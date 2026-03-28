@@ -1,6 +1,7 @@
 import React from "react";
 import { Composition } from "remotion";
-import { VisualMediaProvider, VisualContractProvider } from "./_shared/visual-runtime";
+import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "./_shared/visual-runtime";
+import { GeneratedMediaVisual } from "./_shared/GeneratedMediaVisual";
 import { GeneratedContractVisual } from "./_shared/GeneratedContractVisual";
 
 import { ColdOpenSection } from "./cold_open";
@@ -67,12 +68,70 @@ import { Closing07FinalTitleCard } from "./Closing07FinalTitleCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "cold_open:01_split_screen_darning": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
+  "cold_open:02_developer_cursor_edit": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
+  "cold_open:03_grandmother_darning": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
+  "cold_open:04_developer_codebase_zoomout": { defaultSrc: "veo/developer_codebase_zoomout.mp4", backgroundSrc: "veo/developer_codebase_zoomout.mp4", outputSrc: "veo/developer_codebase_zoomout.mp4", baseSrc: "veo/developer_codebase_zoomout.mp4" },
+  "cold_open:05_grandmother_drawer_zoomout": { defaultSrc: "veo/grandmother_drawer_zoomout.mp4", backgroundSrc: "veo/grandmother_drawer_zoomout.mp4", outputSrc: "veo/grandmother_drawer_zoomout.mp4", baseSrc: "veo/grandmother_drawer_zoomout.mp4" },
+  "cold_open:06_sock_toss": { defaultSrc: "veo/sock_toss.mp4", backgroundSrc: "veo/sock_toss.mp4", outputSrc: "veo/sock_toss.mp4", baseSrc: "veo/sock_toss.mp4" },
   "part1_economics:14_split_developer_grandma": { leftSrc: "veo/developer_cursor_p1.mp4", defaultSrc: "veo/developer_cursor_p1.mp4", rightSrc: "veo/grandmother_darning_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4", revealSrc: "veo/grandmother_darning_p1.mp4" },
+  "part1_economics:15_developer_cursor": { defaultSrc: "veo/developer_cursor_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4" },
+  "part1_economics:16_grandmother_darning": { defaultSrc: "veo/grandmother_darning_p1.mp4", backgroundSrc: "veo/grandmother_darning_p1.mp4", outputSrc: "veo/grandmother_darning_p1.mp4", baseSrc: "veo/grandmother_darning_p1.mp4" },
+  "part1_economics:17_developer_codebase_zoomout": { defaultSrc: "veo/developer_codebase_zoomout.mp4", backgroundSrc: "veo/developer_codebase_zoomout.mp4", outputSrc: "veo/developer_codebase_zoomout.mp4", baseSrc: "veo/developer_codebase_zoomout.mp4" },
+  "part2_paradigm_shift:02_factory_floor_wide": { defaultSrc: "veo/factory_floor_wide.mp4", backgroundSrc: "veo/factory_floor_wide.mp4", outputSrc: "veo/factory_floor_wide.mp4", baseSrc: "veo/factory_floor_wide.mp4" },
+  "part2_paradigm_shift:03_injection_molding_closeup": { defaultSrc: "veo/injection_molding_closeup.mp4", backgroundSrc: "veo/injection_molding_closeup.mp4", outputSrc: "veo/injection_molding_closeup.mp4", baseSrc: "veo/injection_molding_closeup.mp4" },
+  "part2_paradigm_shift:05_defect_and_mold_fix": { defaultSrc: "veo/defect_and_mold_fix.mp4", backgroundSrc: "veo/defect_and_mold_fix.mp4", outputSrc: "veo/defect_and_mold_fix.mp4", baseSrc: "veo/defect_and_mold_fix.mp4" },
+  "part2_paradigm_shift:06_new_parts_eject": { defaultSrc: "veo/new_parts_eject.mp4", backgroundSrc: "veo/new_parts_eject.mp4", outputSrc: "veo/new_parts_eject.mp4", baseSrc: "veo/new_parts_eject.mp4" },
   "part2_paradigm_shift:07_split_craftsman_vs_mold": { leftSrc: "veo/craftsman_carving.mp4", defaultSrc: "veo/craftsman_carving.mp4", rightSrc: "veo/mold_plastic_flow.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4", revealSrc: "veo/mold_plastic_flow.mp4" },
+  "part2_paradigm_shift:08_veo_craftsman_carving": { defaultSrc: "veo/craftsman_carving.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4" },
+  "part2_paradigm_shift:09_veo_mold_plastic_flow": { defaultSrc: "veo/mold_plastic_flow.mp4", backgroundSrc: "veo/mold_plastic_flow.mp4", outputSrc: "veo/mold_plastic_flow.mp4", baseSrc: "veo/mold_plastic_flow.mp4" },
+  "part2_paradigm_shift:10_veo_1980s_chip_lab": { defaultSrc: "veo/1980s_chip_lab.mp4", backgroundSrc: "veo/1980s_chip_lab.mp4", outputSrc: "veo/1980s_chip_lab.mp4", baseSrc: "veo/1980s_chip_lab.mp4" },
+  "part3_mold_parts:14_veo_grounding_material": { defaultSrc: "veo/grounding_material_flow.mp4", backgroundSrc: "veo/grounding_material_flow.mp4", outputSrc: "veo/grounding_material_flow.mp4", baseSrc: "veo/grounding_material_flow.mp4" },
+  "part5_compound_returns:06_veo_grandmother_socks_callback": { defaultSrc: "veo/grandmother_socks_callback.mp4", backgroundSrc: "veo/grandmother_socks_callback.mp4", outputSrc: "veo/grandmother_socks_callback.mp4", baseSrc: "veo/grandmother_socks_callback.mp4" },
+  "part5_compound_returns:07_veo_developer_cursor_callback": { defaultSrc: "veo/developer_cursor_callback.mp4", backgroundSrc: "veo/developer_cursor_callback.mp4", outputSrc: "veo/developer_cursor_callback.mp4", baseSrc: "veo/developer_cursor_callback.mp4" },
+  "closing:01_veo_sock_discard": { defaultSrc: "veo/sock_discard_callback.mp4", backgroundSrc: "veo/sock_discard_callback.mp4", outputSrc: "veo/sock_discard_callback.mp4", baseSrc: "veo/sock_discard_callback.mp4" },
+  "closing:02_veo_developer_regenerate": { defaultSrc: "veo/developer_regenerate_closing.mp4", backgroundSrc: "veo/developer_regenerate_closing.mp4", outputSrc: "veo/developer_regenerate_closing.mp4", baseSrc: "veo/developer_regenerate_closing.mp4" },
+  "closing:05_veo_mold_glow_finale": { defaultSrc: "veo/mold_glow_finale.mp4", backgroundSrc: "veo/mold_glow_finale.mp4", outputSrc: "veo/mold_glow_finale.mp4", baseSrc: "veo/mold_glow_finale.mp4" },
+};
+
+const PREVIEW_VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number> | null> = {
+  "part1_economics:01_section_title_card": { fadeOutFrames: 60 },
+  "part1_economics:02_sock_price_chart": { fadeInFrames: 30 },
+  "part1_economics:09_two_by_two_grid": { fadeInFrames: 45 },
+  "part1_economics:18_key_insight_stillness": { fadeOutFrames: 60 },
+  "part2_paradigm_shift:01_section_title_card": { fadeOutFrames: 90 },
+  "part2_paradigm_shift:13_triple_synthesis_equivalence": { fadeInFrames: 120 },
+  "part2_paradigm_shift:14_synopsys_pdd_equivalence": { fadeOutFrames: 60 },
+  "part2_paradigm_shift:15_abstraction_staircase": { fadeOutFrames: 60 },
+  "part2_paradigm_shift:18_prompt_mold_finale": { fadeOutFrames: 60 },
+  "part3_mold_parts:01_section_title_card": { fadeOutFrames: 60 },
+  "part3_mold_parts:04_liquid_injection": { gradientOverlay: "bottom" },
+  "part3_mold_parts:05_bug_adds_wall": { fadeOutFrames: 30 },
+  "part3_mold_parts:10_z3_formal_proof": { fadeInFrames: 60 },
+  "part3_mold_parts:11_module_boundary": { fadeInFrames: 60 },
+  "part3_mold_parts:15_grounding_styles": { fadeInFrames: 60 },
+  "part4_precision_tradeoff:01_section_title_card": { fadeOutFrames: 60 },
+  "part4_precision_tradeoff:02_split_printer_vs_mold": { fadeOutFrames: 60 },
+  "part4_precision_tradeoff:03_precision_tradeoff_curve": { fadeInFrames: 45 },
+  "part4_precision_tradeoff:06_dual_generation_comparison": { fadeOutFrames: 30 },
+  "part4_precision_tradeoff:07_key_insight_walls": { fadeOutFrames: 20 },
+  "part4_precision_tradeoff:08_embedded_code_document": { fadeOutFrames: 60 },
+  "part4_precision_tradeoff:09_prompt_code_spectrum": { fadeInFrames: 60, fadeOutFrames: 30 },
+  "part5_compound_returns:01_section_title_card": { fadeOutFrames: 62 },
+  "part5_compound_returns:02_maintenance_pie_chart": { fadeInFrames: 120 },
+  "part5_compound_returns:04_diverging_cost_curves": { gradientOverlay: "bottom" },
+  "part5_compound_returns:05_investment_comparison_table": { gradientOverlay: "bottom" },
+  "where_to_start:01_section_title_card": { fadeOutFrames: 60 },
+  "where_to_start:03_module_highlight_terminal": { fadeInFrames: 30 },
+  "where_to_start:07_gradual_migration_insight": { fadeInFrames: 30 },
 };
 
 const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "cold_open:01_split_screen_darning": {"specBaseName": "01_split_screen_darning", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.4}, "panels": {"left": {"clips": ["developer_cursor_edit", "developer_codebase_zoomout"], "label": "Developer patching code"}, "right": {"clips": ["grandmother_darning", "grandmother_drawer_zoomout"], "label": "Grandmother darning socks"}}, "narrationSegments": ["cold_open_001", "cold_open_002", "cold_open_003"], "durationSeconds": 9.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4", "defaultSrc": "veo/developer_cursor_edit.mp4", "rightSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4", "revealSrc": "veo/grandmother_darning.mp4", "leftBaseSrc": "veo/developer_cursor_edit.mp4", "leftRevealSrc": "veo/developer_codebase_zoomout.mp4", "rightBaseSrc": "veo/grandmother_darning.mp4", "rightRevealSrc": "veo/grandmother_drawer_zoomout.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:02_developer_cursor_edit": {"specBaseName": "02_developer_cursor_edit", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_edit", "durationSeconds": 5, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Warm office lighting."}]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_edit.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:03_grandmother_darning": {"specBaseName": "03_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning", "durationSeconds": 5, "characters": [{"id": "grandmother", "label": "Great-Grandmother", "referencePrompt": "An elderly woman in her 70s, 1950s era. Weathered but steady hands, wearing a simple cotton dress with rolled sleeves. Warm golden lamplight on her face and hands. Modest 1950s living room setting."}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/grandmother_darning.mp4", "outputSrc": "veo/grandmother_darning.mp4", "baseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:04_developer_codebase_zoomout": {"specBaseName": "04_developer_codebase_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "developer_codebase_zoomout", "durationSeconds": 4, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Warm office lighting."}]}, "mediaAliases": {"defaultSrc": "veo/developer_codebase_zoomout.mp4", "backgroundSrc": "veo/developer_codebase_zoomout.mp4", "outputSrc": "veo/developer_codebase_zoomout.mp4", "baseSrc": "veo/developer_codebase_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:05_grandmother_drawer_zoomout": {"specBaseName": "05_grandmother_drawer_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_drawer_zoomout", "durationSeconds": 4, "characters": [{"id": "grandmother", "label": "Great-Grandmother", "referencePrompt": "An elderly woman in her 70s, 1950s era. Weathered but steady hands, wearing a simple cotton dress with rolled sleeves. Warm golden lamplight on her face and hands. Modest 1950s living room setting."}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_drawer_zoomout.mp4", "backgroundSrc": "veo/grandmother_drawer_zoomout.mp4", "outputSrc": "veo/grandmother_drawer_zoomout.mp4", "baseSrc": "veo/grandmother_drawer_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:06_sock_toss": {"specBaseName": "06_sock_toss", "dataPoints": {"type": "veo_clip", "clipId": "sock_toss", "durationSeconds": 4}, "mediaAliases": {"defaultSrc": "veo/sock_toss.mp4", "backgroundSrc": "veo/sock_toss.mp4", "outputSrc": "veo/sock_toss.mp4", "baseSrc": "veo/sock_toss.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "cold_open:07_code_cursor_blink": {"specBaseName": "07_code_cursor_blink", "dataPoints": {"type": "code_editor", "language": "python", "theme": "catppuccin-mocha", "functionName": "process_order", "totalLines": 40, "patchComments": [{"line": 5, "text": "// PATCH: fixed null check", "age": "old"}, {"line": 12, "text": "// TODO: refactor this block", "age": "old"}, {"line": 18, "text": "// HOTFIX: edge case #1247", "age": "medium"}, {"line": 23, "text": "// PATCH: handle empty list", "age": "recent"}, {"line": 31, "text": "// PATCH: timezone fix", "age": "medium"}, {"line": 37, "text": "// HOTFIX: race condition", "age": "recent"}], "cursor": {"line": 23, "column": 4, "blinkMs": 500}, "narrationSegments": ["cold_open_005"], "durationSeconds": 1.6}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "cold_open:08_code_regeneration": {"specBaseName": "08_code_regeneration", "dataPoints": {"type": "code_regeneration", "language": "python", "theme": "catppuccin-mocha", "functionName": "process_order", "originalLines": 40, "regeneratedLines": 30, "patchCommentsRemoved": 6, "terminalCommand": "pdd generate process_order", "phases": [{"name": "select", "startFrame": 0, "endFrame": 8}, {"name": "delete", "startFrame": 8, "endFrame": 12}, {"name": "void", "startFrame": 12, "endFrame": 14}, {"name": "regenerate", "startFrame": 14, "endFrame": 44}, {"name": "terminal", "startFrame": 38, "endFrame": 48}, {"name": "hold", "startFrame": 48, "endFrame": 60}], "narrationSegments": ["cold_open_006"], "durationSeconds": 2.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "cold_open:09_title_card_pdd": {"specBaseName": "09_title_card_pdd", "dataPoints": {"type": "title_card", "sectionNumber": 0, "titleLine1": "PROMPT-DRIVEN", "titleLine2": "DEVELOPMENT", "backgroundColor": "#1E1E2E", "backgroundLayer": "regenerated_code_at_15_percent", "accentColor": "#89B4FA", "narrationSegments": ["cold_open_006"], "durationSeconds": 2.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
@@ -90,12 +149,22 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
   "part1_economics:12_context_compression": {"specBaseName": "12_context_compression", "dataPoints": {"type": "context_compression_animation", "chartId": "module_compression", "modules": ["auth", "parser", "router", "validator", "logger", "cache", "queue", "mailer", "search", "analytics", "billing", "permissions", "notifications", "export", "import", "scheduler", "webhook", "api_client", "transformer", "serializer"], "codeTokensPerModule": 750, "promptTokensPerModule": 100, "contextWindowTokens": 4000, "overflowCount": 17, "compressionRatio": "5-10×", "narrationSegments": ["part1_economics_025", "part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:13_crossing_lines_moment": {"specBaseName": "13_crossing_lines_moment", "dataPoints": {"type": "crossing_moment", "chartRef": "code_cost_generate_vs_patch", "crossings": [{"id": "generate_crosses_total_cost", "year": 2025.2, "description": "Generate cost drops below total cost with debt"}, {"id": "generate_crosses_immediate", "year": 2025.6, "description": "Generate cost drops below immediate patch cost"}], "label": "We are here.", "narrationSegments": ["part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:14_split_developer_grandma": {"specBaseName": "14_split_developer_grandma", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["developer_cursor_p1"], "label": "Developer with Cursor"}, "right": {"clips": ["grandmother_darning_p1"], "label": "Grandmother darning"}}, "narrationSegments": ["part1_economics_027", "part1_economics_028"], "durationSeconds": 17.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_p1.mp4", "defaultSrc": "veo/developer_cursor_p1.mp4", "rightSrc": "veo/grandmother_darning_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4", "revealSrc": "veo/grandmother_darning_p1.mp4", "leftBaseSrc": "veo/developer_cursor_p1.mp4", "rightBaseSrc": "veo/grandmother_darning_p1.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:15_developer_cursor": {"specBaseName": "15_developer_cursor", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_p1", "camera": {"framing": "medium_close_up", "movement": "subtle_push_in", "dof": "moderate", "aperture": "f/4", "angle": "over_shoulder"}, "lighting": {"key": {"color": "#B0C4DE", "type": "monitor_glow"}, "fill": {"color": "#E2E8F0", "opacity": 0.2, "type": "ambient"}, "accent": {"color": "#4A90D9", "opacity": 0.1, "type": "led_backlight"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part1_economics:16_grandmother_darning": {"specBaseName": "16_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_p1", "camera": {"framing": "medium_close_up", "movement": "static_with_sway", "dof": "shallow", "aperture": "f/2.8", "angle": "elevated"}, "lighting": {"key": {"color": "#FFB347", "opacity": 0.7, "type": "table_lamp"}, "fill": {"color": "#D4A574", "opacity": 0.15, "type": "ambient"}}, "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly woman in 1950s domestic setting, skilled hands darning wool socks by lamplight, warm amber tones"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning_p1.mp4", "backgroundSrc": "veo/grandmother_darning_p1.mp4", "outputSrc": "veo/grandmother_darning_p1.mp4", "baseSrc": "veo/grandmother_darning_p1.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part1_economics:17_developer_codebase_zoomout": {"specBaseName": "17_developer_codebase_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "developer_codebase_zoomout", "camera": {"framing": "medium_to_wide", "movement": "dolly_back", "dof": "deepening", "angle": "eye_level"}, "lighting": {"key": {"color": "#D4E4F0", "opacity": 0.3, "type": "overhead_fluorescent"}, "fill": {"type": "multiple_monitor_glow"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "overlays": [{"type": "floating_comment", "text": "// don't touch this", "color": "#EF4444"}, {"type": "floating_comment", "text": "// legacy", "color": "#F59E0B"}, {"type": "floating_comment", "text": "// temporary fix (2019)", "color": "#EF4444"}], "narrationSegments": ["part1_economics_028"]}, "mediaAliases": {"defaultSrc": "veo/developer_codebase_zoomout.mp4", "backgroundSrc": "veo/developer_codebase_zoomout.mp4", "outputSrc": "veo/developer_codebase_zoomout.mp4", "baseSrc": "veo/developer_codebase_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part1_economics:18_key_insight_stillness": {"specBaseName": "18_key_insight_stillness", "dataPoints": {"type": "stillness_beat", "style": "3b1b_key_insight", "backgroundColor": "#050810", "text": "So let me put together what I just showed you.", "textColor": "#94A3B8", "textOpacity": 0.6, "purpose": "Palate cleanser before key insight synthesis"}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
   "part1_economics:19_double_meter_insight": {"specBaseName": "19_double_meter_insight", "dataPoints": {"type": "double_meter", "chartId": "context_plus_performance", "meters": [{"id": "context_window", "title": "Effective Context Window", "fillColor": "#4A90D9", "bottomValue": "1×", "topValue": "5-10×", "position": "left"}, {"id": "model_performance", "title": "Model Performance", "fillColor": "#5AAA6E", "bottomValue": "Baseline", "topValue": "+89%", "position": "right"}], "insightText": "Bigger window AND smarter model.", "insightHighlight": {"word": "AND", "color": "#F59E0B"}}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:20_try_it_yourself": {"specBaseName": "20_try_it_yourself", "dataPoints": {"type": "title_card", "style": "handwritten_challenge", "mainText": "Try it yourself.", "font": "Caveat", "instructions": ["Give your favorite LLM a hard coding problem as code,", "then as natural language.", "The natural language version will win."], "backgroundColor": "#0A0F1A", "accentColor": "#4A90D9"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part2_paradigm_shift:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 2, "sectionLabel": "PART 2", "titleLine1": "THE PARADIGM", "titleLine2": "SHIFT", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "mold_silhouette", "colors": ["#4A90D9", "#D9944A"], "role": "injection_mold_preview"}], "narrationSegments": ["part2_paradigm_shift_001", "part2_paradigm_shift_002", "part2_paradigm_shift_003", "part2_paradigm_shift_004", "part2_paradigm_shift_005"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 90}, "renderMode": "component"},
+  "part2_paradigm_shift:02_factory_floor_wide": {"specBaseName": "02_factory_floor_wide", "dataPoints": {"type": "veo_clip", "clipId": "factory_floor_wide", "durationSeconds": 10}, "mediaAliases": {"defaultSrc": "veo/factory_floor_wide.mp4", "backgroundSrc": "veo/factory_floor_wide.mp4", "outputSrc": "veo/factory_floor_wide.mp4", "baseSrc": "veo/factory_floor_wide.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part2_paradigm_shift:03_injection_molding_closeup": {"specBaseName": "03_injection_molding_closeup", "dataPoints": {"type": "veo_clip", "clipId": "injection_molding_closeup", "durationSeconds": 10}, "mediaAliases": {"defaultSrc": "veo/injection_molding_closeup.mp4", "backgroundSrc": "veo/injection_molding_closeup.mp4", "outputSrc": "veo/injection_molding_closeup.mp4", "baseSrc": "veo/injection_molding_closeup.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part2_paradigm_shift:04_mold_production_counter": {"specBaseName": "04_mold_production_counter", "dataPoints": {"type": "counter_animation", "chartId": "mold_production_counter", "counter": {"start": 1, "end": 10000, "milestones": [1, 10, 100, 1000, 10000], "easing": "exponential"}, "moldCycle": {"startFramesPerCycle": 60, "endFramesPerCycle": 6}, "narrationSegments": ["part2_paradigm_shift_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:05_defect_and_mold_fix": {"specBaseName": "05_defect_and_mold_fix", "dataPoints": {"type": "veo_clip", "clipId": "defect_and_mold_fix", "durationSeconds": 9, "characters": [{"id": "manufacturing_engineer", "label": "Manufacturing Engineer", "referencePrompt": "Middle-aged manufacturing engineer in safety glasses and clean work shirt, professional workshop setting"}]}, "mediaAliases": {"defaultSrc": "veo/defect_and_mold_fix.mp4", "backgroundSrc": "veo/defect_and_mold_fix.mp4", "outputSrc": "veo/defect_and_mold_fix.mp4", "baseSrc": "veo/defect_and_mold_fix.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part2_paradigm_shift:06_new_parts_eject": {"specBaseName": "06_new_parts_eject", "dataPoints": {"type": "veo_clip", "clipId": "new_parts_eject", "durationSeconds": 7}, "mediaAliases": {"defaultSrc": "veo/new_parts_eject.mp4", "backgroundSrc": "veo/new_parts_eject.mp4", "outputSrc": "veo/new_parts_eject.mp4", "baseSrc": "veo/new_parts_eject.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part2_paradigm_shift:07_split_craftsman_vs_mold": {"specBaseName": "07_split_craftsman_vs_mold", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.4}, "panels": {"left": {"clips": ["craftsman_carving"], "label": "Craftsman — value in the object", "aura": {"color": "#D9944A", "target": "object"}}, "right": {"clips": ["mold_plastic_flow"], "label": "Mold — value in the specification", "aura": {"color": "#4A90D9", "target": "mold"}, "partDissolve": true}}, "narrationSegments": ["part2_paradigm_shift_009", "part2_paradigm_shift_010"], "durationSeconds": 20.0}, "mediaAliases": {"leftSrc": "veo/craftsman_carving.mp4", "defaultSrc": "veo/craftsman_carving.mp4", "rightSrc": "veo/mold_plastic_flow.mp4", "backgroundSrc": "veo/craftsman_carving.mp4", "outputSrc": "veo/craftsman_carving.mp4", "baseSrc": "veo/craftsman_carving.mp4", "revealSrc": "veo/mold_plastic_flow.mp4", "leftBaseSrc": "veo/craftsman_carving.mp4", "rightBaseSrc": "veo/mold_plastic_flow.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "part2_paradigm_shift:08_veo_craftsman_carving": {"specBaseName": "08_veo_craftsman_carving", "dataPoints": {"type": "veo_clip", "clipId": "craftsman_carving", "durationSeconds": 20, "characters": [{"id": "craftsman", "label": "Craftsman", "referencePrompt": "Experienced woodworker, middle-aged, work apron, traditional workshop setting with warm lighting"}]}, "mediaAliases": {"defaultSrc": "veo/craftsman_carving.mp4", "backgroundSrc": "veo/craftsman_carving.mp4", "outputSrc": "veo/craftsman_carving.mp4", "baseSrc": "veo/craftsman_carving.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part2_paradigm_shift:09_veo_mold_plastic_flow": {"specBaseName": "09_veo_mold_plastic_flow", "dataPoints": {"type": "veo_clip", "clipId": "mold_plastic_flow", "durationSeconds": 20}, "mediaAliases": {"defaultSrc": "veo/mold_plastic_flow.mp4", "backgroundSrc": "veo/mold_plastic_flow.mp4", "outputSrc": "veo/mold_plastic_flow.mp4", "baseSrc": "veo/mold_plastic_flow.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part2_paradigm_shift:10_veo_1980s_chip_lab": {"specBaseName": "10_veo_1980s_chip_lab", "dataPoints": {"type": "veo_clip", "clipId": "1980s_chip_lab", "durationSeconds": 8, "characters": [{"id": "chip_engineer", "label": "1980s Chip Engineer", "referencePrompt": "Male electronics engineer in button-down shirt, 1980s style, drafting desk with schematics, fluorescent-lit lab"}]}, "mediaAliases": {"defaultSrc": "veo/1980s_chip_lab.mp4", "backgroundSrc": "veo/1980s_chip_lab.mp4", "outputSrc": "veo/1980s_chip_lab.mp4", "baseSrc": "veo/1980s_chip_lab.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part2_paradigm_shift:11_schematic_density_zoom": {"specBaseName": "11_schematic_density_zoom", "dataPoints": {"type": "schematic_zoom", "chartId": "schematic_density_zoom", "counter": {"start": 20, "end": 50000, "milestones": [100, 500, 5000, 25000, 50000]}, "zoom": {"startScale": 8, "endScale": 0.1, "easing": "easeInOutCubic"}, "narrationSegments": ["part2_paradigm_shift_011"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part2_paradigm_shift:12_verilog_synthesis": {"specBaseName": "12_verilog_synthesis", "dataPoints": {"type": "synthesis_animation", "chartId": "verilog_synthesis", "codeLanguage": "verilog", "codeSample": "module counter(\\n  input clk, rst,\\n  output reg [7:0] count\\n);\\n  always @(posedge clk)\\n    if (rst) count <= 0;\\n    else count <= count + 1;\\nendmodule", "synthesisStages": ["code_input", "synthesis_process", "gate_output"], "narrationSegments": ["part2_paradigm_shift_011"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part2_paradigm_shift:13_triple_synthesis_equivalence": {"specBaseName": "13_triple_synthesis_equivalence", "dataPoints": {"type": "equivalence_demo", "chartId": "triple_synthesis_equivalence", "runs": [{"id": "run_1", "topology": "dense-left", "label": "Run 1"}, {"id": "run_2", "topology": "tree-branch", "label": "Run 2"}, {"id": "run_3", "topology": "linear-chain", "label": "Run 3"}], "equivalenceLabel": "Functionally equivalent", "equivalenceColor": "#5AAA6E", "narrationSegments": ["part2_paradigm_shift_012", "part2_paradigm_shift_013"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 120}, "renderMode": "component"},
@@ -117,6 +186,7 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
   "part3_mold_parts:11_module_boundary": {"specBaseName": "11_module_boundary", "dataPoints": {"type": "system_diagram", "centralModule": {"name": "user_parser", "color": "#4A90D9", "governed": true}, "surroundingModules": [{"name": "auth_service", "governed": false}, {"name": "db_layer", "governed": false}, {"name": "api_router", "governed": false}, {"name": "cache", "governed": false}, {"name": "logger", "governed": false}, {"name": "config", "governed": false}], "label": "PDD operates at the module level.", "narrationSegments": ["part3_mold_parts_015"], "durationSeconds": 22.0}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
   "part3_mold_parts:12_prompt_nozzle": {"specBaseName": "12_prompt_nozzle", "dataPoints": {"type": "prompt_nozzle", "nozzleLabels": ["intent", "requirements", "constraints"], "promptText": "Parse user IDs from untrusted input. Return None on failure, never throw. Handle unicode.", "promptFile": "user_parser.prompt", "dualGeneration": true, "narrationSegments": ["part3_mold_parts_016"], "durationSeconds": 24.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part3_mold_parts:13_prompt_ratio": {"specBaseName": "13_prompt_ratio", "dataPoints": {"type": "compression_ratio", "promptLines": 15, "codeLines": 200, "ratio": "1:5 to 1:10", "contextComparison": {"left": {"tokens": 15000, "type": "raw_code", "modules": 1}, "right": {"tokens": 15000, "type": "prompts", "modules": 10}}, "narrationSegments": ["part3_mold_parts_017", "part3_mold_parts_018"], "durationSeconds": 18.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "part3_mold_parts:14_veo_grounding_material": {"specBaseName": "14_veo_grounding_material", "dataPoints": {"type": "veo_clip", "clipId": "grounding_material_flow", "durationSeconds": 8, "characters": []}, "mediaAliases": {"defaultSrc": "veo/grounding_material_flow.mp4", "backgroundSrc": "veo/grounding_material_flow.mp4", "outputSrc": "veo/grounding_material_flow.mp4", "baseSrc": "veo/grounding_material_flow.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part3_mold_parts:15_grounding_styles": {"specBaseName": "15_grounding_styles", "dataPoints": {"type": "grounding_styles", "materialStreams": [{"label": "OOP", "color": "#4A90D9", "style": "angular"}, {"label": "Functional", "color": "#D9944A", "style": "smooth"}, {"label": "Your Team's Style", "color": "#4AD9A0", "style": "organic"}], "codeComparison": {"pathA": {"style": "OOP", "borderColor": "#4A90D9"}, "pathB": {"style": "Functional", "borderColor": "#D9944A"}}, "feedbackLoop": {"database": "Grounding Database", "stores": "(prompt, code) pair"}, "narrationSegments": ["part3_mold_parts_019"], "durationSeconds": 26.0}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
   "part3_mold_parts:16_three_components_pullback": {"specBaseName": "16_three_components_pullback", "dataPoints": {"type": "pipeline_pullback", "stages": [{"component": "Prompt", "encodes": "Intent", "color": "#D9944A"}, {"component": "Grounding", "encodes": "Style", "color": "#4AD9A0"}, {"component": "Tests", "encodes": "Correctness", "color": "#4A90D9"}, {"component": "Code", "encodes": "Output", "color": "#38BDF8"}], "narrationSegments": ["part3_mold_parts_020"], "durationSeconds": 9.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part3_mold_parts:17_component_table": {"specBaseName": "17_component_table", "dataPoints": {"type": "component_table", "rows": [{"component": "Prompt", "encodes": "WHAT (intent)", "owner": "Developer", "color": "#D9944A"}, {"component": "Grounding", "encodes": "HOW (style)", "owner": "Automatic", "color": "#4AD9A0"}, {"component": "Tests", "encodes": "CORRECTNESS", "owner": "Accumulated", "color": "#4A90D9"}], "hierarchyRule": "When these conflict, tests win. Always.", "hierarchyOrder": ["Tests", "Prompt", "Grounding"], "narrationSegments": ["part3_mold_parts_021"], "durationSeconds": 10.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
@@ -135,6 +205,8 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
   "part5_compound_returns:03_compound_debt_curve": {"specBaseName": "03_compound_debt_curve", "dataPoints": {"type": "dual_curve_chart", "chartId": "compound_debt_vs_regeneration", "xAxis": {"label": "Time (maintenance cycles)", "range": [0, 20]}, "yAxis": {"label": "Cumulative Cost"}, "series": [{"id": "debt_exponential", "label": "Debt × (1 + Rate)^Time", "color": "#D9944A", "type": "exponential", "data": [{"x": 0, "y": 0.05}, {"x": 2, "y": 0.07}, {"x": 4, "y": 0.1}, {"x": 6, "y": 0.14}, {"x": 8, "y": 0.2}, {"x": 10, "y": 0.3}, {"x": 12, "y": 0.42}, {"x": 14, "y": 0.58}, {"x": 16, "y": 0.72}, {"x": 18, "y": 0.85}, {"x": 20, "y": 0.95}]}, {"id": "regeneration_flat", "label": "Regeneration cost (debt resets each cycle)", "color": "#5AAA6E", "type": "flat", "data": [{"x": 0, "y": 0.08}, {"x": 20, "y": 0.08}]}], "annotations": [{"type": "callout", "text": "$1.52 trillion/year", "source": "CISQ", "position": "steep_section"}], "narrationSegments": ["part5_compound_returns_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part5_compound_returns:04_diverging_cost_curves": {"specBaseName": "04_diverging_cost_curves", "dataPoints": {"type": "diverging_curves", "chartId": "patching_vs_pdd_compounding", "xAxis": {"label": "Time (years)", "range": [0, 10]}, "yAxis": {"label": "Cumulative Cost"}, "series": [{"id": "patching_exponential", "label": "Patching", "color": "#D9944A", "type": "exponential", "data": [{"x": 0, "y": 0.1}, {"x": 1, "y": 0.13}, {"x": 2, "y": 0.17}, {"x": 3, "y": 0.23}, {"x": 4, "y": 0.31}, {"x": 5, "y": 0.42}, {"x": 6, "y": 0.55}, {"x": 7, "y": 0.68}, {"x": 8, "y": 0.8}, {"x": 9, "y": 0.88}, {"x": 10, "y": 0.95}]}, {"id": "pdd_flat", "label": "PDD", "color": "#5AAA6E", "type": "flat_sawtooth", "baseline": 0.1, "sawtoothAmplitude": 0.03, "data": [{"x": 0, "y": 0.1}, {"x": 1, "y": 0.1}, {"x": 2, "y": 0.1}, {"x": 3, "y": 0.1}, {"x": 4, "y": 0.1}, {"x": 5, "y": 0.1}, {"x": 6, "y": 0.1}, {"x": 7, "y": 0.1}, {"x": 8, "y": 0.1}, {"x": 9, "y": 0.1}, {"x": 10, "y": 0.1}]}], "gap": {"label": "The Gap", "gradient": {"top": "#D9944A", "bottom": "#5AAA6E"}}, "thesisStatements": [{"text": "Patching accrues compound costs.", "color": "#D9944A"}, {"text": "Tests accrue compound returns.", "color": "#5AAA6E"}], "narrationSegments": ["part5_compound_returns_003"]}, "mediaAliases": {}, "overlayConfig": {"gradientOverlay": "bottom"}, "renderMode": "component"},
   "part5_compound_returns:05_investment_comparison_table": {"specBaseName": "05_investment_comparison_table", "dataPoints": {"type": "comparison_table", "chartId": "investment_patching_vs_pdd", "columns": ["Investment", "Patching", "PDD"], "columnColors": ["#E2E8F0", "#D9944A", "#5AAA6E"], "rows": [{"investment": "Fix a bug", "patching": "One place, once", "pdd": "Impossible forever"}, {"investment": "Improve code", "patching": "One version", "pdd": "All future versions"}, {"investment": "Document intent", "patching": "One snapshot", "pdd": "Living specification"}], "narrationSegments": ["part5_compound_returns_004"]}, "mediaAliases": {}, "overlayConfig": {"gradientOverlay": "bottom"}, "renderMode": "component"},
+  "part5_compound_returns:06_veo_grandmother_socks_callback": {"specBaseName": "06_veo_grandmother_socks_callback", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_socks_callback", "durationSeconds": 6, "characters": [{"id": "grandmother", "label": "1950s Grandmother", "referencePrompt": "Elderly woman in 1950s domestic setting, warm lamplight, wooden chair, period-appropriate clothing and furnishings"}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_socks_callback.mp4", "backgroundSrc": "veo/grandmother_socks_callback.mp4", "outputSrc": "veo/grandmother_socks_callback.mp4", "baseSrc": "veo/grandmother_socks_callback.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part5_compound_returns:07_veo_developer_cursor_callback": {"specBaseName": "07_veo_developer_cursor_callback", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_callback", "durationSeconds": 6, "characters": [{"id": "developer", "label": "Modern Developer", "referencePrompt": "Software developer at modern desk with large monitor showing code editor, cool blue-white lighting, mechanical keyboard, minimalist workspace"}]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_callback.mp4", "backgroundSrc": "veo/developer_cursor_callback.mp4", "outputSrc": "veo/developer_cursor_callback.mp4", "baseSrc": "veo/developer_cursor_callback.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part5_compound_returns:08_economics_crossing_callback": {"specBaseName": "08_economics_crossing_callback", "dataPoints": {"type": "chart_callback", "chartRef": "code_cost_generate_vs_patch", "sourceSpec": "part1_economics/13_crossing_lines_moment", "crossingPoint": {"id": "generate_crosses_immediate", "year": 2025.6, "pulse": true}, "reframeText": "The economics changed.", "narrationSegments": ["part5_compound_returns_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part5_compound_returns:09_contrarian_quote_card": {"specBaseName": "09_contrarian_quote_card", "dataPoints": {"type": "quote_card", "quote": "This is either the way of the future or it's going to crash and burn spectacularly.", "attribution": "Research engineer, after seeing PDD for the first time.", "backgroundColor": "#0A0F1A", "accentWord": "spectacularly", "accentGlow": {"color": "#D9944A", "opacity": 0.03}, "narrationSegments": ["part5_compound_returns_007", "part5_compound_returns_008"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "where_to_start:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 6, "sectionLabel": "WHERE TO START", "titleLine1": "WHERE TO", "titleLine2": "START", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "module_grid", "rows": 4, "cols": 6, "highlightCell": [2, 3], "role": "one_module_preview"}], "narrationSegments": ["where_to_start_001"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
@@ -144,541 +216,985 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
   "where_to_start:05_module_glow_spread": {"specBaseName": "05_module_glow_spread", "dataPoints": {"type": "module_migration_animation", "animationId": "gradual_glow_spread", "totalModules": 12, "migratedModules": [{"id": "auth_handler", "order": 1, "frameStart": 0}, {"id": "user_service", "order": 2, "frameStart": 30}, {"id": "payment_proc", "order": 3, "frameStart": 75}, {"id": "email_templates", "order": 4, "frameStart": 120}, {"id": "api_routes", "order": 5, "frameStart": 140}, {"id": "config_mgr", "order": 6, "frameStart": 165}], "unmigrated": ["db_models", "test_utils", "middleware", "validators", "cache_layer", "logging_setup"], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "where_to_start:06_no_big_bang_callout": {"specBaseName": "06_no_big_bang_callout", "dataPoints": {"type": "key_insight_card", "insightId": "no_big_bang", "statements": [{"text": "No big bang.", "color": "#E2E8F0", "weight": 700}, {"text": "No rewrite.", "color": "#E2E8F0", "weight": 700}, {"text": "Just gradual migration.", "color": "#5AAA6E", "weight": 600}], "narrationSegments": ["where_to_start_002"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "where_to_start:07_gradual_migration_insight": {"specBaseName": "07_gradual_migration_insight", "dataPoints": {"type": "value_flow_animation", "animationId": "code_to_specification", "containers": [{"id": "code", "label": "CODE", "color": "#64748B", "fillColor": "#94A3B8", "startLevel": 0.7, "endLevel": 0.4}, {"id": "specification", "label": "SPECIFICATION", "color": "#5AAA6E", "fillColor": "#5AAA6E", "startLevel": 0.3, "endLevel": 0.6}], "thesisText": "from code to specification", "narrationSegments": ["where_to_start_003"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
+  "closing:01_veo_sock_discard": {"specBaseName": "01_veo_sock_discard", "dataPoints": {"type": "veo_clip", "clipId": "sock_discard_callback", "durationSeconds": 3, "narrationSegments": ["closing_001"], "characters": []}, "mediaAliases": {"defaultSrc": "veo/sock_discard_callback.mp4", "backgroundSrc": "veo/sock_discard_callback.mp4", "outputSrc": "veo/sock_discard_callback.mp4", "baseSrc": "veo/sock_discard_callback.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "closing:02_veo_developer_regenerate": {"specBaseName": "02_veo_developer_regenerate", "dataPoints": {"type": "veo_clip", "clipId": "developer_regenerate_closing", "durationSeconds": 4, "narrationSegments": ["closing_002"], "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Cool blue-white lighting from LED desk lamp and monitor glow."}]}, "mediaAliases": {"defaultSrc": "veo/developer_regenerate_closing.mp4", "backgroundSrc": "veo/developer_regenerate_closing.mp4", "outputSrc": "veo/developer_regenerate_closing.mp4", "baseSrc": "veo/developer_regenerate_closing.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "closing:03_pdd_triangle": {"specBaseName": "03_pdd_triangle", "dataPoints": {"type": "remotion_animation", "componentId": "pdd_triangle", "durationFrames": 180, "fps": 30, "narrationSegments": ["closing_002", "closing_003"], "vertices": [{"label": "PROMPT", "position": [960, 180], "color": "#D9944A"}, {"label": "TESTS", "position": [683, 680], "color": "#4AD9A0"}, {"label": "GROUNDING", "position": [1237, 680], "color": "#4A90D9"}], "codeLines": ["def calculate_total(items):", "    return sum(i.price for i in items)", "", "def apply_discount(total, pct):", "    return total * (1 - pct)"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "closing:04_dissolve_regenerate_loop": {"specBaseName": "04_dissolve_regenerate_loop", "dataPoints": {"type": "remotion_animation", "componentId": "dissolve_regenerate_loop", "durationFrames": 150, "fps": 30, "narrationSegments": ["closing_003", "closing_004"], "codeVariants": [{"version": 1, "lines": ["def calculate_total(items):", "    return sum(i.price for i in items)", "", "def apply_discount(total, pct):", "    return total * (1 - pct)"]}, {"version": 2, "lines": ["def get_total(cart_items):", "    total = 0", "    for item in cart_items:", "        total += item.price", "    return total"]}, {"version": 3, "lines": ["def compute_sum(products):", "    prices = [p.price for p in products]", "    return functools.reduce(", "        operator.add, prices, 0", "    )"]}], "terminalCommands": [{"command": "pdd test", "result": "✓ All tests passed"}]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "closing:05_veo_mold_glow_finale": {"specBaseName": "05_veo_mold_glow_finale", "dataPoints": {"type": "veo_clip", "clipId": "mold_glow_finale", "durationSeconds": 4, "narrationSegments": ["closing_004", "closing_005"], "characters": []}, "mediaAliases": {"defaultSrc": "veo/mold_glow_finale.mp4", "backgroundSrc": "veo/mold_glow_finale.mp4", "outputSrc": "veo/mold_glow_finale.mp4", "baseSrc": "veo/mold_glow_finale.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "closing:06_the_beat": {"specBaseName": "06_the_beat", "dataPoints": {"type": "remotion_animation", "componentId": "the_beat", "durationFrames": 60, "fps": 30, "narrationSegments": [], "note": "Silent pause between final narration and title card"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "closing:07_final_title_card": {"specBaseName": "07_final_title_card", "dataPoints": {"type": "title_card", "componentId": "final_title_card", "durationFrames": 180, "fps": 30, "narrationSegments": [], "title": "Prompt-Driven Development", "commands": ["uv tool install pdd-cli", "pdd update your_module.py"], "url": "promptdrivendevelopment.com"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+};
+
+const PREVIEW_INTRINSIC_DURATIONS: Record<string, number> = {
+  "cold_open:01_split_screen_darning": 270,
+  "cold_open:02_developer_cursor_edit": 150,
+  "cold_open:03_grandmother_darning": 150,
+  "cold_open:04_developer_codebase_zoomout": 120,
+  "cold_open:05_grandmother_drawer_zoomout": 120,
+  "cold_open:06_sock_toss": 120,
+  "cold_open:07_code_cursor_blink": 48,
+  "cold_open:08_code_regeneration": 60,
+  "cold_open:09_title_card_pdd": 60,
+  "part1_economics:01_section_title_card": 120,
+  "part1_economics:02_sock_price_chart": 720,
+  "part1_economics:03_code_cost_chart": 1650,
+  "part1_economics:04_research_annotations": 900,
+  "part1_economics:05_code_churn_annotations": 840,
+  "part1_economics:06_debt_layers_zoom": 540,
+  "part1_economics:07_context_window_shrink": 1560,
+  "part1_economics:08_performance_vs_context": 1470,
+  "part1_economics:09_two_by_two_grid": 630,
+  "part1_economics:10_fork_codebase_size": 1380,
+  "part1_economics:11_patching_vs_regeneration": 810,
+  "part1_economics:12_context_compression": 1380,
+  "part1_economics:13_crossing_lines_moment": 360,
+  "part1_economics:14_split_developer_grandma": 510,
+  "part1_economics:15_developer_cursor": 150,
+  "part1_economics:16_grandmother_darning": 150,
+  "part1_economics:17_developer_codebase_zoomout": 150,
+  "part1_economics:18_key_insight_stillness": 360,
+  "part1_economics:19_double_meter_insight": 360,
+  "part1_economics:20_try_it_yourself": 240,
+  "part2_paradigm_shift:01_section_title_card": 120,
+  "part2_paradigm_shift:02_factory_floor_wide": 300,
+  "part2_paradigm_shift:03_injection_molding_closeup": 300,
+  "part2_paradigm_shift:04_mold_production_counter": 300,
+  "part2_paradigm_shift:05_defect_and_mold_fix": 420,
+  "part2_paradigm_shift:06_new_parts_eject": 210,
+  "part2_paradigm_shift:07_split_craftsman_vs_mold": 600,
+  "part2_paradigm_shift:08_veo_craftsman_carving": 600,
+  "part2_paradigm_shift:09_veo_mold_plastic_flow": 600,
+  "part2_paradigm_shift:10_veo_1980s_chip_lab": 240,
+  "part2_paradigm_shift:11_schematic_density_zoom": 420,
+  "part2_paradigm_shift:12_verilog_synthesis": 360,
+  "part2_paradigm_shift:13_triple_synthesis_equivalence": 750,
+  "part2_paradigm_shift:14_synopsys_pdd_equivalence": 390,
+  "part2_paradigm_shift:15_abstraction_staircase": 690,
+  "part2_paradigm_shift:16_billion_gate_unreviewable": 360,
+  "part2_paradigm_shift:17_review_spec_verify_output": 360,
+  "part2_paradigm_shift:18_prompt_mold_finale": 360,
+  "part3_mold_parts:01_section_title_card": 1320,
+  "part3_mold_parts:02_mold_cross_section": 420,
+  "part3_mold_parts:03_mold_walls_illuminate": 300,
+  "part3_mold_parts:04_liquid_injection": 870,
+  "part3_mold_parts:05_bug_adds_wall": 480,
+  "part3_mold_parts:06_ratchet_timelapse": 270,
+  "part3_mold_parts:07_split_traditional_vs_pdd": 240,
+  "part3_mold_parts:08_bug_fork_road": 540,
+  "part3_mold_parts:09_five_generations": 540,
+  "part3_mold_parts:10_z3_formal_proof": 780,
+  "part3_mold_parts:11_module_boundary": 660,
+  "part3_mold_parts:12_prompt_nozzle": 720,
+  "part3_mold_parts:13_prompt_ratio": 540,
+  "part3_mold_parts:14_veo_grounding_material": 240,
+  "part3_mold_parts:15_grounding_styles": 780,
+  "part3_mold_parts:16_three_components_pullback": 270,
+  "part3_mold_parts:17_component_table": 300,
+  "part3_mold_parts:18_code_output_finale": 90,
+  "part4_precision_tradeoff:01_section_title_card": 120,
+  "part4_precision_tradeoff:02_split_printer_vs_mold": 480,
+  "part4_precision_tradeoff:03_precision_tradeoff_curve": 450,
+  "part4_precision_tradeoff:04_detailed_prompt_file": 240,
+  "part4_precision_tradeoff:05_minimal_prompt_with_tests": 240,
+  "part4_precision_tradeoff:06_dual_generation_comparison": 240,
+  "part4_precision_tradeoff:07_key_insight_walls": 120,
+  "part4_precision_tradeoff:08_embedded_code_document": 840,
+  "part4_precision_tradeoff:09_prompt_code_spectrum": 480,
+  "part5_compound_returns:01_section_title_card": 120,
+  "part5_compound_returns:02_maintenance_pie_chart": 420,
+  "part5_compound_returns:03_compound_debt_curve": 360,
+  "part5_compound_returns:04_diverging_cost_curves": 420,
+  "part5_compound_returns:05_investment_comparison_table": 420,
+  "part5_compound_returns:06_veo_grandmother_socks_callback": 180,
+  "part5_compound_returns:07_veo_developer_cursor_callback": 180,
+  "part5_compound_returns:08_economics_crossing_callback": 300,
+  "part5_compound_returns:09_contrarian_quote_card": 660,
+  "where_to_start:01_section_title_card": 546,
+  "where_to_start:02_legacy_codebase_reveal": 150,
+  "where_to_start:03_module_highlight_terminal": 270,
+  "where_to_start:04_source_of_truth_label": 150,
+  "where_to_start:05_module_glow_spread": 330,
+  "where_to_start:06_no_big_bang_callout": 150,
+  "where_to_start:07_gradual_migration_insight": 150,
+  "closing:01_veo_sock_discard": 90,
+  "closing:02_veo_developer_regenerate": 120,
+  "closing:03_pdd_triangle": 180,
+  "closing:04_dissolve_regenerate_loop": 150,
+  "closing:05_veo_mold_glow_finale": 240,
+  "closing:06_the_beat": 60,
+  "closing:07_final_title_card": 180,
 };
 
 const ColdOpen01SplitScreenDarningPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:01_split_screen_darning"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:01_split_screen_darning"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:01_split_screen_darning"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen02DeveloperCursorEditPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:02_developer_cursor_edit"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:02_developer_cursor_edit"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:02_developer_cursor_edit"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:02_developer_cursor_edit"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen03GrandmotherDarningPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:03_grandmother_darning"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:03_grandmother_darning"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:03_grandmother_darning"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:03_grandmother_darning"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen04DeveloperCodebaseZoomoutPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:04_developer_codebase_zoomout"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:04_developer_codebase_zoomout"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:04_developer_codebase_zoomout"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:04_developer_codebase_zoomout"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen05GrandmotherDrawerZoomoutPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:05_grandmother_drawer_zoomout"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:05_grandmother_drawer_zoomout"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:05_grandmother_drawer_zoomout"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:05_grandmother_drawer_zoomout"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen06SockTossPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:06_sock_toss"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:06_sock_toss"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:06_sock_toss"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:06_sock_toss"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const ColdOpen07CodeCursorBlinkPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_code_cursor_blink"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_code_cursor_blink"] ?? null}>
-      <ColdOpen07CodeCursorBlink />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:07_code_cursor_blink"] ?? 150}>
+        <ColdOpen07CodeCursorBlink />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const ColdOpen08CodeRegenerationPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:08_code_regeneration"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:08_code_regeneration"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:08_code_regeneration"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const ColdOpen09TitleCardPddPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:09_title_card_pdd"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:09_title_card_pdd"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:09_title_card_pdd"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:01_section_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:01_section_title_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics02SockPriceChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:02_sock_price_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:02_sock_price_chart"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:02_sock_price_chart"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics03CodeCostChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:03_code_cost_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:03_code_cost_chart"] ?? null}>
-      <Part1Economics03CodeCostChart />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:03_code_cost_chart"] ?? 150}>
+        <Part1Economics03CodeCostChart />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics04ResearchAnnotationsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:04_research_annotations"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:04_research_annotations"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:04_research_annotations"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics05CodeChurnAnnotationsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:05_code_churn_annotations"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:05_code_churn_annotations"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:05_code_churn_annotations"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics06DebtLayersZoomPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:06_debt_layers_zoom"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:06_debt_layers_zoom"] ?? null}>
-      <Part1Economics06DebtLayersZoom />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:06_debt_layers_zoom"] ?? 150}>
+        <Part1Economics06DebtLayersZoom />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics07ContextWindowShrinkPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:07_context_window_shrink"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:07_context_window_shrink"] ?? null}>
-      <Part1Economics07ContextWindowShrink />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:07_context_window_shrink"] ?? 150}>
+        <Part1Economics07ContextWindowShrink />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics08PerformanceVsContextPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:08_performance_vs_context"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:08_performance_vs_context"] ?? null}>
-      <Part1Economics08PerformanceVsContext />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:08_performance_vs_context"] ?? 150}>
+        <Part1Economics08PerformanceVsContext />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics09TwoByTwoGridPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:09_two_by_two_grid"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:09_two_by_two_grid"] ?? null}>
-      <Part1Economics09TwoByTwoGrid />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:09_two_by_two_grid"] ?? 150}>
+        <Part1Economics09TwoByTwoGrid />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics10ForkCodebaseSizePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:10_fork_codebase_size"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:10_fork_codebase_size"] ?? null}>
-      <Part1Economics10ForkCodebaseSize />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:10_fork_codebase_size"] ?? 150}>
+        <Part1Economics10ForkCodebaseSize />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics11PatchingVsRegenerationPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:11_patching_vs_regeneration"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:11_patching_vs_regeneration"] ?? null}>
-      <Part1Economics11PatchingVsRegeneration />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:11_patching_vs_regeneration"] ?? 150}>
+        <Part1Economics11PatchingVsRegeneration />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics12ContextCompressionPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:12_context_compression"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:12_context_compression"] ?? null}>
-      <Part1Economics12ContextCompression />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:12_context_compression"] ?? 150}>
+        <Part1Economics12ContextCompression />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics13CrossingLinesMomentPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:13_crossing_lines_moment"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:13_crossing_lines_moment"] ?? null}>
-      <Part1Economics13CrossingLinesMoment />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:13_crossing_lines_moment"] ?? 150}>
+        <Part1Economics13CrossingLinesMoment />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics14SplitDeveloperGrandmaPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:14_split_developer_grandma"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:14_split_developer_grandma"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:14_split_developer_grandma"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part1Economics15DeveloperCursorPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:15_developer_cursor"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:15_developer_cursor"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:15_developer_cursor"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part1_economics:15_developer_cursor"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part1Economics16GrandmotherDarningPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:16_grandmother_darning"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:16_grandmother_darning"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:16_grandmother_darning"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part1_economics:16_grandmother_darning"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part1Economics17DeveloperCodebaseZoomoutPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:17_developer_codebase_zoomout"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:17_developer_codebase_zoomout"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:17_developer_codebase_zoomout"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part1_economics:17_developer_codebase_zoomout"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics18KeyInsightStillnessPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:18_key_insight_stillness"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:18_key_insight_stillness"] ?? null}>
-      <Part1Economics18KeyInsightStillness />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:18_key_insight_stillness"] ?? 150}>
+        <Part1Economics18KeyInsightStillness />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics19DoubleMeterInsightPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:19_double_meter_insight"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:19_double_meter_insight"] ?? null}>
-      <Part1Economics19DoubleMeterInsight />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:19_double_meter_insight"] ?? 150}>
+        <Part1Economics19DoubleMeterInsight />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part1Economics20TryItYourselfPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part1_economics:20_try_it_yourself"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part1_economics:20_try_it_yourself"] ?? null}>
-      <Part1Economics20TryItYourself />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:20_try_it_yourself"] ?? 150}>
+        <Part1Economics20TryItYourself />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:01_section_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:01_section_title_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift02FactoryFloorWidePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:02_factory_floor_wide"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:02_factory_floor_wide"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:02_factory_floor_wide"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:02_factory_floor_wide"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift03InjectionMoldingCloseupPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:03_injection_molding_closeup"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:03_injection_molding_closeup"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:03_injection_molding_closeup"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:03_injection_molding_closeup"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift04MoldProductionCounterPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:04_mold_production_counter"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift05DefectAndMoldFixPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:05_defect_and_mold_fix"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:05_defect_and_mold_fix"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:05_defect_and_mold_fix"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:05_defect_and_mold_fix"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift06NewPartsEjectPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:06_new_parts_eject"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:06_new_parts_eject"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:06_new_parts_eject"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:06_new_parts_eject"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift07SplitCraftsmanVsMoldPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:07_split_craftsman_vs_mold"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:07_split_craftsman_vs_mold"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:07_split_craftsman_vs_mold"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift08VeoCraftsmanCarvingPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:08_veo_craftsman_carving"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:08_veo_craftsman_carving"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:08_veo_craftsman_carving"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:08_veo_craftsman_carving"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift09VeoMoldPlasticFlowPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:09_veo_mold_plastic_flow"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:09_veo_mold_plastic_flow"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:09_veo_mold_plastic_flow"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:09_veo_mold_plastic_flow"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part2ParadigmShift10Veo1980sChipLabPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:10_veo_1980s_chip_lab"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:10_veo_1980s_chip_lab"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:10_veo_1980s_chip_lab"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part2_paradigm_shift:10_veo_1980s_chip_lab"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift11SchematicDensityZoomPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:11_schematic_density_zoom"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:11_schematic_density_zoom"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:11_schematic_density_zoom"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift12VerilogSynthesisPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:12_verilog_synthesis"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:12_verilog_synthesis"] ?? null}>
-      <Part2ParadigmShift12VerilogSynthesis />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:12_verilog_synthesis"] ?? 150}>
+        <Part2ParadigmShift12VerilogSynthesis />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift13TripleSynthesisEquivalencePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? null}>
-      <Part2ParadigmShift13TripleSynthesisEquivalence />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? 150}>
+        <Part2ParadigmShift13TripleSynthesisEquivalence />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift14SynopsysPddEquivalencePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:14_synopsys_pdd_equivalence"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:14_synopsys_pdd_equivalence"] ?? null}>
-      <Part2ParadigmShift14SynopsysPddEquivalence />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:14_synopsys_pdd_equivalence"] ?? 150}>
+        <Part2ParadigmShift14SynopsysPddEquivalence />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift15AbstractionStaircasePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:15_abstraction_staircase"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:15_abstraction_staircase"] ?? null}>
-      <Part2ParadigmShift15AbstractionStaircase />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:15_abstraction_staircase"] ?? 150}>
+        <Part2ParadigmShift15AbstractionStaircase />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift16BillionGateUnreviewablePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:16_billion_gate_unreviewable"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:16_billion_gate_unreviewable"] ?? null}>
-      <Part2ParadigmShift16BillionGateUnreviewable />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:16_billion_gate_unreviewable"] ?? 150}>
+        <Part2ParadigmShift16BillionGateUnreviewable />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift17ReviewSpecVerifyOutputPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:17_review_spec_verify_output"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:17_review_spec_verify_output"] ?? null}>
-      <Part2ParadigmShift17ReviewSpecVerifyOutput />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:17_review_spec_verify_output"] ?? 150}>
+        <Part2ParadigmShift17ReviewSpecVerifyOutput />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part2ParadigmShift18PromptMoldFinalePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:18_prompt_mold_finale"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:18_prompt_mold_finale"] ?? null}>
-      <Part2ParadigmShift18PromptMoldFinale />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:18_prompt_mold_finale"] ?? 150}>
+        <Part2ParadigmShift18PromptMoldFinale />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:01_section_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:01_section_title_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts02MoldCrossSectionPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:02_mold_cross_section"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:02_mold_cross_section"] ?? null}>
-      <Part3MoldParts02MoldCrossSection />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:02_mold_cross_section"] ?? 150}>
+        <Part3MoldParts02MoldCrossSection />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts03MoldWallsIlluminatePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:03_mold_walls_illuminate"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:03_mold_walls_illuminate"] ?? null}>
-      <Part3MoldParts03MoldWallsIlluminate />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:03_mold_walls_illuminate"] ?? 150}>
+        <Part3MoldParts03MoldWallsIlluminate />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts04LiquidInjectionPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:04_liquid_injection"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:04_liquid_injection"] ?? null}>
-      <Part3MoldParts04LiquidInjection />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:04_liquid_injection"] ?? 150}>
+        <Part3MoldParts04LiquidInjection />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts05BugAddsWallPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:05_bug_adds_wall"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:05_bug_adds_wall"] ?? null}>
-      <Part3MoldParts05BugAddsWall />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:05_bug_adds_wall"] ?? 150}>
+        <Part3MoldParts05BugAddsWall />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts06RatchetTimelapsePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:06_ratchet_timelapse"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:06_ratchet_timelapse"] ?? null}>
-      <Part3MoldParts06RatchetTimelapse />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:06_ratchet_timelapse"] ?? 150}>
+        <Part3MoldParts06RatchetTimelapse />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts07SplitTraditionalVsPddPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:07_split_traditional_vs_pdd"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:07_split_traditional_vs_pdd"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:07_split_traditional_vs_pdd"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts08BugForkRoadPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:08_bug_fork_road"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:08_bug_fork_road"] ?? null}>
-      <Part3MoldParts08BugForkRoad />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:08_bug_fork_road"] ?? 150}>
+        <Part3MoldParts08BugForkRoad />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts09FiveGenerationsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:09_five_generations"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:09_five_generations"] ?? null}>
-      <Part3MoldParts09FiveGenerations />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:09_five_generations"] ?? 150}>
+        <Part3MoldParts09FiveGenerations />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts10Z3FormalProofPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:10_z3_formal_proof"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:10_z3_formal_proof"] ?? null}>
-      <Part3MoldParts10Z3FormalProof />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:10_z3_formal_proof"] ?? 150}>
+        <Part3MoldParts10Z3FormalProof />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts11ModuleBoundaryPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:11_module_boundary"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:11_module_boundary"] ?? null}>
-      <Part3MoldParts11ModuleBoundary />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:11_module_boundary"] ?? 150}>
+        <Part3MoldParts11ModuleBoundary />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts12PromptNozzlePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:12_prompt_nozzle"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:12_prompt_nozzle"] ?? null}>
-      <Part3MoldParts12PromptNozzle />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:12_prompt_nozzle"] ?? 150}>
+        <Part3MoldParts12PromptNozzle />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts13PromptRatioPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:13_prompt_ratio"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:13_prompt_ratio"] ?? null}>
-      <Part3MoldParts13PromptRatio />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:13_prompt_ratio"] ?? 150}>
+        <Part3MoldParts13PromptRatio />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part3MoldParts14VeoGroundingMaterialPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:14_veo_grounding_material"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:14_veo_grounding_material"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:14_veo_grounding_material"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part3_mold_parts:14_veo_grounding_material"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts15GroundingStylesPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:15_grounding_styles"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:15_grounding_styles"] ?? null}>
-      <Part3MoldParts15GroundingStyles />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:15_grounding_styles"] ?? 150}>
+        <Part3MoldParts15GroundingStyles />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts16ThreeComponentsPullbackPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:16_three_components_pullback"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:16_three_components_pullback"] ?? null}>
-      <Part3MoldParts16ThreeComponentsPullback />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:16_three_components_pullback"] ?? 150}>
+        <Part3MoldParts16ThreeComponentsPullback />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts17ComponentTablePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:17_component_table"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:17_component_table"] ?? null}>
-      <Part3MoldParts17ComponentTable />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:17_component_table"] ?? 150}>
+        <Part3MoldParts17ComponentTable />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part3MoldParts18CodeOutputFinalePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:18_code_output_finale"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:18_code_output_finale"] ?? null}>
-      <Part3MoldParts18CodeOutputFinale />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:18_code_output_finale"] ?? 150}>
+        <Part3MoldParts18CodeOutputFinale />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:01_section_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:01_section_title_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff02SplitPrinterVsMoldPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:02_split_printer_vs_mold"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:02_split_printer_vs_mold"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:02_split_printer_vs_mold"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff03PrecisionTradeoffCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:03_precision_tradeoff_curve"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff04DetailedPromptFilePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:04_detailed_prompt_file"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:04_detailed_prompt_file"] ?? null}>
-      <Part4PrecisionTradeoff04DetailedPromptFile />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:04_detailed_prompt_file"] ?? 150}>
+        <Part4PrecisionTradeoff04DetailedPromptFile />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff05MinimalPromptWithTestsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:05_minimal_prompt_with_tests"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:05_minimal_prompt_with_tests"] ?? null}>
-      <Part4PrecisionTradeoff05MinimalPromptWithTests />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:05_minimal_prompt_with_tests"] ?? 150}>
+        <Part4PrecisionTradeoff05MinimalPromptWithTests />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff06DualGenerationComparisonPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:06_dual_generation_comparison"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:06_dual_generation_comparison"] ?? null}>
-      <Part4PrecisionTradeoff06DualGenerationComparison />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:06_dual_generation_comparison"] ?? 150}>
+        <Part4PrecisionTradeoff06DualGenerationComparison />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff07KeyInsightWallsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:07_key_insight_walls"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:07_key_insight_walls"] ?? null}>
-      <Part4PrecisionTradeoff07KeyInsightWalls />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:07_key_insight_walls"] ?? 150}>
+        <Part4PrecisionTradeoff07KeyInsightWalls />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff08EmbeddedCodeDocumentPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:08_embedded_code_document"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:08_embedded_code_document"] ?? null}>
-      <Part4PrecisionTradeoff08EmbeddedCodeDocument />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:08_embedded_code_document"] ?? 150}>
+        <Part4PrecisionTradeoff08EmbeddedCodeDocument />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part4PrecisionTradeoff09PromptCodeSpectrumPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:09_prompt_code_spectrum"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:09_prompt_code_spectrum"] ?? null}>
-      <Part4PrecisionTradeoff09PromptCodeSpectrum />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:09_prompt_code_spectrum"] ?? 150}>
+        <Part4PrecisionTradeoff09PromptCodeSpectrum />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:01_section_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:01_section_title_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns02MaintenancePieChartPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:02_maintenance_pie_chart"] ?? null}>
-      <Part5CompoundReturns02MaintenancePieChart />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:02_maintenance_pie_chart"] ?? 150}>
+        <Part5CompoundReturns02MaintenancePieChart />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns03CompoundDebtCurvePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:03_compound_debt_curve"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:03_compound_debt_curve"] ?? null}>
-      <Part5CompoundReturns03CompoundDebtCurve />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:03_compound_debt_curve"] ?? 150}>
+        <Part5CompoundReturns03CompoundDebtCurve />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns04DivergingCostCurvesPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:04_diverging_cost_curves"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:04_diverging_cost_curves"] ?? null}>
-      <Part5CompoundReturns04DivergingCostCurves />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:04_diverging_cost_curves"] ?? 150}>
+        <Part5CompoundReturns04DivergingCostCurves />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns05InvestmentComparisonTablePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:05_investment_comparison_table"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:05_investment_comparison_table"] ?? null}>
-      <Part5CompoundReturns05InvestmentComparisonTable />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:05_investment_comparison_table"] ?? 150}>
+        <Part5CompoundReturns05InvestmentComparisonTable />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part5CompoundReturns06VeoGrandmotherSocksCallbackPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:06_veo_grandmother_socks_callback"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:06_veo_grandmother_socks_callback"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:06_veo_grandmother_socks_callback"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part5_compound_returns:06_veo_grandmother_socks_callback"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Part5CompoundReturns07VeoDeveloperCursorCallbackPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:07_veo_developer_cursor_callback"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:07_veo_developer_cursor_callback"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:07_veo_developer_cursor_callback"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part5_compound_returns:07_veo_developer_cursor_callback"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns08EconomicsCrossingCallbackPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:08_economics_crossing_callback"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Part5CompoundReturns09ContrarianQuoteCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:09_contrarian_quote_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:01_section_title_card"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:01_section_title_card"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart02LegacyCodebaseRevealPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:02_legacy_codebase_reveal"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:02_legacy_codebase_reveal"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:02_legacy_codebase_reveal"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart03ModuleHighlightTerminalPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:03_module_highlight_terminal"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:03_module_highlight_terminal"] ?? null}>
-      <GeneratedContractVisual />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:03_module_highlight_terminal"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart04SourceOfTruthLabelPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:04_source_of_truth_label"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:04_source_of_truth_label"] ?? null}>
-      <WhereToStart04SourceOfTruthLabel />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:04_source_of_truth_label"] ?? 150}>
+        <WhereToStart04SourceOfTruthLabel />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart05ModuleGlowSpreadPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:05_module_glow_spread"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:05_module_glow_spread"] ?? null}>
-      <WhereToStart05ModuleGlowSpread />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:05_module_glow_spread"] ?? 150}>
+        <WhereToStart05ModuleGlowSpread />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart06NoBigBangCalloutPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:06_no_big_bang_callout"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:06_no_big_bang_callout"] ?? null}>
-      <WhereToStart06NoBigBangCallout />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:06_no_big_bang_callout"] ?? 150}>
+        <WhereToStart06NoBigBangCallout />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const WhereToStart07GradualMigrationInsightPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:07_gradual_migration_insight"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:07_gradual_migration_insight"] ?? null}>
-      <WhereToStart07GradualMigrationInsight />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:07_gradual_migration_insight"] ?? 150}>
+        <WhereToStart07GradualMigrationInsight />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Closing01VeoSockDiscardPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:01_veo_sock_discard"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:01_veo_sock_discard"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:01_veo_sock_discard"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["closing:01_veo_sock_discard"] ?? null} />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Closing02VeoDeveloperRegeneratePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:02_veo_developer_regenerate"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:02_veo_developer_regenerate"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:02_veo_developer_regenerate"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["closing:02_veo_developer_regenerate"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Closing03PddTrianglePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:03_pdd_triangle"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:03_pdd_triangle"] ?? null}>
-      <Closing03PddTriangle />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:03_pdd_triangle"] ?? 150}>
+        <Closing03PddTriangle />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Closing04DissolveRegenerateLoopPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:04_dissolve_regenerate_loop"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:04_dissolve_regenerate_loop"] ?? null}>
-      <Closing04DissolveRegenerateLoop />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:04_dissolve_regenerate_loop"] ?? 150}>
+        <Closing04DissolveRegenerateLoop />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const Closing05VeoMoldGlowFinalePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:05_veo_mold_glow_finale"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:05_veo_mold_glow_finale"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:05_veo_mold_glow_finale"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["closing:05_veo_mold_glow_finale"] ?? null} />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Closing06TheBeatPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:06_the_beat"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:06_the_beat"] ?? null}>
-      <Closing06TheBeat />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:06_the_beat"] ?? 150}>
+        <Closing06TheBeat />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const Closing07FinalTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:07_final_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:07_final_title_card"] ?? null}>
-      <Closing07FinalTitleCard />
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:07_final_title_card"] ?? 150}>
+        <Closing07FinalTitleCard />
+      </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
@@ -753,7 +1269,47 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open01-split-screen-darning"
         component={ColdOpen01SplitScreenDarningPreview}
-        durationInFrames={270}
+        durationInFrames={260}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open02-developer-cursor-edit"
+        component={ColdOpen02DeveloperCursorEditPreview}
+        durationInFrames={537}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open03-grandmother-darning"
+        component={ColdOpen03GrandmotherDarningPreview}
+        durationInFrames={537}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open04-developer-codebase-zoomout"
+        component={ColdOpen04DeveloperCodebaseZoomoutPreview}
+        durationInFrames={239}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open05-grandmother-drawer-zoomout"
+        component={ColdOpen05GrandmotherDrawerZoomoutPreview}
+        durationInFrames={239}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open06-sock-toss"
+        component={ColdOpen06SockTossPreview}
+        durationInFrames={153}
         fps={30}
         width={1920}
         height={1080}
@@ -761,7 +1317,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open07-code-cursor-blink"
         component={ColdOpen07CodeCursorBlinkPreview}
-        durationInFrames={48}
+        durationInFrames={47}
         fps={30}
         width={1920}
         height={1080}
@@ -769,7 +1325,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open08-code-regeneration"
         component={ColdOpen08CodeRegenerationPreview}
-        durationInFrames={60}
+        durationInFrames={56}
         fps={30}
         width={1920}
         height={1080}
@@ -777,7 +1333,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open09-title-card-pdd"
         component={ColdOpen09TitleCardPddPreview}
-        durationInFrames={60}
+        durationInFrames={56}
         fps={30}
         width={1920}
         height={1080}
@@ -785,7 +1341,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics01-section-title-card"
         component={Part1Economics01SectionTitleCardPreview}
-        durationInFrames={120}
+        durationInFrames={700}
         fps={30}
         width={1920}
         height={1080}
@@ -793,7 +1349,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics02-sock-price-chart"
         component={Part1Economics02SockPriceChartPreview}
-        durationInFrames={720}
+        durationInFrames={707}
         fps={30}
         width={1920}
         height={1080}
@@ -801,7 +1357,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics03-code-cost-chart"
         component={Part1Economics03CodeCostChartPreview}
-        durationInFrames={1650}
+        durationInFrames={1627}
         fps={30}
         width={1920}
         height={1080}
@@ -809,7 +1365,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics04-research-annotations"
         component={Part1Economics04ResearchAnnotationsPreview}
-        durationInFrames={900}
+        durationInFrames={1156}
         fps={30}
         width={1920}
         height={1080}
@@ -817,7 +1373,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics05-code-churn-annotations"
         component={Part1Economics05CodeChurnAnnotationsPreview}
-        durationInFrames={840}
+        durationInFrames={835}
         fps={30}
         width={1920}
         height={1080}
@@ -825,7 +1381,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics06-debt-layers-zoom"
         component={Part1Economics06DebtLayersZoomPreview}
-        durationInFrames={540}
+        durationInFrames={554}
         fps={30}
         width={1920}
         height={1080}
@@ -833,7 +1389,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics07-context-window-shrink"
         component={Part1Economics07ContextWindowShrinkPreview}
-        durationInFrames={1560}
+        durationInFrames={1529}
         fps={30}
         width={1920}
         height={1080}
@@ -841,7 +1397,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics08-performance-vs-context"
         component={Part1Economics08PerformanceVsContextPreview}
-        durationInFrames={1470}
+        durationInFrames={1618}
         fps={30}
         width={1920}
         height={1080}
@@ -849,7 +1405,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics09-two-by-two-grid"
         component={Part1Economics09TwoByTwoGridPreview}
-        durationInFrames={630}
+        durationInFrames={636}
         fps={30}
         width={1920}
         height={1080}
@@ -857,7 +1413,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics10-fork-codebase-size"
         component={Part1Economics10ForkCodebaseSizePreview}
-        durationInFrames={1380}
+        durationInFrames={1724}
         fps={30}
         width={1920}
         height={1080}
@@ -865,7 +1421,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics11-patching-vs-regeneration"
         component={Part1Economics11PatchingVsRegenerationPreview}
-        durationInFrames={810}
+        durationInFrames={1589}
         fps={30}
         width={1920}
         height={1080}
@@ -873,7 +1429,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics12-context-compression"
         component={Part1Economics12ContextCompressionPreview}
-        durationInFrames={1380}
+        durationInFrames={1738}
         fps={30}
         width={1920}
         height={1080}
@@ -881,7 +1437,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics13-crossing-lines-moment"
         component={Part1Economics13CrossingLinesMomentPreview}
-        durationInFrames={360}
+        durationInFrames={354}
         fps={30}
         width={1920}
         height={1080}
@@ -889,7 +1445,31 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics14-split-developer-grandma"
         component={Part1Economics14SplitDeveloperGrandmaPreview}
-        durationInFrames={510}
+        durationInFrames={463}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part1-economics15-developer-cursor"
+        component={Part1Economics15DeveloperCursorPreview}
+        durationInFrames={203}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part1-economics16-grandmother-darning"
+        component={Part1Economics16GrandmotherDarningPreview}
+        durationInFrames={203}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part1-economics17-developer-codebase-zoomout"
+        component={Part1Economics17DeveloperCodebaseZoomoutPreview}
+        durationInFrames={253}
         fps={30}
         width={1920}
         height={1080}
@@ -897,7 +1477,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics18-key-insight-stillness"
         component={Part1Economics18KeyInsightStillnessPreview}
-        durationInFrames={360}
+        durationInFrames={351}
         fps={30}
         width={1920}
         height={1080}
@@ -905,7 +1485,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics19-double-meter-insight"
         component={Part1Economics19DoubleMeterInsightPreview}
-        durationInFrames={360}
+        durationInFrames={351}
         fps={30}
         width={1920}
         height={1080}
@@ -913,7 +1493,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics20-try-it-yourself"
         component={Part1Economics20TryItYourselfPreview}
-        durationInFrames={240}
+        durationInFrames={236}
         fps={30}
         width={1920}
         height={1080}
@@ -921,7 +1501,23 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift01-section-title-card"
         component={Part2ParadigmShift01SectionTitleCardPreview}
-        durationInFrames={120}
+        durationInFrames={1697}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift02-factory-floor-wide"
+        component={Part2ParadigmShift02FactoryFloorWidePreview}
+        durationInFrames={1160}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift03-injection-molding-closeup"
+        component={Part2ParadigmShift03InjectionMoldingCloseupPreview}
+        durationInFrames={992}
         fps={30}
         width={1920}
         height={1080}
@@ -929,7 +1525,23 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift04-mold-production-counter"
         component={Part2ParadigmShift04MoldProductionCounterPreview}
-        durationInFrames={300}
+        durationInFrames={593}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift05-defect-and-mold-fix"
+        component={Part2ParadigmShift05DefectAndMoldFixPreview}
+        durationInFrames={700}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift06-new-parts-eject"
+        component={Part2ParadigmShift06NewPartsEjectPreview}
+        durationInFrames={504}
         fps={30}
         width={1920}
         height={1080}
@@ -937,7 +1549,31 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift07-split-craftsman-vs-mold"
         component={Part2ParadigmShift07SplitCraftsmanVsMoldPreview}
-        durationInFrames={600}
+        durationInFrames={823}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift08-veo-craftsman-carving"
+        component={Part2ParadigmShift08VeoCraftsmanCarvingPreview}
+        durationInFrames={1190}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift09-veo-mold-plastic-flow"
+        component={Part2ParadigmShift09VeoMoldPlasticFlowPreview}
+        durationInFrames={1190}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part2-paradigm-shift10-veo1980s-chip-lab"
+        component={Part2ParadigmShift10Veo1980sChipLabPreview}
+        durationInFrames={428}
         fps={30}
         width={1920}
         height={1080}
@@ -945,7 +1581,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift11-schematic-density-zoom"
         component={Part2ParadigmShift11SchematicDensityZoomPreview}
-        durationInFrames={420}
+        durationInFrames={667}
         fps={30}
         width={1920}
         height={1080}
@@ -953,7 +1589,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift12-verilog-synthesis"
         component={Part2ParadigmShift12VerilogSynthesisPreview}
-        durationInFrames={360}
+        durationInFrames={667}
         fps={30}
         width={1920}
         height={1080}
@@ -961,7 +1597,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift13-triple-synthesis-equivalence"
         component={Part2ParadigmShift13TripleSynthesisEquivalencePreview}
-        durationInFrames={750}
+        durationInFrames={1106}
         fps={30}
         width={1920}
         height={1080}
@@ -969,7 +1605,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift14-synopsys-pdd-equivalence"
         component={Part2ParadigmShift14SynopsysPddEquivalencePreview}
-        durationInFrames={390}
+        durationInFrames={395}
         fps={30}
         width={1920}
         height={1080}
@@ -977,7 +1613,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift15-abstraction-staircase"
         component={Part2ParadigmShift15AbstractionStaircasePreview}
-        durationInFrames={690}
+        durationInFrames={699}
         fps={30}
         width={1920}
         height={1080}
@@ -985,7 +1621,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift16-billion-gate-unreviewable"
         component={Part2ParadigmShift16BillionGateUnreviewablePreview}
-        durationInFrames={360}
+        durationInFrames={355}
         fps={30}
         width={1920}
         height={1080}
@@ -993,7 +1629,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift17-review-spec-verify-output"
         component={Part2ParadigmShift17ReviewSpecVerifyOutputPreview}
-        durationInFrames={360}
+        durationInFrames={355}
         fps={30}
         width={1920}
         height={1080}
@@ -1001,7 +1637,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift18-prompt-mold-finale"
         component={Part2ParadigmShift18PromptMoldFinalePreview}
-        durationInFrames={360}
+        durationInFrames={355}
         fps={30}
         width={1920}
         height={1080}
@@ -1009,7 +1645,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts01-section-title-card"
         component={Part3MoldParts01SectionTitleCardPreview}
-        durationInFrames={1320}
+        durationInFrames={1741}
         fps={30}
         width={1920}
         height={1080}
@@ -1017,7 +1653,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts02-mold-cross-section"
         component={Part3MoldParts02MoldCrossSectionPreview}
-        durationInFrames={420}
+        durationInFrames={423}
         fps={30}
         width={1920}
         height={1080}
@@ -1025,7 +1661,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts03-mold-walls-illuminate"
         component={Part3MoldParts03MoldWallsIlluminatePreview}
-        durationInFrames={300}
+        durationInFrames={294}
         fps={30}
         width={1920}
         height={1080}
@@ -1033,7 +1669,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts04-liquid-injection"
         component={Part3MoldParts04LiquidInjectionPreview}
-        durationInFrames={870}
+        durationInFrames={1303}
         fps={30}
         width={1920}
         height={1080}
@@ -1041,7 +1677,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts05-bug-adds-wall"
         component={Part3MoldParts05BugAddsWallPreview}
-        durationInFrames={480}
+        durationInFrames={475}
         fps={30}
         width={1920}
         height={1080}
@@ -1049,7 +1685,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts06-ratchet-timelapse"
         component={Part3MoldParts06RatchetTimelapsePreview}
-        durationInFrames={270}
+        durationInFrames={280}
         fps={30}
         width={1920}
         height={1080}
@@ -1057,7 +1693,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts07-split-traditional-vs-pdd"
         component={Part3MoldParts07SplitTraditionalVsPddPreview}
-        durationInFrames={240}
+        durationInFrames={236}
         fps={30}
         width={1920}
         height={1080}
@@ -1065,7 +1701,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts08-bug-fork-road"
         component={Part3MoldParts08BugForkRoadPreview}
-        durationInFrames={540}
+        durationInFrames={547}
         fps={30}
         width={1920}
         height={1080}
@@ -1073,7 +1709,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts09-five-generations"
         component={Part3MoldParts09FiveGenerationsPreview}
-        durationInFrames={540}
+        durationInFrames={530}
         fps={30}
         width={1920}
         height={1080}
@@ -1081,7 +1717,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts10-z3-formal-proof"
         component={Part3MoldParts10Z3FormalProofPreview}
-        durationInFrames={780}
+        durationInFrames={781}
         fps={30}
         width={1920}
         height={1080}
@@ -1089,7 +1725,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts11-module-boundary"
         component={Part3MoldParts11ModuleBoundaryPreview}
-        durationInFrames={660}
+        durationInFrames={671}
         fps={30}
         width={1920}
         height={1080}
@@ -1097,7 +1733,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts12-prompt-nozzle"
         component={Part3MoldParts12PromptNozzlePreview}
-        durationInFrames={720}
+        durationInFrames={713}
         fps={30}
         width={1920}
         height={1080}
@@ -1105,7 +1741,15 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts13-prompt-ratio"
         component={Part3MoldParts13PromptRatioPreview}
-        durationInFrames={540}
+        durationInFrames={1269}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part3-mold-parts14-veo-grounding-material"
+        component={Part3MoldParts14VeoGroundingMaterialPreview}
+        durationInFrames={272}
         fps={30}
         width={1920}
         height={1080}
@@ -1113,7 +1757,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts15-grounding-styles"
         component={Part3MoldParts15GroundingStylesPreview}
-        durationInFrames={780}
+        durationInFrames={768}
         fps={30}
         width={1920}
         height={1080}
@@ -1121,7 +1765,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts16-three-components-pullback"
         component={Part3MoldParts16ThreeComponentsPullbackPreview}
-        durationInFrames={270}
+        durationInFrames={261}
         fps={30}
         width={1920}
         height={1080}
@@ -1129,7 +1773,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts17-component-table"
         component={Part3MoldParts17ComponentTablePreview}
-        durationInFrames={300}
+        durationInFrames={301}
         fps={30}
         width={1920}
         height={1080}
@@ -1137,7 +1781,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part3-mold-parts18-code-output-finale"
         component={Part3MoldParts18CodeOutputFinalePreview}
-        durationInFrames={90}
+        durationInFrames={86}
         fps={30}
         width={1920}
         height={1080}
@@ -1145,7 +1789,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff01-section-title-card"
         component={Part4PrecisionTradeoff01SectionTitleCardPreview}
-        durationInFrames={120}
+        durationInFrames={734}
         fps={30}
         width={1920}
         height={1080}
@@ -1153,7 +1797,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff02-split-printer-vs-mold"
         component={Part4PrecisionTradeoff02SplitPrinterVsMoldPreview}
-        durationInFrames={480}
+        durationInFrames={734}
         fps={30}
         width={1920}
         height={1080}
@@ -1161,7 +1805,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff03-precision-tradeoff-curve"
         component={Part4PrecisionTradeoff03PrecisionTradeoffCurvePreview}
-        durationInFrames={450}
+        durationInFrames={703}
         fps={30}
         width={1920}
         height={1080}
@@ -1169,7 +1813,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff04-detailed-prompt-file"
         component={Part4PrecisionTradeoff04DetailedPromptFilePreview}
-        durationInFrames={240}
+        durationInFrames={482}
         fps={30}
         width={1920}
         height={1080}
@@ -1177,7 +1821,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff05-minimal-prompt-with-tests"
         component={Part4PrecisionTradeoff05MinimalPromptWithTestsPreview}
-        durationInFrames={240}
+        durationInFrames={482}
         fps={30}
         width={1920}
         height={1080}
@@ -1185,7 +1829,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff06-dual-generation-comparison"
         component={Part4PrecisionTradeoff06DualGenerationComparisonPreview}
-        durationInFrames={240}
+        durationInFrames={482}
         fps={30}
         width={1920}
         height={1080}
@@ -1193,7 +1837,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff07-key-insight-walls"
         component={Part4PrecisionTradeoff07KeyInsightWallsPreview}
-        durationInFrames={120}
+        durationInFrames={482}
         fps={30}
         width={1920}
         height={1080}
@@ -1201,7 +1845,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff08-embedded-code-document"
         component={Part4PrecisionTradeoff08EmbeddedCodeDocumentPreview}
-        durationInFrames={840}
+        durationInFrames={837}
         fps={30}
         width={1920}
         height={1080}
@@ -1209,7 +1853,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part4-precision-tradeoff09-prompt-code-spectrum"
         component={Part4PrecisionTradeoff09PromptCodeSpectrumPreview}
-        durationInFrames={480}
+        durationInFrames={473}
         fps={30}
         width={1920}
         height={1080}
@@ -1217,7 +1861,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns01-section-title-card"
         component={Part5CompoundReturns01SectionTitleCardPreview}
-        durationInFrames={120}
+        durationInFrames={812}
         fps={30}
         width={1920}
         height={1080}
@@ -1225,7 +1869,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns02-maintenance-pie-chart"
         component={Part5CompoundReturns02MaintenancePieChartPreview}
-        durationInFrames={420}
+        durationInFrames={812}
         fps={30}
         width={1920}
         height={1080}
@@ -1233,7 +1877,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns03-compound-debt-curve"
         component={Part5CompoundReturns03CompoundDebtCurvePreview}
-        durationInFrames={360}
+        durationInFrames={473}
         fps={30}
         width={1920}
         height={1080}
@@ -1241,7 +1885,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns04-diverging-cost-curves"
         component={Part5CompoundReturns04DivergingCostCurvesPreview}
-        durationInFrames={420}
+        durationInFrames={655}
         fps={30}
         width={1920}
         height={1080}
@@ -1249,7 +1893,23 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns05-investment-comparison-table"
         component={Part5CompoundReturns05InvestmentComparisonTablePreview}
-        durationInFrames={420}
+        durationInFrames={265}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part5-compound-returns06-veo-grandmother-socks-callback"
+        component={Part5CompoundReturns06VeoGrandmotherSocksCallbackPreview}
+        durationInFrames={265}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="part5-compound-returns07-veo-developer-cursor-callback"
+        component={Part5CompoundReturns07VeoDeveloperCursorCallbackPreview}
+        durationInFrames={284}
         fps={30}
         width={1920}
         height={1080}
@@ -1257,7 +1917,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns08-economics-crossing-callback"
         component={Part5CompoundReturns08EconomicsCrossingCallbackPreview}
-        durationInFrames={300}
+        durationInFrames={288}
         fps={30}
         width={1920}
         height={1080}
@@ -1265,7 +1925,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part5-compound-returns09-contrarian-quote-card"
         component={Part5CompoundReturns09ContrarianQuoteCardPreview}
-        durationInFrames={660}
+        durationInFrames={655}
         fps={30}
         width={1920}
         height={1080}
@@ -1281,7 +1941,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start02-legacy-codebase-reveal"
         component={WhereToStart02LegacyCodebaseRevealPreview}
-        durationInFrames={150}
+        durationInFrames={546}
         fps={30}
         width={1920}
         height={1080}
@@ -1289,7 +1949,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start03-module-highlight-terminal"
         component={WhereToStart03ModuleHighlightTerminalPreview}
-        durationInFrames={270}
+        durationInFrames={546}
         fps={30}
         width={1920}
         height={1080}
@@ -1297,7 +1957,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start04-source-of-truth-label"
         component={WhereToStart04SourceOfTruthLabelPreview}
-        durationInFrames={150}
+        durationInFrames={546}
         fps={30}
         width={1920}
         height={1080}
@@ -1305,7 +1965,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start05-module-glow-spread"
         component={WhereToStart05ModuleGlowSpreadPreview}
-        durationInFrames={330}
+        durationInFrames={340}
         fps={30}
         width={1920}
         height={1080}
@@ -1313,7 +1973,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="where-to-start06-no-big-bang-callout"
         component={WhereToStart06NoBigBangCalloutPreview}
-        durationInFrames={150}
+        durationInFrames={340}
         fps={30}
         width={1920}
         height={1080}
@@ -1327,9 +1987,25 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
+        id="closing01-veo-sock-discard"
+        component={Closing01VeoSockDiscardPreview}
+        durationInFrames={43}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="closing02-veo-developer-regenerate"
+        component={Closing02VeoDeveloperRegeneratePreview}
+        durationInFrames={163}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
         id="closing03-pdd-triangle"
         component={Closing03PddTrianglePreview}
-        durationInFrames={180}
+        durationInFrames={264}
         fps={30}
         width={1920}
         height={1080}
@@ -1337,7 +2013,15 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing04-dissolve-regenerate-loop"
         component={Closing04DissolveRegenerateLoopPreview}
-        durationInFrames={150}
+        durationInFrames={163}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="closing05-veo-mold-glow-finale"
+        component={Closing05VeoMoldGlowFinalePreview}
+        durationInFrames={121}
         fps={30}
         width={1920}
         height={1080}
@@ -1345,7 +2029,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing06-the-beat"
         component={Closing06TheBeatPreview}
-        durationInFrames={60}
+        durationInFrames={54}
         fps={30}
         width={1920}
         height={1080}
@@ -1353,7 +2037,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="closing07-final-title-card"
         component={Closing07FinalTitleCardPreview}
-        durationInFrames={180}
+        durationInFrames={121}
         fps={30}
         width={1920}
         height={1080}

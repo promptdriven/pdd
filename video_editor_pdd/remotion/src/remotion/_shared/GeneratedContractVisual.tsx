@@ -10,6 +10,7 @@ import {
 
 import {
   useVisualContractData,
+  useVisualDurationInFrames,
   useVisualMediaAssetSrc,
 } from "./visual-runtime";
 import {
@@ -86,6 +87,10 @@ const resolveContractChartId = (data: Record<string, unknown>): string | null =>
 
   if (rawChartId === "code_cost_generate_vs_patch") {
     return "code_cost_triple_line";
+  }
+
+  if (rawChartId === "maintenance_cost_split") {
+    return "maintenance_cost_pie";
   }
 
   return rawChartId;
@@ -1507,7 +1512,7 @@ const ChartVisual: React.FC<{
 }> = ({ data, width, height, frame }) => {
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
-  const { durationInFrames } = useVideoConfig();
+  const durationInFrames = useVisualDurationInFrames();
   const chartId = resolveContractChartId(data);
   const event = asString(data.event);
   const callouts = Array.isArray(data.callouts)
@@ -1597,7 +1602,12 @@ const ChartVisual: React.FC<{
       productionProgress >= 0.96
         ? endValue
         : Math.max(startValue, startValue * Math.pow(endValue / startValue, easedProgress));
-    const displayValue = productionProgress >= 0.8 ? `${formatCompactMetric(endValue)}` : formatCompactMetric(currentValue);
+    const finalDisplayValue =
+      endValue >= 10000 ? "10,000+" : `${Math.round(endValue).toLocaleString()}+`;
+    const displayValue =
+      productionProgress >= 0.8
+        ? finalDisplayValue
+        : Math.round(currentValue).toLocaleString();
     const cycleDots = Math.max(4, Math.min(10, Math.round(interpolate(
       frame,
       [0, durationInFrames],
@@ -1643,35 +1653,75 @@ const ChartVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              left: 92,
-              top: 120,
-              width: 360,
-              padding: "28px 30px",
-              borderRadius: 28,
-              backgroundColor: "rgba(2, 6, 23, 0.76)",
-              border: "1px solid rgba(74, 222, 128, 0.24)",
+              left: 120,
+              top: 112,
+              width: 780,
+              height: 468,
+              borderRadius: 36,
+              backgroundColor: "rgba(15, 23, 42, 0.72)",
+              border: "1px solid rgba(148, 163, 184, 0.22)",
+              overflow: "hidden",
             }}
           >
-            <div style={{ color: "#94A3B8", fontSize: 20, fontWeight: 600, letterSpacing: 1.2 }}>
-              parts produced
-            </div>
+            <svg width="100%" height="100%" viewBox="0 0 780 468">
+              <rect x={164} y={112} width={452} height={214} rx={44} fill="none" stroke="rgba(148, 163, 184, 0.78)" strokeWidth={14} />
+              <rect x={198} y={142} width={384} height={160} rx={26} fill="rgba(2, 6, 23, 0.36)" stroke="rgba(217, 148, 74, 0.72)" strokeWidth={6} />
+              <rect x={316} y={84} width={148} height={46} rx={22} fill="rgba(226, 232, 240, 0.16)" />
+              <path d="M 390 148 C 350 208, 330 236, 328 270 C 326 308, 358 336, 394 336 C 430 336, 460 306, 458 270 C 456 236, 434 208, 414 172 Z" fill="rgba(217, 148, 74, 0.28)" />
+              <path d="M 390 138 L 390 54" stroke="rgba(217, 148, 74, 0.72)" strokeWidth={8} strokeLinecap="round" />
+              {Array.from({ length: 12 }).map((_, index) => (
+                <rect
+                  key={`part-${index}`}
+                  x={170 + (index % 4) * 112}
+                  y={372 + Math.floor(index / 4) * 38}
+                  width={52}
+                  height={28}
+                  rx={10}
+                  fill={index < Math.round(productionProgress * 12) ? "#D9944A" : "rgba(71, 85, 105, 0.55)"}
+                />
+              ))}
+            </svg>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: 120,
+              bottom: 118,
+              width: 360,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+            }}
+          >
             <div
               style={{
-                color: "#F8FAFC",
-                fontSize: 84,
-                fontWeight: 800,
+                color: "#E2E8F0",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 96,
+                fontWeight: 700,
                 lineHeight: 1,
-                marginTop: 18,
               }}
             >
               {displayValue}
             </div>
             <div
               style={{
+                marginTop: 10,
+                color: "rgba(148, 163, 184, 0.6)",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 16,
+                fontWeight: 400,
+              }}
+            >
+              parts produced
+            </div>
+            <div
+              style={{
                 marginTop: 22,
-                height: 14,
+                width: 300,
+                height: 4,
                 borderRadius: 999,
-                backgroundColor: "rgba(30, 41, 59, 0.92)",
+                backgroundColor: "#1E293B",
                 overflow: "hidden",
               }}
             >
@@ -1689,6 +1739,7 @@ const ChartVisual: React.FC<{
                 marginTop: 18,
                 display: "flex",
                 flexWrap: "wrap",
+                justifyContent: "center",
                 gap: 8,
               }}
             >
@@ -1698,7 +1749,7 @@ const ChartVisual: React.FC<{
                   style={{
                     padding: "8px 12px",
                     borderRadius: 999,
-                    backgroundColor: "rgba(15, 23, 42, 0.86)",
+                    backgroundColor: "rgba(15, 23, 42, 0.84)",
                     border: `1px solid ${currentValue >= value ? "rgba(74, 222, 128, 0.42)" : "rgba(71, 85, 105, 0.42)"}`,
                     color: currentValue >= value ? "#86EFAC" : "#94A3B8",
                     fontFamily: "'JetBrains Mono', monospace",
@@ -1706,41 +1757,10 @@ const ChartVisual: React.FC<{
                     fontWeight: 700,
                   }}
                 >
-                  {value >= endValue ? `${formatCompactMetric(value)}` : value.toLocaleString()}
+                  {value >= endValue ? finalDisplayValue : value.toLocaleString()}
                 </div>
               ))}
             </div>
-          </div>
-          <div
-            style={{
-              position: "absolute",
-              right: 90,
-              top: 88,
-              width: 560,
-              height: 520,
-              borderRadius: 36,
-              backgroundColor: "rgba(15, 23, 42, 0.72)",
-              border: "1px solid rgba(148, 163, 184, 0.22)",
-              overflow: "hidden",
-            }}
-          >
-            <svg width="100%" height="100%" viewBox="0 0 560 520">
-              <rect x={106} y={132} width={348} height={198} rx={34} fill="none" stroke="rgba(148, 163, 184, 0.72)" strokeWidth={10} />
-              <rect x={134} y={156} width={292} height={148} rx={22} fill="rgba(2, 6, 23, 0.42)" stroke="rgba(217, 148, 74, 0.7)" strokeWidth={5} />
-              <rect x={224} y={104} width={112} height={44} rx={20} fill="rgba(226, 232, 240, 0.18)" />
-              <path d="M 282 148 C 252 206, 222 252, 226 294 C 230 332, 272 362, 320 350 C 350 342, 370 316, 366 270 C 362 232, 332 200, 308 170 Z" fill="rgba(245, 158, 11, 0.3)" />
-              {Array.from({ length: 12 }).map((_, index) => (
-                <rect
-                  key={`part-${index}`}
-                  x={116 + (index % 4) * 84}
-                  y={382 + Math.floor(index / 4) * 42}
-                  width={52}
-                  height={28}
-                  rx={10}
-                  fill={index < Math.round(productionProgress * 12) ? "#60A5FA" : "rgba(71, 85, 105, 0.55)"}
-                />
-              ))}
-            </svg>
           </div>
         </div>
       </AbsoluteFill>
@@ -1787,22 +1807,6 @@ const ChartVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              right: 68,
-              bottom: 58,
-              padding: "22px 26px",
-              borderRadius: 24,
-              backgroundColor: "rgba(15, 23, 42, 0.92)",
-              border: "1px solid rgba(96, 165, 250, 0.34)",
-            }}
-          >
-            <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 600 }}>transistors</div>
-            <div style={{ color: "#E2E8F0", fontSize: 64, fontWeight: 800, lineHeight: 1, marginTop: 12 }}>
-              {displayValue}
-            </div>
-          </div>
-          <div
-            style={{
-              position: "absolute",
               inset: "72px 110px 92px 72px",
               display: "grid",
               gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
@@ -1814,18 +1818,73 @@ const ChartVisual: React.FC<{
               transformOrigin: "center center",
             }}
           >
-            {Array.from({ length: 120 }).map((_, index) => (
-              <div
-                key={`schematic-cell-${index}`}
-                style={{
-                  minHeight: 20 + (index % 4),
-                  borderRadius: 6,
-                  backgroundColor: "rgba(15, 23, 42, 0.78)",
-                  border: "1px solid rgba(71, 85, 105, 0.18)",
-                  boxShadow: index % 7 === 0 ? "0 0 0 1px rgba(96, 165, 250, 0.12) inset" : undefined,
-                }}
-              />
-            ))}
+            {Array.from({ length: 120 }).map((_, index) => {
+              const wobble = ((index % 5) - 2) * 1.6;
+              return (
+                <svg
+                  key={`schematic-cell-${index}`}
+                  viewBox="0 0 82 56"
+                  style={{
+                    width: "100%",
+                    minHeight: 28,
+                    overflow: "visible",
+                    opacity: 0.18 + (index % 7) * 0.08,
+                  }}
+                >
+                  <line x1="8" y1="28" x2="28" y2="28" stroke="#4A5568" strokeWidth="1" />
+                  <line x1="54" y1="28" x2="74" y2="28" stroke="#4A5568" strokeWidth="1" />
+                  <line x1="41" y1="12" x2="41" y2="44" stroke="#4A5568" strokeWidth="1" />
+                  <path
+                    d={`M 28 12 L 54 28 L 28 44`}
+                    fill="none"
+                    stroke="#2D3748"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d={`M 16 ${16 + wobble} C 26 ${20 + wobble}, 36 ${18 + wobble}, 44 ${24 + wobble}`}
+                    fill="none"
+                    stroke="#4A5568"
+                    strokeWidth="1"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              );
+            })}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: 86,
+              bottom: 72,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-end",
+              gap: 6,
+            }}
+          >
+            <div
+              style={{
+                color: "#4A5568",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 36,
+                fontWeight: 400,
+                lineHeight: 1,
+              }}
+            >
+              {displayValue}
+            </div>
+            <div
+              style={{
+                color: "#94A3B8",
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 14,
+                fontWeight: 400,
+              }}
+            >
+              transistors
+            </div>
           </div>
         </div>
       </AbsoluteFill>
@@ -1844,7 +1903,6 @@ const ChartVisual: React.FC<{
           );
     const leftAnnotation = calloutAnnotations[0] ?? asRecord(annotationRecord?.left);
     const rightAnnotation = calloutAnnotations[1] ?? asRecord(annotationRecord?.right);
-    const curveColor = asString(asRecord(data.curve)?.color) ?? "#2DD4BF";
     const chartLeft = width * 0.14;
     const chartTop = height * 0.22;
     const curveWidth = width * 0.66;
@@ -1854,8 +1912,6 @@ const ChartVisual: React.FC<{
     const yTicks = asStringArray(yAxis?.ticks);
     const resolvedXTicks = xTicks.length > 0 ? xTicks : ["0", "10", "20", "30", "40", "50+"];
     const resolvedYTicks = yTicks.length > 0 ? yTicks : ["Low", "Medium", "High"];
-    const densePromptLines = buildDenseCodePreviewLines("dense").slice(0, 8);
-    const minimalPromptLines = buildDenseCodePreviewLines("clean").slice(0, 4);
     const introText = asString(data.introText) ?? "This maps directly to PDD.";
     const rightTestCount = asNumber(rightAnnotation?.testCount) ?? 50;
     const resolveCalloutCopy = (
@@ -1890,6 +1946,8 @@ const ChartVisual: React.FC<{
       "10-line prompt",
       "Tests handle constraints"
     );
+    const leftCalloutColor = asString(leftAnnotation?.color) ?? "#D9944A";
+    const rightCalloutColor = asString(rightAnnotation?.color) ?? "#4A90D9";
     const pointForTestCount = (testCount: number) => {
       const clamped = Math.max(0, Math.min(50, testCount));
       const x = chartLeft + (clamped / 50) * curveWidth;
@@ -1904,6 +1962,16 @@ const ChartVisual: React.FC<{
       .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
       .join(" ");
     const areaPath = `${curvePath} L ${chartLeft + curveWidth} ${chartBottom} L ${chartLeft} ${chartBottom} Z`;
+    const curveStrokeColor =
+      asString(asRecord(series[0])?.color) ?? "#E2E8F0";
+    const leftZoneColor =
+      asString(
+        Array.isArray(data.zones) ? asRecord(data.zones[0])?.color : null
+      ) ?? "#D9944A";
+    const rightZoneColor =
+      asString(
+        Array.isArray(data.zones) ? asRecord(data.zones[1])?.color : null
+      ) ?? "#4A90D9";
     const dotProgress = interpolate(frame, [300, 450], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -1926,14 +1994,20 @@ const ChartVisual: React.FC<{
             extrapolateRight: "clamp",
           })
         : 0;
+    const leftCalloutX = chartLeft + curveWidth * 0.12;
+    const leftCalloutY = chartTop + curveHeight * 0.1;
+    const rightCalloutX = chartLeft + curveWidth * 0.72;
+    const rightCalloutY = chartTop + curveHeight * 0.54;
 
     return (
       <AbsoluteFill>
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
           <defs>
-            <linearGradient id="precisionTradeoffFill" x1="0" y1="1" x2="0" y2="0">
-              <stop offset="0%" stopColor={curveColor} stopOpacity="0.03" />
-              <stop offset="100%" stopColor={curveColor} stopOpacity="0.14" />
+            <linearGradient id="precisionTradeoffFill" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor={leftZoneColor} stopOpacity="0.08" />
+              <stop offset="42%" stopColor={leftZoneColor} stopOpacity="0.05" />
+              <stop offset="58%" stopColor={rightZoneColor} stopOpacity="0.05" />
+              <stop offset="100%" stopColor={rightZoneColor} stopOpacity="0.08" />
             </linearGradient>
           </defs>
           {Array.from({ length: 8 }).map((_, index) => {
@@ -1981,27 +2055,25 @@ const ChartVisual: React.FC<{
             strokeWidth={2}
           />
           <path d={areaPath} fill="url(#precisionTradeoffFill)" opacity={0.9} />
-          <path d={curvePath} fill="none" stroke={curveColor} strokeWidth={4} opacity={0.92} />
-          <circle cx={dotPoint.x} cy={dotPoint.y} r={12} fill={curveColor} opacity={0.92} />
-          <circle cx={dotPoint.x} cy={dotPoint.y} r={24} fill={`${curveColor}33`} />
+          <path d={curvePath} fill="none" stroke={curveStrokeColor} strokeWidth={4} opacity={0.96} />
+          <circle cx={dotPoint.x} cy={dotPoint.y} r={10} fill="#FFFFFF" opacity={0.96} />
+          <circle cx={dotPoint.x} cy={dotPoint.y} r={18} fill="rgba(255, 255, 255, 0.18)" />
           <line
             x1={leftPoint.x}
             y1={leftPoint.y}
-            x2={chartLeft + curveWidth * 0.22}
-            y2={chartTop + curveHeight * 0.12}
-            stroke={`${curveColor}66`}
-            strokeWidth={2}
-            strokeDasharray="8 8"
+            x2={leftCalloutX + 12}
+            y2={leftCalloutY + 36}
+            stroke={leftCalloutColor}
+            strokeWidth={1.5}
             opacity={leftOpacity}
           />
           <line
             x1={rightPoint.x}
             y1={rightPoint.y}
-            x2={chartLeft + curveWidth * 0.82}
-            y2={chartTop + curveHeight * 0.68}
-            stroke={`${curveColor}66`}
-            strokeWidth={2}
-            strokeDasharray="8 8"
+            x2={rightCalloutX + 12}
+            y2={rightCalloutY + 28}
+            stroke={rightCalloutColor}
+            strokeWidth={1.5}
             opacity={rightOpacity}
           />
           {resolvedXTicks.map((tick, index) => {
@@ -2088,142 +2160,91 @@ const ChartVisual: React.FC<{
         <div
           style={{
             position: "absolute",
-            left: chartLeft + curveWidth * 0.05,
-            top: chartTop + 24,
-            width: 318,
-            padding: "18px 20px",
-            borderRadius: 20,
-            backgroundColor: "rgba(15, 30, 30, 0.92)",
-            border: `1px solid ${curveColor}55`,
-            boxShadow: "0 16px 42px rgba(2, 6, 23, 0.45)",
+            left: leftCalloutX,
+            top: leftCalloutY,
+            width: 260,
             opacity: leftOpacity,
+          }}
+        >
+          <div
+            style={{
+              color: leftCalloutColor,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: 0.18,
             }}
           >
-            <div
-              style={{
-                color: "#E2E8F0",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 12,
-                fontWeight: 700,
-                letterSpacing: 0.18,
-                marginBottom: 8,
-              }}
-            >
-              parser_v1.prompt
-            </div>
-            <div
-              style={{
-                color: curveColor,
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 13,
-              fontWeight: 700,
-              letterSpacing: 0.2,
+            parser_v1.prompt
+          </div>
+          <div
+            style={{
+              color: leftCalloutColor,
+              fontFamily: "'Inter', sans-serif",
+              fontSize: 14,
+              fontWeight: 400,
+              lineHeight: 1.35,
+              marginTop: 8,
             }}
           >
             {leftCallout.label}
           </div>
           <div
             style={{
-              color: "#99F6E4",
+              color: leftCalloutColor,
+              opacity: 0.92,
               fontSize: 14,
               marginTop: 8,
-              marginBottom: 10,
+              lineHeight: 1.35,
             }}
           >
             {leftCallout.description}
           </div>
-          {densePromptLines.map((line, index) => (
-            <div
-              key={`precision-dense-line-${index}`}
-              style={{
-                color: "rgba(45, 212, 191, 0.56)",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 11,
-                lineHeight: 1.38,
-                marginTop: index === 0 ? 0 : 5,
-              }}
-            >
-              {line}
-            </div>
-          ))}
         </div>
         <div
           style={{
             position: "absolute",
-            left: chartLeft + curveWidth * 0.67,
-            top: chartTop + curveHeight * 0.46,
-            width: 332,
-            padding: "18px 20px",
-            borderRadius: 20,
-            backgroundColor: "rgba(15, 30, 30, 0.92)",
-            border: `1px solid ${curveColor}55`,
-            boxShadow: "0 16px 42px rgba(2, 6, 23, 0.45)",
+            left: rightCalloutX,
+            top: rightCalloutY,
+            width: 292,
             opacity: rightOpacity,
           }}
         >
           <div
             style={{
-              color: curveColor,
+              color: rightCalloutColor,
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: 700,
-              letterSpacing: 0.2,
+              letterSpacing: 0.18,
+            }}
+          >
+            parser_v2.prompt
+          </div>
+          <div
+            style={{
+              color: rightCalloutColor,
+              fontSize: 14,
+              marginTop: 8,
+              lineHeight: 1.35,
             }}
           >
             {rightCallout.label}
           </div>
           <div
             style={{
-              color: "#99F6E4",
+              color: rightCalloutColor,
+              opacity: 0.92,
               fontSize: 14,
               marginTop: 8,
-              marginBottom: 10,
+              lineHeight: 1.35,
             }}
           >
             {rightCallout.description}
           </div>
           <div
             style={{
-              borderRadius: 14,
-              backgroundColor: "rgba(2, 6, 23, 0.72)",
-              border: `1px solid ${curveColor}44`,
-              padding: "12px 14px",
-            }}
-          >
-            <div
-              style={{
-                color: "#E2E8F0",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 12,
-                fontWeight: 700,
-                letterSpacing: 0.18,
-                marginBottom: 8,
-              }}
-            >
-              parser_v2.prompt
-            </div>
-            {minimalPromptLines.map((line, index) => (
-              <div
-                key={`precision-clean-line-${index}`}
-                style={{
-                  color: "rgba(45, 212, 191, 0.58)",
-                  fontFamily: "'JetBrains Mono', monospace",
-                  fontSize: 11,
-                  lineHeight: 1.38,
-                  marginTop: index === 0 ? 0 : 5,
-                }}
-              >
-                {line}
-              </div>
-            ))}
-          </div>
-          <div
-            style={{
-              marginTop: 12,
-              padding: "10px 12px",
-              borderRadius: 14,
-              backgroundColor: "rgba(30, 41, 59, 0.85)",
-              border: "1px solid rgba(74, 222, 128, 0.36)",
+              marginTop: 14,
               color: "#86EFAC",
               fontFamily: "'JetBrains Mono', monospace",
               fontSize: 12,
@@ -2232,28 +2253,6 @@ const ChartVisual: React.FC<{
           >
             <div>$ pdd test parser</div>
             <div>{`${rightTestCount} tests passing ✓`}</div>
-          </div>
-          <div
-            style={{
-              marginTop: 14,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-            }}
-          >
-            {Array.from({ length: 12 }).map((_, index) => (
-              <div
-                key={`precision-wall-${index}`}
-                style={{
-                  width: 12,
-                  height: 20,
-                  borderRadius: 4,
-                  backgroundColor: "rgba(217, 148, 74, 0.5)",
-                  border: "1px solid rgba(217, 148, 74, 0.82)",
-                  opacity: 0.88 - index * 0.03,
-                }}
-              />
-            ))}
           </div>
         </div>
       </AbsoluteFill>
@@ -2265,14 +2264,28 @@ const ChartVisual: React.FC<{
       ? data.slices
           .map((entry) => asRecord(entry))
           .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : Array.isArray(data.segments)
+        ? data.segments
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+        : [];
+    const statisticEntries = Array.isArray(data.statistics)
+      ? data.statistics
+          .map((entry) => asRecord(entry))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
     const centerX = width * 0.44;
     const centerY = height * 0.5;
     const baseRadius = 220;
     let startAngle = -90;
     const resolvedSlices = slices.map((slice, index) => {
-      const value = parsePercentRangeMidpoint(slice.range) ?? (index === 0 ? 85 : 15);
-      const sweep = (value / 100) * 360;
+      const percentageRange = asString(slice.range) ?? asString(slice.percentage);
+      const degrees = asNumber(slice.degrees);
+      const value =
+        parsePercentRangeMidpoint(percentageRange) ??
+        (degrees !== null ? (degrees / 360) * 100 : null) ??
+        (index === 0 ? 85 : 15);
+      const sweep = degrees ?? (value / 100) * 360;
       const pullOut = asNumber(slice.pullOut) ?? 0;
       const midAngle = startAngle + sweep / 2;
       const offset = polarToCartesian(0, 0, pullOut, midAngle);
@@ -2285,8 +2298,8 @@ const ChartVisual: React.FC<{
           startAngle + sweep
         ),
         label: asString(slice.label) ?? `Slice ${index + 1}`,
-        valueText: asString(slice.range) ?? `${Math.round(value)}%`,
-        color: asString(slice.color) ?? (index === 0 ? "#F59E0B" : "#4ADE80"),
+        valueText: percentageRange ?? `${Math.round(value)}%`,
+        color: asString(slice.color) ?? (index === 0 ? "#D9944A" : "#4A90D9"),
         midAngle,
         cx: centerX + offset.x,
         cy: centerY + offset.y,
@@ -2366,7 +2379,7 @@ const ChartVisual: React.FC<{
             width: 360,
           }}
         >
-          {callouts.slice(0, 2).map((callout, index) => (
+          {(callouts.length > 0 ? callouts : statisticEntries).slice(0, 3).map((callout, index) => (
             <div
               key={`callout-${index}`}
               style={{
@@ -2389,9 +2402,10 @@ const ChartVisual: React.FC<{
                     fontFamily: "'Inter', sans-serif",
                     fontSize: 16,
                     fontWeight: 400,
+                    lineHeight: 1.35,
                   }}
                 >
-                  {asString(callout.text) ?? ""}
+                  {asString(callout.text) ?? asString(callout.finding) ?? ""}
                 </div>
                 <div
                   style={{
@@ -2411,45 +2425,68 @@ const ChartVisual: React.FC<{
     );
   }
 
-  if (chartId === "compound_debt_curve") {
-    const debtCurve = Array.isArray(data.curves)
-      ? data.curves
-          .map((entry) => asRecord(entry))
-          .find((entry) => asString(entry?.id) === "debt_exponential")
-      : null;
-    const regenerationCurve = Array.isArray(data.curves)
-      ? data.curves
-          .map((entry) => asRecord(entry))
-          .find((entry) => asString(entry?.id) === "regeneration_flat")
-      : null;
+  if (
+    chartId === "compound_debt_curve" ||
+    chartId === "compound_debt_vs_regeneration"
+  ) {
+    const curveEntries = Array.isArray(data.series)
+      ? data.series
+      : Array.isArray(data.curves)
+        ? data.curves
+        : [];
+    const resolvedCurves = curveEntries
+      .map((entry) => asRecord(entry))
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+    const debtCurve = resolvedCurves.find(
+      (entry) => asString(entry?.id) === "debt_exponential"
+    );
+    const regenerationCurve = resolvedCurves.find(
+      (entry) => asString(entry?.id) === "regeneration_flat"
+    );
     const chartLeft = width * 0.14;
     const chartTop = height * 0.24;
     const curveWidth = width * 0.66;
     const curveHeight = height * 0.5;
-    const debtColor = asString(debtCurve?.color) ?? "#F59E0B";
-    const flatColor = asString(regenerationCurve?.color) ?? "#4ADE80";
-    const debtPoints = Array.from({ length: 6 }, (_, pointIndex) => {
-      const x = pointIndex / 5;
+    const debtColor = asString(debtCurve?.color) ?? "#D9944A";
+    const flatColor = asString(regenerationCurve?.color) ?? "#5AAA6E";
+    const debtSeries = Array.isArray(debtCurve?.data)
+      ? debtCurve.data.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const regenerationSeries = Array.isArray(regenerationCurve?.data)
+      ? regenerationCurve.data.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    const debtPoints = (debtSeries.length > 0 ? debtSeries : Array.from({ length: 11 }, (_, pointIndex) => {
+      const x = pointIndex / 10;
       return {
-        x,
-        px: chartLeft + curveWidth * x,
-        py: chartTop + curveHeight * (0.86 - Math.pow(1.58, pointIndex) / 13),
+        x: x * 20,
+        y: 0.05 + Math.pow(x, 2.1) * 0.9,
       };
-    });
+    }))
+      .map((point) => {
+        const x = asNumber(point.x) ?? 0;
+        const y = asNumber(point.y) ?? 0.05;
+        return {
+          x,
+          y,
+          px: chartLeft + curveWidth * (x / 20),
+          py: chartTop + curveHeight * (1 - y),
+        };
+      });
     const debtPath = debtPoints
       .map((point, index) => `${index === 0 ? "M" : "L"} ${point.px} ${point.py}`)
       .join(" ");
     const debtAreaPath = `${debtPath} L ${chartLeft + curveWidth} ${chartTop + curveHeight} L ${chartLeft} ${chartTop + curveHeight} Z`;
-    const flatY = chartTop + curveHeight * 0.8;
-    const stat = stats[0];
+    const flatYValue = asNumber(regenerationSeries[0]?.y) ?? 0.08;
+    const flatY = chartTop + curveHeight * (1 - flatYValue);
+    const stat = stats[0] ?? asRecord(annotations[0]);
 
     return (
       <AbsoluteFill>
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
           <defs>
             <linearGradient id="compoundDebtFill" x1="0" y1="1" x2="0" y2="0">
-              <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.15" />
-              <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.04" />
+              <stop offset="0%" stopColor="#D9944A" stopOpacity="0.16" />
+              <stop offset="100%" stopColor="#D9944A" stopOpacity="0.04" />
             </linearGradient>
           </defs>
           {Array.from({ length: 4 }).map((_, index) => {
@@ -2497,73 +2534,125 @@ const ChartVisual: React.FC<{
             x2={chartLeft + curveWidth}
             y2={flatY}
             stroke={flatColor}
-            strokeWidth={2.5}
-            strokeDasharray={asNumber(regenerationCurve?.strokeWidth) ? "8 4" : "8 4"}
+            strokeWidth={3}
           />
-        </svg>
-        <div
-          style={{
-            position: "absolute",
-            left: chartLeft + curveWidth * 0.68,
-            top: chartTop + 8,
-            color: debtColor,
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 16,
-            fontWeight: 700,
-          }}
-        >
-          {asString(debtCurve?.label) ?? "Debt × (1 + Rate)^Time"}
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            left: chartLeft + curveWidth * 0.62,
-            top: flatY + 14,
-            color: flatColor,
-            fontFamily: "'Inter', sans-serif",
-            fontSize: 14,
-            fontWeight: 600,
-          }}
-        >
-          {asString(regenerationCurve?.label) ?? "Regeneration cost (debt resets each cycle)"}
-        </div>
-        {stat ? (
-          <div
-            style={{
-              position: "absolute",
-              left: 200,
-              top: 180,
-              padding: "20px 22px",
-              borderRadius: 12,
-              backgroundColor: "rgba(26, 37, 64, 0.4)",
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-            }}
+          {Array.from({ length: 6 }).map((_, index) => {
+            const x = chartLeft + (index / 5) * curveWidth;
+            return (
+              <g key={`reset-arrow-${index}`}>
+                <line
+                  x1={x}
+                  y1={flatY - 4}
+                  x2={x}
+                  y2={flatY + 18}
+                  stroke={flatColor}
+                  strokeWidth={1.5}
+                  strokeDasharray="3 5"
+                  opacity={0.5}
+                />
+                <path
+                  d={`M ${x - 7} ${flatY + 10} L ${x} ${flatY + 18} L ${x + 7} ${flatY + 10}`}
+                  fill="none"
+                  stroke={flatColor}
+                  strokeWidth={1.8}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity={0.7}
+                />
+              </g>
+            );
+          })}
+          {Array.from({ length: 5 }).map((_, index) => {
+            const x = chartLeft + (index / 4) * curveWidth;
+            const tickValue = index * 5;
+            return (
+              <g key={`compound-x-tick-${tickValue}`}>
+                <line
+                  x1={x}
+                  y1={chartTop + curveHeight}
+                  x2={x}
+                  y2={chartTop + curveHeight + 10}
+                  stroke="#64748B"
+                  strokeWidth={1.5}
+                />
+                <text
+                  x={x}
+                  y={chartTop + curveHeight + 34}
+                  fill="#94A3B8"
+                  fontSize={14}
+                  textAnchor="middle"
+                  fontFamily="'Inter', sans-serif"
+                >
+                  {tickValue}
+                </text>
+              </g>
+            );
+          })}
+          <text
+            x={chartLeft + curveWidth / 2}
+            y={chartTop + curveHeight + 70}
+            fill="#94A3B8"
+            fontSize={14}
+            textAnchor="middle"
+            fontFamily="'Inter', sans-serif"
           >
-            <div
-              style={{
-                color: asString(stat.color) ?? debtColor,
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 48,
-                fontWeight: 800,
-                lineHeight: 1,
-              }}
-            >
-              {asString(stat.value) ?? "$1.52T"}
-            </div>
-            <div
-              style={{
-                color: "rgba(148, 163, 184, 0.72)",
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 16,
-                fontWeight: 400,
-              }}
-            >
-              {`${asString(stat.label) ?? "annually"} — ${asString(stat.source) ?? "CISQ"}`}
-            </div>
-          </div>
-        ) : null}
+            {asString(asRecord(data.xAxis)?.label) ?? "Time (maintenance cycles)"}
+          </text>
+          <text
+            x={chartLeft - 86}
+            y={chartTop + curveHeight / 2}
+            fill="#94A3B8"
+            fontSize={14}
+            textAnchor="middle"
+            fontFamily="'Inter', sans-serif"
+            transform={`rotate(-90 ${chartLeft - 86} ${chartTop + curveHeight / 2})`}
+          >
+            {asString(asRecord(data.yAxis)?.label) ?? "Cumulative Cost"}
+          </text>
+          <text
+            x={chartLeft + curveWidth * 0.7}
+            y={chartTop + 24}
+            fill={debtColor}
+            fontSize={18}
+            fontFamily="'JetBrains Mono', monospace"
+            opacity={0.8}
+          >
+            {asString(debtCurve?.label) ?? "Debt × (1 + Rate)^Time"}
+          </text>
+          <text
+            x={chartLeft + curveWidth * 0.7}
+            y={flatY + 26}
+            fill={flatColor}
+            fontSize={16}
+            fontFamily="'Inter', sans-serif"
+            opacity={0.82}
+          >
+            {asString(regenerationCurve?.label) ?? "Regeneration cost (debt resets each cycle)"}
+          </text>
+          {stat ? (
+            <>
+              <text
+                x={chartLeft + curveWidth * 0.46}
+                y={chartTop + 60}
+                fill="#E2E8F0"
+                fontSize={22}
+                fontWeight={700}
+                fontFamily="'Inter', sans-serif"
+              >
+                {asString(stat.value) ?? asString(stat.text) ?? "$1.52 trillion/year"}
+              </text>
+              <text
+                x={chartLeft + curveWidth * 0.46}
+                y={chartTop + 86}
+                fill="#94A3B8"
+                fontSize={14}
+                fontFamily="'Inter', sans-serif"
+              >
+                {`— ${asString(stat.source) ?? "CISQ"}`}
+              </text>
+            </>
+          ) : null}
+        </svg>
       </AbsoluteFill>
     );
   }
@@ -2862,8 +2951,12 @@ const SplitVisual: React.FC<{
   height: number;
 }> = ({ data, width, height }) => {
   const frame = useCurrentFrame();
-  const { durationInFrames } = useVideoConfig();
+  const durationInFrames = useVisualDurationInFrames();
   const splitVisualId = React.useId().replace(/:/g, "");
+  const divider = asRecord(data.divider);
+  const dividerWidth = Math.max(1, Math.floor(asNumber(divider?.width) ?? 2));
+  const dividerColor = asString(divider?.color) ?? "#FFFFFF";
+  const dividerOpacity = asNumber(divider?.opacity) ?? 0.6;
   const panelRecord = asRecord(data.panels);
   const left = asRecord(panelRecord?.left) ?? asRecord(data.leftPanel) ?? asRecord(data.left) ?? {};
   const right = asRecord(panelRecord?.right) ?? asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
@@ -3484,8 +3577,7 @@ const SplitVisual: React.FC<{
       asString(panel.caption) ??
       asString(panel.description) ??
       asString(panel.subLabel) ??
-      asString(panel.summary) ??
-      (!labelLooksLikeHeader ? rawLabel : null);
+      asString(panel.summary);
     const tokenCount = formatApproxTokenCount(panel.tokenCount);
     const usesInsetTokenBadge = ["context_window_cluttered", "context_window_clean", "dense_code", "prompt_blocks"].includes(
       content ?? ""
@@ -3750,7 +3842,7 @@ const SplitVisual: React.FC<{
           width,
           height,
           display: "flex",
-          gap: 20,
+          gap: dividerWidth,
         }}
       >
         {renderPanel(left, "#60A5FA", leftSrc, leftBaseSrc, leftRevealSrc, "left")}
@@ -3762,8 +3854,10 @@ const SplitVisual: React.FC<{
           top: 88,
           bottom: 72,
           left: "50%",
-          width: 2,
-          backgroundColor: "rgba(51, 65, 85, 0.35)",
+          width: dividerWidth,
+          backgroundColor: dividerColor,
+          opacity: dividerOpacity,
+          transform: "translateX(-50%)",
         }}
       />
         {multiplier ? (
@@ -4227,42 +4321,57 @@ const CodeVisual: React.FC<{
   }
 
   if (visualType === "code_regeneration") {
-    const terminalResult = asString(terminal?.result) ?? "Generated in 0.8s";
     const resolvedFunctionName = functionName ?? "regenerate_auth_handler";
     const functionArgs =
       resolvedFunctionName === "process_order" ? "order, ctx" : "user_input: str";
     const fileTabLabel =
       fileNames[0] ?? `${resolvedFunctionName.replace(/[^\w]+/g, "_")}.py`;
-    const regenerationLines = Array.from({ length: generatedLines }).map((_, index) => {
-      if (index === 0) return resolvedFunctionName === "process_order" ? "from pricing import apply_discounts" : "from auth import normalize_user_id";
-      if (index === 1) return resolvedFunctionName === "process_order" ? "from inventory import reserve_items" : "from tests import ensure_user_contract";
-      if (index === 2) return "";
-      if (index === 3) return `def ${resolvedFunctionName}(${functionArgs}):`;
-      if (resolvedFunctionName === "process_order") {
-        if (index === 4) return "    validated = validate_order(order, ctx)";
-        if (index === 5) return "    if validated is None:";
-        if (index === 6) return "        return error_response('invalid-order')";
-        if (index === 7) return "    priced = apply_discounts(validated, ctx)";
-        if (index === 8) return "    reserved = reserve_items(priced, ctx)";
-        if (index === 9) return "    if reserved.failed:";
-        if (index === 10) return "        return error_response('inventory-unavailable')";
-        if (index === 11) return "    receipt = finalize_order(reserved, ctx)";
-      } else {
-        if (index === 4) return "    normalized = normalize_user_id(user_input)";
-        if (index === 5) return "    if normalized is None:";
-        if (index === 6) return "        return None";
-        if (index === 7) return "    ensure_user_contract(normalized)";
-        if (index === 8) return "    payload = load_user_payload(normalized)";
-        if (index === 9) return "    if payload is None:";
-        if (index === 10) return "        return None";
-        if (index === 11) return "    return build_auth_response(payload)";
-      }
-      if (index === 12) return "";
-      if (index === 13) return "# generated from prompt + tests + grounding";
-      if (index === 14) return resolvedFunctionName === "process_order" ? "    return success_response(receipt)" : "RESULT = 'fresh module'";
-      if (index === 15) return resolvedFunctionName === "process_order" ? "" : "return RESULT";
-      return resolvedFunctionName === "process_order" ? "    audit_logger.info('order regenerated')" : "return RESULT";
-    });
+    const regenerationLines =
+      resolvedFunctionName === "process_order"
+        ? [
+            "from pricing import apply_discounts",
+            "from inventory import reserve_items",
+            "from receipts import build_receipt_response",
+            "from metrics import emit_order_metrics",
+            "",
+            `def ${resolvedFunctionName}(${functionArgs}):`,
+            "    validated = validate_order(order, ctx)",
+            "    if validated is None:",
+            "        return error_response('invalid-order')",
+            "",
+            "    priced = apply_discounts(validated, ctx)",
+            "    reserved = reserve_items(priced, ctx)",
+            "    if reserved.failed:",
+            "        return error_response('inventory-unavailable')",
+            "",
+            "    receipt = finalize_order(reserved, ctx)",
+            "    emit_order_metrics(receipt, ctx)",
+            "    notify_fulfillment(receipt, ctx)",
+            "    return build_receipt_response(receipt)",
+            "",
+            "# generated from prompt + tests + grounding",
+          ].slice(0, Math.max(generatedLines, 21))
+        : [
+            "from auth import normalize_user_id",
+            "from tests import ensure_user_contract",
+            "",
+            `def ${resolvedFunctionName}(${functionArgs}):`,
+            "    normalized = normalize_user_id(user_input)",
+            "    if normalized is None:",
+            "        return None",
+            "    ensure_user_contract(normalized)",
+            "    payload = load_user_payload(normalized)",
+            "    if payload is None:",
+            "        return None",
+            "    return build_auth_response(payload)",
+            "",
+            "# generated from prompt + tests + grounding",
+          ].slice(0, Math.max(generatedLines, 14));
+    const terminalCommandText =
+      asString(terminal?.command) ??
+      asString(data.terminalCommand) ??
+      `pdd generate ${resolvedFunctionName}`;
+    const terminalDisplay = `${terminalCommandText.startsWith("$") ? terminalCommandText : `$ ${terminalCommandText}`} ✓`;
 
     return (
       <AbsoluteFill style={{ padding: "76px 88px 78px" }}>
@@ -4351,31 +4460,18 @@ const CodeVisual: React.FC<{
               bottom: 24,
               minWidth: 320,
               padding: "14px 16px",
-              borderRadius: 18,
-              backgroundColor: "rgba(2, 6, 23, 0.86)",
-              border: "1px solid rgba(74, 222, 128, 0.36)",
-              boxShadow: "0 0 0 1px rgba(74, 222, 128, 0.12) inset",
+              borderRadius: 8,
+              backgroundColor: "rgba(17, 17, 27, 0.9)",
             }}
           >
             <div
               style={{
-                color: "#94A3B8",
+                color: "#A6E3A1",
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 14,
+                fontSize: 12,
               }}
             >
-              {asString(terminal?.command) ?? asString(data.terminalCommand) ?? `pdd generate ${resolvedFunctionName}`}
-            </div>
-            <div
-              style={{
-                color: "#4ADE80",
-                fontFamily: "'Inter', sans-serif",
-                fontSize: 18,
-                fontWeight: 800,
-                marginTop: 8,
-              }}
-            >
-              {`✓ ${terminalResult}`}
+              {terminalDisplay}
             </div>
           </div>
         </div>

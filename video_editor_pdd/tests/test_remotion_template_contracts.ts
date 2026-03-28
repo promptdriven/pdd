@@ -209,6 +209,10 @@ describe("shared generated contract renderer", () => {
     process.cwd(),
     "remotion/src/remotion/_shared/GeneratedContractVisual.tsx"
   );
+  const visualRuntimePath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/_shared/visual-runtime.tsx"
+  );
   const extractBlock = (source: string, startMarker: string, endMarker: string) => {
     const start = source.indexOf(startMarker);
     const end = source.indexOf(endMarker, start + 1);
@@ -311,6 +315,21 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/useVisualMediaAssetSrc\(\s*"rightRevealSrc"\s*\)/);
   });
 
+  it("keeps slot-scaled previews authoritative for intrinsic duration, not only intrinsic frame", () => {
+    const contractSource = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const runtimeSource = fs.readFileSync(visualRuntimePath, "utf8");
+    const chartBlock = extractBlock(contractSource, "const ChartVisual", "const SplitVisual");
+    const splitBlock = extractBlock(contractSource, "const SplitVisual", "const TableVisual");
+
+    expect(runtimeSource).toMatch(/export const useVisualDurationInFrames =/);
+    expect(runtimeSource).toMatch(/sequenceContext\?\.durationInFrames \?\? videoConfig\.durationInFrames/);
+    expect(contractSource).toMatch(/useVisualDurationInFrames/);
+    expect(chartBlock).toMatch(/const durationInFrames = useVisualDurationInFrames\(\);/);
+    expect(splitBlock).toMatch(/const durationInFrames = useVisualDurationInFrames\(\);/);
+    expect(chartBlock).not.toMatch(/const \{ durationInFrames \} = useVideoConfig\(\);/);
+    expect(splitBlock).not.toMatch(/const \{ durationInFrames \} = useVideoConfig\(\);/);
+  });
+
   it("supports precision-tradeoff chart annotations and constrains mold-flow panels inside the mold walls", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
@@ -321,6 +340,46 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/tests passing/);
     expect(source).toMatch(/50\+/);
     expect(source).toMatch(/clipPath/);
+  });
+
+  it("keeps the shared chart and code-regeneration fallbacks aligned with the authored contract details that were still failing audit", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const moldCounterBlock = extractBlock(
+      source,
+      'if (chartId === "mold_production_counter")',
+      'if (chartId === "schematic_density_zoom")'
+    );
+    const schematicBlock = extractBlock(
+      source,
+      'if (chartId === "schematic_density_zoom")',
+      'if (chartId === "precision_tradeoff_curve")'
+    );
+    const precisionBlock = extractBlock(
+      source,
+      'if (chartId === "precision_tradeoff_curve")',
+      'if (chartId === "maintenance_cost_pie")'
+    );
+    const codeRegenerationBlock = extractBlock(
+      source,
+      'if (visualType === "code_regeneration")',
+      "const supportsSourceOfTruthShift ="
+    );
+
+    expect(moldCounterBlock).toMatch(/10,000\+/);
+    expect(moldCounterBlock).toMatch(/"#D9944A"/);
+    expect(moldCounterBlock).not.toMatch(/"#60A5FA"/);
+
+    expect(schematicBlock).toMatch(/stroke="#2D3748"/);
+    expect(schematicBlock).toMatch(/stroke="#4A5568"/);
+    expect(schematicBlock).not.toMatch(/backgroundColor:\s*"rgba\(15, 23, 42, 0\.92\)"/);
+
+    expect(precisionBlock).toMatch(/asString\(asRecord\(series\[0\]\)\?\.color\)/);
+    expect(precisionBlock).not.toMatch(/densePromptLines/);
+    expect(precisionBlock).not.toMatch(/minimalPromptLines/);
+
+    expect(codeRegenerationBlock).toMatch(/return build_receipt_response\(receipt\)/);
+    expect(codeRegenerationBlock).toMatch(/emit_order_metrics\(receipt, ctx\)/);
+    expect(codeRegenerationBlock).not.toContain("audit_logger.info('order regenerated')");
   });
 
   it("supports contract-authored quote cards instead of collapsing them into a generic quote fallback", () => {
@@ -342,8 +401,13 @@ describe("shared generated contract renderer", () => {
     const chartBlock = extractBlock(source, "const ChartVisual", "const SplitVisual");
 
     expect(chartBlock).toMatch(/maintenance_cost_pie/);
+    expect(source).toMatch(/rawChartId === "maintenance_cost_split"/);
+    expect(chartBlock).toMatch(/Array\.isArray\(data\.segments\)/);
+    expect(chartBlock).toMatch(/Array\.isArray\(data\.statistics\)/);
     expect(chartBlock).toMatch(/callouts/);
     expect(chartBlock).toMatch(/compound_debt_curve/);
+    expect(chartBlock).toMatch(/compound_debt_vs_regeneration/);
+    expect(chartBlock).toMatch(/Array\.isArray\(data\.series\)/);
     expect(chartBlock).toMatch(/dashed|strokeDasharray/);
     expect(chartBlock).toMatch(/stats/);
   });
@@ -415,6 +479,10 @@ describe("shared generated contract renderer", () => {
     expect(source).not.toMatch(/\?\?\s*["']Panel["']/);
     expect(source).not.toMatch(/caption\s*\?\?\s*content/);
     expect(source).not.toMatch(/caption\s*\?\?\s*thematicRole/);
+    expect(source).not.toMatch(/!\s*labelLooksLikeHeader\s*\?\s*rawLabel\s*:\s*null/);
+    expect(source).toMatch(/const divider = asRecord\(data\.divider\)/);
+    expect(source).toMatch(/backgroundColor:\s*dividerColor/);
+    expect(source).toMatch(/opacity:\s*dividerOpacity/);
   });
 
   it("supports contract-driven chart variants beyond the original line-series happy path", () => {

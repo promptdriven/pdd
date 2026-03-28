@@ -2097,6 +2097,75 @@ def resolve_component_intrinsic_duration_frames(
     return None
 
 
+def resolve_contract_intrinsic_duration_frames(
+    contract: Optional[Dict[str, Any]],
+    fps: int,
+) -> Optional[int]:
+    """Best-effort intrinsic duration discovery from contract metadata."""
+    if not isinstance(contract, dict):
+        return None
+
+    data_points = contract.get('dataPoints')
+    if not isinstance(data_points, dict):
+        return None
+
+    duration_frames = data_points.get('durationFrames')
+    if isinstance(duration_frames, int) and duration_frames > 0:
+        return duration_frames
+
+    duration_seconds = data_points.get('durationSeconds')
+    if isinstance(duration_seconds, (int, float)) and duration_seconds > 0:
+        return max(1, int(round(float(duration_seconds) * fps)))
+
+    return None
+
+
+def build_preview_slot_duration_manifest(
+    project_dir: str,
+    fps: int,
+) -> Dict[str, int]:
+    """Map preview wrapper keys to slot durations from section-timeline.json."""
+    if not project_dir:
+        return {}
+
+    timeline_path = os.path.join(
+        project_dir,
+        'outputs',
+        'compositions',
+        'section-timeline.json',
+    )
+    if not os.path.isfile(timeline_path):
+        return {}
+
+    try:
+        with open(timeline_path, 'r', encoding='utf-8') as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError, TypeError):
+        return {}
+
+    manifest: Dict[str, int] = {}
+    for section_entry in payload.get('sections', []):
+        if not isinstance(section_entry, dict):
+            continue
+        section_id = section_entry.get('sectionId')
+        if not isinstance(section_id, str) or not section_id:
+            continue
+        for entry in section_entry.get('entries', []):
+            if not isinstance(entry, dict):
+                continue
+            visual_id = entry.get('id')
+            if not isinstance(visual_id, str) or not visual_id:
+                continue
+            start_seconds = entry.get('startSeconds', entry.get('resolvedStartSeconds'))
+            end_seconds = entry.get('endSeconds', entry.get('resolvedEndSeconds'))
+            if not isinstance(start_seconds, (int, float)) or not isinstance(end_seconds, (int, float)):
+                continue
+            duration_frames = max(1, int(round((float(end_seconds) - float(start_seconds)) * fps)))
+            manifest[f'{section_id}:{visual_id}'] = duration_frames
+
+    return manifest
+
+
 def _read_section_duration_from_constants(
     section_id: str,
     remotion_src: str,
@@ -2859,13 +2928,18 @@ def generate_root_tsx(
     remotion_src = os.path.join(remotion_dir, 'src', 'remotion') if remotion_dir else ''
     remotion_public = os.path.join(remotion_dir, 'public') if remotion_dir else ''
     preview_media_records: List[tuple[str, str, Dict[str, str]]] = []
+    preview_overlay_records: List[tuple[str, str, Dict[str, Any]]] = []
     preview_contract_records: List[tuple[str, str, Dict[str, Any]]] = []
+    preview_contract_render_modes: Dict[str, str] = {}
     preview_wrapper_names: Dict[str, str] = {}
+    preview_intrinsic_durations: Dict[str, int] = {}
     section_contract_lookup: Dict[str, Dict[str, Dict[str, Any]]] = {}
     section_component_records: Dict[str, List[tuple[str, str, str]]] = {}
     section_component_lookup: Dict[str, Dict[str, str]] = {}
     section_preview_visual_ids: Dict[str, List[str]] = {}
+    preview_slot_duration_manifest = build_preview_slot_duration_manifest(project_dir, fps)
     needs_generated_contract_preview = False
+    needs_generated_media_preview = False
 
     if project_dir and remotion_public:
         visual_contract_manifest = build_visual_contract_manifest(
@@ -2895,9 +2969,22 @@ def generate_root_tsx(
                 visual_id: export_name
                 for visual_id, export_name, _ in section_component_records[section['id']]
             }
-            section_preview_visual_ids[section['id']] = [
+            preview_visual_ids = [
                 visual_id for visual_id, _, _ in section_component_records[section['id']]
             ]
+            section_preview_visual_ids[section['id']] = preview_visual_ids
+            for comp_id, export_name, _ in section_component_records[section['id']]:
+                wrapper_key = f'{section["id"]}:{comp_id}'
+                logical_name = export_name or resolve_logical_component_name(comp_id, section['id'])
+                preview_wrapper_names[wrapper_key] = f'{logical_name}Preview'
+                intrinsic_duration = resolve_component_intrinsic_duration_frames(
+                    comp_id,
+                    section['id'],
+                    remotion_src,
+                    project_dir=project_dir,
+                    spec_dir=section.get('specDir', ''),
+                )
+                preview_intrinsic_durations[wrapper_key] = max(1, intrinsic_duration or 150)
             continue
 
         fallback_video_src = resolve_direct_video_src(section['id'], remotion_public)
@@ -2920,12 +3007,12 @@ def generate_root_tsx(
             fallback_video_src=fallback_video_src,
             component_visual_ids=comp_ids,
         )
+        visual_overlay_manifest = build_visual_overlay_manifest(
+            section,
+            project_dir,
+        )
         contract_visuals = section_contract_lookup.get(section['id'], {})
-        preview_visual_ids = [
-            visual_id
-            for visual_id, contract in contract_visuals.items()
-            if contract.get('renderMode') == 'component'
-        ]
+        preview_visual_ids = list(contract_visuals.keys())
         if not preview_visual_ids:
             preview_visual_ids = [visual_id for visual_id, _, _ in component_records]
         section_preview_visual_ids[section['id']] = preview_visual_ids
@@ -2937,24 +3024,51 @@ def generate_root_tsx(
                 contract_media = contract.get('mediaAliases')
                 if isinstance(contract_media, dict) and contract_media:
                     media = contract_media
+            overlay_config = visual_overlay_manifest.get(comp_id)
+            if overlay_config is None and isinstance(contract, dict):
+                contract_overlay = contract.get('overlayConfig')
+                if isinstance(contract_overlay, dict) and contract_overlay:
+                    overlay_config = contract_overlay
             wrapper_key = f'{section["id"]}:{comp_id}'
             export_name = section_component_lookup.get(section['id'], {}).get(comp_id)
             logical_name = export_name or resolve_logical_component_name(comp_id, section['id'])
             preview_wrapper_names[wrapper_key] = f'{logical_name}Preview'
+            intrinsic_duration = resolve_component_intrinsic_duration_frames(
+                comp_id,
+                section['id'],
+                remotion_src,
+                project_dir=project_dir,
+                spec_dir=section.get('specDir', ''),
+            )
+            if intrinsic_duration is None:
+                intrinsic_duration = resolve_contract_intrinsic_duration_frames(contract, fps)
+            preview_intrinsic_durations[wrapper_key] = max(1, intrinsic_duration or 150)
             if export_name is None:
-                needs_generated_contract_preview = True
+                if isinstance(contract, dict) and contract.get('renderMode') == 'component':
+                    needs_generated_contract_preview = True
+                elif media:
+                    needs_generated_media_preview = True
+                else:
+                    needs_generated_contract_preview = True
             if media:
                 preview_media_records.append((section['id'], comp_id, media))
+            if overlay_config:
+                preview_overlay_records.append((section['id'], comp_id, overlay_config))
             if contract:
                 preview_contract_records.append((section['id'], comp_id, contract))
+                render_mode = contract.get('renderMode')
+                if isinstance(render_mode, str) and render_mode:
+                    preview_contract_render_modes[wrapper_key] = render_mode
 
     lines.append('import React from "react";')
     lines.append('import { Composition } from "remotion";')
     if preview_media_records or preview_contract_records:
-        imports = ['VisualMediaProvider']
+        imports = ['SlotScaledSequence', 'VisualMediaProvider']
         if preview_contract_records:
             imports.append('VisualContractProvider')
         lines.append(f'import {{ {", ".join(imports)} }} from "./_shared/visual-runtime";')
+    if needs_generated_media_preview:
+        lines.append('import { GeneratedMediaVisual } from "./_shared/GeneratedMediaVisual";')
     if needs_generated_contract_preview:
         lines.append('import { GeneratedContractVisual } from "./_shared/GeneratedContractVisual";')
     lines.append('')
@@ -2985,9 +3099,28 @@ def generate_root_tsx(
             lines.append(f'  "{section_id}:{comp_id}": {{ {alias_parts} }},')
         lines.append('};')
         lines.append('')
+        lines.append('const PREVIEW_VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number> | null> = {')
+        for section_id, comp_id, config in preview_overlay_records:
+            overlay_parts: List[str] = []
+            for key, value in config.items():
+                if isinstance(value, bool):
+                    serialized = 'true' if value else 'false'
+                elif isinstance(value, (int, float)):
+                    serialized = json.dumps(value)
+                else:
+                    serialized = json.dumps(str(value))
+                overlay_parts.append(f'{key}: {serialized}')
+            lines.append(f'  "{section_id}:{comp_id}": {{ {", ".join(overlay_parts)} }},')
+        lines.append('};')
+        lines.append('')
         lines.append('const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {')
         for section_id, comp_id, contract in preview_contract_records:
             lines.append(f'  "{section_id}:{comp_id}": {json.dumps(contract, ensure_ascii=False)},')
+        lines.append('};')
+        lines.append('')
+        lines.append('const PREVIEW_INTRINSIC_DURATIONS: Record<string, number> = {')
+        for wrapper_key, intrinsic_duration in preview_intrinsic_durations.items():
+            lines.append(f'  "{wrapper_key}": {intrinsic_duration},')
         lines.append('};')
         lines.append('')
         generated_preview_wrappers: set = set()
@@ -3003,10 +3136,19 @@ def generate_root_tsx(
                 lines.append(f'const {preview_wrapper_name}: React.FC = () => (')
                 lines.append(f'  <VisualContractProvider contract={{PREVIEW_VISUAL_CONTRACTS["{section_id}:{comp_id}"] ?? null}}>')
                 lines.append(f'    <VisualMediaProvider media={{PREVIEW_VISUAL_MEDIA["{section_id}:{comp_id}"] ?? null}}>')
+                lines.append(f'      <SlotScaledSequence intrinsicDurationInFrames={{PREVIEW_INTRINSIC_DURATIONS["{section_id}:{comp_id}"] ?? 150}}>')
                 if component_export:
-                    lines.append(f'      <{component_export} />')
+                    lines.append(f'        <{component_export} />')
+                elif preview_contract_render_modes.get(wrapper_key) == 'component':
+                    lines.append('        <GeneratedContractVisual />')
+                elif wrapper_key in {
+                    f'{media_section_id}:{media_comp_id}'
+                    for media_section_id, media_comp_id, _ in preview_media_records
+                }:
+                    lines.append(f'        <GeneratedMediaVisual config={{PREVIEW_VISUAL_OVERLAYS["{section_id}:{comp_id}"] ?? null}} />')
                 else:
-                    lines.append('      <GeneratedContractVisual />')
+                    lines.append('        <GeneratedContractVisual />')
+                lines.append('      </SlotScaledSequence>')
                 lines.append('    </VisualMediaProvider>')
                 lines.append('  </VisualContractProvider>')
                 lines.append(');')
@@ -3061,15 +3203,9 @@ def generate_root_tsx(
                     resolve_logical_component_name(comp_id, section_id),
                 ),
             )
-            preview_duration = (
-                resolve_component_intrinsic_duration_frames(
-                    comp_id,
-                    section_id,
-                    remotion_src,
-                    project_dir=project_dir,
-                    spec_dir=section.get('specDir', ''),
-                )
-                or 150
+            preview_duration = preview_slot_duration_manifest.get(
+                wrapper_key,
+                preview_intrinsic_durations.get(wrapper_key, 150),
             )
             remotion_id = resolve_preview_composition_id(comp_id, section_id)
             lines.append(f'      <Composition')

@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-Frame at 90% progress (intrinsic frame 134/150) correctly shows the final hold phase of the dissolve-regenerate loop. The background PDD triangle is visible at reduced opacity with labeled vertices (Prompt, Tests, Grounding) and subtle vertex glows. The center code block displays regenerated Python code with proper syntax highlighting. The terminal strip at the bottom shows '✓ All tests passed' with a green check mark, matching the expected state for the hold phase (frames 120-150). Code block is visually centered, dark background with appropriate styling. All critical elements are present and correctly positioned.
+At frame 134 (90% progress, within the 'final code holds' phase at frames 120-150), the center code block containing the third regenerated code variant is completely absent. The spec requires syntax-highlighted code to be visible and held steady during this phase. Only the terminal strip showing '✓ All tests passed' is rendered. The background PDD triangle with dimmed labels (Prompt, Tests, Grounding) and the terminal strip are correctly rendered, but the primary visual element — the regenerated code block — is missing. The 'pdd test' critical element noted in audit hints is present in the terminal output, but the code that was generated and tested is not shown.

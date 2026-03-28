@@ -48,7 +48,7 @@ type FrameRange = {
 const FRAME_RANGE_RE =
   /Frames?\s+(\d+)\s*-\s*(\d+)(?:\s*\([^)]*\))?\s*:\s*(.+)$/i;
 const HOLD_RE = /(hold|static|steady|full opacity|final|remains on screen|remains steady|all elements static)/i;
-const FRAME_SAMPLE_EPSILON_SECONDS = 0.0005;
+export const FRAME_SAMPLE_EPSILON_SECONDS = 0.0005;
 
 const clampEndToSection = (endSeconds: number, sectionDurationSeconds: number): number =>
   Math.min(endSeconds, Math.max(sectionDurationSeconds - 0.001, 0));

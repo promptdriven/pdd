@@ -117,6 +117,16 @@ export const useVisualContractData = <
   return dataPoints as T;
 };
 
+export const useVisualDurationInFrames = (): number => {
+  const videoConfig = useVideoConfig();
+  const sequenceContext = useContext(Internals.SequenceContext);
+
+  return Math.max(
+    1,
+    Math.floor(sequenceContext?.durationInFrames ?? videoConfig.durationInFrames)
+  );
+};
+
 export const SlotScaledSequence: React.FC<{
   intrinsicDurationInFrames: number;
   children: React.ReactNode;

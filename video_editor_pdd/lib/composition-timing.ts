@@ -773,6 +773,10 @@ export function resolveSectionVisuals(
       hasComponent: false,
       hasExplicitMedia: true,
       requiresCompositedAudit: mediaInfo.requiresCompositedAudit,
+      previewCompositionId:
+        mediaInfo.contractId != null
+          ? resolvePreviewCompositionId(mediaInfo.contractId, section.id)
+          : undefined,
       mediaReferences: mediaInfo.mediaReferences,
       stagedAssetPath: mediaInfo.stagedAssetPath,
       auditHints: mediaInfo.auditHints,

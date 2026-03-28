@@ -1,20 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at 96.9% progress through the intrinsic visual (frame 1424/1470), which falls within the hold phase (frames 90-1380) or the very beginning of the fade-out phase (frames 1380-1470). All critical text elements are present and correctly rendered:
-
-1. **"PART 2"** — Visible above the main title in small, semi-bold, muted blue-gray text with letter-spacing. Centered horizontally, positioned above the title at approximately y~400. Matches spec.
-
-2. **"THE PARADIGM"** — Large, bold, light-colored text (~72px), centered horizontally at approximately y~460. Correct weight and color (`#E2E8F0` range). Matches spec.
-
-3. **"SHIFT"** — Large, bold, light-colored text below the horizontal rule, centered horizontally. Matches spec. There is no obvious offset-right of 15px visible, but "SHIFT" appears centered or very near center, which is within acceptable tolerance for this layout intent.
-
-4. **Horizontal rule** — A thin horizontal line is visible between "THE PARADIGM" and "SHIFT", centered, approximately 280px wide. Matches spec.
-
-5. **Background** — Deep navy-black (`#0A0F1A` range), consistent with spec. No blueprint grid is prominently visible, but at this very low opacity (0.05) it would be extremely subtle and essentially invisible in a compressed PNG — this is within tolerance.
-
-6. **Ghost mold silhouette** — Not visibly discernible, but the spec calls for extremely low opacity (0.04 stroke, 0.03 fill), making it essentially invisible in normal viewing. This is within tolerance.
-
-7. **Animation phase** — At 96.9% progress, we're in the fade-out phase (frames 1380-1470). The elements appear to have slightly reduced opacity consistent with an early-to-mid fade-out, though they remain clearly visible. This is consistent with the expected animation state.
-
-All critical elements are present, correctly positioned, and visually match the spec's intent.
+The frame is sampled at 96.9% progress through the intrinsic visual (frame 1424/1470), which falls within the hold phase (frames 90-1380) or the very beginning of the fade-out phase (frames 1380-1470). All critical text elements are present and correctly rendered: 'PART 2' label appears centered above in a muted gray color with letter-spacing consistent with the spec. 'THE PARADIGM' is displayed in large bold white/light text centered on the canvas. A thin horizontal rule is visible between the two title lines. 'SHIFT' appears below the rule in the same bold styling. The background is the specified deep navy-black (#0A0F1A). The blueprint grid is at very low opacity as expected. The ghost mold silhouette is at spec-correct very low opacity (0.04) and is not prominently visible, which is consistent with the spec's intent of a faint background hint. The vertical positioning of all elements is centered and consistent with the layout intent. 'SHIFT' does not appear to have a strong rightward offset but the centering reads correctly as a composed title card. The horizontal rule width and placement between the title words match the spec description. Text opacity appears full (not yet fading out), which is plausible given the sample is near the boundary of the hold/fade-out phases.

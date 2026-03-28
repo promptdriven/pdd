@@ -20,6 +20,7 @@ import {
   evaluateDeterministicTextAudit,
 } from "@/lib/audit-evidence";
 import {
+  FRAME_SAMPLE_EPSILON_SECONDS,
   resolveAuditSampleWindow,
   resolveRenderedAuditSampleWindow,
 } from "@/lib/audit-timing";
@@ -381,7 +382,7 @@ function resolveAuditRenderSource(
 ): AuditRenderSource {
   const visualType = resolveVisualType(visual);
 
-  if (visualType === "component" && visual.previewCompositionId) {
+  if (visual.previewCompositionId && (visualType === "component" || visualType === "media")) {
     return {
       kind: "preview-composition",
       visualType,
@@ -493,13 +494,14 @@ async function auditSection(
         .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
     : [];
   const configuredCompositionIds = resolveSectionCompositionIds(section);
+  const resolvedSectionVisuals = resolveSectionVisuals(
+    getProjectDir(),
+    section,
+    configuredCompositionIds
+  );
   const renderableVisuals =
-    configuredCompositionIds.length > 0
-      ? resolveSectionVisuals(
-          getProjectDir(),
-          section,
-          configuredCompositionIds
-        )
+    resolvedSectionVisuals.length > 0
+      ? resolvedSectionVisuals
           .filter((visual) => Boolean(visual.specPath))
           .map((visual) => ({
             specPath: visual.specPath as string,
@@ -624,7 +626,22 @@ async function auditSection(
         clearStaleAuditStill(outputStill);
 
         if (renderSource.kind === "preview-composition") {
-          const sampleFrame = Math.max(0, sampleWindow.intrinsicSampleFrame);
+          const previewDurationFrames = Math.max(
+            1,
+            Math.round(
+              Math.max(
+                FRAME_SAMPLE_EPSILON_SECONDS,
+                sampleWindow.endSeconds - sampleWindow.startSeconds
+              ) * fps
+            )
+          );
+          const sampleFrame = Math.max(
+            0,
+            Math.min(
+              previewDurationFrames - 1,
+              Math.round((previewDurationFrames - 1) * sampleWindow.normalizedSample)
+            )
+          );
           onLog(
             `[audit] Rendering preview still for ${section.id} (${specName}) from ${renderSource.compositionId} at frame ${sampleFrame} (${sampleWindow.source})`
           );

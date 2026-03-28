@@ -3481,7 +3481,7 @@ class TestCompositionTiming:
             project_dir=str(project_dir),
         )
 
-        assert 'import { VisualMediaProvider, VisualContractProvider } from "./_shared/visual-runtime";' in root
+        assert 'import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "./_shared/visual-runtime";' in root
         assert 'const PREVIEW_VISUAL_MEDIA' in root
         assert 'const PREVIEW_VISUAL_CONTRACTS' in root
         assert '"veo_section:05_split_nature_comparison": { defaultSrc: "veo/02_ocean_wave_broll.mp4"' in root
@@ -3898,6 +3898,202 @@ class TestDigitPrefixedIdentifiers:
         assert 'const Part1Economics02SockPriceChartPreview: React.FC = () => (' in root
         assert '<GeneratedContractVisual />' in root
         assert 'id="part1-economics02-sock-price-chart"' in root
+
+    def test_generate_root_tsx_registers_media_preview_for_manifest_raw_media_visual_without_exact_component(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "part1_economics"
+
+        remotion_src.mkdir(parents=True)
+        (remotion_public / "veo").mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo" / "developer_codebase_zoomout.mp4").write_text(
+            "stub",
+            encoding="utf-8",
+        )
+        (specs_dir / "17_developer_codebase_zoomout.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "veo_clip",
+                        "clipId": "developer_codebase_zoomout",
+                        "characters": [
+                            {
+                                "id": "developer_protagonist",
+                                "label": "Developer",
+                            }
+                        ],
+                        "narrationSegments": ["part1_economics_028"],
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "part1_economics",
+                "compositionId": "Part1EconomicsSection",
+                "durationSeconds": 8,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "part1_economics",
+                "compositions": [],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'import { GeneratedMediaVisual } from "./_shared/GeneratedMediaVisual";' in root
+        assert 'const Part1Economics17DeveloperCodebaseZoomoutPreview: React.FC = () => (' in root
+        assert 'PREVIEW_VISUAL_MEDIA["part1_economics:17_developer_codebase_zoomout"]' in root
+        assert '<SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:17_developer_codebase_zoomout"] ?? 150}>' in root
+        assert '<GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["part1_economics:17_developer_codebase_zoomout"] ?? null} />' in root
+        assert 'id="part1-economics17-developer-codebase-zoomout"' in root
+
+    def test_generate_root_tsx_prefers_contract_preview_for_manifest_component_even_with_media_aliases(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "cold_open"
+
+        remotion_src.mkdir(parents=True)
+        (remotion_public / "veo").mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (remotion_public / "veo" / "developer_cursor_edit.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "developer_codebase_zoomout.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "grandmother_darning.mp4").write_text("stub", encoding="utf-8")
+        (remotion_public / "veo" / "grandmother_drawer_zoomout.mp4").write_text("stub", encoding="utf-8")
+        (specs_dir / "01_split_screen_darning.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "split_screen",
+                        "layout": "vertical_50_50",
+                        "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.4},
+                        "panels": {
+                            "left": {"clips": ["developer_cursor_edit", "developer_codebase_zoomout"]},
+                            "right": {"clips": ["grandmother_darning", "grandmother_drawer_zoomout"]},
+                        },
+                        "durationSeconds": 9,
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "cold_open",
+                "compositionId": "ColdOpenSection",
+                "durationSeconds": 9,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "cold_open",
+                "compositions": [],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'const ColdOpen01SplitScreenDarningPreview: React.FC = () => (' in root
+        assert '<GeneratedContractVisual />' in root
+        assert '<GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:01_split_screen_darning"] ?? null} />' not in root
+
+    def test_generate_root_tsx_uses_section_timeline_slot_duration_for_preview_compositions(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_src = remotion_dir / "src" / "remotion"
+        specs_dir = project_dir / "specs" / "part1_economics"
+        outputs_dir = project_dir / "outputs" / "compositions"
+        component_dir = remotion_src / "Part1Economics01SectionTitleCard"
+
+        component_dir.mkdir(parents=True, exist_ok=True)
+        specs_dir.mkdir(parents=True)
+        outputs_dir.mkdir(parents=True)
+
+        (component_dir / "constants.ts").write_text(
+            'export const TOTAL_FRAMES = 150;\n',
+            encoding="utf-8",
+        )
+        (specs_dir / "01_section_title_card.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "title_card",
+                        "sectionNumber": 1,
+                        "titleLine1": "THE ECONOMICS",
+                        "titleLine2": "OF DARNING",
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (outputs_dir / "section-timeline.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "updatedAt": "2026-03-27T00:00:00Z",
+                    "sections": [
+                        {
+                            "sectionId": "part1_economics",
+                            "durationSeconds": 24,
+                            "entries": [
+                                {
+                                    "id": "01_section_title_card",
+                                    "startSeconds": 0,
+                                    "endSeconds": 24,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "part1_economics",
+                "compositionId": "Part1EconomicsSection",
+                "durationSeconds": 24,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "part1_economics",
+                "compositions": ["01_section_title_card"],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'const PREVIEW_INTRINSIC_DURATIONS: Record<string, number> = {' in root
+        assert '"part1_economics:01_section_title_card": 150,' in root
+        assert '<SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part1_economics:01_section_title_card"] ?? 150}>' in root
+        assert 'id="part1-economics01-section-title-card"' in root
+        assert 'durationInFrames={720}' in root
 
     def test_generate_section_component_falls_back_to_generated_contract_visual_when_import_missing(self, tmp_path):
         project_dir = tmp_path

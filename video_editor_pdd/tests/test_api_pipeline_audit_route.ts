@@ -245,6 +245,33 @@ function mockProjectConfig() {
   };
 }
 
+function withDefaultAuditJson(
+  fallbackText: string,
+  overrides: Record<string, string> = {}
+): (candidate: string) => string {
+  return (candidate: string) => {
+    const normalized = String(candidate);
+    if (normalized in overrides) {
+      return overrides[normalized];
+    }
+    if (normalized.endsWith("visual-manifest.json")) {
+      return JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-27T00:00:00Z",
+        sections: [],
+      });
+    }
+    if (normalized.endsWith("section-timeline.json")) {
+      return JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-27T00:00:00Z",
+        sections: [],
+      });
+    }
+    return fallbackText;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -306,8 +333,30 @@ beforeEach(() => {
   );
   mockGetProjectDir.mockReturnValue("/project-root");
   mockReaddirSync.mockReturnValue([]);
-  mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
-  mockExistsSync.mockReturnValue(true);
+  mockReadFileSync.mockImplementation((candidate: string) => {
+    if (String(candidate).endsWith("visual-manifest.json")) {
+      return JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-27T00:00:00Z",
+        sections: [],
+      });
+    }
+    if (String(candidate).endsWith("section-timeline.json")) {
+      return JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-27T00:00:00Z",
+        sections: [],
+      });
+    }
+    return "**Timestamp:** 0:00 - 0:03\n";
+  });
+  mockExistsSync.mockImplementation((candidate: string) => {
+    const normalized = String(candidate);
+    return (
+      !normalized.includes("/outputs/veo/") &&
+      !normalized.includes("/remotion/public/veo/")
+    );
+  });
   mockMkdirSync.mockReturnValue(undefined);
   mockWriteFileSync.mockReturnValue(undefined);
   mockUnlinkSync.mockReturnValue(undefined);
@@ -799,7 +848,9 @@ describe("audit executor factory", () => {
     ];
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["01_title_card.md"]);
-    mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n")
+    );
 
     const executor = registerCallArgs.factory(
       { sections: ["animation_section"] },
@@ -829,7 +880,9 @@ describe("audit executor factory", () => {
       "animation_section_01_title_card",
     ]);
     mockReaddirSync.mockReturnValue(["01_title_card.md"]);
-    mockReadFileSync.mockReturnValue("**Timestamp:** 0:00 - 0:03\n");
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n")
+    );
 
     const executor = registerCallArgs.factory(
       { sections: ["animation_section"] },
@@ -841,7 +894,97 @@ describe("audit executor factory", () => {
     expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
   });
 
-  it("uses the intrinsic sample frame for preview compositions instead of scaling against the 150-frame preview container", async () => {
+  it("renders the preview composition for raw-media visuals when generated previews exist", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "part1_economics",
+        label: "Part 1",
+        specDir: "part1_economics",
+        compositionId: "Part1EconomicsSection",
+        videoFile: "outputs/sections/part1_economics.mp4",
+        durationSeconds: 8,
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockResolveSectionCompositionIds.mockReturnValue([]);
+    mockReaddirSync.mockReturnValue(["17_developer_codebase_zoomout.md"]);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "part1_economics");
+    const specPath = pathMod.join(specDir, "17_developer_codebase_zoomout.md");
+    const manifestPath = pathMod.join(
+      "/project-root",
+      "outputs",
+      "compositions",
+      "visual-manifest.json"
+    );
+    const clipPath = pathMod.join(
+      "/project-root",
+      "remotion",
+      "public",
+      "veo",
+      "developer_codebase_zoomout.mp4"
+    );
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [manifestPath]: JSON.stringify({
+          version: 1,
+          updatedAt: "2026-03-27T00:00:00.000Z",
+          sections: [
+            {
+              id: "part1_economics",
+              visuals: [
+                {
+                  id: "17_developer_codebase_zoomout",
+                  specBaseName: "17_developer_codebase_zoomout",
+                  renderMode: "raw-media",
+                  mediaAliases: {
+                    defaultSrc: "veo/developer_codebase_zoomout.mp4",
+                    backgroundSrc: "veo/developer_codebase_zoomout.mp4",
+                    outputSrc: "veo/developer_codebase_zoomout.mp4",
+                    baseSrc: "veo/developer_codebase_zoomout.mp4",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+        [specPath]: [
+          "[veo:]",
+          "",
+          "**Timestamp:** 7:56 - 8:04",
+          "",
+          "```tsx",
+          '<VeoClip clipId="developer_codebase_zoomout" src="/clips/developer_codebase_zoomout.mp4" />',
+          "```",
+        ].join("\n"),
+      })
+    );
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        candidate === specDir ||
+        candidate === specPath ||
+        candidate === clipPath ||
+        candidate === manifestPath
+      );
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["part1_economics"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockRenderStill).toHaveBeenCalledTimes(1);
+    expect(mockRenderStill.mock.calls[0][0]).toBe(
+      "part1-economics17-developer-codebase-zoomout"
+    );
+    expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
+  });
+
+  it("maps preview audit samples into the rendered slot window instead of the legacy intrinsic preview container", async () => {
     const config = mockProjectConfig();
     config.sections = [
       {
@@ -862,9 +1005,9 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "animation_section");
     const slidePath = pathMod.join(specDir, "04_square_slide_right.md");
-    mockReadFileSync.mockImplementation((candidate: string) => {
-      if (candidate === slidePath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [slidePath]: [
           "**Timestamp:** 0:04 - 0:05",
           "",
           "## Animation Sequence",
@@ -872,10 +1015,9 @@ describe("audit executor factory", () => {
           "2. Frame 3-22: Square slides to the right.",
           "3. Frame 22-27: Overshoot settle.",
           "4. Frame 27-33: Guide line fades out and glow appears.",
-        ].join("\n");
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return (
         candidate === specDir ||
@@ -892,7 +1034,7 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledWith(
       "animation-section04-square-slide-right",
-      29,
+      91,
       pathMod.join("/project-root", "outputs", "audit", "animation_section", "04_square_slide_right_frame.png")
     );
   });
@@ -918,9 +1060,9 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "animation_section");
     const specPath = pathMod.join(specDir, "07_long_timeline_visual.md");
-    mockReadFileSync.mockImplementation((candidate: string) => {
-      if (candidate === specPath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [specPath]: [
           "[Remotion]",
           "",
           "**Duration:** ~8s (240 frames @ 30fps)",
@@ -930,10 +1072,9 @@ describe("audit executor factory", () => {
           "2. Frame 40-120: Build the main layout.",
           "3. Frame 120-210: Transition to the payoff state.",
           "4. Frame 210-240: Hold on the final payoff frame.",
-        ].join("\n");
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return candidate === specDir || candidate === specPath;
     });
@@ -978,9 +1119,9 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "animation_section");
     const specPath = pathMod.join(specDir, "07_long_timeline_visual.md");
-    mockReadFileSync.mockImplementation((candidate: string) => {
-      if (candidate === specPath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [specPath]: [
           "[Remotion]",
           "",
           "**Duration:** ~8s (240 frames @ 30fps)",
@@ -990,10 +1131,9 @@ describe("audit executor factory", () => {
           "2. Frame 40-120: Build the main layout.",
           "3. Frame 120-210: Transition to the payoff state.",
           "4. Frame 210-240: Hold on the final payoff frame.",
-        ].join("\n");
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return candidate === specDir || candidate === specPath;
     });
@@ -1042,7 +1182,7 @@ describe("audit executor factory", () => {
     );
   });
 
-  it("uses the rendered preview sample window when a preview composition spec timestamp is global to the full section timeline", async () => {
+  it("uses the rendered preview slot window when a preview composition spec timestamp is global to the full section timeline", async () => {
     const config = mockProjectConfig();
     config.sections = [
       {
@@ -1063,9 +1203,9 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "veo_section");
     const specPath = pathMod.join(specDir, "08_section_end_card.md");
-    mockReadFileSync.mockImplementation((candidate: string) => {
-      if (candidate === specPath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [specPath]: [
           "[title:]",
           "",
           "**Timestamp:** 0:15.8 – 0:16.6",
@@ -1076,10 +1216,9 @@ describe("audit executor factory", () => {
           "3. **Frame 14–18 (0.47–0.6s):** Rule expands.",
           "4. **Frame 18–22 (0.6–0.73s):** Subtitle fades in.",
           "5. **Frame 22–24 (0.73–0.8s):** Hold.",
-        ].join("\n");
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return candidate === specDir || candidate === specPath;
     });
@@ -1092,7 +1231,7 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledWith(
       "veo-section08-section-end-card",
-      117,
+      5,
       pathMod.join(
         "/project-root",
         "outputs",
@@ -1127,19 +1266,16 @@ describe("audit executor factory", () => {
     const brollPath = pathMod.join(specDir, "02_ocean_wave_broll.md");
     const stagedClipPath = pathMod.join("/project-root", "outputs", "veo", "02_ocean_wave_broll.mp4");
 
-    mockReadFileSync.mockImplementation((candidate: string) => {
-      if (candidate === titleCardPath) {
-        return "**Timestamp:** 0:07 – 0:10\n";
-      }
-      if (candidate === brollPath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [titleCardPath]: "**Timestamp:** 0:07 – 0:10\n",
+        [brollPath]: [
           "[veo: Ocean wave at sunset]",
           "",
           "**Timestamp:** 0:10 – 0:14",
-        ].join("\n");
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return (
         candidate === specDir ||
@@ -1183,16 +1319,15 @@ describe("audit executor factory", () => {
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "veo_section");
     const splitPath = pathMod.join(specDir, "05_split_nature_comparison.md");
-    mockReadFileSync.mockImplementation((candidate: string) => {
-      if (candidate === splitPath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [splitPath]: [
           "**Timestamp:** 0:14 – 0:18",
           "",
           'Split uses "veo/ocean_sunset.mp4" and "veo/aerial_forest.mp4".',
-        ].join("\n");
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return candidate === specDir || candidate === splitPath;
     });
@@ -2250,15 +2385,14 @@ Technical assessment: Previous review claimed it was at y≈410.
     ];
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["01_title_card.md", "04_veo_broll.md"]);
-    mockReadFileSync.mockImplementation((filePath: string) => {
-      if (String(filePath).includes("01_title_card.md")) {
-        return "**Timestamp:** 0:00 - 0:03\n";
-      }
-      if (String(filePath).includes("04_veo_broll.md")) {
-        return "**Timestamp:** 0:03 - 0:06\n";
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [pathMod.join(specDir, "01_title_card.md")]: "**Timestamp:** 0:00 - 0:03\n",
+        [pathMod.join(specDir, "04_veo_broll.md")]: "**Timestamp:** 0:03 - 0:06\n",
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return !String(candidate).endsWith("04_veo_broll.mp4");
     });
@@ -2321,9 +2455,9 @@ Technical assessment: Previous review claimed it was at y≈410.
     const specDir = pathMod.join("/project-root", "specs", "animation_section");
     const titleCardPath = pathMod.join(specDir, "01_title_card.md");
     const pulsePath = pathMod.join(specDir, "02_blue_circle_pulse.md");
-    mockReadFileSync.mockImplementation((filePath: string) => {
-      if (filePath === titleCardPath) {
-        return [
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [titleCardPath]: [
           "**Timestamp:** 0:00 - 0:03",
           "",
           "## Animation Sequence",
@@ -2331,13 +2465,10 @@ Technical assessment: Previous review claimed it was at y≈410.
           "2. Frame 15-45: Title reveal.",
           "3. Frame 45-65: Rule expansion.",
           "4. Frame 65-90: Hold — all elements static at full opacity.",
-        ].join("\n");
-      }
-      if (filePath === pulsePath) {
-        return "**Timestamp:** 0:03 - 0:08\n";
-      }
-      return "**Timestamp:** 0:00 - 0:03\n";
-    });
+        ].join("\n"),
+        [pulsePath]: "**Timestamp:** 0:03 - 0:08\n",
+      })
+    );
     mockExistsSync.mockImplementation((candidate: string) => {
       return (
         candidate === specDir ||
@@ -2356,8 +2487,9 @@ Technical assessment: Previous review claimed it was at y≈410.
     expect(mockRenderStill).toHaveBeenCalledTimes(2);
     expect(mockExtractFrameAtTime).not.toHaveBeenCalled();
     expect(mockRenderStill.mock.calls[0][0]).toBe("animation-section01-title-card");
-    expect(mockRenderStill.mock.calls[0][1]).toBe(77);
+    expect(mockRenderStill.mock.calls[0][1]).toBe(58);
   });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -3256,6 +3388,12 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
 
   it("uses runClaudeAudit for comparing stills against specs", () => {
     expect(sourceCode).toMatch(/runClaudeAudit/);
+  });
+
+  it("samples preview compositions from the rendered slot window instead of raw intrinsic frame ids", () => {
+    expect(sourceCode).toMatch(/previewDurationFrames/);
+    expect(sourceCode).toMatch(/sampleWindow\.normalizedSample/);
+    expect(sourceCode).not.toMatch(/const sampleFrame = Math\.max\(0, sampleWindow\.intrinsicSampleFrame\);/);
   });
 });
 
