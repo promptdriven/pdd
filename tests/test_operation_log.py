@@ -809,7 +809,7 @@ def test_decorator_fingerprint_failure_warns_not_silent_issue_983(temp_pdd_env):
 
     with patch(
         "pdd.sync_determine_operation.get_pdd_file_paths",
-        side_effect=RuntimeError("simulated path resolution failure"),
+        side_effect=OSError("simulated path resolution failure"),
     ), patch("pdd.operation_log.console") as mock_console:
 
         # Should NOT raise — the decorator still catches the exception
