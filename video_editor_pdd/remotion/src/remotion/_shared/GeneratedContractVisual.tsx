@@ -38,6 +38,70 @@ const asStringArray = (value: unknown): string[] => {
     : [];
 };
 
+const asRecordArray = (value: unknown): Record<string, unknown>[] => {
+  return Array.isArray(value)
+    ? value
+        .map((entry) => asRecord(entry))
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+    : [];
+};
+
+const extractTextList = (
+  value: unknown,
+  preferredKeys: string[] = ["text", "label", "name", "title", "comment"]
+): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const values: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string" && entry.trim()) {
+      values.push(entry.trim());
+      continue;
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const resolved = preferredKeys
+      .map((key) => asString(record[key]))
+      .find((item): item is string => Boolean(item));
+    if (resolved) {
+      values.push(resolved);
+    }
+  }
+  return values;
+};
+
+const resolveContractChartId = (data: Record<string, unknown>): string | null => {
+  const rawChartId =
+    asString(data.chartId) ??
+    asString(data.chartRef) ??
+    asString(data.editorId);
+
+  if (!rawChartId) {
+    return null;
+  }
+
+  if (rawChartId === "code_cost_generate_vs_patch") {
+    return "code_cost_triple_line";
+  }
+
+  return rawChartId;
+};
+
+const formatCompactMetric = (value: number): string => {
+  const rounded = Math.round(value);
+  if (rounded >= 10000) {
+    return `${Math.round(rounded / 1000).toLocaleString()}000+`;
+  }
+  if (rounded >= 1000) {
+    return rounded.toLocaleString();
+  }
+  return `${rounded}`;
+};
+
 const formatApproxTokenCount = (value: unknown): string | null => {
   if (typeof value === "number" && Number.isFinite(value)) {
     return `~${Math.round(value).toLocaleString()} tokens`;
@@ -452,7 +516,7 @@ const buildDegradationSeries = (
 };
 
 const buildEventSeries = (data: Record<string, unknown>): SeriesEntry[] => {
-  const chartId = asString(data.chartId);
+  const chartId = resolveContractChartId(data);
   if (chartId === "code_cost_triple_line") {
     return [
       {
@@ -541,16 +605,21 @@ const normalizeSeries = (data: Record<string, unknown>): SeriesEntry[] => {
           if (degradationSeries) {
             return degradationSeries;
           }
-          const points = Array.isArray(record.dataPoints)
+          const rawPoints = Array.isArray(record.dataPoints)
             ? record.dataPoints
+            : Array.isArray(record.data)
+              ? record.data
+              : [];
+          const points = rawPoints.length > 0
+            ? rawPoints
                 .map((point) => {
                   const item = asRecord(point);
                   const x = asNumber(item?.x);
-              const y = asNumber(item?.y);
-              return x === null || y === null ? null : { x, y };
-            })
-            .filter((point): point is { x: number; y: number } => Boolean(point))
-        : [];
+                  const y = asNumber(item?.y);
+                  return x === null || y === null ? null : { x, y };
+                })
+                .filter((point): point is { x: number; y: number } => Boolean(point))
+            : [];
       if (points.length < 2) return null;
       return {
         label: asString(record.label) ?? asString(record.id) ?? "Series",
@@ -1438,7 +1507,8 @@ const ChartVisual: React.FC<{
 }> = ({ data, width, height, frame }) => {
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
-  const chartId = asString(data.chartId);
+  const { durationInFrames } = useVideoConfig();
+  const chartId = resolveContractChartId(data);
   const event = asString(data.event);
   const callouts = Array.isArray(data.callouts)
     ? data.callouts
@@ -1496,6 +1566,7 @@ const ChartVisual: React.FC<{
   const eventLabel = asString(data.label) ?? asString(asRecord(data.takeaway)?.line1);
   const eventSubLabel =
     debtResetNote ??
+    asString(data.reframeText) ??
     asString(data.newAnnotation) ??
     (isCodeCostCallback ? "When economics change, rational behavior changes." : null) ??
     asString(asRecord(data.takeaway)?.line2);
@@ -1508,12 +1579,271 @@ const ChartVisual: React.FC<{
     extrapolateRight: "clamp",
   });
 
+  if (chartId === "mold_production_counter") {
+    const counter = asRecord(data.counter);
+    const moldCycle = asRecord(data.moldCycle);
+    const startValue = Math.max(1, asNumber(counter?.start) ?? 1);
+    const endValue = Math.max(startValue + 1, asNumber(counter?.end) ?? 10000);
+    const milestoneValues = (Array.isArray(counter?.milestones) ? counter?.milestones : [])
+      .map((entry) => asNumber(entry))
+      .filter((entry): entry is number => entry !== null);
+    const holdStart = Math.max(1, Math.floor(durationInFrames * 0.78));
+    const productionProgress = interpolate(frame, [0, holdStart], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const easedProgress = Math.pow(productionProgress, 0.42);
+    const currentValue =
+      productionProgress >= 0.96
+        ? endValue
+        : Math.max(startValue, startValue * Math.pow(endValue / startValue, easedProgress));
+    const displayValue = productionProgress >= 0.8 ? `${formatCompactMetric(endValue)}` : formatCompactMetric(currentValue);
+    const cycleDots = Math.max(4, Math.min(10, Math.round(interpolate(
+      frame,
+      [0, durationInFrames],
+      [asNumber(moldCycle?.startFramesPerCycle) ?? 60, asNumber(moldCycle?.endFramesPerCycle) ?? 6],
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    ) / 8)));
+
+    return (
+      <AbsoluteFill style={{ padding: "88px 92px 78px" }}>
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            borderRadius: 32,
+            background:
+              "radial-gradient(circle at 68% 18%, rgba(96, 165, 250, 0.12), transparent 28%), radial-gradient(circle at 18% 82%, rgba(217, 148, 74, 0.12), transparent 34%), rgba(10, 15, 26, 0.96)",
+            border: subtleBorder,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: 76,
+              top: 54,
+              display: "flex",
+              gap: 10,
+            }}
+          >
+            {Array.from({ length: cycleDots }).map((_, index) => (
+              <div
+                key={`cycle-dot-${index}`}
+                style={{
+                  width: 12,
+                  height: 12,
+                  borderRadius: 999,
+                  backgroundColor: index < Math.round(productionProgress * cycleDots) ? "#F59E0B" : "rgba(148, 163, 184, 0.22)",
+                  boxShadow: index < Math.round(productionProgress * cycleDots) ? "0 0 14px rgba(245, 158, 11, 0.35)" : undefined,
+                }}
+              />
+            ))}
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              left: 92,
+              top: 120,
+              width: 360,
+              padding: "28px 30px",
+              borderRadius: 28,
+              backgroundColor: "rgba(2, 6, 23, 0.76)",
+              border: "1px solid rgba(74, 222, 128, 0.24)",
+            }}
+          >
+            <div style={{ color: "#94A3B8", fontSize: 20, fontWeight: 600, letterSpacing: 1.2 }}>
+              parts produced
+            </div>
+            <div
+              style={{
+                color: "#F8FAFC",
+                fontSize: 84,
+                fontWeight: 800,
+                lineHeight: 1,
+                marginTop: 18,
+              }}
+            >
+              {displayValue}
+            </div>
+            <div
+              style={{
+                marginTop: 22,
+                height: 14,
+                borderRadius: 999,
+                backgroundColor: "rgba(30, 41, 59, 0.92)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${Math.max(6, productionProgress * 100)}%`,
+                  height: "100%",
+                  borderRadius: 999,
+                  background: "linear-gradient(90deg, #4A90D9 0%, #5AAA6E 100%)",
+                }}
+              />
+            </div>
+            <div
+              style={{
+                marginTop: 18,
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+              }}
+            >
+              {(milestoneValues.length > 0 ? milestoneValues : [1, 10, 100, 1000, 10000]).map((value) => (
+                <div
+                  key={`milestone-${value}`}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 999,
+                    backgroundColor: "rgba(15, 23, 42, 0.86)",
+                    border: `1px solid ${currentValue >= value ? "rgba(74, 222, 128, 0.42)" : "rgba(71, 85, 105, 0.42)"}`,
+                    color: currentValue >= value ? "#86EFAC" : "#94A3B8",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 14,
+                    fontWeight: 700,
+                  }}
+                >
+                  {value >= endValue ? `${formatCompactMetric(value)}` : value.toLocaleString()}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              right: 90,
+              top: 88,
+              width: 560,
+              height: 520,
+              borderRadius: 36,
+              backgroundColor: "rgba(15, 23, 42, 0.72)",
+              border: "1px solid rgba(148, 163, 184, 0.22)",
+              overflow: "hidden",
+            }}
+          >
+            <svg width="100%" height="100%" viewBox="0 0 560 520">
+              <rect x={106} y={132} width={348} height={198} rx={34} fill="none" stroke="rgba(148, 163, 184, 0.72)" strokeWidth={10} />
+              <rect x={134} y={156} width={292} height={148} rx={22} fill="rgba(2, 6, 23, 0.42)" stroke="rgba(217, 148, 74, 0.7)" strokeWidth={5} />
+              <rect x={224} y={104} width={112} height={44} rx={20} fill="rgba(226, 232, 240, 0.18)" />
+              <path d="M 282 148 C 252 206, 222 252, 226 294 C 230 332, 272 362, 320 350 C 350 342, 370 316, 366 270 C 362 232, 332 200, 308 170 Z" fill="rgba(245, 158, 11, 0.3)" />
+              {Array.from({ length: 12 }).map((_, index) => (
+                <rect
+                  key={`part-${index}`}
+                  x={116 + (index % 4) * 84}
+                  y={382 + Math.floor(index / 4) * 42}
+                  width={52}
+                  height={28}
+                  rx={10}
+                  fill={index < Math.round(productionProgress * 12) ? "#60A5FA" : "rgba(71, 85, 105, 0.55)"}
+                />
+              ))}
+            </svg>
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
+  if (chartId === "schematic_density_zoom") {
+    const counter = asRecord(data.counter);
+    const zoom = asRecord(data.zoom);
+    const startValue = Math.max(1, asNumber(counter?.start) ?? 20);
+    const endValue = Math.max(startValue + 1, asNumber(counter?.end) ?? 50000);
+    const zoomProgress = interpolate(frame, [0, Math.max(1, durationInFrames - 60)], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+    const currentValue =
+      zoomProgress >= 0.82
+        ? endValue
+        : Math.max(startValue, startValue * Math.pow(endValue / startValue, Math.pow(zoomProgress, 0.58)));
+    const displayValue = zoomProgress >= 0.78 ? `${formatCompactMetric(endValue)}` : `${formatCompactMetric(currentValue)}`;
+    const finalScale = asNumber(zoom?.endScale) ?? 0.1;
+
+    return (
+      <AbsoluteFill style={{ padding: "82px 88px 78px" }}>
+        <div
+          style={{
+            position: "relative",
+            flex: 1,
+            borderRadius: 30,
+            backgroundColor: "#F5F0E8",
+            overflow: "hidden",
+            border: "1px solid rgba(148, 163, 184, 0.24)",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundImage:
+                "linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px)",
+              backgroundSize: "38px 38px",
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: 68,
+              bottom: 58,
+              padding: "22px 26px",
+              borderRadius: 24,
+              backgroundColor: "rgba(15, 23, 42, 0.92)",
+              border: "1px solid rgba(96, 165, 250, 0.34)",
+            }}
+          >
+            <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 600 }}>transistors</div>
+            <div style={{ color: "#E2E8F0", fontSize: 64, fontWeight: 800, lineHeight: 1, marginTop: 12 }}>
+              {displayValue}
+            </div>
+          </div>
+          <div
+            style={{
+              position: "absolute",
+              inset: "72px 110px 92px 72px",
+              display: "grid",
+              gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+              gap: 8,
+              transform: `scale(${interpolate(zoomProgress, [0, 1], [1.7, Math.max(1, 1 / finalScale) * 0.12], {
+                extrapolateLeft: "clamp",
+                extrapolateRight: "clamp",
+              })})`,
+              transformOrigin: "center center",
+            }}
+          >
+            {Array.from({ length: 120 }).map((_, index) => (
+              <div
+                key={`schematic-cell-${index}`}
+                style={{
+                  minHeight: 20 + (index % 4),
+                  borderRadius: 6,
+                  backgroundColor: "rgba(15, 23, 42, 0.78)",
+                  border: "1px solid rgba(71, 85, 105, 0.18)",
+                  boxShadow: index % 7 === 0 ? "0 0 0 1px rgba(96, 165, 250, 0.12) inset" : undefined,
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </AbsoluteFill>
+    );
+  }
+
   if (chartId === "precision_tradeoff_curve") {
     const axes = asRecord(data.axes);
-    const xAxis = asRecord(axes?.x);
-    const yAxis = asRecord(axes?.y);
-    const leftAnnotation = asRecord(annotationRecord?.left);
-    const rightAnnotation = asRecord(annotationRecord?.right);
+    const xAxis = asRecord(data.xAxis) ?? asRecord(axes?.x);
+    const yAxis = asRecord(data.yAxis) ?? asRecord(axes?.y);
+    const calloutAnnotations =
+      annotations.length > 0
+        ? annotations
+        : [asRecord(annotationRecord?.left), asRecord(annotationRecord?.right)].filter(
+            (entry): entry is Record<string, unknown> => Boolean(entry)
+          );
+    const leftAnnotation = calloutAnnotations[0] ?? asRecord(annotationRecord?.left);
+    const rightAnnotation = calloutAnnotations[1] ?? asRecord(annotationRecord?.right);
     const curveColor = asString(asRecord(data.curve)?.color) ?? "#2DD4BF";
     const chartLeft = width * 0.14;
     const chartTop = height * 0.22;
@@ -1527,7 +1857,39 @@ const ChartVisual: React.FC<{
     const densePromptLines = buildDenseCodePreviewLines("dense").slice(0, 8);
     const minimalPromptLines = buildDenseCodePreviewLines("clean").slice(0, 4);
     const introText = asString(data.introText) ?? "This maps directly to PDD.";
-    const rightTestCount = asNumber(rightAnnotation?.testCount) ?? 47;
+    const rightTestCount = asNumber(rightAnnotation?.testCount) ?? 50;
+    const resolveCalloutCopy = (
+      annotation: Record<string, unknown> | null,
+      fallbackLabel: string,
+      fallbackDescription: string
+    ) => {
+      const rawText = asString(annotation?.text);
+      if (rawText) {
+        const [labelLine, ...detailLines] = rawText
+          .split(/\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        return {
+          label: labelLine ?? fallbackLabel,
+          description: detailLines.join(" ") || fallbackDescription,
+        };
+      }
+
+      return {
+        label: asString(annotation?.label) ?? fallbackLabel,
+        description: asString(annotation?.description) ?? fallbackDescription,
+      };
+    };
+    const leftCallout = resolveCalloutCopy(
+      leftAnnotation,
+      "50-line prompt",
+      "Every edge case specified"
+    );
+    const rightCallout = resolveCalloutCopy(
+      rightAnnotation,
+      "10-line prompt",
+      "Tests handle constraints"
+    );
     const pointForTestCount = (testCount: number) => {
       const clamped = Math.max(0, Math.min(50, testCount));
       const x = chartLeft + (clamped / 50) * curveWidth;
@@ -1735,18 +2097,30 @@ const ChartVisual: React.FC<{
             border: `1px solid ${curveColor}55`,
             boxShadow: "0 16px 42px rgba(2, 6, 23, 0.45)",
             opacity: leftOpacity,
-          }}
-        >
-          <div
-            style={{
-              color: curveColor,
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 13,
+            }}
+          >
+            <div
+              style={{
+                color: "#E2E8F0",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 0.18,
+                marginBottom: 8,
+              }}
+            >
+              parser_v1.prompt
+            </div>
+            <div
+              style={{
+                color: curveColor,
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 13,
               fontWeight: 700,
               letterSpacing: 0.2,
             }}
           >
-            {asString(leftAnnotation?.label) ?? "parser_v1.prompt — 50 lines"}
+            {leftCallout.label}
           </div>
           <div
             style={{
@@ -1756,7 +2130,7 @@ const ChartVisual: React.FC<{
               marginBottom: 10,
             }}
           >
-            {asString(leftAnnotation?.description) ?? "Dense prompt, few tests"}
+            {leftCallout.description}
           </div>
           {densePromptLines.map((line, index) => (
             <div
@@ -1796,7 +2170,7 @@ const ChartVisual: React.FC<{
               letterSpacing: 0.2,
             }}
           >
-            {asString(rightAnnotation?.label) ?? "parser_v2.prompt — 10 lines"}
+            {rightCallout.label}
           </div>
           <div
             style={{
@@ -1806,7 +2180,7 @@ const ChartVisual: React.FC<{
               marginBottom: 10,
             }}
           >
-            {asString(rightAnnotation?.description) ?? "Minimal prompt, 47 tests"}
+            {rightCallout.description}
           </div>
           <div
             style={{
@@ -1816,6 +2190,18 @@ const ChartVisual: React.FC<{
               padding: "12px 14px",
             }}
           >
+            <div
+              style={{
+                color: "#E2E8F0",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 12,
+                fontWeight: 700,
+                letterSpacing: 0.18,
+                marginBottom: 8,
+              }}
+            >
+              parser_v2.prompt
+            </div>
             {minimalPromptLines.map((line, index) => (
               <div
                 key={`precision-clean-line-${index}`}
@@ -2476,11 +2862,17 @@ const SplitVisual: React.FC<{
   height: number;
 }> = ({ data, width, height }) => {
   const frame = useCurrentFrame();
+  const { durationInFrames } = useVideoConfig();
   const splitVisualId = React.useId().replace(/:/g, "");
-  const left = asRecord(data.leftPanel) ?? asRecord(data.left) ?? {};
-  const right = asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
+  const panelRecord = asRecord(data.panels);
+  const left = asRecord(panelRecord?.left) ?? asRecord(data.leftPanel) ?? asRecord(data.left) ?? {};
+  const right = asRecord(panelRecord?.right) ?? asRecord(data.rightPanel) ?? asRecord(data.right) ?? {};
   const leftSrc = useVisualMediaAssetSrc("leftSrc");
   const rightSrc = useVisualMediaAssetSrc("rightSrc");
+  const leftBaseSrc = useVisualMediaAssetSrc("leftBaseSrc") ?? leftSrc;
+  const leftRevealSrc = useVisualMediaAssetSrc("leftRevealSrc");
+  const rightBaseSrc = useVisualMediaAssetSrc("rightBaseSrc") ?? rightSrc;
+  const rightRevealSrc = useVisualMediaAssetSrc("rightRevealSrc");
   const multiplier = asString(data.multiplier);
 
   const renderPanelInterior = (
@@ -2488,6 +2880,7 @@ const SplitVisual: React.FC<{
     accent: string,
     panelKey: "left" | "right"
   ) => {
+    const animation = asString(panel.animation);
     const content = asString(panel.content);
     const tokenCount = formatApproxTokenCount(panel.tokenCount);
     const elements = Array.isArray(panel.elements)
@@ -2781,6 +3174,28 @@ const SplitVisual: React.FC<{
       }
     }
 
+    if (animation === "printer_nozzle_grid") {
+      return renderPanelInterior(
+        {
+          ...panel,
+          elements: [{ type: "coordinate_grid" }, { type: "printer_nozzle" }],
+        },
+        accent,
+        panelKey
+      );
+    }
+
+    if (animation === "liquid_flow_walls") {
+      return renderPanelInterior(
+        {
+          ...panel,
+          elements: [{ type: "mold_walls" }, { type: "liquid_flow" }, { type: "wall_glow_on_impact" }],
+        },
+        accent,
+        panelKey
+      );
+    }
+
     if (content === "context_window_cluttered") {
       const blocks = buildContextWindowTokenBlocks("cluttered");
       return (
@@ -3052,18 +3467,22 @@ const SplitVisual: React.FC<{
     panel: Record<string, unknown>,
     accent: string,
     src: string | null,
+    baseSrc: string | null,
+    revealSrc: string | null,
     panelKey: "left" | "right"
   ) => {
+    const panelAccent = asString(panel.accentColor) ?? accent;
     const rawLabel = asString(panel.label);
     const labelLooksLikeHeader =
       Boolean(rawLabel) &&
       rawLabel === rawLabel?.toUpperCase() &&
       rawLabel.length <= 24;
     const header = asString(panel.header) ?? (labelLooksLikeHeader ? rawLabel : null);
-    const headerColor = asString(panel.headerColor) ?? asString(panel.color) ?? accent;
+    const headerColor = asString(panel.headerColor) ?? asString(panel.color) ?? panelAccent;
     const content = asString(panel.content);
     const caption =
       asString(panel.caption) ??
+      asString(panel.description) ??
       asString(panel.subLabel) ??
       asString(panel.summary) ??
       (!labelLooksLikeHeader ? rawLabel : null);
@@ -3081,12 +3500,33 @@ const SplitVisual: React.FC<{
           extrapolateRight: "clamp",
         })
       : 1;
+    const revealOpacity =
+      revealSrc && revealSrc !== baseSrc
+        ? interpolate(
+            frame,
+            [
+              Math.max(6, Math.floor(durationInFrames * 0.18)),
+              Math.max(12, Math.floor(durationInFrames * 0.55)),
+            ],
+            [0, 1],
+            {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            }
+          )
+        : 1;
     const steps = Array.isArray(panel.steps)
-      ? panel.steps.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      ? panel.steps
+          .map((entry) =>
+            typeof entry === "string" && entry.trim()
+              ? { text: entry.trim() }
+              : asRecord(entry)
+          )
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry))
       : [];
     const interior = renderPanelInterior(
       panel,
-      accent,
+      panelAccent,
       panelKey
     );
     const usagePercent =
@@ -3102,27 +3542,44 @@ const SplitVisual: React.FC<{
           overflow: "hidden",
           borderRadius: 28,
           backgroundColor: subtleSurface,
-          border: `1px solid ${accent}55`,
+          border: `1px solid ${panelAccent}55`,
         }}
       >
-        {src ? (
-          <OffthreadVideo
-            src={src}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-              opacity: 0.88,
-              transform: `scale(${panelScale})`,
-              transformOrigin: "center center",
-            }}
-          />
+        {baseSrc || src ? (
+          <>
+            <OffthreadVideo
+              src={baseSrc ?? src ?? ""}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                opacity: revealSrc && revealSrc !== baseSrc ? 0.88 * (1 - revealOpacity) : 0.88,
+                transform: `scale(${panelScale})`,
+                transformOrigin: "center center",
+              }}
+            />
+            {revealSrc && revealSrc !== baseSrc ? (
+              <OffthreadVideo
+                src={revealSrc}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  opacity: 0.92 * revealOpacity,
+                  transform: `scale(${panelScale})`,
+                  transformOrigin: "center center",
+                }}
+              />
+            ) : null}
+          </>
         ) : (
           <div
             style={{
               width: "100%",
               height: "100%",
-              background: `linear-gradient(135deg, ${accent}2b, rgba(15, 23, 42, 0.96))`,
+              background: `linear-gradient(135deg, ${panelAccent}2b, rgba(15, 23, 42, 0.96))`,
               transform: `scale(${panelScale})`,
               transformOrigin: "center center",
             }}
@@ -3146,8 +3603,8 @@ const SplitVisual: React.FC<{
               height: 260,
               borderRadius: 999,
               transform: "translate(-50%, -50%)",
-              boxShadow: `0 0 120px ${asString(aura.color) ?? accent}66`,
-              border: `2px solid ${asString(aura.color) ?? accent}55`,
+              boxShadow: `0 0 120px ${asString(aura.color) ?? panelAccent}66`,
+              border: `2px solid ${asString(aura.color) ?? panelAccent}55`,
               opacity: 0.42,
               pointerEvents: "none",
             }}
@@ -3296,8 +3753,8 @@ const SplitVisual: React.FC<{
           gap: 20,
         }}
       >
-        {renderPanel(left, "#60A5FA", leftSrc, "left")}
-        {renderPanel(right, "#D9944A", rightSrc, "right")}
+        {renderPanel(left, "#60A5FA", leftSrc, leftBaseSrc, leftRevealSrc, "left")}
+        {renderPanel(right, "#D9944A", rightSrc, rightBaseSrc, rightRevealSrc, "right")}
       </div>
       <div
         style={{
@@ -3581,18 +4038,35 @@ const CodeVisual: React.FC<{
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
   const visualType = asString(data.type);
+  const editorId = asString(data.editorId);
+  const functionName = asString(data.functionName);
   const fileNames = [
     asString(data.filename),
     asString(data.highlightedModule),
     asString(data.promptFile),
+    ...asStringArray(data.files),
     ...asStringArray(data.fileNames),
   ].filter((item): item is string => Boolean(item));
   const workflow = asStringArray(data.workflow);
-  const warningComments = asStringArray(data.warningComments);
-  const lineCount = asString(data.lineCount);
-  const generatedLines = Math.max(8, asNumber(data.generatedLines) ?? 14);
-  const deletedLines = Math.max(0, asNumber(data.deletedLines) ?? 0);
-  const chartId = asString(data.chartId);
+  const warningComments = [
+    ...asStringArray(data.warningComments),
+    ...extractTextList(data.warningComments),
+  ].filter((item, index, all) => all.indexOf(item) === index);
+  const lineCount =
+    asString(data.lineCount) ??
+    (typeof data.originalLines === "number" ? `${data.originalLines} lines` : null);
+  const regeneratedLines = asNumber(data.regeneratedLines);
+  const originalLines = asNumber(data.originalLines);
+  const generatedLines = Math.max(8, asNumber(data.generatedLines) ?? regeneratedLines ?? 14);
+  const deletedLines = Math.max(
+    0,
+    asNumber(data.deletedLines) ??
+      asNumber(data.patchCommentsRemoved) ??
+      (originalLines !== null && regeneratedLines !== null
+        ? Math.max(0, originalLines - regeneratedLines)
+        : 0)
+  );
+  const chartId = resolveContractChartId(data);
   const terminal = asRecord(data.terminal);
   const terminalLines = [
     asString(terminal?.command),
@@ -3613,8 +4087,12 @@ const CodeVisual: React.FC<{
   const derivePromptFileName = (moduleName: string): string =>
     moduleName.replace(/\.[a-z0-9]+$/i, ".prompt.md");
 
-  if (visualType === "code_visualization") {
-    const panels = Math.max(3, asNumber(data.panels) ?? fileNames.length ?? 5);
+  if (visualType === "code_visualization" || visualType === "code_editor_animation") {
+    const prefersDenseEditor = editorId === "legacy_codebase_reveal";
+    const panels = Math.max(
+      prefersDenseEditor ? 4 : 3,
+      asNumber(data.panels) ?? fileNames.length ?? (prefersDenseEditor ? 4 : 5)
+    );
     const panelNames =
       fileNames.length > 0
         ? fileNames
@@ -3679,7 +4157,24 @@ const CodeVisual: React.FC<{
                 {Array.from({ length: 16 }).map((_, lineIndex) => {
                   const comment =
                     warningComments[(lineIndex + index) % Math.max(1, warningComments.length)];
-                  const showComment = Boolean(comment) && [2, 6, 11].includes(lineIndex);
+                  const showComment = Boolean(comment) && [2, 6, 11, 14].includes(lineIndex);
+                  const fallbackLine = prefersDenseEditor
+                    ? lineIndex % 5 === 0
+                      ? "class LegacyAdapter:"
+                      : lineIndex % 5 === 1
+                        ? "    def route(self, request, env, cache):"
+                        : lineIndex % 5 === 2
+                          ? "        payload = legacy_utils.maybe_decode(request)"
+                          : lineIndex % 5 === 3
+                            ? "        return payment_processor.forward(payload, env)"
+                            : "        return auth_handler.process(payload)"
+                    : lineIndex % 4 === 0
+                      ? "def legacy_handler(user, state):"
+                      : lineIndex % 4 === 1
+                        ? "    payload = adapter.load(state)"
+                        : lineIndex % 4 === 2
+                          ? "    if payload is None: return cache_fallback()"
+                          : "    return transform(payload, user)";
                   return (
                     <React.Fragment key={`viz-line-${index}-${lineIndex}`}>
                       <div
@@ -3699,15 +4194,7 @@ const CodeVisual: React.FC<{
                           whiteSpace: "pre",
                         }}
                       >
-                        {showComment
-                          ? comment
-                          : lineIndex % 4 === 0
-                            ? "def legacy_handler(user, state):"
-                            : lineIndex % 4 === 1
-                              ? "    payload = adapter.load(state)"
-                              : lineIndex % 4 === 2
-                                ? "    if payload is None: return cache_fallback()"
-                                : "    return transform(payload, user)"}
+                        {showComment ? comment : fallbackLine}
                       </div>
                     </React.Fragment>
                   );
@@ -3741,23 +4228,40 @@ const CodeVisual: React.FC<{
 
   if (visualType === "code_regeneration") {
     const terminalResult = asString(terminal?.result) ?? "Generated in 0.8s";
+    const resolvedFunctionName = functionName ?? "regenerate_auth_handler";
+    const functionArgs =
+      resolvedFunctionName === "process_order" ? "order, ctx" : "user_input: str";
+    const fileTabLabel =
+      fileNames[0] ?? `${resolvedFunctionName.replace(/[^\w]+/g, "_")}.py`;
     const regenerationLines = Array.from({ length: generatedLines }).map((_, index) => {
-      if (index === 0) return "from auth import normalize_user_id";
-      if (index === 1) return "from tests import ensure_user_contract";
+      if (index === 0) return resolvedFunctionName === "process_order" ? "from pricing import apply_discounts" : "from auth import normalize_user_id";
+      if (index === 1) return resolvedFunctionName === "process_order" ? "from inventory import reserve_items" : "from tests import ensure_user_contract";
       if (index === 2) return "";
-      if (index === 3) return "def regenerate_auth_handler(user_input: str):";
-      if (index === 4) return "    normalized = normalize_user_id(user_input)";
-      if (index === 5) return "    if normalized is None:";
-      if (index === 6) return "        return None";
-      if (index === 7) return "    ensure_user_contract(normalized)";
-      if (index === 8) return "    payload = load_user_payload(normalized)";
-      if (index === 9) return "    if payload is None:";
-      if (index === 10) return "        return None";
-      if (index === 11) return "    return build_auth_response(payload)";
+      if (index === 3) return `def ${resolvedFunctionName}(${functionArgs}):`;
+      if (resolvedFunctionName === "process_order") {
+        if (index === 4) return "    validated = validate_order(order, ctx)";
+        if (index === 5) return "    if validated is None:";
+        if (index === 6) return "        return error_response('invalid-order')";
+        if (index === 7) return "    priced = apply_discounts(validated, ctx)";
+        if (index === 8) return "    reserved = reserve_items(priced, ctx)";
+        if (index === 9) return "    if reserved.failed:";
+        if (index === 10) return "        return error_response('inventory-unavailable')";
+        if (index === 11) return "    receipt = finalize_order(reserved, ctx)";
+      } else {
+        if (index === 4) return "    normalized = normalize_user_id(user_input)";
+        if (index === 5) return "    if normalized is None:";
+        if (index === 6) return "        return None";
+        if (index === 7) return "    ensure_user_contract(normalized)";
+        if (index === 8) return "    payload = load_user_payload(normalized)";
+        if (index === 9) return "    if payload is None:";
+        if (index === 10) return "        return None";
+        if (index === 11) return "    return build_auth_response(payload)";
+      }
       if (index === 12) return "";
       if (index === 13) return "# generated from prompt + tests + grounding";
-      if (index === 14) return "RESULT = 'fresh module'";
-      return "return RESULT";
+      if (index === 14) return resolvedFunctionName === "process_order" ? "    return success_response(receipt)" : "RESULT = 'fresh module'";
+      if (index === 15) return resolvedFunctionName === "process_order" ? "" : "return RESULT";
+      return resolvedFunctionName === "process_order" ? "    audit_logger.info('order regenerated')" : "return RESULT";
     });
 
     return (
@@ -3794,7 +4298,7 @@ const CodeVisual: React.FC<{
               fontSize: 15,
             }}
           >
-            <div>{fileNames[0] ?? "auth_handler.py"}</div>
+            <div>{fileTabLabel}</div>
             <div style={{ color: "#4ADE80" }}>{deletedLines > 0 ? `-${deletedLines} / +${generatedLines}` : `+${generatedLines} lines`}</div>
           </div>
           <div
@@ -3860,7 +4364,7 @@ const CodeVisual: React.FC<{
                 fontSize: 14,
               }}
             >
-              {asString(terminal?.command) ?? "pdd generate auth_handler"}
+              {asString(terminal?.command) ?? asString(data.terminalCommand) ?? `pdd generate ${resolvedFunctionName}`}
             </div>
             <div
               style={{
@@ -6873,6 +7377,9 @@ export const GeneratedContractVisual: React.FC = () => {
   let body: React.ReactNode;
   if (
     visualType === "animated_chart" ||
+    visualType === "line_chart" ||
+    visualType === "counter_animation" ||
+    visualType === "schematic_zoom" ||
     visualType === "inset_chart" ||
     visualType === "pie_chart" ||
     visualType === "forking_chart" ||
@@ -6896,6 +7403,7 @@ export const GeneratedContractVisual: React.FC = () => {
     body = <TransitionVisual data={data} />;
   } else if (
     visualType === "code_visualization" ||
+    visualType === "code_editor_animation" ||
     visualType === "code_transformation" ||
     visualType === "code_display" ||
     visualType === "code_regeneration"

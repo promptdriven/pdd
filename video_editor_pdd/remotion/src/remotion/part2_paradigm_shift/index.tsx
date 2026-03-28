@@ -2,9 +2,8 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
+import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part2ParadigmShift04MoldProductionCounter } from "../Part2ParadigmShift04MoldProductionCounter";
-import { Part2ParadigmShift11SchematicDensityZoom } from "../Part2ParadigmShift11SchematicDensityZoom";
 import { Part2ParadigmShift12VerilogSynthesis } from "../Part2ParadigmShift12VerilogSynthesis";
 import { Part2ParadigmShift13TripleSynthesisEquivalence } from "../Part2ParadigmShift13TripleSynthesisEquivalence";
 import { Part2ParadigmShift14SynopsysPddEquivalence } from "../Part2ParadigmShift14SynopsysPddEquivalence";
@@ -14,8 +13,6 @@ import { Part2ParadigmShift17ReviewSpecVerifyOutput } from "../Part2ParadigmShif
 import { Part2ParadigmShift18PromptMoldFinale } from "../Part2ParadigmShift18PromptMoldFinale";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "04_mold_production_counter": Part2ParadigmShift04MoldProductionCounter,
-  "11_schematic_density_zoom": Part2ParadigmShift11SchematicDensityZoom,
   "12_verilog_synthesis": Part2ParadigmShift12VerilogSynthesis,
   "13_triple_synthesis_equivalence": Part2ParadigmShift13TripleSynthesisEquivalence,
   "14_synopsys_pdd_equivalence": Part2ParadigmShift14SynopsysPddEquivalence,
@@ -26,8 +23,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "04_mold_production_counter": 300,
-  "11_schematic_density_zoom": 420,
   "12_verilog_synthesis": 360,
   "13_triple_synthesis_equivalence": 750,
   "14_synopsys_pdd_equivalence": 390,
@@ -42,7 +37,7 @@ const VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "03_injection_molding_closeup": { defaultSrc: "veo/injection_molding_closeup.mp4", backgroundSrc: "veo/injection_molding_closeup.mp4", outputSrc: "veo/injection_molding_closeup.mp4", baseSrc: "veo/injection_molding_closeup.mp4" },
   "05_defect_and_mold_fix": { defaultSrc: "veo/defect_and_mold_fix.mp4", backgroundSrc: "veo/defect_and_mold_fix.mp4", outputSrc: "veo/defect_and_mold_fix.mp4", baseSrc: "veo/defect_and_mold_fix.mp4" },
   "06_new_parts_eject": { defaultSrc: "veo/new_parts_eject.mp4", backgroundSrc: "veo/new_parts_eject.mp4", outputSrc: "veo/new_parts_eject.mp4", baseSrc: "veo/new_parts_eject.mp4" },
-  "07_split_craftsman_vs_mold": { defaultSrc: "veo/craftsman_carving.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4" },
+  "07_split_craftsman_vs_mold": { leftSrc: "veo/craftsman_carving.mp4", defaultSrc: "veo/craftsman_carving.mp4", rightSrc: "veo/mold_plastic_flow.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4", revealSrc: "veo/mold_plastic_flow.mp4" },
   "08_veo_craftsman_carving": { defaultSrc: "veo/craftsman_carving.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4" },
   "09_veo_mold_plastic_flow": { defaultSrc: "veo/mold_plastic_flow.mp4", backgroundSrc: "veo/mold_plastic_flow.mp4", outputSrc: "veo/mold_plastic_flow.mp4", baseSrc: "veo/mold_plastic_flow.mp4" },
   "10_veo_1980s_chip_lab": { defaultSrc: "veo/1980s_chip_lab.mp4", backgroundSrc: "veo/1980s_chip_lab.mp4", outputSrc: "veo/1980s_chip_lab.mp4", baseSrc: "veo/1980s_chip_lab.mp4" },
@@ -63,7 +58,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "04_mold_production_counter": {"specBaseName": "04_mold_production_counter", "dataPoints": {"type": "counter_animation", "chartId": "mold_production_counter", "counter": {"start": 1, "end": 10000, "milestones": [1, 10, 100, 1000, 10000], "easing": "exponential"}, "moldCycle": {"startFramesPerCycle": 60, "endFramesPerCycle": 6}, "narrationSegments": ["part2_paradigm_shift_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "05_defect_and_mold_fix": {"specBaseName": "05_defect_and_mold_fix", "dataPoints": {"type": "veo_clip", "clipId": "defect_and_mold_fix", "durationSeconds": 9, "characters": [{"id": "manufacturing_engineer", "label": "Manufacturing Engineer", "referencePrompt": "Middle-aged manufacturing engineer in safety glasses and clean work shirt, professional workshop setting"}]}, "mediaAliases": {"defaultSrc": "veo/defect_and_mold_fix.mp4", "backgroundSrc": "veo/defect_and_mold_fix.mp4", "outputSrc": "veo/defect_and_mold_fix.mp4", "baseSrc": "veo/defect_and_mold_fix.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "06_new_parts_eject": {"specBaseName": "06_new_parts_eject", "dataPoints": {"type": "veo_clip", "clipId": "new_parts_eject", "durationSeconds": 7}, "mediaAliases": {"defaultSrc": "veo/new_parts_eject.mp4", "backgroundSrc": "veo/new_parts_eject.mp4", "outputSrc": "veo/new_parts_eject.mp4", "baseSrc": "veo/new_parts_eject.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "07_split_craftsman_vs_mold": {"specBaseName": "07_split_craftsman_vs_mold", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.4}, "panels": {"left": {"clips": ["craftsman_carving"], "label": "Craftsman — value in the object", "aura": {"color": "#D9944A", "target": "object"}}, "right": {"clips": ["mold_plastic_flow"], "label": "Mold — value in the specification", "aura": {"color": "#4A90D9", "target": "mold"}, "partDissolve": true}}, "narrationSegments": ["part2_paradigm_shift_009", "part2_paradigm_shift_010"], "durationSeconds": 20.0}, "mediaAliases": {"defaultSrc": "veo/craftsman_carving.mp4", "backgroundSrc": "veo/craftsman_carving.mp4", "outputSrc": "veo/craftsman_carving.mp4", "baseSrc": "veo/craftsman_carving.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "07_split_craftsman_vs_mold": {"specBaseName": "07_split_craftsman_vs_mold", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.4}, "panels": {"left": {"clips": ["craftsman_carving"], "label": "Craftsman — value in the object", "aura": {"color": "#D9944A", "target": "object"}}, "right": {"clips": ["mold_plastic_flow"], "label": "Mold — value in the specification", "aura": {"color": "#4A90D9", "target": "mold"}, "partDissolve": true}}, "narrationSegments": ["part2_paradigm_shift_009", "part2_paradigm_shift_010"], "durationSeconds": 20.0}, "mediaAliases": {"leftSrc": "veo/craftsman_carving.mp4", "defaultSrc": "veo/craftsman_carving.mp4", "rightSrc": "veo/mold_plastic_flow.mp4", "backgroundSrc": "veo/craftsman_carving.mp4", "outputSrc": "veo/craftsman_carving.mp4", "baseSrc": "veo/craftsman_carving.mp4", "revealSrc": "veo/mold_plastic_flow.mp4", "leftBaseSrc": "veo/craftsman_carving.mp4", "rightBaseSrc": "veo/mold_plastic_flow.mp4"}, "overlayConfig": null, "renderMode": "component"},
   "08_veo_craftsman_carving": {"specBaseName": "08_veo_craftsman_carving", "dataPoints": {"type": "veo_clip", "clipId": "craftsman_carving", "durationSeconds": 20, "characters": [{"id": "craftsman", "label": "Craftsman", "referencePrompt": "Experienced woodworker, middle-aged, work apron, traditional workshop setting with warm lighting"}]}, "mediaAliases": {"defaultSrc": "veo/craftsman_carving.mp4", "backgroundSrc": "veo/craftsman_carving.mp4", "outputSrc": "veo/craftsman_carving.mp4", "baseSrc": "veo/craftsman_carving.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "09_veo_mold_plastic_flow": {"specBaseName": "09_veo_mold_plastic_flow", "dataPoints": {"type": "veo_clip", "clipId": "mold_plastic_flow", "durationSeconds": 20}, "mediaAliases": {"defaultSrc": "veo/mold_plastic_flow.mp4", "backgroundSrc": "veo/mold_plastic_flow.mp4", "outputSrc": "veo/mold_plastic_flow.mp4", "baseSrc": "veo/mold_plastic_flow.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "10_veo_1980s_chip_lab": {"specBaseName": "10_veo_1980s_chip_lab", "dataPoints": {"type": "veo_clip", "clipId": "1980s_chip_lab", "durationSeconds": 8, "characters": [{"id": "chip_engineer", "label": "1980s Chip Engineer", "referencePrompt": "Male electronics engineer in button-down shirt, 1980s style, drafting desk with schematics, fluorescent-lit lab"}]}, "mediaAliases": {"defaultSrc": "veo/1980s_chip_lab.mp4", "backgroundSrc": "veo/1980s_chip_lab.mp4", "outputSrc": "veo/1980s_chip_lab.mp4", "baseSrc": "veo/1980s_chip_lab.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
@@ -116,7 +111,11 @@ export const Part2ParadigmShiftSection: React.FC = () => {
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
-                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (
+                  <GeneratedMediaVisual config={visualOverlayConfig} />
+                ) : (
+                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                )}
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

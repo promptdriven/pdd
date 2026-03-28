@@ -1,4 +1,4 @@
 ## Verdict
 fail
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 03_compound_debt_curve. Claude CLI returned error: API Error: Rate limit reached
+Multiple discrepancies from spec: (1) The regeneration cost line is rendered in blue/light-blue instead of the specified green (#5AAA6E) — this is a clear color mismatch on a critical element. (2) The regeneration line shows upward triangular spikes/pulses instead of being a flat horizontal line with small downward reset arrows — the visual metaphor differs. (3) Axis labels use 'COST'/'TIME' with dollar-sign ticks ($$, $$$) and 'Year 1-10' instead of the specified 'Cumulative Cost'/'Time (maintenance cycles)' with 0-20 numeric labels. (4) The CISQ callout is rendered as a floating card box with '$1.52T /year in US tech debt, CISQ 2022' instead of plain text '$1.52 trillion/year' with '— CISQ' attribution, and is positioned centrally rather than on the steep section of the amber curve. The amber exponential curve shape, color, formula label, and shaded area are all correct.

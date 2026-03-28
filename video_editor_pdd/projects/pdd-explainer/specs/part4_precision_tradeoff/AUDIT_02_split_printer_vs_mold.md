@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 02_split_printer_vs_mold. Claude CLI returned error: API Error: Rate limit reached
+OCR confirmed visible text tokens in the rendered frame (nozzle, deposits, material, point, coordinate), so the frame does not support a hard missing-text failure.

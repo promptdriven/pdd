@@ -301,6 +301,16 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/codeComments|warningComments|lineCount|terminalCommands|workflow/);
   });
 
+  it("supports split contracts declared under panels plus multi-clip reveal aliases", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/asRecord\(data\.panels\)/);
+    expect(source).toMatch(/useVisualMediaAssetSrc\(\s*"leftBaseSrc"\s*\)/);
+    expect(source).toMatch(/useVisualMediaAssetSrc\(\s*"leftRevealSrc"\s*\)/);
+    expect(source).toMatch(/useVisualMediaAssetSrc\(\s*"rightBaseSrc"\s*\)/);
+    expect(source).toMatch(/useVisualMediaAssetSrc\(\s*"rightRevealSrc"\s*\)/);
+  });
+
   it("supports precision-tradeoff chart annotations and constrains mold-flow panels inside the mold walls", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
@@ -390,6 +400,8 @@ describe("shared generated contract renderer", () => {
 
     expect(source).toMatch(/veo_clip_with_aura/);
     expect(source).toMatch(/veo_clip_then_zoom_out/);
+    expect(source).toMatch(/animation === "printer_nozzle_grid"/);
+    expect(source).toMatch(/animation === "liquid_flow_walls"/);
     expect(source).toMatch(/coordinate_grid/);
     expect(source).toMatch(/printer_nozzle/);
     expect(source).toMatch(/mold_walls/);
@@ -408,10 +420,29 @@ describe("shared generated contract renderer", () => {
   it("supports contract-driven chart variants beyond the original line-series happy path", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
+    expect(source).toMatch(/record\.data\)/);
+    expect(source).toMatch(/chartRef/);
     expect(source).toMatch(/degradationRange|causalChain|crossings|debtResetNote/);
     expect(source).toMatch(/threshold|keyDates|debtShading/);
     expect(source).toMatch(/computeSeriesBounds/);
     expect(source).toMatch(/trapArrow|annotations/);
+  });
+
+  it("supports current spec families for line charts, counters, schematic zooms, and code editor animations", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/visualType === "line_chart"/);
+    expect(source).toMatch(/visualType === "counter_animation"/);
+    expect(source).toMatch(/visualType === "schematic_zoom"/);
+    expect(source).toMatch(/visualType === "code_editor_animation"/);
+    expect(source).toMatch(/chartId === "mold_production_counter"/);
+    expect(source).toMatch(/chartId === "schematic_density_zoom"/);
+    expect(source).toMatch(/legacy_codebase_reveal/);
+    expect(source).toMatch(/regeneratedLines/);
+    expect(source).toMatch(/patchCommentsRemoved/);
+    expect(source).toMatch(/functionName/);
+    expect(source).toMatch(/reframeText/);
+    expect(source).toMatch(/asStringArray\(data\.files\)/);
   });
 
   it("supports the remaining animated-diagram families that were still falling back to placeholders", () => {

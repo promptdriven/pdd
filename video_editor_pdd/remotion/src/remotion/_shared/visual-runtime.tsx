@@ -11,6 +11,10 @@ export type VisualMedia = {
   outputSrc?: string;
   leftSrc?: string;
   rightSrc?: string;
+  leftBaseSrc?: string;
+  leftRevealSrc?: string;
+  rightBaseSrc?: string;
+  rightRevealSrc?: string;
   baseSrc?: string;
   revealSrc?: string;
 };
@@ -51,6 +55,10 @@ export const VisualContractProvider: React.FC<{
 const SPLIT_ONLY_KEYS: ReadonlySet<keyof VisualMedia> = new Set([
   "leftSrc",
   "rightSrc",
+  "leftBaseSrc",
+  "leftRevealSrc",
+  "rightBaseSrc",
+  "rightRevealSrc",
 ]);
 
 export const useVisualMediaSrc = (

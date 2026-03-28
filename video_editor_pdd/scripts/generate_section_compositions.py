@@ -464,18 +464,77 @@ def _extract_embedded_veo_clip_ids(data_points: Any) -> List[str]:
     if not isinstance(data_points, dict):
         return []
 
-    embedded = data_points.get('embeddedVeoClips')
-    if not isinstance(embedded, list):
-        return []
-
     clip_ids: List[str] = []
-    for clip_id in embedded:
-        if isinstance(clip_id, str) and clip_id.strip():
-            normalized = _normalize_clip_identifier(clip_id)
-            if normalized and normalized not in clip_ids:
-                clip_ids.append(normalized)
+
+    def _add(raw_value: Any) -> None:
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            return
+        normalized = _normalize_clip_identifier(raw_value)
+        if normalized and normalized not in clip_ids:
+            clip_ids.append(normalized)
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for raw_key, nested in value.items():
+                key = str(raw_key).strip().lower().replace('_', '').replace('-', '')
+                if key in {'embeddedveoclips', 'clips'} and isinstance(nested, list):
+                    for item in nested:
+                        _add(item)
+                elif key in {'clipid', 'leftclipid', 'rightclipid'}:
+                    _add(nested)
+                _walk(nested)
+            return
+        if isinstance(value, list):
+            for nested in value:
+                _walk(nested)
+
+    _walk(data_points)
 
     return clip_ids
+
+
+def _extract_split_panel_clip_ids(data_points: Any) -> Dict[str, List[str]]:
+    """Return explicit split-panel clip ids from structured panel metadata."""
+    if not isinstance(data_points, dict):
+        return {}
+
+    panels: Dict[str, List[str]] = {}
+
+    def _collect(raw_value: Any) -> List[str]:
+        values: List[str] = []
+        if isinstance(raw_value, str) and raw_value.strip():
+            normalized = _normalize_clip_identifier(raw_value)
+            if normalized:
+                values.append(normalized)
+        elif isinstance(raw_value, list):
+            for item in raw_value:
+                if isinstance(item, str) and item.strip():
+                    normalized = _normalize_clip_identifier(item)
+                    if normalized and normalized not in values:
+                        values.append(normalized)
+        return values
+
+    structured_panels = data_points.get('panels')
+    if isinstance(structured_panels, dict):
+        for panel_name in ('left', 'right'):
+            panel = structured_panels.get(panel_name)
+            if not isinstance(panel, dict):
+                continue
+            clips = _collect(panel.get('clips'))
+            if not clips:
+                clips = _collect(panel.get('clipId') or panel.get('clip'))
+            if clips:
+                panels[panel_name] = clips
+
+    for panel_name, key in (('left', 'leftClipId'), ('right', 'rightClipId')):
+        clips = _collect(data_points.get(key))
+        if clips:
+            existing = panels.setdefault(panel_name, [])
+            for clip_id in clips:
+                if clip_id not in existing:
+                    existing.append(clip_id)
+
+    return panels
 
 
 def _iter_structured_media_candidates(
@@ -1273,15 +1332,19 @@ CONTRACT_FIRST_VISUAL_TYPES = {
     'annotation_overlay',
     'chart_callback',
     'chart_event',
+    'counter_animation',
     'code_regeneration',
+    'code_editor_animation',
     'code_transformation',
     'code_visualization',
     'dual_meter_animation',
     'forking_chart',
     'inset_chart',
+    'line_chart',
     'network_graph',
     'pie_chart',
     'quote_card',
+    'schematic_zoom',
     'text_overlay_with_morph',
     'transition',
 }
@@ -1290,10 +1353,14 @@ CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
     'annotation_overlay',
     'chart_callback',
     'chart_event',
+    'counter_animation',
+    'code_editor_animation',
     'code_regeneration',
     'code_transformation',
     'code_visualization',
+    'line_chart',
     'quote_card',
+    'schematic_zoom',
     'text_overlay_with_morph',
 }
 
@@ -1586,6 +1653,27 @@ def build_visual_contract_manifest(
             if not isinstance(media_aliases, dict):
                 media_aliases = {}
                 visual['mediaAliases'] = media_aliases
+
+            panel_clip_ids = _extract_split_panel_clip_ids(data_points)
+            for panel_name in ('left', 'right'):
+                raw_clip_ids = panel_clip_ids.get(panel_name, [])
+                resolved_sources: List[str] = []
+                for clip_id in raw_clip_ids:
+                    resolved = _resolve_video_reference_static_path(
+                        remotion_public,
+                        clip_id,
+                        reference_aliases=None,
+                    )
+                    if isinstance(resolved, str) and resolved and resolved not in resolved_sources:
+                        resolved_sources.append(resolved)
+
+                if not resolved_sources:
+                    continue
+
+                media_aliases.setdefault(f'{panel_name}Src', resolved_sources[0])
+                media_aliases.setdefault(f'{panel_name}BaseSrc', resolved_sources[0])
+                if len(resolved_sources) > 1:
+                    media_aliases.setdefault(f'{panel_name}RevealSrc', resolved_sources[-1])
 
             for child_id in visual.get('children', []):
                 child = id_to_visual.get(child_id)

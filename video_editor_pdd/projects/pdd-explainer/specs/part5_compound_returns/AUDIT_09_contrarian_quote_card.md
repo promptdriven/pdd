@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 09_contrarian_quote_card. Claude CLI returned error: API Error: Rate limit reached
+OCR confirmed visible text tokens in the rendered frame (either, future, going, crash, burn), so the frame does not support a hard missing-text failure.

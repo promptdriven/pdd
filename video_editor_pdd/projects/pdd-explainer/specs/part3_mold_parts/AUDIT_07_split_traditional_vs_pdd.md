@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 07_split_traditional_vs_pdd. Claude CLI returned error: API Error: Rate limit reached
+OCR confirmed visible text tokens in the rendered frame (found, patch, code, similar, elsewhere), so the frame does not support a hard missing-text failure.

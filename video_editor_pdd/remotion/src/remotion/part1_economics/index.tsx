@@ -2,8 +2,8 @@ import React from "react";
 import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
+import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { Part1Economics02SockPriceChart } from "../Part1Economics02SockPriceChart";
 import { Part1Economics03CodeCostChart } from "../Part1Economics03CodeCostChart";
 import { Part1Economics06DebtLayersZoom } from "../Part1Economics06DebtLayersZoom";
 import { Part1Economics07ContextWindowShrink } from "../Part1Economics07ContextWindowShrink";
@@ -18,7 +18,6 @@ import { Part1Economics19DoubleMeterInsight } from "../Part1Economics19DoubleMet
 import { Part1Economics20TryItYourself } from "../Part1Economics20TryItYourself";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "02_sock_price_chart": Part1Economics02SockPriceChart,
   "03_code_cost_chart": Part1Economics03CodeCostChart,
   "06_debt_layers_zoom": Part1Economics06DebtLayersZoom,
   "07_context_window_shrink": Part1Economics07ContextWindowShrink,
@@ -34,7 +33,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "02_sock_price_chart": 720,
   "03_code_cost_chart": 1650,
   "06_debt_layers_zoom": 540,
   "07_context_window_shrink": 1560,
@@ -50,7 +48,7 @@ const VISUAL_DURATIONS: Record<string, number> = {
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "14_split_developer_grandma": { defaultSrc: "veo/developer_cursor_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4" },
+  "14_split_developer_grandma": { leftSrc: "veo/developer_cursor_p1.mp4", defaultSrc: "veo/developer_cursor_p1.mp4", rightSrc: "veo/grandmother_darning_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4", revealSrc: "veo/grandmother_darning_p1.mp4" },
   "15_developer_cursor": { defaultSrc: "veo/developer_cursor_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4" },
   "16_grandmother_darning": { defaultSrc: "veo/grandmother_darning_p1.mp4", backgroundSrc: "veo/grandmother_darning_p1.mp4", outputSrc: "veo/grandmother_darning_p1.mp4", baseSrc: "veo/grandmother_darning_p1.mp4" },
   "17_developer_codebase_zoomout": { defaultSrc: "veo/developer_codebase_zoomout.mp4", backgroundSrc: "veo/developer_codebase_zoomout.mp4", outputSrc: "veo/developer_codebase_zoomout.mp4", baseSrc: "veo/developer_codebase_zoomout.mp4" },
@@ -77,7 +75,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "11_patching_vs_regeneration": {"specBaseName": "11_patching_vs_regeneration", "dataPoints": {"type": "side_by_side_comparison", "chartId": "patching_vs_regeneration", "panels": {"left": {"header": "Agentic Patching", "tokenCount": 15000, "distribution": {"irrelevant": 0.8, "relevant": 0.05, "neutral": 0.15}, "label": "15,000 tokens — mostly wrong", "accentColor": "#EF4444"}, "right": {"header": "PDD Regeneration", "blocks": [{"label": "Prompt", "tokens": 300, "color": "#4A90D9"}, {"label": "Tests", "tokens": 2000, "color": "#D9944A"}, {"label": "Grounding", "tokens": 200, "color": "#5AAA6E"}], "label": "2,300 tokens — all curated", "accentColor": "#5AAA6E"}}, "narrationSegments": ["part1_economics_023", "part1_economics_024"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "12_context_compression": {"specBaseName": "12_context_compression", "dataPoints": {"type": "context_compression_animation", "chartId": "module_compression", "modules": ["auth", "parser", "router", "validator", "logger", "cache", "queue", "mailer", "search", "analytics", "billing", "permissions", "notifications", "export", "import", "scheduler", "webhook", "api_client", "transformer", "serializer"], "codeTokensPerModule": 750, "promptTokensPerModule": 100, "contextWindowTokens": 4000, "overflowCount": 17, "compressionRatio": "5-10×", "narrationSegments": ["part1_economics_025", "part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "13_crossing_lines_moment": {"specBaseName": "13_crossing_lines_moment", "dataPoints": {"type": "crossing_moment", "chartRef": "code_cost_generate_vs_patch", "crossings": [{"id": "generate_crosses_total_cost", "year": 2025.2, "description": "Generate cost drops below total cost with debt"}, {"id": "generate_crosses_immediate", "year": 2025.6, "description": "Generate cost drops below immediate patch cost"}], "label": "We are here.", "narrationSegments": ["part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "14_split_developer_grandma": {"specBaseName": "14_split_developer_grandma", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["developer_cursor_p1"], "label": "Developer with Cursor"}, "right": {"clips": ["grandmother_darning_p1"], "label": "Grandmother darning"}}, "narrationSegments": ["part1_economics_027", "part1_economics_028"], "durationSeconds": 17.0}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "14_split_developer_grandma": {"specBaseName": "14_split_developer_grandma", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["developer_cursor_p1"], "label": "Developer with Cursor"}, "right": {"clips": ["grandmother_darning_p1"], "label": "Grandmother darning"}}, "narrationSegments": ["part1_economics_027", "part1_economics_028"], "durationSeconds": 17.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_p1.mp4", "defaultSrc": "veo/developer_cursor_p1.mp4", "rightSrc": "veo/grandmother_darning_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4", "revealSrc": "veo/grandmother_darning_p1.mp4", "leftBaseSrc": "veo/developer_cursor_p1.mp4", "rightBaseSrc": "veo/grandmother_darning_p1.mp4"}, "overlayConfig": null, "renderMode": "component"},
   "15_developer_cursor": {"specBaseName": "15_developer_cursor", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_p1", "camera": {"framing": "medium_close_up", "movement": "subtle_push_in", "dof": "moderate", "aperture": "f/4", "angle": "over_shoulder"}, "lighting": {"key": {"color": "#B0C4DE", "type": "monitor_glow"}, "fill": {"color": "#E2E8F0", "opacity": 0.2, "type": "ambient"}, "accent": {"color": "#4A90D9", "opacity": 0.1, "type": "led_backlight"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "16_grandmother_darning": {"specBaseName": "16_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_p1", "camera": {"framing": "medium_close_up", "movement": "static_with_sway", "dof": "shallow", "aperture": "f/2.8", "angle": "elevated"}, "lighting": {"key": {"color": "#FFB347", "opacity": 0.7, "type": "table_lamp"}, "fill": {"color": "#D4A574", "opacity": 0.15, "type": "ambient"}}, "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly woman in 1950s domestic setting, skilled hands darning wool socks by lamplight, warm amber tones"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning_p1.mp4", "backgroundSrc": "veo/grandmother_darning_p1.mp4", "outputSrc": "veo/grandmother_darning_p1.mp4", "baseSrc": "veo/grandmother_darning_p1.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "17_developer_codebase_zoomout": {"specBaseName": "17_developer_codebase_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "developer_codebase_zoomout", "camera": {"framing": "medium_to_wide", "movement": "dolly_back", "dof": "deepening", "angle": "eye_level"}, "lighting": {"key": {"color": "#D4E4F0", "opacity": 0.3, "type": "overhead_fluorescent"}, "fill": {"type": "multiple_monitor_glow"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "overlays": [{"type": "floating_comment", "text": "// don't touch this", "color": "#EF4444"}, {"type": "floating_comment", "text": "// legacy", "color": "#F59E0B"}, {"type": "floating_comment", "text": "// temporary fix (2019)", "color": "#EF4444"}], "narrationSegments": ["part1_economics_028"]}, "mediaAliases": {"defaultSrc": "veo/developer_codebase_zoomout.mp4", "backgroundSrc": "veo/developer_codebase_zoomout.mp4", "outputSrc": "veo/developer_codebase_zoomout.mp4", "baseSrc": "veo/developer_codebase_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
@@ -125,7 +123,11 @@ export const Part1EconomicsSection: React.FC = () => {
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>
-                <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                {visualOverlayConfig || visualMedia?.leftSrc || visualMedia?.rightSrc ? (
+                  <GeneratedMediaVisual config={visualOverlayConfig} />
+                ) : (
+                  <OffthreadVideo src={staticFile(visualMedia.defaultSrc)} style={{ width: "100%", height: "100%" }} />
+                )}
                 </VisualMediaProvider>
               </VisualContractProvider>
             ) : null}

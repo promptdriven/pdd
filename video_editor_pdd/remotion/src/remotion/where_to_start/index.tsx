@@ -3,14 +3,12 @@ import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
-import { WhereToStart02LegacyCodebaseReveal } from "../WhereToStart02LegacyCodebaseReveal";
 import { WhereToStart04SourceOfTruthLabel } from "../WhereToStart04SourceOfTruthLabel";
 import { WhereToStart05ModuleGlowSpread } from "../WhereToStart05ModuleGlowSpread";
 import { WhereToStart06NoBigBangCallout } from "../WhereToStart06NoBigBangCallout";
 import { WhereToStart07GradualMigrationInsight } from "../WhereToStart07GradualMigrationInsight";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
-  "02_legacy_codebase_reveal": WhereToStart02LegacyCodebaseReveal,
   "04_source_of_truth_label": WhereToStart04SourceOfTruthLabel,
   "05_module_glow_spread": WhereToStart05ModuleGlowSpread,
   "06_no_big_bang_callout": WhereToStart06NoBigBangCallout,
@@ -18,7 +16,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
-  "02_legacy_codebase_reveal": 150,
   "04_source_of_truth_label": 150,
   "05_module_glow_spread": 330,
   "06_no_big_bang_callout": 150,

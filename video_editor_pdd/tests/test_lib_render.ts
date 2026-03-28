@@ -715,6 +715,18 @@ describe("extractFrameAtTime — ffmpeg still extraction", () => {
       extractFrameAtTime("/sections/intro.mp4", 16.5, "/frames/frame.png")
     ).rejects.toThrow(/did not produce a frame/i);
   });
+
+  it("backs off and retries slightly earlier when the requested tail frame produces no output", async () => {
+    (fs.existsSync as jest.Mock)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    await extractFrameAtTime("/sections/intro.mp4", 7.999, "/frames/frame.png");
+
+    expect(mockExecPromisified).toHaveBeenCalledTimes(2);
+    expect(mockExecPromisified.mock.calls[0][0]).toContain("-ss 7.999");
+    expect(mockExecPromisified.mock.calls[1][0]).toContain("-ss 7.966");
+  });
 });
 
 // ---------------------------------------------------------------------------

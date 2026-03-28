@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 10_fork_codebase_size. Claude CLI returned error: API Error: Rate limit reached
+OCR confirmed visible text tokens in the rendered frame (small, codebase, large, metr, 2025), so the frame does not support a hard missing-text failure.

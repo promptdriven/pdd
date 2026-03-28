@@ -323,18 +323,27 @@ export const extractFrameAtTime = async (
 ): Promise<void> => {
   await ensureDir(outputPath);
 
-  const safeTimeSeconds = Math.max(0, timeSeconds);
-  const cmd =
-    `ffmpeg -y -ss ${safeTimeSeconds.toFixed(3)} -i "${videoPath}" ` +
-    `-vframes 1 -q:v 2 "${outputPath}"`;
+  const attemptedTimes = [
+    Math.max(0, timeSeconds),
+    Math.max(0, timeSeconds - 1 / 30),
+    Math.max(0, timeSeconds - 2 / 30),
+  ];
 
-  await execAsync(cmd);
+  for (const safeTimeSeconds of attemptedTimes) {
+    const cmd =
+      `ffmpeg -y -ss ${safeTimeSeconds.toFixed(3)} -i "${videoPath}" ` +
+      `-vframes 1 -q:v 2 "${outputPath}"`;
 
-  if (!fs.existsSync(outputPath)) {
-    throw new Error(
-      `ffmpeg did not produce a frame for "${videoPath}" at ${safeTimeSeconds.toFixed(3)}s`
-    );
+    await execAsync(cmd);
+
+    if (fs.existsSync(outputPath)) {
+      return;
+    }
   }
+
+  throw new Error(
+    `ffmpeg did not produce a frame for "${videoPath}" at ${Math.max(0, timeSeconds).toFixed(3)}s`
+  );
 };
 
 /**

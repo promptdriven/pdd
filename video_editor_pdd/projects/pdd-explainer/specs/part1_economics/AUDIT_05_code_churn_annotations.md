@@ -1,4 +1,4 @@
 ## Verdict
-fail
+warn
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 05_code_churn_annotations. Claude CLI returned error: API Error: Rate limit reached
+OCR confirmed visible text tokens in the rendered frame (code, callout, gitclear, 2025, 211m), so the frame does not support a hard missing-text failure.

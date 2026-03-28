@@ -5437,6 +5437,79 @@ class TestVisualContractManifestNewFields:
         assert split_visual["mediaAliases"]["leftSrc"] == "veo/craftsman_carving.mp4"
         assert split_visual["mediaAliases"]["rightSrc"] == "veo/mold_producing_parts.mp4"
 
+    def test_build_visual_contract_manifest_synthesizes_split_panel_reveal_aliases_from_panel_clips(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "project"
+        spec_dir = project_dir / "specs" / "cold_open"
+        remotion_public = project_dir / "remotion-public"
+        (remotion_public / "veo").mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        for clip_id in (
+            "developer_cursor_edit",
+            "developer_codebase_zoomout",
+            "grandmother_darning",
+            "grandmother_drawer_zoomout",
+        ):
+            (remotion_public / "veo" / f"{clip_id}.mp4").write_text("stub", encoding="utf-8")
+
+        (spec_dir / "01_split_screen_darning.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "split_screen",
+                            "panels": {
+                                "left": {
+                                    "clips": [
+                                        "developer_cursor_edit",
+                                        "developer_codebase_zoomout",
+                                    ]
+                                },
+                                "right": {
+                                    "clips": [
+                                        "grandmother_darning",
+                                        "grandmother_drawer_zoomout",
+                                    ]
+                                },
+                            },
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 9,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": ["01_split_screen_darning"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual["mediaAliases"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
+        assert visual["mediaAliases"]["leftBaseSrc"] == "veo/developer_cursor_edit.mp4"
+        assert visual["mediaAliases"]["leftRevealSrc"] == "veo/developer_codebase_zoomout.mp4"
+        assert visual["mediaAliases"]["rightSrc"] == "veo/grandmother_darning.mp4"
+        assert visual["mediaAliases"]["rightBaseSrc"] == "veo/grandmother_darning.mp4"
+        assert visual["mediaAliases"]["rightRevealSrc"] == "veo/grandmother_drawer_zoomout.mp4"
+
 
 class TestContractFirstVisualResolution:
     def test_prefers_generated_contract_for_structured_title_cards(self):
@@ -5578,6 +5651,50 @@ class TestContractFirstVisualResolution:
                 "dataPoints": {
                     "type": "animated_chart",
                     "chartId": "precision_tradeoff_curve",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_counter_animation_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "counter_animation",
+                    "chartId": "mold_production_counter",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_schematic_zoom_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "schematic_zoom",
+                    "chartId": "schematic_density_zoom",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_line_charts_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "line_chart",
+                    "chartId": "precision_tradeoff_curve",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_code_editor_animation_even_with_exact_component(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "code_editor_animation",
+                    "editorId": "legacy_codebase_reveal",
                 }
             },
             has_exact_component=True,
