@@ -23,6 +23,13 @@ from .agentic_langtest import default_verify_cmd_for
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 # Moved import to top level to allow mocking in tests
 from .pytest_output import run_pytest_and_capture_output
+from .failure_classification import (
+    FailureKind,
+    classify_failure,
+    extract_failure_signature,
+    failure_classification_hint,
+    format_signature_hint,
+)
 
 console = Console()
 
@@ -42,7 +49,8 @@ def cloud_fix_errors(
     verbose: bool = False,
     time: float = DEFAULT_TIME,
     code_file_ext: str = ".py",
-    protect_tests: bool = False
+    protect_tests: bool = False,
+    failure_classification: str | None = None,
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
@@ -81,12 +89,16 @@ def cloud_fix_errors(
     if not jwt_token:
         raise RuntimeError("Cloud authentication failed - no JWT token available")
 
+    err_body = error
+    if failure_classification:
+        err_body = f"[PDD failure classification] {failure_classification}\n\n{error}"
+
     # Build cloud payload
     payload = {
         "unitTest": unit_test,
         "code": code,
         "prompt": prompt,
-        "errors": error,
+        "errors": err_body,
         "language": get_language(code_file_ext),
         "strength": strength,
         "temperature": temperature,
@@ -278,7 +290,8 @@ def fix_error_loop(unit_test_file: str,
                    agentic_fallback: bool = True,
                    protect_tests: bool = False,
                    use_cloud: bool = False,
-                   test_files: list[str] | None = None):
+                   test_files: list[str] | None = None,
+                   failure_aware_retries: bool = True):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations,
     counting only the number of times we actually call the LLM fix function.
@@ -310,6 +323,9 @@ def fix_error_loop(unit_test_file: str,
         test_files: Optional list of ALL test files to run together (Bug #360).
             When provided, pytest runs all files together to detect test isolation
             failures that only manifest when multiple test files interact.
+        failure_aware_retries: When True (default), shorten the loop for syntax/import
+            failures that do not change signature, and for timeout/flaky patterns without
+            improvement. Set False for legacy behavior (always up to max_attempts).
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -542,6 +558,9 @@ def fix_error_loop(unit_test_file: str,
     # Track if tests were initially passing
     initially_passing = success
 
+    # Consecutive timeout/flaky iterations without improvement (failure-aware early exit)
+    timeout_flaky_streak = 0
+
     while fix_attempts < max_attempts and total_cost < budget:
         iteration += 1
 
@@ -620,6 +639,10 @@ def fix_error_loop(unit_test_file: str,
             stats["final_warnings"] = 0  # Explicitly set to 0
             break
 
+        kind_this_iteration = classify_failure(pytest_output)
+        sig_before_fix = extract_failure_signature(pytest_output)
+        failure_hint = failure_classification_hint(kind_this_iteration)
+
         # We only attempt to fix if test is failing or has warnings:
         # Let's create backups in .pdd/backups/ to avoid polluting code/test directories
         code_name = os.path.basename(code_file)
@@ -687,7 +710,8 @@ def fix_error_loop(unit_test_file: str,
                         verbose=verbose,
                         time=time,
                         code_file_ext=os.path.splitext(code_file)[1],
-                        protect_tests=protect_tests
+                        protect_tests=protect_tests,
+                        failure_classification=failure_hint,
                     )
                 except RuntimeError as cloud_err:
                     # Cloud failed - fall back to local if it's a recoverable error
@@ -708,7 +732,8 @@ def fix_error_loop(unit_test_file: str,
                         verbose=verbose,
                         time=time,
                         protect_tests=protect_tests,
-                        language=get_language(os.path.splitext(code_file)[1])
+                        language=get_language(os.path.splitext(code_file)[1]),
+                        failure_classification=failure_hint,
                     )
             else:
                 # Use local LLM for fix
@@ -723,7 +748,8 @@ def fix_error_loop(unit_test_file: str,
                     verbose=verbose,
                     time=time,  # Pass time parameter
                     protect_tests=protect_tests,
-                    language=get_language(os.path.splitext(code_file)[1])
+                    language=get_language(os.path.splitext(code_file)[1]),
+                    failure_classification=failure_hint,
                 )
 
             # Update the fix attempt in the structured log
@@ -827,6 +853,38 @@ def fix_error_loop(unit_test_file: str,
             stats["final_fails"] = fails
             stats["final_errors"] = errors
             stats["final_warnings"] = warnings
+
+            # Failure-aware early exit (reduces wasted LLM retries)
+            if failure_aware_retries and not success:
+                improved = stats["iterations_info"][-1].get("improved", False)
+                sig_after_fix = extract_failure_signature(pytest_output)
+                if kind_this_iteration == FailureKind.TIMEOUT_FLAKY:
+                    if not improved:
+                        timeout_flaky_streak += 1
+                    else:
+                        timeout_flaky_streak = 0
+                    if timeout_flaky_streak >= 2:
+                        rprint(
+                            "[yellow]Stopping after "
+                            f"{fix_attempts} attempt(s): failures look like timeouts/flaky tests. "
+                            "Consider isolating this test or increasing timeout, rather than more code changes.[/yellow]"
+                        )
+                        break
+                else:
+                    timeout_flaky_streak = 0
+                if kind_this_iteration == FailureKind.SYNTAX_IMPORT:
+                    if (
+                        fix_attempts >= 1
+                        and sig_before_fix
+                        and sig_after_fix == sig_before_fix
+                    ):
+                        loc = format_signature_hint(sig_after_fix)
+                        rprint(
+                            "[yellow]Stopping after "
+                            f"{fix_attempts} attempt(s): still seeing a syntax/import error at {loc}. "
+                            "This may require fixing imports/env or adding missing files.[/yellow]"
+                        )
+                        break
         except Exception as e:
             rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
             success = False

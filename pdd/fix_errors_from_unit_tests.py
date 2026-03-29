@@ -110,7 +110,8 @@ def fix_errors_from_unit_tests(
     time: float = DEFAULT_TIME,
     verbose: bool = False,
     protect_tests: bool = False,
-    language: Optional[str] = None
+    language: Optional[str] = None,
+    failure_classification: Optional[str] = None,
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Fix errors in unit tests using LLM models and log the process.
@@ -128,6 +129,7 @@ def fix_errors_from_unit_tests(
         verbose (bool): Whether to print detailed output
         protect_tests (bool): If True, prevents LLM from modifying unit tests
         language (Optional[str]): Programming language of the code (e.g., "python", "typescript")
+        failure_classification (Optional[str]): Heuristic hint for this fix attempt (syntax/import, timeout, etc.)
 
     Returns:
         Tuple containing update flags, fixed code/tests, total cost, and model name
@@ -167,7 +169,13 @@ def fix_errors_from_unit_tests(
             fix_errors_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'errors', 'prompt']
+            exclude_keys=['unit_test', 'code', 'errors', 'prompt', 'failure_classification']
+        )
+
+        fc_text = (
+            failure_classification
+            if failure_classification
+            else "Not classified (treat as a general test failure; use errors below)."
         )
 
         if verbose:
@@ -180,7 +188,8 @@ def fix_errors_from_unit_tests(
                 "code": code,
                 "prompt": processed_prompt,
                 "errors": error,
-                "protect_tests": "true" if protect_tests else "false"
+                "protect_tests": "true" if protect_tests else "false",
+                "failure_classification": fc_text,
             },
             strength=strength,
             temperature=temperature,
