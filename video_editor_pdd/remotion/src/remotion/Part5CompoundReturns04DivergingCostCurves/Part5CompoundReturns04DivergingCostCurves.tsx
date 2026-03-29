@@ -1,70 +1,191 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from 'remotion';
 import {
   BG_COLOR,
   PATCHING_COLOR,
   PDD_COLOR,
-  PATCHING_POINTS,
-  PDD_POINTS,
+  PATCHING_DATA,
+  PDD_DATA,
+  FONT_FAMILY,
+  CURVE_DRAW_START,
+  CURVE_DRAW_DURATION,
+  CURVE_LABELS_START,
+  CURVE_LABELS_FADE,
+  THESIS_1_START,
+  THESIS_2_START,
+  THESIS_FADE,
+  FADEOUT_START,
+  FADEOUT_DURATION,
+  CHART_RIGHT,
 } from './constants';
-import { ChartGrid } from './ChartGrid';
 import { ChartAxes } from './ChartAxes';
-import { AnimatedCurve } from './AnimatedCurve';
-import { GapFill } from './GapFill';
-import { Annotations } from './Annotations';
-import { GapLabel } from './GapLabel';
+import { AnimatedLine, yToPixelCorrected } from './AnimatedLine';
+import { GapRegion } from './GapRegion';
 
 export const defaultPart5CompoundReturns04DivergingCostCurvesProps = {};
 
-/**
- * Section 5.4: Diverging Cost Curves — The Compounding Gap
- *
- * Two cost curves (Patching vs PDD) draw from a shared origin and diverge
- * dramatically over 10 years, visualizing the compound cost argument.
- *
- * Duration: 420 frames @ 30fps (14s)
- *
- * All sub-components manage their own timing via absolute frame references
- * from useCurrentFrame() (no Sequence offset wrappers).
- */
 export const Part5CompoundReturns04DivergingCostCurves: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  // Curve end labels fade in
+  const curveLabelsOpacity = interpolate(
+    frame,
+    [CURVE_LABELS_START, CURVE_LABELS_START + CURVE_LABELS_FADE],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Thesis statement 1 fade in
+  const thesis1Opacity = interpolate(
+    frame,
+    [THESIS_1_START, THESIS_1_START + THESIS_FADE],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Thesis statement 2 fade in
+  const thesis2Opacity = interpolate(
+    frame,
+    [THESIS_2_START, THESIS_2_START + THESIS_FADE],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Final fade-out (entire chart dims to 0.3)
+  const fadeOutOpacity = interpolate(
+    frame,
+    [FADEOUT_START, FADEOUT_START + FADEOUT_DURATION],
+    [1, 0.3],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.quad),
+    }
+  );
+
+  // Pixel positions for curve end labels
+  const patchingEndY = yToPixelCorrected(
+    PATCHING_DATA[PATCHING_DATA.length - 1].y
+  );
+  const pddEndY = yToPixelCorrected(0.1); // PDD baseline
+
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        width: 1920,
-        height: 1080,
-        overflow: 'hidden',
+        fontFamily: FONT_FAMILY,
       }}
     >
-      {/* Layer 1: Subtle background grid */}
-      <ChartGrid />
+      <div style={{ opacity: fadeOutOpacity, width: '100%', height: '100%' }}>
+        {/* Chart axes and grid */}
+        <ChartAxes />
 
-      {/* Layer 2: Axes + origin point + labels */}
-      <ChartAxes />
+        {/* Patching exponential curve (amber) */}
+        <AnimatedLine
+          data={PATCHING_DATA}
+          color={PATCHING_COLOR}
+          strokeWidth={3}
+          startFrame={CURVE_DRAW_START}
+          drawDuration={CURVE_DRAW_DURATION}
+          easingType="easeIn"
+        />
 
-      {/* Layer 3: Patching curve (exponential rise) */}
-      <AnimatedCurve
-        points={PATCHING_POINTS}
-        color={PATCHING_COLOR}
-        label="PATCHING"
-      />
+        {/* PDD flat sawtooth curve (green) */}
+        <AnimatedLine
+          data={PDD_DATA}
+          color={PDD_COLOR}
+          strokeWidth={3}
+          startFrame={CURVE_DRAW_START}
+          drawDuration={CURVE_DRAW_DURATION}
+          easingType="easeOut"
+        />
 
-      {/* Layer 4: PDD curve (flat/declining) */}
-      <AnimatedCurve
-        points={PDD_POINTS}
-        color={PDD_COLOR}
-        label="PDD"
-      />
+        {/* Gap shaded region */}
+        <GapRegion />
 
-      {/* Layer 5: Gradient fill between curves with pulse */}
-      <GapFill />
+        {/* Curve end labels: "Patching" and "PDD" */}
+        <div
+          style={{
+            position: 'absolute',
+            left: CHART_RIGHT + 16,
+            top: patchingEndY - 12,
+            fontFamily: FONT_FAMILY,
+            fontSize: 16,
+            fontWeight: 600,
+            color: PATCHING_COLOR,
+            opacity: curveLabelsOpacity,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Patching
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            left: CHART_RIGHT + 16,
+            top: pddEndY - 12,
+            fontFamily: FONT_FAMILY,
+            fontSize: 16,
+            fontWeight: 600,
+            color: PDD_COLOR,
+            opacity: curveLabelsOpacity,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          PDD
+        </div>
 
-      {/* Layer 6: Side annotations with leader lines */}
-      <Annotations />
-
-      {/* Layer 7: Central "compounding gap" label + double arrow */}
-      <GapLabel />
+        {/* Thesis annotations below chart */}
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 850,
+            width: 1920,
+            textAlign: 'center',
+            fontFamily: FONT_FAMILY,
+            fontSize: 18,
+            fontWeight: 600,
+            color: PATCHING_COLOR,
+            opacity: thesis1Opacity,
+          }}
+        >
+          Patching accrues compound costs.
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 890,
+            width: 1920,
+            textAlign: 'center',
+            fontFamily: FONT_FAMILY,
+            fontSize: 18,
+            fontWeight: 600,
+            color: PDD_COLOR,
+            opacity: thesis2Opacity,
+          }}
+        >
+          Tests accrue compound returns.
+        </div>
+      </div>
     </AbsoluteFill>
   );
 };

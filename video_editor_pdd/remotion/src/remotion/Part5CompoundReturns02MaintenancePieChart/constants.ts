@@ -1,57 +1,66 @@
-// ── Colors ──────────────────────────────────────────────────────────
-export const BG_COLOR = "#0F172A";
-export const BLUE = "#4A90D9";
-export const AMBER = "#D9944A";
-export const BORDER_COLOR = "#1E293B";
-export const CARD_BG = "#1E293B";
-export const CARD_BORDER = "#334155";
-export const TEXT_PRIMARY = "#E2E8F0";
-export const TEXT_SECONDARY = "#94A3B8";
-export const TEXT_MUTED = "#64748B";
+// === Colors ===
+export const BG_COLOR = "#0A0F1A";
+export const SEGMENT_STROKE_COLOR = "#1E293B";
 
-// ── Donut Dimensions ────────────────────────────────────────────────
-export const CENTER_X = 960;
-export const CENTER_Y = 500;
-export const OUTER_RADIUS = 220;
-export const INNER_RADIUS = 120;
-export const DONUT_WIDTH = OUTER_RADIUS - INNER_RADIUS; // 100px
+export const MAINTENANCE_COLOR = "#D9944A";
+export const DEVELOPMENT_COLOR = "#4A90D9";
+export const STAT_TEXT_COLOR = "#94A3B8";
 
-// ── Segments ────────────────────────────────────────────────────────
-// Using 15% as the midpoint of 10-20%
-export const DEV_ANGLE_DEG = 54; // 15% of 360
-export const MAINT_ANGLE_DEG = 306; // 85% of 360
+// === Chart Dimensions ===
+export const CHART_CX = 960;
+export const CHART_CY = 540;
+export const CHART_RADIUS = 220;
+export const CHART_STROKE_WIDTH = 2;
 
-// ── Canvas ──────────────────────────────────────────────────────────
-export const WIDTH = 1920;
-export const HEIGHT = 1080;
+// === Segment Data ===
+export const MAINTENANCE_DEGREES = 306; // 85% of 360
+export const DEVELOPMENT_DEGREES = 54; // 15% of 360
 
-// ── Frame Timings ───────────────────────────────────────────────────
-export const RING_FADE_START = 0;
-export const RING_FADE_DURATION = 20;
+// === Label Positions ===
+export const MAINTENANCE_LABEL_X = 1250;
+export const MAINTENANCE_LABEL_Y = 440;
+export const DEVELOPMENT_LABEL_X = 1250;
+export const DEVELOPMENT_LABEL_Y = 520;
 
-export const BLUE_SEG_START = 30;
-export const BLUE_SEG_DRAW_DURATION = 30;
+// === Stat Callout Positions ===
+export const STAT_Y_START = 720;
+export const STAT_Y_GAP = 36;
 
-export const AMBER_SEG_START = 60;
-export const AMBER_SEG_DRAW_DURATION = 90;
+// === Animation Timing (frames) ===
+export const OUTLINE_START = 0;
+export const OUTLINE_DURATION = 30;
 
-export const HOLD_START = 150;
+export const MAINTENANCE_FILL_START = 30;
+export const MAINTENANCE_FILL_DURATION = 90;
 
-export const MCKINSEY_SLIDE_START = 210;
-export const MCKINSEY_SLIDE_DURATION = 25;
-export const MCKINSEY_PULSE_START = 235;
-export const MCKINSEY_PULSE_DURATION = 20;
+export const DEVELOPMENT_FILL_START = 120;
+export const DEVELOPMENT_FILL_DURATION = 30;
 
-export const STRIPE_SLIDE_START = 270;
-export const STRIPE_SLIDE_DURATION = 25;
-export const STRIPE_PULSE_START = 295;
-export const STRIPE_PULSE_DURATION = 20;
+export const LABELS_START = 150;
+export const LABELS_FADE_DURATION = 20;
 
-export const TOTAL_FRAMES = 420;
+export const STAT1_START = 200;
+export const STAT2_START = 220;
+export const STAT_FADE_DURATION = 15;
 
-// ── Callout Positions ───────────────────────────────────────────────
-export const CALLOUT_X = 1400;
-export const MCKINSEY_Y = 380;
-export const STRIPE_Y = 520;
-export const CALLOUT_WIDTH = 320;
-export const CALLOUT_HEIGHT = 100;
+export const PULSE_START = 300;
+export const PULSE_END = 420;
+
+export const MORPH_START = 420;
+export const MORPH_DURATION = 60;
+
+export const TOTAL_FRAMES = 480;
+
+// === Typography ===
+export const FONT_FAMILY = "Inter, sans-serif";
+export const LABEL_FONT_SIZE = 20;
+export const COUNTER_FONT_SIZE = 28;
+export const STAT_FONT_SIZE = 14;
+export const LABEL_FONT_WEIGHT = 600;
+export const COUNTER_FONT_WEIGHT = 700;
+export const STAT_FONT_WEIGHT = 400;
+export const STAT_OPACITY = 0.6;
+
+// === Connector Lines ===
+export const CONNECTOR_OPACITY = 0.4;
+export const CONNECTOR_STROKE_WIDTH = 1;

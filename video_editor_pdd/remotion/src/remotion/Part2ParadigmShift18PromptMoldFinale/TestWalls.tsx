@@ -1,163 +1,186 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  TEST_WALL_COLOR,
+  WALL_COLOR,
   CAVITY_X,
   CAVITY_Y,
   CAVITY_WIDTH,
   CAVITY_HEIGHT,
-  WALLS_START,
+  WALL_THICKNESS,
   WALL_DRAW_DURATION,
   WALL_LABELS,
-} from './constants';
+} from "./constants";
 
-interface WallFlashState {
-  active: boolean;
-  intensity: number;
+interface WallSegment {
+  id: string;
+  label: string;
+  delayFrames: number;
+  // Position & size for each wall side
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  // Label position offset
+  labelX: number;
+  labelY: number;
+  // Draw direction: "horizontal" or "vertical"
+  direction: "horizontal" | "vertical";
 }
+
+const WALL_SEGMENTS: WallSegment[] = [
+  {
+    id: "top",
+    label: WALL_LABELS[0],
+    delayFrames: 0,
+    x: CAVITY_X,
+    y: CAVITY_Y,
+    width: CAVITY_WIDTH,
+    height: WALL_THICKNESS,
+    labelX: CAVITY_X + CAVITY_WIDTH / 2,
+    labelY: CAVITY_Y - 14,
+    direction: "horizontal",
+  },
+  {
+    id: "right",
+    label: WALL_LABELS[1],
+    delayFrames: 5,
+    x: CAVITY_X + CAVITY_WIDTH - WALL_THICKNESS,
+    y: CAVITY_Y,
+    width: WALL_THICKNESS,
+    height: CAVITY_HEIGHT,
+    labelX: CAVITY_X + CAVITY_WIDTH + 14,
+    labelY: CAVITY_Y + CAVITY_HEIGHT / 2,
+    direction: "vertical",
+  },
+  {
+    id: "bottom",
+    label: WALL_LABELS[2],
+    delayFrames: 10,
+    x: CAVITY_X,
+    y: CAVITY_Y + CAVITY_HEIGHT - WALL_THICKNESS,
+    width: CAVITY_WIDTH,
+    height: WALL_THICKNESS,
+    labelX: CAVITY_X + CAVITY_WIDTH / 2,
+    labelY: CAVITY_Y + CAVITY_HEIGHT + 18,
+    direction: "horizontal",
+  },
+  {
+    id: "left",
+    label: WALL_LABELS[3],
+    delayFrames: 15,
+    x: CAVITY_X,
+    y: CAVITY_Y,
+    width: WALL_THICKNESS,
+    height: CAVITY_HEIGHT,
+    labelX: CAVITY_X - 14,
+    labelY: CAVITY_Y + CAVITY_HEIGHT / 2,
+    direction: "vertical",
+  },
+];
 
 interface TestWallsProps {
-  wallFlash: WallFlashState;
+  /** Frame offset from Sequence start (already handled by useCurrentFrame inside Sequence) */
+  flashActive: boolean;
 }
 
-/**
- * Four glowing test walls surrounding the code cavity.
- * Walls draw sequentially starting at WALLS_START.
- * Each wall has a label: "assert", "expect", "verify", "test".
- */
-export const TestWalls: React.FC<TestWallsProps> = ({ wallFlash }) => {
+export const TestWalls: React.FC<TestWallsProps> = ({ flashActive }) => {
   const frame = useCurrentFrame();
-  const localFrame = frame - WALLS_START;
-
-  if (localFrame < 0) return null;
-
-  // Each wall draws in sequence, 20 frames each, staggered by 8 frames
-  const wallStagger = 8;
-  const wallProgresses = [0, 1, 2, 3].map((i) => {
-    const wallStart = i * wallStagger;
-    return interpolate(localFrame, [wallStart, wallStart + WALL_DRAW_DURATION], [0, 1], {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
-    });
-  });
-
-  // Flash intensity for all walls
-  const flashGlow = wallFlash.active ? wallFlash.intensity : 0;
-  const baseGlowOpacity = 0.2;
-  const glowOpacity = baseGlowOpacity + flashGlow * 0.4;
-  const glowBlur = 15 + flashGlow * 15;
-
-  const wallThickness = 3;
-
-  // Wall definitions: top, right, bottom, left
-  const walls = [
-    // Top wall
-    {
-      left: CAVITY_X,
-      top: CAVITY_Y,
-      width: CAVITY_WIDTH * wallProgresses[0],
-      height: wallThickness,
-      labelX: CAVITY_X + CAVITY_WIDTH / 2,
-      labelY: CAVITY_Y - 18,
-      progress: wallProgresses[0],
-    },
-    // Right wall
-    {
-      left: CAVITY_X + CAVITY_WIDTH - wallThickness,
-      top: CAVITY_Y,
-      width: wallThickness,
-      height: CAVITY_HEIGHT * wallProgresses[1],
-      labelX: CAVITY_X + CAVITY_WIDTH + 14,
-      labelY: CAVITY_Y + CAVITY_HEIGHT / 2,
-      progress: wallProgresses[1],
-    },
-    // Bottom wall
-    {
-      left: CAVITY_X + CAVITY_WIDTH * (1 - wallProgresses[2]),
-      top: CAVITY_Y + CAVITY_HEIGHT - wallThickness,
-      width: CAVITY_WIDTH * wallProgresses[2],
-      height: wallThickness,
-      labelX: CAVITY_X + CAVITY_WIDTH / 2,
-      labelY: CAVITY_Y + CAVITY_HEIGHT + 20,
-      progress: wallProgresses[2],
-    },
-    // Left wall
-    {
-      left: CAVITY_X,
-      top: CAVITY_Y + CAVITY_HEIGHT * (1 - wallProgresses[3]),
-      width: wallThickness,
-      height: CAVITY_HEIGHT * wallProgresses[3],
-      labelX: CAVITY_X - 14,
-      labelY: CAVITY_Y + CAVITY_HEIGHT / 2,
-      progress: wallProgresses[3],
-    },
-  ];
 
   return (
     <>
-      {/* Glow behind walls */}
-      <div
-        style={{
-          position: 'absolute',
-          left: CAVITY_X - 20,
-          top: CAVITY_Y - 20,
-          width: CAVITY_WIDTH + 40,
-          height: CAVITY_HEIGHT + 40,
-          borderRadius: 8,
-          border: `2px solid ${TEST_WALL_COLOR}`,
-          opacity: glowOpacity * Math.min(wallProgresses[0], 0.5) * 2,
-          filter: `blur(${glowBlur}px)`,
-          boxShadow: `0 0 ${glowBlur}px ${TEST_WALL_COLOR}`,
-          pointerEvents: 'none',
-        }}
-      />
+      {WALL_SEGMENTS.map((wall) => {
+        const localFrame = frame - wall.delayFrames;
+        // Draw progress
+        const drawProgress = interpolate(
+          localFrame,
+          [0, WALL_DRAW_DURATION],
+          [0, 1],
+          {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.inOut(Easing.cubic),
+          }
+        );
 
-      {/* Individual walls */}
-      {walls.map((wall, i) => (
-        <React.Fragment key={i}>
-          {/* Wall line */}
-          <div
-            style={{
-              position: 'absolute',
-              left: wall.left,
-              top: wall.top,
-              width: Math.max(wall.width, 0),
-              height: Math.max(wall.height, 0),
-              backgroundColor: TEST_WALL_COLOR,
-              boxShadow: `0 0 ${glowBlur}px ${TEST_WALL_COLOR}`,
-              opacity: wall.progress,
-            }}
-          />
+        // Flash glow when code regenerates
+        const flashGlow = flashActive ? 0.5 : 0;
 
-          {/* Wall label */}
-          {wall.progress > 0.5 && (
+        // Scale for draw animation
+        const scaleX =
+          wall.direction === "horizontal" ? drawProgress : 1;
+        const scaleY =
+          wall.direction === "vertical" ? drawProgress : 1;
+
+        const wallOpacity = interpolate(drawProgress, [0, 0.1], [0, 1], {
+          extrapolateRight: "clamp",
+        });
+
+        // Label fade-in after wall is drawn
+        const labelOpacity = interpolate(
+          localFrame,
+          [WALL_DRAW_DURATION, WALL_DRAW_DURATION + 10],
+          [0, 0.7],
+          {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          }
+        );
+
+        return (
+          <React.Fragment key={wall.id}>
+            {/* Wall glow */}
             <div
               style={{
-                position: 'absolute',
+                position: "absolute",
+                left: wall.x - 8,
+                top: wall.y - 8,
+                width: wall.width + 16,
+                height: wall.height + 16,
+                background: WALL_COLOR,
+                opacity: (0.2 + flashGlow) * wallOpacity,
+                filter: "blur(15px)",
+                transform: `scale(${scaleX}, ${scaleY})`,
+                transformOrigin:
+                  wall.direction === "horizontal" ? "left center" : "center top",
+              }}
+            />
+            {/* Wall solid */}
+            <div
+              style={{
+                position: "absolute",
+                left: wall.x,
+                top: wall.y,
+                width: wall.width,
+                height: wall.height,
+                backgroundColor: WALL_COLOR,
+                opacity: wallOpacity,
+                transform: `scale(${scaleX}, ${scaleY})`,
+                transformOrigin:
+                  wall.direction === "horizontal" ? "left center" : "center top",
+                boxShadow: flashActive
+                  ? `0 0 20px ${WALL_COLOR}`
+                  : "none",
+              }}
+            />
+            {/* Wall label */}
+            <div
+              style={{
+                position: "absolute",
                 left: wall.labelX,
                 top: wall.labelY,
-                transform: 'translate(-50%, -50%)',
+                transform: "translate(-50%, -50%)",
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 11,
-                color: TEST_WALL_COLOR,
-                opacity: interpolate(
-                  wall.progress,
-                  [0.5, 1],
-                  [0, 0.78],
-                  { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-                ),
-                letterSpacing: 1,
-                whiteSpace: 'nowrap',
+                color: WALL_COLOR,
+                opacity: labelOpacity,
+                whiteSpace: "nowrap",
               }}
             >
-              {WALL_LABELS[i]}
+              {wall.label}
             </div>
-          )}
-        </React.Fragment>
-      ))}
+          </React.Fragment>
+        );
+      })}
     </>
   );
 };
-
-export default TestWalls;

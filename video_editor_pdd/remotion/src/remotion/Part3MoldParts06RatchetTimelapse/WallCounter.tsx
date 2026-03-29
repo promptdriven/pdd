@@ -1,36 +1,34 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  COUNTER_X,
-  COUNTER_Y,
   COUNTER_LABEL_COLOR,
   COUNTER_NUMBER_COLOR,
-  START_WALL_COUNT,
-  CYCLE_FRAMES,
+  COUNTER_PULSE_FRAMES,
   WALL_CYCLES,
-  COUNTER_PULSE_DURATION,
+  FLASH_FRAMES,
 } from './constants';
 
 export const WallCounter: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Calculate current wall count based on completed cycles
-  let count = START_WALL_COUNT;
+  // Count starts at 5, increments when each wall finishes its flash
+  const baseCount = 5;
+  let currentCount = baseCount;
   let lastIncrementFrame = -100;
 
-  for (let i = 0; i < WALL_CYCLES.length; i++) {
-    const incrementFrame = i * CYCLE_FRAMES + 8; // increment when wall starts appearing
+  for (const cycle of WALL_CYCLES) {
+    const incrementFrame = cycle.startFrame + FLASH_FRAMES;
     if (frame >= incrementFrame) {
-      count = START_WALL_COUNT + i + 1;
+      currentCount++;
       lastIncrementFrame = incrementFrame;
     }
   }
 
-  // Scale pulse on increment
-  const timeSinceIncrement = frame - lastIncrementFrame;
-  const pulseScale =
-    timeSinceIncrement >= 0 && timeSinceIncrement < COUNTER_PULSE_DURATION
-      ? interpolate(timeSinceIncrement, [0, 4, COUNTER_PULSE_DURATION], [1.0, 1.2, 1.0], {
+  // Scale pulse when counter increments
+  const pulseLocalFrame = frame - lastIncrementFrame;
+  const scale =
+    pulseLocalFrame >= 0 && pulseLocalFrame < COUNTER_PULSE_FRAMES
+      ? interpolate(pulseLocalFrame, [0, 4, COUNTER_PULSE_FRAMES], [1.0, 1.2, 1.0], {
           extrapolateRight: 'clamp',
           easing: Easing.out(Easing.quad),
         })
@@ -40,40 +38,38 @@ export const WallCounter: React.FC = () => {
     <div
       style={{
         position: 'absolute',
-        left: COUNTER_X - 60,
-        top: COUNTER_Y,
+        right: 140,
+        top: 60,
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        width: 80,
+        alignItems: 'flex-end',
       }}
     >
-      {/* Label */}
-      <div
+      <span
         style={{
-          fontFamily: 'Inter, sans-serif',
+          fontFamily: "'Inter', sans-serif",
           fontSize: 12,
           fontWeight: 600,
           color: COUNTER_LABEL_COLOR,
-          letterSpacing: '0.08em',
+          letterSpacing: '0.1em',
           marginBottom: 4,
         }}
       >
         WALLS:
-      </div>
-      {/* Count */}
-      <div
+      </span>
+      <span
         style={{
-          fontFamily: 'Inter, sans-serif',
+          fontFamily: "'Inter', sans-serif",
           fontSize: 24,
           fontWeight: 700,
           color: COUNTER_NUMBER_COLOR,
-          transform: `scale(${pulseScale})`,
-          textAlign: 'center',
+          transform: `scale(${scale})`,
+          display: 'inline-block',
+          transformOrigin: 'center',
         }}
       >
-        {count}
-      </div>
+        {currentCount}
+      </span>
     </div>
   );
 };

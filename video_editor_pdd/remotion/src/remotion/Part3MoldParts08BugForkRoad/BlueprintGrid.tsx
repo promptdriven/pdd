@@ -1,45 +1,53 @@
-import React from "react";
-import { AbsoluteFill } from "remotion";
+import React from 'react';
+import { AbsoluteFill } from 'remotion';
+import {
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
+  GRID_SPACING,
+  GRID_COLOR,
+  GRID_OPACITY,
+} from './constants';
 
-interface BlueprintGridProps {
-  spacing: number;
-  color: string;
-  opacity: number;
-}
+export const BlueprintGrid: React.FC = () => {
+  const verticalLines: number[] = [];
+  for (let x = 0; x <= CANVAS_WIDTH; x += GRID_SPACING) {
+    verticalLines.push(x);
+  }
 
-export const BlueprintGrid: React.FC<BlueprintGridProps> = ({
-  spacing,
-  color,
-  opacity,
-}) => {
-  const cols = Math.ceil(1920 / spacing);
-  const rows = Math.ceil(1080 / spacing);
+  const horizontalLines: number[] = [];
+  for (let y = 0; y <= CANVAS_HEIGHT; y += GRID_SPACING) {
+    horizontalLines.push(y);
+  }
 
   return (
     <AbsoluteFill>
-      <svg width={1920} height={1080} style={{ position: "absolute" }}>
-        {Array.from({ length: cols + 1 }, (_, i) => (
+      <svg
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        {verticalLines.map((x) => (
           <line
-            key={`v-${i}`}
-            x1={i * spacing}
+            key={`v-${x}`}
+            x1={x}
             y1={0}
-            x2={i * spacing}
-            y2={1080}
-            stroke={color}
+            x2={x}
+            y2={CANVAS_HEIGHT}
+            stroke={GRID_COLOR}
             strokeWidth={1}
-            opacity={opacity}
+            opacity={GRID_OPACITY}
           />
         ))}
-        {Array.from({ length: rows + 1 }, (_, i) => (
+        {horizontalLines.map((y) => (
           <line
-            key={`h-${i}`}
+            key={`h-${y}`}
             x1={0}
-            y1={i * spacing}
-            x2={1920}
-            y2={i * spacing}
-            stroke={color}
+            y1={y}
+            x2={CANVAS_WIDTH}
+            y2={y}
+            stroke={GRID_COLOR}
             strokeWidth={1}
-            opacity={opacity}
+            opacity={GRID_OPACITY}
           />
         ))}
       </svg>

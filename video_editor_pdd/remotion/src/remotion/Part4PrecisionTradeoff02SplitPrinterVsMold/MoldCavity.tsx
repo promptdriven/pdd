@@ -1,67 +1,94 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
-
-const MOLD_ACCENT = '#D9944A';
-const MOLD_WALL_OPACITY = 0.7;
-const MOLD_WALL_STROKE = 4;
-const GLOW_RADIUS = 8;
-const CAVITY_BG = '#0F172A';
-
-// Mold dimensions
-const CX = 470;
-const CY = 310;
-const W = 340;
-const H = 260;
-
-interface WallSegment {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-const MOLD_WALLS: WallSegment[] = [
-  // Outer rectangle
-  { x1: CX - W / 2, y1: CY - H / 2, x2: CX + W / 2, y2: CY - H / 2 },
-  { x1: CX + W / 2, y1: CY - H / 2, x2: CX + W / 2, y2: CY + H / 2 },
-  { x1: CX + W / 2, y1: CY + H / 2, x2: CX - W / 2, y2: CY + H / 2 },
-  { x1: CX - W / 2, y1: CY + H / 2, x2: CX - W / 2, y2: CY - H / 2 },
-  // Internal channels
-  { x1: CX - W / 4, y1: CY - H / 2, x2: CX - W / 4, y2: CY + H / 4 },
-  { x1: CX + W / 4, y1: CY - H / 4, x2: CX + W / 4, y2: CY + H / 2 },
-  { x1: CX - W / 4, y1: CY, x2: CX + W / 4, y2: CY },
-];
-
-// Injection entry at top center
-const ENTRY_X = CX;
-const ENTRY_Y = CY - H / 2;
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import {
+  PANEL_WIDTH,
+  CANVAS_HEIGHT,
+  MOLD_WALL_COLOR,
+  MOLD_WALL_OPACITY,
+  MOLD_WALL_STROKE,
+  WALL_GLOW_COLOR,
+  WALL_GLOW_RADIUS,
+  MOLD_OUTER_X,
+  MOLD_OUTER_Y,
+  MOLD_OUTER_W,
+  MOLD_OUTER_H,
+  MOLD_CORNER_RADIUS,
+  MOLD_CHANNELS,
+  MOLD_INJECTION_X,
+  MOLD_INJECTION_Y,
+  BG_CAVITY,
+  PHASE_ANIMATE_MID,
+  PHASE_FILL_END,
+} from './constants';
 
 interface MoldCavityProps {
-  panelWidth: number;
-  panelHeight: number;
+  panelOpacity: number;
 }
 
-export const MoldCavity: React.FC<MoldCavityProps> = ({
-  panelWidth,
-  panelHeight,
-}) => {
+// Wall segments to glow when liquid contacts them
+const WALL_GLOW_SEGMENTS = [
+  { frame: 150, cx: 470, cy: 140 },   // Top entry
+  { frame: 170, cx: 470, cy: 300 },   // Junction
+  { frame: 190, cx: 250, cy: 300 },   // Left junction
+  { frame: 195, cx: 690, cy: 300 },   // Right junction
+  { frame: 220, cx: 250, cy: 500 },   // Left mid
+  { frame: 225, cx: 690, cy: 500 },   // Right mid
+  { frame: 250, cx: 470, cy: 500 },   // Center mid
+  { frame: 270, cx: 250, cy: 750 },   // Left bottom
+  { frame: 275, cx: 690, cy: 750 },   // Right bottom
+  { frame: 280, cx: 470, cy: 750 },   // Center bottom
+  { frame: 290, cx: 120, cy: 540 },   // Outer wall left
+  { frame: 295, cx: 820, cy: 540 },   // Outer wall right
+  { frame: 300, cx: 470, cy: 940 },   // Outer wall bottom
+];
+
+export const MoldCavity: React.FC<MoldCavityProps> = ({ panelOpacity }) => {
   const frame = useCurrentFrame();
 
-  // Walls draw in over frames 0-30
-  const wallReveal = interpolate(frame, [0, 30], [0, 1], {
-    easing: Easing.out(Easing.quad),
-    extrapolateRight: 'clamp',
-  });
+  // Generate wall glow effects
+  const glowEffects: React.ReactNode[] = [];
+  for (const seg of WALL_GLOW_SEGMENTS) {
+    if (frame >= seg.frame) {
+      const glowOpacity = interpolate(
+        frame,
+        [seg.frame, seg.frame + 10],
+        [0, 1],
+        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+      );
+
+      glowEffects.push(
+        <circle
+          key={`glow-${seg.cx}-${seg.cy}`}
+          cx={seg.cx}
+          cy={seg.cy}
+          r={WALL_GLOW_RADIUS * 2}
+          fill="none"
+          stroke={WALL_GLOW_COLOR}
+          strokeWidth={3}
+          strokeOpacity={glowOpacity * 0.8}
+          filter="url(#wallGlow)"
+        />
+      );
+    }
+  }
+
+  // Full cavity fill progress (from frame 150 to 300)
+  const fillProgress = interpolate(
+    frame,
+    [PHASE_ANIMATE_MID, PHASE_FILL_END],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+  );
 
   return (
     <svg
-      width={panelWidth}
-      height={panelHeight}
-      style={{ position: 'absolute', top: 0, left: 0 }}
+      width={PANEL_WIDTH}
+      height={CANVAS_HEIGHT}
+      style={{ position: 'absolute', top: 0, left: 0, opacity: panelOpacity }}
     >
       <defs>
         <filter id="wallGlow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation={GLOW_RADIUS} result="blur" />
+          <feGaussianBlur stdDeviation={WALL_GLOW_RADIUS / 2} result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
@@ -69,69 +96,79 @@ export const MoldCavity: React.FC<MoldCavityProps> = ({
         </filter>
       </defs>
 
-      {/* Cavity interior fill */}
+      {/* Cavity interior (dark void) */}
       <rect
-        x={CX - W / 2}
-        y={CY - H / 2}
-        width={W}
-        height={H}
-        fill={CAVITY_BG}
-        opacity={wallReveal}
-        rx={4}
+        x={MOLD_OUTER_X}
+        y={MOLD_OUTER_Y}
+        width={MOLD_OUTER_W}
+        height={MOLD_OUTER_H}
+        rx={MOLD_CORNER_RADIUS}
+        ry={MOLD_CORNER_RADIUS}
+        fill={BG_CAVITY}
       />
 
-      {/* Injection entry funnel */}
-      <polygon
-        points={`${ENTRY_X - 15},${ENTRY_Y - 30} ${ENTRY_X + 15},${ENTRY_Y - 30} ${ENTRY_X + 6},${ENTRY_Y} ${ENTRY_X - 6},${ENTRY_Y}`}
-        fill={MOLD_ACCENT}
-        opacity={MOLD_WALL_OPACITY * wallReveal}
+      {/* Filled liquid area - grows as fillProgress increases */}
+      {fillProgress > 0 && (
+        <rect
+          x={MOLD_OUTER_X + MOLD_WALL_STROKE}
+          y={MOLD_OUTER_Y + MOLD_OUTER_H * (1 - fillProgress)}
+          width={MOLD_OUTER_W - MOLD_WALL_STROKE * 2}
+          height={MOLD_OUTER_H * fillProgress - MOLD_WALL_STROKE}
+          rx={fillProgress > 0.9 ? MOLD_CORNER_RADIUS - MOLD_WALL_STROKE : 4}
+          fill="#4A90D9"
+          fillOpacity={0.2}
+        />
+      )}
+
+      {/* Outer mold wall */}
+      <rect
+        x={MOLD_OUTER_X}
+        y={MOLD_OUTER_Y}
+        width={MOLD_OUTER_W}
+        height={MOLD_OUTER_H}
+        rx={MOLD_CORNER_RADIUS}
+        ry={MOLD_CORNER_RADIUS}
+        fill="none"
+        stroke={MOLD_WALL_COLOR}
+        strokeWidth={MOLD_WALL_STROKE}
+        strokeOpacity={MOLD_WALL_OPACITY}
       />
 
-      {/* Wall segments */}
-      {MOLD_WALLS.map((seg, i) => {
-        // Stagger wall reveal
-        const segDelay = i * 3;
-        const segOpacity = interpolate(
-          frame,
-          [segDelay, segDelay + 15],
-          [0, MOLD_WALL_OPACITY],
-          {
-            easing: Easing.out(Easing.quad),
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-          }
-        );
+      {/* Internal channels */}
+      {MOLD_CHANNELS.map((ch, i) => (
+        <line
+          key={`ch-${i}`}
+          x1={ch.x1}
+          y1={ch.y1}
+          x2={ch.x2}
+          y2={ch.y2}
+          stroke={MOLD_WALL_COLOR}
+          strokeWidth={MOLD_WALL_STROKE / 2}
+          strokeOpacity={MOLD_WALL_OPACITY * 0.6}
+        />
+      ))}
 
-        // Glow on contact — each wall segment glows at different times
-        const contactDelay = 150 + i * 15;
-        const segGlow = interpolate(
-          frame,
-          [contactDelay, contactDelay + 10],
-          [0, 1],
-          {
-            easing: Easing.out(Easing.cubic),
-            extrapolateLeft: 'clamp',
-            extrapolateRight: 'clamp',
-          }
-        );
+      {/* Injection point marker */}
+      <circle
+        cx={MOLD_INJECTION_X}
+        cy={MOLD_INJECTION_Y}
+        r={8}
+        fill={MOLD_WALL_COLOR}
+        fillOpacity={0.5}
+      />
+      <line
+        x1={MOLD_INJECTION_X}
+        y1={MOLD_INJECTION_Y + 8}
+        x2={MOLD_INJECTION_X}
+        y2={MOLD_OUTER_Y}
+        stroke={MOLD_WALL_COLOR}
+        strokeWidth={2}
+        strokeOpacity={0.5}
+        strokeDasharray="4 4"
+      />
 
-        const currentOpacity = segOpacity + segGlow * (1 - segOpacity);
-
-        return (
-          <line
-            key={`wall-${i}`}
-            x1={seg.x1}
-            y1={seg.y1}
-            x2={seg.x2}
-            y2={seg.y2}
-            stroke={MOLD_ACCENT}
-            strokeWidth={MOLD_WALL_STROKE}
-            opacity={currentOpacity}
-            strokeLinecap="round"
-            filter={segGlow > 0.3 ? 'url(#wallGlow)' : undefined}
-          />
-        );
-      })}
+      {/* Wall glow effects */}
+      {glowEffects}
     </svg>
   );
 };

@@ -1,99 +1,112 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import { ANNOTATION_SIZE, ANNOTATION_DRAW_DURATION } from './constants';
+import React from "react";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
+import {
+  ANNOTATION_SIZE,
+  ANNOTATION_OPACITY,
+  ANNOTATION_START,
+  ANNOTATION_DRAW_DURATION,
+} from "./constants";
 
 interface AnnotationArrowProps {
-  fromX: number;
-  fromY: number;
-  toX: number;
-  toY: number;
+  /** Arrow tip x (points toward document) */
+  tipX: number;
+  /** Arrow tip y */
+  tipY: number;
+  /** Label text */
   label: string;
+  /** Arrow / label color */
   color: string;
-  labelOpacity: number;
-  startFrame: number;
+  /** Stagger offset in frames from ANNOTATION_START */
+  delay?: number;
 }
 
+const ARROW_LENGTH = 60;
+const ARROW_HEAD_SIZE = 8;
+const LABEL_GAP = 10;
+
 const AnnotationArrow: React.FC<AnnotationArrowProps> = ({
-  fromX,
-  fromY,
-  toX,
-  toY,
+  tipX,
+  tipY,
   label,
   color,
-  labelOpacity,
-  startFrame,
+  delay = 0,
 }) => {
   const frame = useCurrentFrame();
 
-  const drawProgress = interpolate(
-    frame,
-    [startFrame, startFrame + ANNOTATION_DRAW_DURATION],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
-  );
+  const drawStart = ANNOTATION_START + delay;
+  const drawEnd = drawStart + ANNOTATION_DRAW_DURATION;
 
-  if (drawProgress <= 0) return null;
+  const progress = interpolate(frame, [drawStart, drawEnd], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
 
-  const arrowLength = toX - fromX;
-  const currentEndX = fromX + arrowLength * drawProgress;
+  if (progress <= 0) return null;
 
-  // Arrowhead dimensions
-  const arrowHeadSize = 8;
+  const tailX = tipX - ARROW_LENGTH;
+  const currentTipX = tailX + ARROW_LENGTH * progress;
+
+  // Arrow line coordinates (SVG)
+  const svgWidth = ARROW_LENGTH + 20;
+  const svgHeight = 40;
 
   return (
     <div
       style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: '100%',
-        height: '100%',
-        pointerEvents: 'none',
+        position: "absolute",
+        left: tipX - ARROW_LENGTH - 120,
+        top: tipY - svgHeight / 2,
+        display: "flex",
+        alignItems: "center",
+        opacity: progress,
       }}
     >
-      {/* Arrow line using SVG */}
-      <svg
-        style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' }}
-        viewBox="0 0 1920 1080"
-      >
-        {/* Arrow line */}
-        <line
-          x1={fromX}
-          y1={fromY}
-          x2={currentEndX}
-          y2={toY}
-          stroke={color}
-          strokeWidth={2}
-          opacity={labelOpacity}
-        />
-        {/* Arrowhead */}
-        {drawProgress > 0.5 && (
-          <polygon
-            points={`${toX},${toY} ${toX - arrowHeadSize},${toY - arrowHeadSize / 2} ${toX - arrowHeadSize},${toY + arrowHeadSize / 2}`}
-            fill={color}
-            opacity={labelOpacity * drawProgress}
-          />
-        )}
-      </svg>
-
-      {/* Label text */}
+      {/* Label */}
       <div
         style={{
-          position: 'absolute',
-          left: fromX - 160,
-          top: fromY - 10,
-          fontFamily: 'Inter, sans-serif',
+          fontFamily: "Inter, sans-serif",
           fontSize: ANNOTATION_SIZE,
           fontWeight: 400,
           color,
-          opacity: labelOpacity * drawProgress,
-          whiteSpace: 'nowrap',
-          textAlign: 'right',
-          width: 150,
+          opacity: ANNOTATION_OPACITY,
+          marginRight: LABEL_GAP,
+          whiteSpace: "nowrap",
         }}
       >
         {label}
       </div>
+
+      {/* Arrow SVG */}
+      <svg
+        width={svgWidth}
+        height={svgHeight}
+        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        style={{ overflow: "visible" }}
+      >
+        {/* Line */}
+        <line
+          x1={0}
+          y1={svgHeight / 2}
+          x2={ARROW_LENGTH * progress}
+          y2={svgHeight / 2}
+          stroke={color}
+          strokeWidth={1.5}
+          strokeOpacity={ANNOTATION_OPACITY}
+        />
+        {/* Arrowhead */}
+        {progress > 0.5 && (
+          <polygon
+            points={`
+              ${ARROW_LENGTH * progress},${svgHeight / 2}
+              ${ARROW_LENGTH * progress - ARROW_HEAD_SIZE},${svgHeight / 2 - ARROW_HEAD_SIZE / 2}
+              ${ARROW_LENGTH * progress - ARROW_HEAD_SIZE},${svgHeight / 2 + ARROW_HEAD_SIZE / 2}
+            `}
+            fill={color}
+            opacity={ANNOTATION_OPACITY}
+          />
+        )}
+      </svg>
     </div>
   );
 };

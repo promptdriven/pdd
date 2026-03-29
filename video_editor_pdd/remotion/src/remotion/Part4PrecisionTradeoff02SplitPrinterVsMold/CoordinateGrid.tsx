@@ -1,112 +1,92 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
-
-const GRID_LINE_COLOR = '#1E293B';
-const GRID_LINE_OPACITY = 0.12;
-const GRID_SPACING = 40;
-const GRID_LABEL_COLOR = '#64748B';
-const GRID_LABEL_OPACITY = 0.2;
-const LABEL_FONT_SIZE = 10;
-
-const GRID_ORIGIN_X = 80;
-const GRID_ORIGIN_Y = 80;
-const GRID_COLS = 20;
-const GRID_ROWS = 10;
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import {
+  PANEL_WIDTH,
+  CANVAS_HEIGHT,
+  GRID_SPACING,
+  GRID_LINE_COLOR,
+  GRID_LINE_OPACITY,
+  GRID_LABEL_COLOR,
+  GRID_LABEL_OPACITY,
+  GRID_LABEL_SIZE,
+  GRID_ORIGIN_X,
+  GRID_ORIGIN_Y,
+  GRID_COLS,
+  GRID_ROWS,
+  HEADER_FONT_FAMILY,
+  PHASE_ANIMATE_MID,
+} from './constants';
 
 interface CoordinateGridProps {
-  panelWidth: number;
-  panelHeight: number;
-  showLabels: boolean;
+  panelOpacity: number;
 }
 
-export const CoordinateGrid: React.FC<CoordinateGridProps> = ({
-  panelWidth,
-  panelHeight,
-  showLabels,
-}) => {
+export const CoordinateGrid: React.FC<CoordinateGridProps> = ({ panelOpacity }) => {
   const frame = useCurrentFrame();
 
-  // Grid fades in over first 30 frames
-  const gridOpacity = interpolate(frame, [0, 30], [0, 1], {
-    easing: Easing.out(Easing.quad),
-    extrapolateRight: 'clamp',
-  });
+  // Grid labels fade in at frame 150 over 30 frames
+  const labelOpacity = interpolate(
+    frame,
+    [PHASE_ANIMATE_MID, PHASE_ANIMATE_MID + 30],
+    [0, GRID_LABEL_OPACITY],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+  );
 
-  // Labels fade in starting at frame 150
-  const labelOpacity = showLabels
-    ? interpolate(frame, [150, 180], [0, GRID_LABEL_OPACITY], {
-        easing: Easing.out(Easing.quad),
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      })
-    : 0;
-
+  // Generate vertical grid lines
   const verticalLines: React.ReactNode[] = [];
-  for (let col = 0; col <= GRID_COLS; col++) {
-    const x = GRID_ORIGIN_X + col * GRID_SPACING;
+  const numVertical = Math.floor(PANEL_WIDTH / GRID_SPACING);
+  for (let i = 0; i <= numVertical; i++) {
+    const x = i * GRID_SPACING;
     verticalLines.push(
       <line
-        key={`v-${col}`}
+        key={`v-${i}`}
         x1={x}
-        y1={GRID_ORIGIN_Y}
+        y1={0}
         x2={x}
-        y2={GRID_ORIGIN_Y + GRID_ROWS * GRID_SPACING}
+        y2={CANVAS_HEIGHT}
         stroke={GRID_LINE_COLOR}
+        strokeOpacity={GRID_LINE_OPACITY}
         strokeWidth={1}
-        opacity={GRID_LINE_OPACITY * gridOpacity}
       />
     );
   }
 
+  // Generate horizontal grid lines
   const horizontalLines: React.ReactNode[] = [];
-  for (let row = 0; row <= GRID_ROWS; row++) {
-    const y = GRID_ORIGIN_Y + row * GRID_SPACING;
+  const numHorizontal = Math.floor(CANVAS_HEIGHT / GRID_SPACING);
+  for (let i = 0; i <= numHorizontal; i++) {
+    const y = i * GRID_SPACING;
     horizontalLines.push(
       <line
-        key={`h-${row}`}
-        x1={GRID_ORIGIN_X}
+        key={`h-${i}`}
+        x1={0}
         y1={y}
-        x2={GRID_ORIGIN_X + GRID_COLS * GRID_SPACING}
+        x2={PANEL_WIDTH}
         y2={y}
         stroke={GRID_LINE_COLOR}
+        strokeOpacity={GRID_LINE_OPACITY}
         strokeWidth={1}
-        opacity={GRID_LINE_OPACITY * gridOpacity}
       />
     );
   }
 
-  // Select labels at edges
+  // Grid coordinate labels at select intersections (every 4th intersection)
   const labels: React.ReactNode[] = [];
-  if (labelOpacity > 0) {
-    for (let col = 0; col <= GRID_COLS; col += 5) {
+  for (let row = 0; row < GRID_ROWS; row += 4) {
+    for (let col = 0; col < GRID_COLS; col += 4) {
+      const x = GRID_ORIGIN_X + col * GRID_SPACING;
+      const y = GRID_ORIGIN_Y + row * GRID_SPACING;
       labels.push(
         <text
-          key={`lx-${col}`}
-          x={GRID_ORIGIN_X + col * GRID_SPACING}
-          y={GRID_ORIGIN_Y + GRID_ROWS * GRID_SPACING + 16}
+          key={`label-${row}-${col}`}
+          x={x + 4}
+          y={y - 4}
           fill={GRID_LABEL_COLOR}
-          opacity={labelOpacity}
-          fontSize={LABEL_FONT_SIZE}
-          fontFamily="Inter, sans-serif"
-          textAnchor="middle"
+          fillOpacity={labelOpacity}
+          fontSize={GRID_LABEL_SIZE}
+          fontFamily={HEADER_FONT_FAMILY}
         >
-          {col}
-        </text>
-      );
-    }
-    for (let row = 0; row <= GRID_ROWS; row += 5) {
-      labels.push(
-        <text
-          key={`ly-${row}`}
-          x={GRID_ORIGIN_X - 14}
-          y={GRID_ORIGIN_Y + row * GRID_SPACING + 4}
-          fill={GRID_LABEL_COLOR}
-          opacity={labelOpacity}
-          fontSize={LABEL_FONT_SIZE}
-          fontFamily="Inter, sans-serif"
-          textAnchor="end"
-        >
-          {row}
+          {col},{row}
         </text>
       );
     }
@@ -114,9 +94,14 @@ export const CoordinateGrid: React.FC<CoordinateGridProps> = ({
 
   return (
     <svg
-      width={panelWidth}
-      height={panelHeight}
-      style={{ position: 'absolute', top: 0, left: 0 }}
+      width={PANEL_WIDTH}
+      height={CANVAS_HEIGHT}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        opacity: panelOpacity,
+      }}
     >
       {verticalLines}
       {horizontalLines}

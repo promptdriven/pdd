@@ -1,190 +1,134 @@
-import React, { useMemo } from 'react';
-import { useCurrentFrame, interpolate } from 'remotion';
+import React, { useMemo } from "react";
+import { useCurrentFrame, interpolate } from "remotion";
 import {
   GATE_COLOR,
   GATE_STREAM_START,
-  CANVAS_WIDTH,
-} from './constants';
+  CHIP_X,
+  CHIP_Y,
+  CHIP_WIDTH,
+  WIDTH,
+} from "./constants";
 
-interface GateSymbol {
-  type: 'and' | 'or' | 'not' | 'nand' | 'xor';
-  yOffset: number;
-  speed: number;
-  startDelay: number;
-  size: number;
+// Gate symbol SVG paths (drawn as small logic gate icons)
+const AND_GATE = "M0,-8 L0,8 L10,8 A10,10 0 0,0 10,-8 Z";
+const OR_GATE = "M0,-8 Q5,0 0,8 Q10,8 16,0 Q10,-8 0,-8 Z";
+const NOT_GATE = "M0,-8 L14,0 L0,8 Z M16,-3 A3,3 0 1,0 16,3 A3,3 0 1,0 16,-3";
+const NAND_GATE = "M0,-8 L0,8 L10,8 A10,10 0 0,0 10,-8 Z M20,-3 A3,3 0 1,0 20,3 A3,3 0 1,0 20,-3";
+
+const GATE_TYPES = [AND_GATE, OR_GATE, NOT_GATE, NAND_GATE];
+
+function seededRandom(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 16807 + 0) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
 }
 
-/**
- * Renders a continuous stream of logic gate symbols flowing rightward.
- * Appears from GATE_STREAM_START onward.
- */
+interface GateParticle {
+  yOffset: number;
+  gateIdx: number;
+  speed: number;
+  scale: number;
+  row: number;
+}
+
 export const GateStream: React.FC = () => {
   const frame = useCurrentFrame();
-  const localFrame = Math.max(0, frame - GATE_STREAM_START);
 
-  // Generate deterministic gate symbols
-  const gates = useMemo<GateSymbol[]>(() => {
-    const items: GateSymbol[] = [];
-    const types: GateSymbol['type'][] = ['and', 'or', 'not', 'nand', 'xor'];
-    const seed = (i: number) => {
-      const s = Math.sin(i * 127.1 + 311.7) * 43758.5453;
-      return s - Math.floor(s);
-    };
+  const streamFrame = frame - GATE_STREAM_START;
+  if (streamFrame < 0) return null;
 
+  const startX = CHIP_X + CHIP_WIDTH / 2 + 30;
+  const endX = WIDTH + 40;
+  const streamWidth = endX - startX;
+
+  const gates = useMemo<GateParticle[]>(() => {
+    const rand = seededRandom(99);
+    const result: GateParticle[] = [];
     for (let i = 0; i < 30; i++) {
-      items.push({
-        type: types[Math.floor(seed(i * 7) * types.length)],
-        yOffset: (seed(i * 13) - 0.5) * 80,
-        speed: 1.5 + seed(i * 17) * 2,
-        startDelay: i * 5,
-        size: 16 + seed(i * 23) * 10,
+      result.push({
+        yOffset: (rand() - 0.5) * 16,
+        gateIdx: Math.floor(rand() * GATE_TYPES.length),
+        speed: 1.5 + rand() * 1.5,
+        scale: 0.7 + rand() * 0.5,
+        row: Math.floor(i / 10),
       });
     }
-    return items;
+    return result;
   }, []);
 
-  if (frame < GATE_STREAM_START) return null;
+  // Row Y positions centered around CHIP_Y
+  const rowYs = [CHIP_Y - 30, CHIP_Y, CHIP_Y + 30];
 
-  // Starting x position for gate stream (right of chip output)
-  const streamStartX = 1140;
-  const streamY = 580;
+  // Overall stream opacity ramp-in
+  const streamOpacity = interpolate(streamFrame, [0, 20], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: CANVAS_WIDTH,
-        height: 1080,
-        overflow: 'hidden',
-        pointerEvents: 'none',
-      }}
+    <svg
+      width={WIDTH}
+      height={1080}
+      style={{ position: "absolute", top: 0, left: 0, opacity: streamOpacity }}
     >
-      <svg width={CANVAS_WIDTH} height={1080}>
-        {gates.map((gate, i) => {
-          const elapsed = localFrame - gate.startDelay;
-          if (elapsed < 0) return null;
+      {/* Connecting wire lines */}
+      {rowYs.map((ry, ri) => (
+        <line
+          key={`wire-${ri}`}
+          x1={startX}
+          y1={ry}
+          x2={endX}
+          y2={ry}
+          stroke={GATE_COLOR}
+          strokeWidth={1}
+          opacity={0.2}
+        />
+      ))}
 
-          const x = streamStartX + elapsed * gate.speed;
-          if (x > CANVAS_WIDTH + 40) return null;
+      {/* Gate symbols flowing right */}
+      {gates.map((g, i) => {
+        const rowY = rowYs[g.row] + g.yOffset;
+        // Each gate starts offset and moves rightward
+        const offset = (i % 10) * (streamWidth / 10);
+        const xPos = startX + ((offset + streamFrame * g.speed * 2) % streamWidth);
 
-          const y = streamY + gate.yOffset;
-          const entryOpacity = interpolate(
-            elapsed,
-            [0, 10],
-            [0, 0.85],
-            { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-          );
+        // Fade in at left edge, fade out at right edge
+        const edgeDist = Math.min(xPos - startX, endX - xPos);
+        const fadeOpacity = interpolate(edgeDist, [0, 60], [0, 0.85], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        });
 
+        return (
+          <g
+            key={i}
+            transform={`translate(${xPos}, ${rowY}) scale(${g.scale})`}
+            opacity={fadeOpacity}
+          >
+            <path d={GATE_TYPES[g.gateIdx]} fill={GATE_COLOR} fillOpacity={0.3} stroke={GATE_COLOR} strokeWidth={1.5} />
+          </g>
+        );
+      })}
+
+      {/* Small connection dots at intervals */}
+      {rowYs.map((ry, ri) =>
+        Array.from({ length: 8 }).map((_, di) => {
+          const dotX = startX + 60 + ((di * 90 + streamFrame * 2) % streamWidth);
+          if (dotX > endX - 20) return null;
           return (
-            <g key={`gate-${i}`} transform={`translate(${x}, ${y})`} opacity={entryOpacity}>
-              {renderGateShape(gate.type, gate.size)}
-            </g>
+            <circle
+              key={`dot-${ri}-${di}`}
+              cx={dotX}
+              cy={ry}
+              r={2.5}
+              fill={GATE_COLOR}
+              opacity={0.5}
+            />
           );
-        })}
-
-        {/* Connecting wire lines between gates */}
-        {localFrame > 15 && (
-          <line
-            x1={streamStartX}
-            y1={streamY}
-            x2={Math.min(streamStartX + localFrame * 3, CANVAS_WIDTH)}
-            y2={streamY}
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-            opacity={0.3}
-          />
-        )}
-      </svg>
-    </div>
+        })
+      )}
+    </svg>
   );
 };
-
-function renderGateShape(type: string, size: number): React.ReactNode {
-  const s = size;
-  const hs = s / 2;
-
-  switch (type) {
-    case 'and':
-      // D-shape AND gate
-      return (
-        <path
-          d={`M ${-hs} ${-hs} L ${0} ${-hs} A ${hs} ${hs} 0 0 1 ${0} ${hs} L ${-hs} ${hs} Z`}
-          fill="none"
-          stroke={GATE_COLOR}
-          strokeWidth={1.5}
-        />
-      );
-    case 'or':
-      // Curved OR gate
-      return (
-        <path
-          d={`M ${-hs} ${-hs} Q ${0} ${-hs * 0.5} ${hs} ${0} Q ${0} ${hs * 0.5} ${-hs} ${hs} Q ${-hs * 0.3} ${0} ${-hs} ${-hs}`}
-          fill="none"
-          stroke={GATE_COLOR}
-          strokeWidth={1.5}
-        />
-      );
-    case 'not':
-      // Triangle with circle (inverter)
-      return (
-        <>
-          <polygon
-            points={`${-hs},${-hs} ${hs * 0.6},${0} ${-hs},${hs}`}
-            fill="none"
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-          />
-          <circle
-            cx={hs * 0.8}
-            cy={0}
-            r={hs * 0.2}
-            fill="none"
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-          />
-        </>
-      );
-    case 'nand':
-      // AND shape with bubble
-      return (
-        <>
-          <path
-            d={`M ${-hs} ${-hs} L ${0} ${-hs} A ${hs} ${hs} 0 0 1 ${0} ${hs} L ${-hs} ${hs} Z`}
-            fill="none"
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-          />
-          <circle
-            cx={hs * 0.3}
-            cy={0}
-            r={hs * 0.2}
-            fill="none"
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-          />
-        </>
-      );
-    case 'xor':
-      // OR shape with extra curve
-      return (
-        <>
-          <path
-            d={`M ${-hs} ${-hs} Q ${0} ${-hs * 0.5} ${hs} ${0} Q ${0} ${hs * 0.5} ${-hs} ${hs} Q ${-hs * 0.3} ${0} ${-hs} ${-hs}`}
-            fill="none"
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-          />
-          <path
-            d={`M ${-hs * 1.2} ${-hs} Q ${-hs * 0.5} ${0} ${-hs * 1.2} ${hs}`}
-            fill="none"
-            stroke={GATE_COLOR}
-            strokeWidth={1.5}
-          />
-        </>
-      );
-    default:
-      return null;
-  }
-}

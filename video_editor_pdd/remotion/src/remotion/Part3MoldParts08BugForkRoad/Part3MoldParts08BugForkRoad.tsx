@@ -1,381 +1,288 @@
-import React from "react";
+import React from 'react';
 import {
   AbsoluteFill,
-  Sequence,
-  interpolate,
   useCurrentFrame,
+  interpolate,
   Easing,
-} from "remotion";
-import { BlueprintGrid } from "./BlueprintGrid";
-import { FlowNode } from "./FlowNode";
-import { DrawLine, DrawArrow } from "./DrawLine";
-import { MiniMoldAddWall, MiniMoldReshape } from "./MiniMold";
+} from 'remotion';
 import {
-  BG_COLOR,
-  GRID_COLOR,
-  GRID_OPACITY,
-  GRID_SPACING,
-  ROOT_BORDER_COLOR,
-  ROOT_TEXT_COLOR,
-  ROOT_NODE_WIDTH,
-  ROOT_NODE_HEIGHT,
-  ROOT_NODE_X,
-  ROOT_NODE_Y,
-  LEFT_BRANCH_COLOR,
-  RIGHT_BRANCH_COLOR,
-  ACTION_TEXT_COLOR,
-  LEFT_FORK_X,
-  LEFT_FORK_Y,
-  RIGHT_FORK_X,
-  RIGHT_FORK_Y,
+  BACKGROUND_COLOR,
+  ROOT_X,
+  ROOT_Y,
+  ROOT_WIDTH,
+  ROOT_HEIGHT,
+  RED_ACCENT,
+  BLUE_BRANCH,
+  AMBER_BRANCH,
+  LEFT_BRANCH_X,
+  RIGHT_BRANCH_X,
+  BRANCH_NODE_Y,
+  FORK_TARGET_Y,
   LEFT_NODE_WIDTH,
-  LEFT_NODE_HEIGHT,
-  LEFT_NODE_X,
-  LEFT_NODE_Y,
   RIGHT_NODE_WIDTH,
-  RIGHT_NODE_HEIGHT,
-  RIGHT_NODE_X,
-  RIGHT_NODE_Y,
-  LEFT_ACTION_Y,
-  RIGHT_ACTION_Y,
-  LEFT_MOLD_X,
-  LEFT_MOLD_Y,
-  RIGHT_MOLD_X,
-  RIGHT_MOLD_Y,
-  LEFT_RESOLUTION_Y,
-  RIGHT_RESOLUTION_Y,
-  TOTAL_FRAMES,
+  BRANCH_NODE_HEIGHT,
+  ACTION_TEXT_COLOR,
+  ACTION_TEXT_Y,
+  MINI_MOLD_Y,
   ROOT_FADE_START,
   ROOT_FADE_DURATION,
   FORK_DRAW_START,
   FORK_DRAW_DURATION,
   LEFT_NODE_START,
-  LEFT_NODE_FADE_DURATION,
   LEFT_ACTION_START,
-  LEFT_ACTION_FADE_DURATION,
+  LEFT_ACTION_DURATION,
   RIGHT_NODE_START,
-  RIGHT_NODE_FADE_DURATION,
   RIGHT_ACTION_START,
-  RIGHT_ACTION_FADE_DURATION,
+  RIGHT_ACTION_DURATION,
   LEFT_MOLD_ANIM_START,
   RIGHT_MOLD_ANIM_START,
   MOLD_ANIM_DURATION,
-  LEFT_ARROW_START,
-  RIGHT_ARROW_START,
-  ARROW_DRAW_DURATION,
-} from "./constants";
+  RESOLUTION_Y,
+} from './constants';
+import { BlueprintGrid } from './BlueprintGrid';
+import { FlowNode } from './FlowNode';
+import { DrawLine } from './DrawLine';
+import { MiniMold } from './MiniMold';
+import { ResolutionArrow } from './ResolutionArrow';
 
 export const defaultPart3MoldParts08BugForkRoadProps = {};
 
-const ActionText: React.FC<{
-  text: string;
-  x: number;
-  y: number;
-  fadeStart: number;
-  fadeDuration: number;
-  color: string;
-}> = ({ text, x, y, fadeStart, fadeDuration, color }) => {
+export const Part3MoldParts08BugForkRoad: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(
+  // Action text fade-in helpers
+  const leftActionOpacity = interpolate(
     frame,
-    [fadeStart, fadeStart + fadeDuration],
-    [0, 0.85],
+    [LEFT_ACTION_START, LEFT_ACTION_START + LEFT_ACTION_DURATION],
+    [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: x - 120,
-        top: y,
-        width: 240,
-        textAlign: "center",
-        fontFamily: "Inter, sans-serif",
-        fontSize: 14,
-        fontWeight: 400,
-        color,
-        opacity,
-        lineHeight: 1.4,
-      }}
-    >
-      {text}
-    </div>
+  const rightActionOpacity = interpolate(
+    frame,
+    [RIGHT_ACTION_START, RIGHT_ACTION_START + RIGHT_ACTION_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
   );
-};
 
-const ResolutionNode: React.FC<{
-  x: number;
-  y: number;
-  color: string;
-  fadeStart: number;
-}> = ({ x, y, color, fadeStart }) => {
-  const frame = useCurrentFrame();
-
-  const opacity = interpolate(frame, [fadeStart, fadeStart + 20], [0, 0.8], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
+  // Final fade for transition readiness (frames 480-540)
+  const finalFade = interpolate(frame, [480, 540], [1, 0.85], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
   });
 
   return (
-    <div
+    <AbsoluteFill
       style={{
-        position: "absolute",
-        left: x - 50,
-        top: y - 15,
-        width: 100,
-        height: 30,
-        borderRadius: 15,
-        border: `1.5px solid ${color}`,
-        backgroundColor: "#1E1E2E",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        opacity,
+        backgroundColor: BACKGROUND_COLOR,
+        opacity: finalFade,
       }}
     >
-      <span
+      {/* Blueprint grid background */}
+      <BlueprintGrid />
+
+      {/* Starting node: "Bug found" */}
+      <FlowNode
+        text="Bug found"
+        borderColor={RED_ACCENT}
+        textColor={RED_ACCENT}
+        x={ROOT_X}
+        y={ROOT_Y}
+        width={ROOT_WIDTH}
+        height={ROOT_HEIGHT}
+        fadeStartFrame={ROOT_FADE_START}
+        fadeDuration={ROOT_FADE_DURATION}
+        fontSize={16}
+        fontWeight={700}
+      />
+
+      {/* Fork lines */}
+      <DrawLine
+        fromX={ROOT_X}
+        fromY={ROOT_Y + ROOT_HEIGHT / 2}
+        toX={LEFT_BRANCH_X}
+        toY={FORK_TARGET_Y}
+        color={BLUE_BRANCH}
+        strokeWidth={2}
+        drawStartFrame={FORK_DRAW_START}
+        drawDuration={FORK_DRAW_DURATION}
+      />
+      <DrawLine
+        fromX={ROOT_X}
+        fromY={ROOT_Y + ROOT_HEIGHT / 2}
+        toX={RIGHT_BRANCH_X}
+        toY={FORK_TARGET_Y}
+        color={AMBER_BRANCH}
+        strokeWidth={2}
+        drawStartFrame={FORK_DRAW_START}
+        drawDuration={FORK_DRAW_DURATION}
+      />
+
+      {/* Left branch: "Code bug" node */}
+      <FlowNode
+        text="Code bug"
+        borderColor={BLUE_BRANCH}
+        textColor={BLUE_BRANCH}
+        x={LEFT_BRANCH_X}
+        y={BRANCH_NODE_Y}
+        width={LEFT_NODE_WIDTH}
+        height={BRANCH_NODE_HEIGHT}
+        fadeStartFrame={LEFT_NODE_START}
+        fadeDuration={ROOT_FADE_DURATION}
+        fontSize={14}
+        fontWeight={600}
+      />
+
+      {/* Left action text: "Add a wall" */}
+      <div
         style={{
-          fontFamily: "Inter, sans-serif",
-          fontSize: 12,
-          fontWeight: 500,
-          color,
+          position: 'absolute',
+          left: LEFT_BRANCH_X - 90,
+          top: ACTION_TEXT_Y,
+          width: 180,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 400,
+          color: ACTION_TEXT_COLOR,
+          opacity: leftActionOpacity,
         }}
       >
-        Resolved
-      </span>
-    </div>
+        Add a wall
+      </div>
+
+      {/* Left mini mold */}
+      <MiniMold
+        action="addWall"
+        x={LEFT_BRANCH_X}
+        y={MINI_MOLD_Y}
+        accentColor={BLUE_BRANCH}
+        animStartFrame={LEFT_MOLD_ANIM_START}
+        animDuration={MOLD_ANIM_DURATION}
+      />
+
+      {/* Left resolution arrow */}
+      <ResolutionArrow
+        x={LEFT_BRANCH_X}
+        fromY={MINI_MOLD_Y + 55}
+        toY={RESOLUTION_Y}
+        color={BLUE_BRANCH}
+        fadeStartFrame={LEFT_MOLD_ANIM_START + MOLD_ANIM_DURATION}
+      />
+
+      {/* Right branch: "Prompt defect" node */}
+      <FlowNode
+        text="Prompt defect"
+        borderColor={AMBER_BRANCH}
+        textColor={AMBER_BRANCH}
+        x={RIGHT_BRANCH_X}
+        y={BRANCH_NODE_Y}
+        width={RIGHT_NODE_WIDTH}
+        height={BRANCH_NODE_HEIGHT}
+        fadeStartFrame={RIGHT_NODE_START}
+        fadeDuration={ROOT_FADE_DURATION}
+        fontSize={14}
+        fontWeight={600}
+      />
+
+      {/* Right action text: "Change the mold itself" */}
+      <div
+        style={{
+          position: 'absolute',
+          left: RIGHT_BRANCH_X - 110,
+          top: ACTION_TEXT_Y,
+          width: 220,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 400,
+          color: ACTION_TEXT_COLOR,
+          opacity: rightActionOpacity,
+        }}
+      >
+        Change the mold itself
+      </div>
+
+      {/* Right mini mold */}
+      <MiniMold
+        action="reshapeNozzle"
+        x={RIGHT_BRANCH_X}
+        y={MINI_MOLD_Y}
+        accentColor={AMBER_BRANCH}
+        animStartFrame={RIGHT_MOLD_ANIM_START}
+        animDuration={MOLD_ANIM_DURATION}
+      />
+
+      {/* Right resolution arrow */}
+      <ResolutionArrow
+        x={RIGHT_BRANCH_X}
+        fromY={MINI_MOLD_Y + 55}
+        toY={RESOLUTION_Y}
+        color={AMBER_BRANCH}
+        fadeStartFrame={RIGHT_MOLD_ANIM_START + MOLD_ANIM_DURATION}
+      />
+
+      {/* Distinction label at bottom center */}
+      <DistinctionLabel frame={frame} />
+    </AbsoluteFill>
   );
 };
 
-const Divider: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  const opacity = interpolate(frame, [270, 300], [0, 0.8], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+const DistinctionLabel: React.FC<{ frame: number }> = ({ frame }) => {
+  const opacity = interpolate(frame, [270, 300], [0, 0.85], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
   });
 
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: 960 - 1,
-        top: 340,
-        width: 2,
-        height: 400,
-        backgroundColor: "#94A3B8",
-        opacity: opacity * 0.15,
-      }}
-    />
-  );
-};
-
-const DistinctionLabel: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  const opacity = interpolate(frame, [300, 330], [0, 0.85], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  const y = interpolate(frame, [270, 300], [10, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         bottom: 100,
         left: 0,
-        width: 1920,
-        textAlign: "center",
+        right: 0,
+        textAlign: 'center',
         opacity,
+        transform: `translateY(${y}px)`,
       }}
     >
+      {/* Divider line */}
+      <div
+        style={{
+          width: 400,
+          height: 2,
+          backgroundColor: '#94A3B8',
+          opacity: 0.75,
+          margin: '0 auto 16px auto',
+        }}
+      />
       <span
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: 'Inter, sans-serif',
           fontSize: 18,
           fontWeight: 500,
-          color: "#94A3B8",
-          letterSpacing: "1px",
+          color: '#E2E8F0',
+          opacity: 0.85,
         }}
       >
-        PDD separates{" "}
-        <span style={{ color: LEFT_BRANCH_COLOR, fontWeight: 600 }}>
-          code failures
-        </span>{" "}
-        from{" "}
-        <span style={{ color: RIGHT_BRANCH_COLOR, fontWeight: 600 }}>
-          specification failures
-        </span>
+        PDD separates code failures from specification failures
       </span>
     </div>
-  );
-};
-
-export const Part3MoldParts08BugForkRoad: React.FC = () => {
-  return (
-    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        {/* Blueprint grid background */}
-        <BlueprintGrid
-          spacing={GRID_SPACING}
-          color={GRID_COLOR}
-          opacity={GRID_OPACITY}
-        />
-
-        {/* Center divider (subtle) */}
-        <Divider />
-
-        {/* Starting node: "Bug found" */}
-        <FlowNode
-          text="Bug found"
-          borderColor={ROOT_BORDER_COLOR}
-          textColor={ROOT_TEXT_COLOR}
-          x={ROOT_NODE_X}
-          y={ROOT_NODE_Y}
-          width={ROOT_NODE_WIDTH}
-          height={ROOT_NODE_HEIGHT}
-          fadeStartFrame={ROOT_FADE_START}
-          fadeDuration={ROOT_FADE_DURATION}
-          fontSize={16}
-          fontWeight={700}
-        />
-
-        {/* Fork lines diverging */}
-        <DrawLine
-          fromX={ROOT_NODE_X}
-          fromY={ROOT_NODE_Y + ROOT_NODE_HEIGHT / 2}
-          toX={LEFT_FORK_X}
-          toY={LEFT_FORK_Y}
-          color={LEFT_BRANCH_COLOR}
-          strokeWidth={2}
-          drawStartFrame={FORK_DRAW_START}
-          drawDuration={FORK_DRAW_DURATION}
-        />
-        <DrawLine
-          fromX={ROOT_NODE_X}
-          fromY={ROOT_NODE_Y + ROOT_NODE_HEIGHT / 2}
-          toX={RIGHT_FORK_X}
-          toY={RIGHT_FORK_Y}
-          color={RIGHT_BRANCH_COLOR}
-          strokeWidth={2}
-          drawStartFrame={FORK_DRAW_START}
-          drawDuration={FORK_DRAW_DURATION}
-        />
-
-        {/* Left branch: Code bug */}
-        <FlowNode
-          text="Code bug"
-          borderColor={LEFT_BRANCH_COLOR}
-          textColor={LEFT_BRANCH_COLOR}
-          x={LEFT_NODE_X}
-          y={LEFT_NODE_Y}
-          width={LEFT_NODE_WIDTH}
-          height={LEFT_NODE_HEIGHT}
-          fadeStartFrame={LEFT_NODE_START}
-          fadeDuration={LEFT_NODE_FADE_DURATION}
-        />
-        <ActionText
-          text="Add a wall"
-          x={LEFT_NODE_X}
-          y={LEFT_ACTION_Y}
-          fadeStart={LEFT_ACTION_START}
-          fadeDuration={LEFT_ACTION_FADE_DURATION}
-          color={ACTION_TEXT_COLOR}
-        />
-
-        {/* Left mini mold animation */}
-        <MiniMoldAddWall
-          x={LEFT_MOLD_X}
-          y={LEFT_MOLD_Y}
-          color={LEFT_BRANCH_COLOR}
-          animStartFrame={LEFT_MOLD_ANIM_START}
-          animDuration={MOLD_ANIM_DURATION}
-        />
-
-        {/* Left resolution arrow */}
-        <DrawArrow
-          fromX={LEFT_NODE_X}
-          fromY={LEFT_MOLD_Y + 50}
-          toX={LEFT_NODE_X}
-          toY={LEFT_RESOLUTION_Y - 20}
-          color={LEFT_BRANCH_COLOR}
-          strokeWidth={2}
-          drawStartFrame={LEFT_ARROW_START}
-          drawDuration={ARROW_DRAW_DURATION}
-          arrowOpacity={0.3}
-        />
-
-        {/* Left resolution node */}
-        <ResolutionNode
-          x={LEFT_NODE_X}
-          y={LEFT_RESOLUTION_Y}
-          color={LEFT_BRANCH_COLOR}
-          fadeStart={LEFT_ARROW_START + ARROW_DRAW_DURATION}
-        />
-
-        {/* Right branch: Prompt defect */}
-        <FlowNode
-          text="Prompt defect"
-          borderColor={RIGHT_BRANCH_COLOR}
-          textColor={RIGHT_BRANCH_COLOR}
-          x={RIGHT_NODE_X}
-          y={RIGHT_NODE_Y}
-          width={RIGHT_NODE_WIDTH}
-          height={RIGHT_NODE_HEIGHT}
-          fadeStartFrame={RIGHT_NODE_START}
-          fadeDuration={RIGHT_NODE_FADE_DURATION}
-        />
-        <ActionText
-          text="Change the mold itself"
-          x={RIGHT_NODE_X}
-          y={RIGHT_ACTION_Y}
-          fadeStart={RIGHT_ACTION_START}
-          fadeDuration={RIGHT_ACTION_FADE_DURATION}
-          color={ACTION_TEXT_COLOR}
-        />
-
-        {/* Right mini mold animation */}
-        <MiniMoldReshape
-          x={RIGHT_MOLD_X}
-          y={RIGHT_MOLD_Y}
-          color={RIGHT_BRANCH_COLOR}
-          animStartFrame={RIGHT_MOLD_ANIM_START}
-          animDuration={MOLD_ANIM_DURATION}
-        />
-
-        {/* Right resolution arrow */}
-        <DrawArrow
-          fromX={RIGHT_NODE_X}
-          fromY={RIGHT_MOLD_Y + 50}
-          toX={RIGHT_NODE_X}
-          toY={RIGHT_RESOLUTION_Y - 20}
-          color={RIGHT_BRANCH_COLOR}
-          strokeWidth={2}
-          drawStartFrame={RIGHT_ARROW_START}
-          drawDuration={ARROW_DRAW_DURATION}
-          arrowOpacity={0.3}
-        />
-
-        {/* Right resolution node */}
-        <ResolutionNode
-          x={RIGHT_NODE_X}
-          y={RIGHT_RESOLUTION_Y}
-          color={RIGHT_BRANCH_COLOR}
-          fadeStart={RIGHT_ARROW_START + ARROW_DRAW_DURATION}
-        />
-
-        {/* Distinction label at bottom */}
-        <DistinctionLabel />
-      </Sequence>
-    </AbsoluteFill>
   );
 };
 

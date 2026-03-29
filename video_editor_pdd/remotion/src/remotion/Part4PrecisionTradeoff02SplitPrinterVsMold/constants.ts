@@ -1,77 +1,82 @@
-// Layout
+// === Layout ===
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
+export const DIVIDER_WIDTH_PX = 40;
 export const PANEL_WIDTH = 940;
-export const DIVIDER_GAP = 40;
-export const DIVIDER_WIDTH = 2;
+export const TOTAL_FRAMES = 480;
+export const FPS = 30;
+
+// === Divider ===
 export const DIVIDER_COLOR = '#FFFFFF';
-export const DIVIDER_OPACITY = 0.4;
+export const DIVIDER_LINE_WIDTH = 2;
+export const DIVIDER_OPACITY = 0.7;
+export const DIVIDER_BG = '#0A0F1A';
 
-// Backgrounds
-export const SCENE_BG = '#0A0F1A';
-export const PANEL_BG = '#0D1117';
-export const CAVITY_BG = '#0F172A';
+// === Backgrounds ===
+export const BG_OUTER = '#0A1628';
+export const BG_PANEL = '#0D1117';
+export const BG_CAVITY = '#0F172A';
 
-// Left panel — 3D Printer
-export const PRINTER_ACCENT = '#4A90D9';
-export const NOZZLE_COLOR = '#E2E8F0';
+// === Left Panel (3D Printer) ===
+export const GRID_SPACING = 40;
 export const GRID_LINE_COLOR = '#1E293B';
 export const GRID_LINE_OPACITY = 0.12;
-export const GRID_SPACING = 40;
+export const NOZZLE_COLOR = '#E2E8F0';
+export const NOZZLE_WIDTH = 20;
+export const NOZZLE_HEIGHT = 12;
+export const DOT_COLOR = '#4A90D9';
+export const DOT_OPACITY = 0.6;
 export const DOT_SIZE = 6;
+export const TRAIL_COLOR = '#4A90D9';
 export const TRAIL_OPACITY = 0.15;
 export const GRID_LABEL_COLOR = '#64748B';
 export const GRID_LABEL_OPACITY = 0.2;
+export const GRID_LABEL_SIZE = 10;
 export const PRINTER_HEADER_COLOR = '#94A3B8';
 
-// Right panel — Injection Mold
-export const MOLD_ACCENT = '#D9944A';
+// === Right Panel (Injection Mold) ===
+export const MOLD_WALL_COLOR = '#D9944A';
 export const MOLD_WALL_OPACITY = 0.7;
 export const MOLD_WALL_STROKE = 4;
 export const LIQUID_COLOR = '#4A90D9';
 export const LIQUID_OPACITY = 0.4;
-export const GLOW_RADIUS = 8;
+export const WALL_GLOW_COLOR = '#D9944A';
+export const WALL_GLOW_RADIUS = 8;
+export const MOLD_HEADER_COLOR = '#D9944A';
 
-// Typography
-export const HEADER_FONT_SIZE = 16;
+// === Typography ===
+export const HEADER_FONT_SIZE = 18;
 export const HEADER_FONT_WEIGHT = 600;
-export const LABEL_FONT_SIZE = 10;
+export const HEADER_FONT_FAMILY = 'Inter, sans-serif';
 
-// Animation timing (frames @ 30fps)
-export const TOTAL_FRAMES = 480;
+// === Animation Phases ===
+export const PHASE_ESTABLISH_START = 0;
 export const PHASE_ESTABLISH_END = 30;
 export const PHASE_ANIMATE_START = 30;
-export const PHASE_FLOW_START = 150;
-export const PHASE_COMPLETE_START = 300;
-export const PHASE_HOLD_START = 420;
-export const FADE_OUT_START = 420;
-export const FADE_OUT_DURATION = 60;
+export const PHASE_ANIMATE_MID = 150;
+export const PHASE_FILL_END = 300;
+export const PHASE_COMPLETE = 420;
+export const PHASE_FADEOUT_START = 420;
+export const PHASE_FADEOUT_END = 480;
 
-// Nozzle path — grid points the nozzle visits (in panel-local coords)
-// Panel area for grid: roughly x 60..880, y 80..520 (leaving margins)
-const GRID_ORIGIN_X = 80;
-const GRID_ORIGIN_Y = 80;
-const GRID_COLS = 20;
-const GRID_ROWS = 10;
+// === Nozzle path: grid points the nozzle visits (in panel-local coords) ===
+// The nozzle traverses a serpentine path across the grid, filling a rectangular region.
+// Panel usable area: ~60px from left, ~60px from top (below header), leaving ~820x900 area.
+// We'll fill a 15-column x 16-row grid (each cell 40px) starting from (80, 100).
+export const GRID_ORIGIN_X = 80;
+export const GRID_ORIGIN_Y = 100;
+export const GRID_COLS = 15;
+export const GRID_ROWS = 16;
 
-export interface GridPoint {
-  x: number;
-  y: number;
-  col: number;
-  row: number;
-}
-
-// Generate a serpentine (boustrophedon) path across the grid
-export const NOZZLE_PATH: GridPoint[] = (() => {
-  const points: GridPoint[] = [];
+/** Generate serpentine nozzle path through the grid */
+export function generateNozzlePath(): Array<{ x: number; y: number }> {
+  const points: Array<{ x: number; y: number }> = [];
   for (let row = 0; row < GRID_ROWS; row++) {
     if (row % 2 === 0) {
       for (let col = 0; col < GRID_COLS; col++) {
         points.push({
           x: GRID_ORIGIN_X + col * GRID_SPACING,
           y: GRID_ORIGIN_Y + row * GRID_SPACING,
-          col,
-          row,
         });
       }
     } else {
@@ -79,53 +84,35 @@ export const NOZZLE_PATH: GridPoint[] = (() => {
         points.push({
           x: GRID_ORIGIN_X + col * GRID_SPACING,
           y: GRID_ORIGIN_Y + row * GRID_SPACING,
-          col,
-          row,
         });
       }
     }
   }
   return points;
-})();
-
-// Mold cavity shape — defined as wall segments
-export interface WallSegment {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
 }
 
-// Mold cavity: a rounded-ish shape with internal channels
-const CX = 470; // center of right panel
-const CY = 310;
-const W = 340;
-const H = 260;
+// === Mold cavity shape (in panel-local coords) ===
+// A rounded rectangle with internal channels, centered in the right panel
+export const MOLD_OUTER_X = 120;
+export const MOLD_OUTER_Y = 140;
+export const MOLD_OUTER_W = 700;
+export const MOLD_OUTER_H = 800;
+export const MOLD_CORNER_RADIUS = 40;
+export const MOLD_INJECTION_X = 470;
+export const MOLD_INJECTION_Y = 100;
 
-export const MOLD_WALLS: WallSegment[] = [
-  // Outer rectangle
-  { x1: CX - W / 2, y1: CY - H / 2, x2: CX + W / 2, y2: CY - H / 2 }, // top
-  { x1: CX + W / 2, y1: CY - H / 2, x2: CX + W / 2, y2: CY + H / 2 }, // right
-  { x1: CX + W / 2, y1: CY + H / 2, x2: CX - W / 2, y2: CY + H / 2 }, // bottom
-  { x1: CX - W / 2, y1: CY + H / 2, x2: CX - W / 2, y2: CY - H / 2 }, // left
-  // Internal channel walls
-  { x1: CX - W / 4, y1: CY - H / 2, x2: CX - W / 4, y2: CY + H / 4 }, // left divider
-  { x1: CX + W / 4, y1: CY - H / 4, x2: CX + W / 4, y2: CY + H / 2 }, // right divider
-  // Horizontal internal
-  { x1: CX - W / 4, y1: CY, x2: CX + W / 4, y2: CY }, // middle horizontal
+// Internal channel waypoints (relative to panel)
+export const MOLD_CHANNELS: Array<{ x1: number; y1: number; x2: number; y2: number }> = [
+  // Vertical entry channel from injection point
+  { x1: 470, y1: 140, x2: 470, y2: 300 },
+  // Horizontal distribution
+  { x1: 250, y1: 300, x2: 690, y2: 300 },
+  // Left vertical fill
+  { x1: 250, y1: 300, x2: 250, y2: 750 },
+  // Right vertical fill
+  { x1: 690, y1: 300, x2: 690, y2: 750 },
+  // Bottom horizontal
+  { x1: 250, y1: 750, x2: 690, y2: 750 },
+  // Center cross-fill
+  { x1: 470, y1: 300, x2: 470, y2: 750 },
 ];
-
-// Injection point (top center of mold)
-export const INJECTION_POINT = { x: CX, y: CY - H / 2 - 30 };
-
-// Mold cavity center and bounds for particle containment
-export const MOLD_BOUNDS = {
-  left: CX - W / 2 + MOLD_WALL_STROKE,
-  right: CX + W / 2 - MOLD_WALL_STROKE,
-  top: CY - H / 2 + MOLD_WALL_STROKE,
-  bottom: CY + H / 2 - MOLD_WALL_STROKE,
-  centerX: CX,
-  centerY: CY,
-  width: W,
-  height: H,
-};

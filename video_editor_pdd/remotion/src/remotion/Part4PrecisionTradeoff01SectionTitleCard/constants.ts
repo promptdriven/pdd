@@ -1,91 +1,71 @@
-// Part 4 Title Card — The Precision Tradeoff
-// Component-level constants
+// ── Canvas ──────────────────────────────────────────────────────────────────
+export const WIDTH = 1920;
+export const HEIGHT = 1080;
+export const FPS = 30;
+export const DURATION_FRAMES = 240;
 
-export const CANVAS = {
-  WIDTH: 1920,
-  HEIGHT: 1080,
-  FPS: 30,
-  DURATION_FRAMES: 120,
-} as const;
+// ── Colors ──────────────────────────────────────────────────────────────────
+export const BG_COLOR = "#0A0F1A";
+export const GRID_LINE_COLOR = "#1E293B";
+export const GRID_LINE_OPACITY = 0.05;
+export const SECTION_LABEL_COLOR = "#64748B";
+export const SECTION_LABEL_OPACITY = 0.5;
+export const TITLE_COLOR = "#E2E8F0";
+export const RULE_COLOR = "#334155";
+export const RULE_OPACITY = 0.7;
+export const GHOST_CURVE_COLOR = "#D9944A";
+export const GHOST_CURVE_OPACITY = 0.04;
+export const GHOST_GRID_COLOR = "#4A90D9";
+export const GHOST_GRID_OPACITY = 0.03;
 
-export const COLORS = {
-  background: '#0A0F1A',
-  blueprintGrid: '#1E293B',
-  sectionLabel: '#64748B',
-  titleText: '#E2E8F0',
-  rule: '#334155',
-  dotGrid: '#94A3B8',
-  moldOutline: '#D9944A',
-} as const;
+// ── Grid ────────────────────────────────────────────────────────────────────
+export const GRID_SPACING = 60;
 
-export const OPACITIES = {
-  blueprintGrid: 0.05,
-  sectionLabel: 0.5,
-  rule: 0.5,
-  ghostDots: 0.03,
-  ghostMold: 0.04,
-  ghostLabel: 0.03,
-  ghostGlow: 0.02,
-} as const;
+// ── Typography ──────────────────────────────────────────────────────────────
+export const FONT_FAMILY = "Inter, sans-serif";
+export const TITLE_FONT_SIZE = 72;
+export const TITLE_FONT_WEIGHT = 700;
+export const LABEL_FONT_SIZE = 14;
+export const LABEL_FONT_WEIGHT = 600;
+export const LABEL_LETTER_SPACING = 4;
 
-export const TYPOGRAPHY = {
-  sectionLabel: {
-    size: 14,
-    weight: 600,
-    letterSpacing: 4,
-  },
-  title: {
-    size: 72,
-    weight: 700,
-  },
-  ghostLabel: {
-    size: 8,
-  },
-} as const;
+// ── Layout positions ────────────────────────────────────────────────────────
+export const LABEL_Y = 400;
+export const TITLE_LINE1_Y = 460;
+export const RULE_Y = 505;
+export const TITLE_LINE2_Y = 545;
+export const TITLE_LINE2_OFFSET_X = 15;
+export const RULE_WIDTH = 280;
+export const RULE_THICKNESS = 2;
 
-export const POSITIONS = {
-  sectionLabel: { x: 960, y: 400 },
-  titleLine1: { x: 960, y: 460 },
-  titleLine2: { x: 975, y: 545 },
-  rule: { y: 505, halfWidth: 100 },
-  dotGrid: { x: 560, y: 480 },
-  moldOutline: { x: 1360, y: 480 },
-} as const;
+// ── Animation timing (frames) ───────────────────────────────────────────────
+export const BG_FADE_START = 0;
+export const BG_FADE_END = 15;
 
-export const DOT_GRID = {
-  rows: 8,
-  cols: 8,
-  dotSize: 4,
-  spacing: 12,
-} as const;
+export const LABEL_FADE_START = 15;
+export const LABEL_FADE_DURATION = 20;
 
-export const MOLD = {
-  width: 100,
-  height: 80,
-  strokeWidth: 3,
-} as const;
+export const CURVE_DRAW_START = 15;
+export const CURVE_DRAW_DURATION = 25;
 
-export const TIMING = {
-  // Phase 1: Background + grid (0-15)
-  bgFadeEnd: 15,
-  // Phase 2: PART 4 label + ghost shapes (15-40)
-  ghostStart: 15,
-  labelFadeStart: 15,
-  labelFadeDuration: 20,
-  // Phase 3: THE PRECISION typewriter (40-60)
-  typewriterStart: 40,
-  charDelay: 3, // frames per character
-  // Phase 4: Horizontal rule (60-70)
-  ruleStart: 60,
-  ruleDuration: 10,
-  // Phase 5: TRADEOFF fade + slide (70-90)
-  tradeoffStart: 70,
-  tradeoffDuration: 20,
-  tradeoffSlideDistance: 10,
-  // Phase 6: Hold + pulse (90-120)
-  holdStart: 90,
-  pulseCycleFrames: 30,
-  // Ghost animation
-  wallDrawDuration: 40,
-  glowBlur: 8,
-} as const;
+export const TYPEWRITER_START = 35;
+export const TYPEWRITER_CHAR_DELAY = 2; // frames per character
+
+export const RULE_DRAW_START = 55;
+export const RULE_DRAW_DURATION = 10;
+
+export const LINE2_FADE_START = 65;
+export const LINE2_FADE_DURATION = 20;
+export const LINE2_SLIDE_DISTANCE = 10;
+
+export const HOLD_START = 85;
+export const HOLD_END = 180;
+export const PULSE_CYCLE_FRAMES = 60;
+
+export const FADEOUT_START = 180;
+export const FADEOUT_DURATION = 60;
+
+// ── Content ─────────────────────────────────────────────────────────────────
+export const SECTION_LABEL_TEXT = "PART 4";
+export const TITLE_LINE1_TEXT = "THE PRECISION";
+export const TITLE_LINE2_TEXT = "TRADEOFF";

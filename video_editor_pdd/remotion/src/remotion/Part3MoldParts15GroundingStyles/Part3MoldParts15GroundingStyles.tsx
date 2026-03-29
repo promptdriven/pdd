@@ -4,67 +4,96 @@ import {
   useCurrentFrame,
   interpolate,
   Sequence,
-  Easing,
 } from "remotion";
+import MaterialStream from "./MaterialStream";
+import CodePanel from "./CodePanel";
+import DatabaseFeedback from "./DatabaseFeedback";
 import {
   BG_COLOR,
-  TOTAL_FRAMES,
+  TEAL,
+  OOP_BLUE,
+  FUNC_AMBER,
+  SLATE,
   MATERIAL_STREAMS,
-  OOP_CODE,
-  FUNCTIONAL_CODE,
-  OOP_COLOR,
-  FUNC_COLOR,
-  TEAM_COLOR,
-  SUBTITLE_COLOR,
-  STREAM_Y_CENTER,
-  STREAM_SPACING,
+  STREAM_Y_START,
+  STREAM_Y_SPACING,
+  STREAM_WIDTH,
+  STREAM_HEIGHT,
+  PANEL_WIDTH,
+  PANEL_HEIGHT,
   PANEL_LEFT_X,
   PANEL_RIGHT_X,
   PANEL_Y,
+  OOP_CODE,
+  FUNCTIONAL_CODE,
+  TOTAL_FRAMES,
+  HEADER_FADE_END,
+  PHASE2_START,
+  CROSSFADE_END,
+  OOP_TYPE_START,
+  FUNC_TYPE_START,
+  BOTH_GLOW_START,
+  BOTH_GLOW_END,
+  SELECT_GLOW_START,
+  SELECT_GLOW_END,
+  PHASE3_START,
+  ARROW_ANIM_END,
+  DB_APPEAR,
+  DB_APPEAR_END,
+  DASHED_ARROW_START,
+  DASHED_ARROW_END,
 } from "./constants";
-import MaterialStream from "./MaterialStream";
-import CodePanel from "./CodePanel";
-import {
-  FlowArrow,
-  DashedArrow,
-  DatabaseIcon,
-  TerminalNote,
-} from "./DatabaseFeedback";
 
 export const defaultPart3MoldParts15GroundingStylesProps = {};
 
 export const Part3MoldParts15GroundingStyles: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // ─── Phase 1 opacity: fade out during crossfade (frames 120-150) ───
-  const phase1Opacity = interpolate(frame, [120, 150], [1, 0], {
+  // --- Phase 1: Header + Material Streams ---
+
+  // "Grounding" header fade in (frame 0-30)
+  const headerOpacity = interpolate(frame, [0, HEADER_FADE_END], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // ─── Phase 2 opacity: fade in during crossfade (frames 120-150) ───
-  const phase2Opacity = interpolate(frame, [120, 150], [0, 1], {
+  // Header fades out as Phase 2 starts
+  const headerFadeOut = interpolate(
+    frame,
+    [PHASE2_START, CROSSFADE_END],
+    [1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // --- Phase 2: "Same prompt. Same tests." label ---
+  const samePromptOpacity = interpolate(
+    frame,
+    [PHASE2_START, PHASE2_START + 30],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Phase 2 overall fade out for Phase 3 transition
+  const phase2FadeOut = interpolate(
+    frame,
+    [PHASE3_START + 60, PHASE3_START + 90],
+    [1, 0.6],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+
+  // Subtle gradient overlay
+  const gradientOpacity = interpolate(frame, [0, 60], [0, 0.15], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // ─── Header "Grounding" fade-in ───
-  const headerOpacity = interpolate(frame, [0, 30], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Header stays visible across all phases, just repositions
-  const headerY = interpolate(frame, [120, 150], [120, 60], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // ─── "Same prompt. Same tests." label ───
-  const samePromptOpacity = interpolate(frame, [130, 155], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  // Wall indicators during glow phase
+  const wallOpacity = interpolate(
+    frame,
+    [BOTH_GLOW_START, BOTH_GLOW_START + 15],
+    [0, 0.6],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
 
   return (
     <AbsoluteFill
@@ -73,167 +102,211 @@ export const Part3MoldParts15GroundingStyles: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* ─── Header: "Grounding" ─── */}
+      {/* Subtle radial gradient overlay */}
       <div
         style={{
           position: "absolute",
+          top: 0,
           left: 0,
-          right: 0,
-          top: headerY,
+          width: 1920,
+          height: 1080,
+          background: `radial-gradient(ellipse at 50% 40%, ${TEAL}08 0%, transparent 70%)`,
+          opacity: gradientOpacity,
+        }}
+      />
+
+      {/* Phase 1: "Grounding" Header */}
+      <div
+        style={{
+          position: "absolute",
+          top: 100,
+          left: 0,
+          width: 1920,
           textAlign: "center",
           fontFamily: "Inter, sans-serif",
           fontSize: 24,
           fontWeight: 700,
-          color: TEAM_COLOR,
-          opacity: headerOpacity,
-          zIndex: 10,
+          color: TEAL,
+          opacity: headerOpacity * headerFadeOut,
         }}
       >
         Grounding
       </div>
 
-      {/* ─── Phase 1: Material Streams (frames 0-180) ─── */}
-      <div style={{ opacity: phase1Opacity }}>
-        <Sequence from={0} durationInFrames={180}>
-          {MATERIAL_STREAMS.map((stream, i) => (
-            <MaterialStream
-              key={stream.label}
-              stream={stream}
-              y={STREAM_Y_CENTER - STREAM_SPACING + i * STREAM_SPACING}
-              delayFrames={30 + i * 20}
-            />
-          ))}
-        </Sequence>
-      </div>
+      {/* Phase 1: Material Streams */}
+      {MATERIAL_STREAMS.map((stream, i) => (
+        <MaterialStream
+          key={stream.label}
+          color={stream.color}
+          label={stream.label}
+          y={STREAM_Y_START + i * STREAM_Y_SPACING}
+          width={STREAM_WIDTH}
+          height={STREAM_HEIGHT}
+          streamStyle={stream.style}
+          animStartFrame={30 + i * 20}
+          fadeOutStart={PHASE2_START}
+          fadeOutEnd={CROSSFADE_END}
+        />
+      ))}
 
-      {/* ─── Phase 2: OOP vs Functional Split (frames 120+) ─── */}
-      <div style={{ opacity: phase2Opacity }}>
-        {/* "Same prompt. Same tests." */}
+      {/* Phase 2: "Same prompt. Same tests." label */}
+      {frame >= PHASE2_START && (
         <div
           style={{
             position: "absolute",
-            left: 0,
-            right: 0,
             top: 220,
+            left: 0,
+            width: 1920,
             textAlign: "center",
             fontFamily: "Inter, sans-serif",
             fontSize: 14,
-            color: SUBTITLE_COLOR,
-            opacity: samePromptOpacity,
-            zIndex: 5,
+            color: SLATE,
+            opacity: samePromptOpacity * phase2FadeOut * 0.85,
           }}
         >
           Same prompt. Same tests.
         </div>
+      )}
 
-        {/* Code panels use absolute frame references */}
-        <Sequence from={120}>
-          {/* OOP Panel — type-in starts at frame 180 absolute = 60 relative */}
-          <CodePanel
-            x={PANEL_LEFT_X}
-            y={PANEL_Y}
-            header="OOP Grounding"
-            headerColor={OOP_COLOR}
-            borderColor={OOP_COLOR}
-            code={OOP_CODE}
-            typeInStart={60}
-            glowStart={240}
-            glowBrightStart={undefined}
-          />
-
-          {/* Functional Panel — type-in starts at frame 270 absolute = 150 relative */}
-          <CodePanel
-            x={PANEL_RIGHT_X}
-            y={PANEL_Y}
-            header="Functional Grounding"
-            headerColor={FUNC_COLOR}
-            borderColor={FUNC_COLOR}
-            code={FUNCTIONAL_CODE}
-            typeInStart={150}
-            glowStart={240}
-            glowBrightStart={300}
-          />
+      {/* Phase 2: OOP Code Panel (left) */}
+      {frame >= PHASE2_START && (
+        <Sequence from={PHASE2_START} durationInFrames={TOTAL_FRAMES - PHASE2_START}>
+          <div style={{ opacity: phase2FadeOut }}>
+            <CodePanel
+              x={PANEL_LEFT_X}
+              y={PANEL_Y}
+              width={PANEL_WIDTH}
+              height={PANEL_HEIGHT}
+              header="OOP Grounding"
+              headerColor={OOP_BLUE}
+              borderColor={OOP_BLUE}
+              code={OOP_CODE}
+              typeInStart={OOP_TYPE_START - PHASE2_START}
+              glowStart={BOTH_GLOW_START - PHASE2_START}
+              glowEnd={BOTH_GLOW_END - PHASE2_START}
+              fadeInStart={0}
+              fadeInEnd={30}
+            />
+          </div>
         </Sequence>
+      )}
 
-        {/* Walls indicator at edges during glow phase */}
-        {frame >= 360 && (
-          <WallIndicators
-            startFrame={360}
-          />
-        )}
-      </div>
+      {/* Phase 2: Functional Code Panel (right) */}
+      {frame >= PHASE2_START && (
+        <Sequence from={PHASE2_START} durationInFrames={TOTAL_FRAMES - PHASE2_START}>
+          <div style={{ opacity: phase2FadeOut }}>
+            <CodePanel
+              x={PANEL_RIGHT_X}
+              y={PANEL_Y}
+              width={PANEL_WIDTH}
+              height={PANEL_HEIGHT}
+              header="Functional Grounding"
+              headerColor={FUNC_AMBER}
+              borderColor={FUNC_AMBER}
+              code={FUNCTIONAL_CODE}
+              typeInStart={FUNC_TYPE_START - PHASE2_START}
+              glowStart={BOTH_GLOW_START - PHASE2_START}
+              glowEnd={BOTH_GLOW_END - PHASE2_START}
+              selectGlowStart={SELECT_GLOW_START - PHASE2_START}
+              selectGlowEnd={SELECT_GLOW_END - PHASE2_START}
+              isSelected
+              fadeInStart={0}
+              fadeInEnd={30}
+            />
+          </div>
+        </Sequence>
+      )}
 
-      {/* ─── Phase 3: Database Feedback (frames 480+) ─── */}
-      {frame >= 480 && (
+      {/* Wall indicators (left and right edges) during glow phase */}
+      {frame >= BOTH_GLOW_START && (
         <>
-          {/* Arrow from right panel to database */}
-          <FlowArrow
-            fromX={1100}
-            fromY={630}
-            toX={960}
-            toY={790}
-            startFrame={480}
-            durationFrames={40}
-            label="(prompt, code)"
+          {/* Left wall */}
+          <div
+            style={{
+              position: "absolute",
+              left: PANEL_LEFT_X - 20,
+              top: PANEL_Y + 40,
+              width: 4,
+              height: PANEL_HEIGHT - 80,
+              backgroundColor: "#22C55E",
+              borderRadius: 2,
+              opacity: wallOpacity * phase2FadeOut,
+              boxShadow: "0 0 8px #22C55E40",
+            }}
           />
-
-          {/* Database icon */}
-          <DatabaseIcon fadeStartFrame={510} pulseStartFrame={520} />
-
-          {/* Terminal note */}
-          <TerminalNote startFrame={530} />
+          {/* Right wall (after right panel) */}
+          <div
+            style={{
+              position: "absolute",
+              left: PANEL_RIGHT_X + PANEL_WIDTH + 16,
+              top: PANEL_Y + 40,
+              width: 4,
+              height: PANEL_HEIGHT - 80,
+              backgroundColor: "#22C55E",
+              borderRadius: 2,
+              opacity: wallOpacity * phase2FadeOut,
+              boxShadow: "0 0 8px #22C55E40",
+            }}
+          />
         </>
       )}
 
-      {/* ─── Dashed arrow to Future Generations (frames 600+) ─── */}
-      {frame >= 600 && (
-        <DashedArrow
-          fromX={960}
-          fromY={880}
-          toX={960}
-          toY={960}
-          startFrame={600}
-          label="Future Generations"
-        />
+      {/* Phase 3: Database Feedback Loop */}
+      {frame >= PHASE3_START && (
+        <Sequence from={PHASE3_START} durationInFrames={TOTAL_FRAMES - PHASE3_START}>
+          <DatabaseFeedback
+            arrowStart={0}
+            arrowEnd={ARROW_ANIM_END - PHASE3_START}
+            dbAppearStart={DB_APPEAR - PHASE3_START}
+            dbAppearEnd={DB_APPEAR_END - PHASE3_START}
+            dashedArrowStart={DASHED_ARROW_START - PHASE3_START}
+            dashedArrowEnd={DASHED_ARROW_END - PHASE3_START}
+          />
+        </Sequence>
       )}
+
+      {/* Persistent "Grounding" label that returns in Phase 3 */}
+      {frame >= PHASE3_START + 60 && (
+        <div
+          style={{
+            position: "absolute",
+            top: 100,
+            left: 0,
+            width: 1920,
+            textAlign: "center",
+            fontFamily: "Inter, sans-serif",
+            fontSize: 24,
+            fontWeight: 700,
+            color: TEAL,
+            opacity: interpolate(
+              frame,
+              [PHASE3_START + 60, PHASE3_START + 80],
+              [0, 0.8],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+            ),
+          }}
+        >
+          Grounding
+        </div>
+      )}
+
+      {/* Horizontal divider rule below header */}
+      <div
+        style={{
+          position: "absolute",
+          top: 150,
+          left: 760,
+          width: 400,
+          height: 2,
+          backgroundColor: TEAL,
+          opacity: interpolate(frame, [10, 30], [0, 0.7], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          }),
+          borderRadius: 1,
+        }}
+      />
     </AbsoluteFill>
-  );
-};
-
-// ─── Wall Indicators Sub-component ───
-interface WallIndicatorsProps {
-  startFrame: number;
-}
-
-const WallIndicators: React.FC<WallIndicatorsProps> = ({ startFrame }) => {
-  const frame = useCurrentFrame();
-  const localFrame = Math.max(0, frame - startFrame);
-
-  const opacity = interpolate(localFrame, [0, 15], [0, 0.75], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  const wallStyle: React.CSSProperties = {
-    position: "absolute",
-    width: 3,
-    backgroundColor: "#22C55E",
-    opacity,
-    borderRadius: 2,
-  };
-
-  return (
-    <>
-      {/* Left wall - left panel */}
-      <div style={{ ...wallStyle, left: 164, top: 280, height: 350 }} />
-      {/* Right wall - left panel */}
-      <div style={{ ...wallStyle, left: 754, top: 280, height: 350 }} />
-      {/* Left wall - right panel */}
-      <div style={{ ...wallStyle, left: 804, top: 280, height: 350 }} />
-      {/* Right wall - right panel */}
-      <div style={{ ...wallStyle, left: 1394, top: 280, height: 350 }} />
-    </>
   );
 };
 

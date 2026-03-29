@@ -1,5 +1,5 @@
-import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   BLUE_ACCENT,
   EDITOR_X,
@@ -10,118 +10,105 @@ import {
   TERMINAL_Y,
   TERMINAL_WIDTH,
   WALL_COUNT,
-  WALL_DRAW_DURATION,
   WALL_STAGGER,
+  WALL_DRAW_DURATION,
   WALLS_START,
-} from "./constants";
+} from './constants';
 
-/**
- * Generates wall line endpoints connecting terminal area to prompt editor area.
- * Lines radiate from the terminal perimeter toward the editor perimeter.
- */
-function getWallLines(count: number) {
-  const lines: Array<{
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-  }> = [];
+interface WallLine {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
 
+function generateWallLines(): WallLine[] {
+  const lines: WallLine[] = [];
+  const termCenterX = TERMINAL_X + TERMINAL_WIDTH / 2;
+  const termTopY = TERMINAL_Y;
+  const editorCenterX = EDITOR_X + EDITOR_WIDTH / 2;
   const editorBottom = EDITOR_Y + EDITOR_HEIGHT;
-  const terminalTop = TERMINAL_Y;
 
-  // Distribute lines across the width, some on left side, some on right, some center
-  for (let i = 0; i < count; i++) {
-    const t = count === 1 ? 0.5 : i / (count - 1);
+  // Lines from terminal top area reaching up to frame the editor
+  for (let i = 0; i < WALL_COUNT; i++) {
+    const t = i / (WALL_COUNT - 1); // 0 to 1
+    // Spread across the width of the terminal/editor
+    const spreadX = EDITOR_X + t * EDITOR_WIDTH;
 
-    // Source points along terminal top edge
-    const srcX = TERMINAL_X + 40 + t * (TERMINAL_WIDTH - 80);
-    const srcY = terminalTop;
+    // Source: spread along top of terminal
+    const srcX = TERMINAL_X + t * TERMINAL_WIDTH;
+    const srcY = termTopY;
 
-    // Target points along editor bottom edge + sides
-    let tgtX: number;
-    let tgtY: number;
+    // Destination: frame the editor — some go to bottom, some to sides
+    let dstX: number;
+    let dstY: number;
 
-    if (i < 2) {
-      // Left side walls
-      tgtX = EDITOR_X;
-      tgtY = editorBottom - 20 - i * 60;
-    } else if (i >= count - 2) {
-      // Right side walls
-      tgtX = EDITOR_X + EDITOR_WIDTH;
-      tgtY = editorBottom - 20 - (count - 1 - i) * 60;
+    if (i < 3) {
+      // Left side framing
+      dstX = EDITOR_X - 10;
+      dstY = editorBottom - (2 - i) * 60;
+    } else if (i >= WALL_COUNT - 3) {
+      // Right side framing
+      dstX = EDITOR_X + EDITOR_WIDTH + 10;
+      dstY = editorBottom - (i - (WALL_COUNT - 3)) * 60;
     } else {
-      // Bottom edge walls
-      const innerT = (i - 2) / (count - 5);
-      tgtX = EDITOR_X + 30 + innerT * (EDITOR_WIDTH - 60);
-      tgtY = editorBottom;
+      // Bottom framing
+      dstX = spreadX;
+      dstY = editorBottom + 10;
     }
 
-    lines.push({ x1: srcX, y1: srcY, x2: tgtX, y2: tgtY });
+    lines.push({ x1: srcX, y1: srcY, x2: dstX, y2: dstY });
   }
 
   return lines;
 }
 
+const wallLines = generateWallLines();
+
 export const TestWalls: React.FC = () => {
   const frame = useCurrentFrame();
-  const lines = getWallLines(WALL_COUNT);
 
   return (
     <svg
       width={1920}
       height={1080}
       style={{
-        position: "absolute",
+        position: 'absolute',
         top: 0,
         left: 0,
-        pointerEvents: "none",
+        pointerEvents: 'none',
       }}
     >
-      <defs>
-        <filter id="wallGlow">
-          <feGaussianBlur stdDeviation="3" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      {lines.map((line, i) => {
-        const lineStart = WALLS_START + i * WALL_STAGGER;
-        const lineEnd = lineStart + WALL_DRAW_DURATION;
-
-        const drawProgress = interpolate(
+      {wallLines.map((line, i) => {
+        const lineStart = i * WALL_STAGGER;
+        const progress = interpolate(
           frame,
-          [lineStart, lineEnd],
+          [lineStart, lineStart + WALL_DRAW_DURATION],
           [0, 1],
           {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
             easing: Easing.out(Easing.cubic),
           }
         );
 
         // Glow pulse after draw completes
-        const pulseProgress = interpolate(
+        const pulseStart = lineStart + WALL_DRAW_DURATION;
+        const pulseOpacity = interpolate(
           frame,
-          [lineEnd, lineEnd + 10],
-          [0, 1],
+          [pulseStart, pulseStart + 10],
+          [0.4, 0.15],
           {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
             easing: Easing.out(Easing.quad),
           }
         );
 
-        if (drawProgress <= 0) return null;
+        const currentX2 = line.x1 + (line.x2 - line.x1) * progress;
+        const currentY2 = line.y1 + (line.y2 - line.y1) * progress;
 
-        // Interpolate from source to target based on draw progress
-        const currentX2 = line.x1 + (line.x2 - line.x1) * drawProgress;
-        const currentY2 = line.y1 + (line.y2 - line.y1) * drawProgress;
-
-        const glowOpacity = 0.15 + pulseProgress * 0.2;
-        const lineOpacity = 0.4;
+        if (progress <= 0) return null;
 
         return (
           <g key={i}>
@@ -133,8 +120,8 @@ export const TestWalls: React.FC = () => {
               y2={currentY2}
               stroke={BLUE_ACCENT}
               strokeWidth={6}
-              strokeOpacity={glowOpacity}
-              filter="url(#wallGlow)"
+              opacity={pulseOpacity > 0.15 ? pulseOpacity : 0.15}
+              style={{ filter: 'blur(3px)' }}
             />
             {/* Main line */}
             <line
@@ -144,7 +131,7 @@ export const TestWalls: React.FC = () => {
               y2={currentY2}
               stroke={BLUE_ACCENT}
               strokeWidth={2}
-              strokeOpacity={lineOpacity}
+              opacity={0.4}
             />
           </g>
         );
@@ -152,5 +139,3 @@ export const TestWalls: React.FC = () => {
     </svg>
   );
 };
-
-export default TestWalls;

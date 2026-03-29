@@ -1,196 +1,215 @@
-import React, { useMemo } from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import React, { useMemo } from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
   CODE_TEXT_COLOR,
-  PROMPT_X,
-  PROMPT_Y,
-  PROMPT_HEIGHT,
   CAVITY_X,
   CAVITY_Y,
   CAVITY_WIDTH,
   CAVITY_HEIGHT,
-  CODE_FLOW_START,
-  CODE_FILL_DURATION,
+  WALL_THICKNESS,
   REGEN_INTERVAL,
   DISSOLVE_DURATION,
-  REFILL_DURATION,
+  FILL_DURATION,
   CODE_GENERATIONS,
-} from './constants';
+} from "./constants";
 
-/**
- * Streaming code that flows from the prompt document into the mold cavity.
- * Code regenerates every REGEN_INTERVAL frames with a dissolve/refill cycle.
- * Returns the current generation index for the parent to coordinate wall flashes.
- */
+// Padding inside the cavity walls
+const INNER_PAD = 16;
+const LINE_HEIGHT = 20;
+const INNER_X = CAVITY_X + WALL_THICKNESS + INNER_PAD;
+const INNER_Y = CAVITY_Y + WALL_THICKNESS + INNER_PAD;
+const INNER_WIDTH = CAVITY_WIDTH - 2 * (WALL_THICKNESS + INNER_PAD);
+const INNER_HEIGHT = CAVITY_HEIGHT - 2 * (WALL_THICKNESS + INNER_PAD);
 
-interface StreamParticle {
-  x: number;
-  y: number;
-  delay: number; // frame offset within fill
+// Connection line from prompt to cavity
+const STREAM_SOURCE_Y = 180; // below prompt document
+
+interface CodeFlowProps {
+  /** Whether the flash is currently active (for parent coordination) */
+  onFlashState?: (active: boolean) => void;
 }
 
-function generateParticlePositions(lineCount: number): StreamParticle[] {
-  const particles: StreamParticle[] = [];
-  const lineHeight = 18;
-  const startX = CAVITY_X + 20;
-  const startY = CAVITY_Y + 16;
-
-  for (let i = 0; i < lineCount; i++) {
-    particles.push({
-      x: startX,
-      y: startY + i * lineHeight,
-      delay: i * 2, // stagger each line by 2 frames
-    });
-  }
-  return particles;
-}
-
-export const CodeFlow: React.FC = () => {
+export const CodeFlow: React.FC<CodeFlowProps> = () => {
   const frame = useCurrentFrame();
-  const localFrame = frame - CODE_FLOW_START;
-  const clampedLocalFrame = Math.max(0, localFrame);
 
-  // Determine which generation we're in and the phase within it
-  const generationIndex = Math.min(
-    Math.floor(clampedLocalFrame / REGEN_INTERVAL),
+  // Determine which generation we're on (0, 1, 2)
+  const genIndex = Math.min(
+    Math.floor(frame / REGEN_INTERVAL),
     CODE_GENERATIONS.length - 1
   );
-  const frameInGeneration = clampedLocalFrame - generationIndex * REGEN_INTERVAL;
+  const localFrame = frame - genIndex * REGEN_INTERVAL;
 
-  // For first generation, we have a longer fill; for subsequent, dissolve→fill cycle
-  const isFirstGeneration = generationIndex === 0;
+  // Phase within each generation:
+  // 0..DISSOLVE_DURATION: dissolve previous (except gen 0)
+  // DISSOLVE_DURATION..DISSOLVE_DURATION+FILL_DURATION: fill new
+  // after: hold
+  const isFirstGen = genIndex === 0;
+  const dissolveEnd = isFirstGen ? 0 : DISSOLVE_DURATION;
+  const fillStart = dissolveEnd;
+  const fillEnd = fillStart + FILL_DURATION;
 
-  // Phase logic for non-first generations:
-  //   0..DISSOLVE_DURATION: dissolve old code
-  //   DISSOLVE_DURATION..DISSOLVE_DURATION+REFILL_DURATION: refill new code
-  //   after that: hold
+  // Dissolve opacity (previous generation fading out)
+  const dissolveOpacity = isFirstGen
+    ? 0
+    : interpolate(localFrame, [0, dissolveEnd], [0.6, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.in(Easing.quad),
+      });
 
-  const currentCode = CODE_GENERATIONS[generationIndex];
-  const particles = useMemo(
-    () => generateParticlePositions(currentCode.length),
-    [currentCode.length]
+  // Fill progress for current generation
+  const fillProgress = interpolate(localFrame, [fillStart, fillEnd], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.cubic),
+  });
+
+  // Current code lines
+  const codeLines = CODE_GENERATIONS[genIndex];
+  const prevLines =
+    genIndex > 0 ? CODE_GENERATIONS[genIndex - 1] : [];
+
+  // Stream particles from prompt to cavity
+  const streamOpacity = interpolate(
+    fillProgress,
+    [0, 0.3, 0.9, 1],
+    [0, 0.6, 0.4, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  if (localFrame < 0) return null;
+  // Number of visible lines based on fill progress
+  const visibleLines = Math.floor(fillProgress * codeLines.length);
 
-  // Stream particles from prompt location
-  const sourceX = PROMPT_X;
-  const sourceY = PROMPT_Y + PROMPT_HEIGHT;
+  // Per-line fade for the last appearing line
+  const lastLineFade =
+    visibleLines < codeLines.length && visibleLines > 0
+      ? (fillProgress * codeLines.length) % 1
+      : 1;
 
-  // Compute overall opacity and per-line progress
-  let overallOpacity = 1;
-  let fillProgress = 1; // 0..1 how far along the fill is
-
-  if (isFirstGeneration) {
-    // First gen: fill over CODE_FILL_DURATION frames
-    fillProgress = interpolate(
-      frameInGeneration,
-      [0, CODE_FILL_DURATION],
-      [0, 1],
-      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
-    );
-  } else {
-    // Dissolve phase
-    if (frameInGeneration < DISSOLVE_DURATION) {
-      overallOpacity = interpolate(
-        frameInGeneration,
-        [0, DISSOLVE_DURATION],
-        [1, 0],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.in(Easing.quad) }
-      );
-      fillProgress = 1; // old code is fully placed, just fading
+  // Generate stream particles
+  const particles = useMemo(() => {
+    const pts: Array<{ id: number; xOffset: number; speed: number }> = [];
+    for (let i = 0; i < 8; i++) {
+      pts.push({
+        id: i,
+        xOffset: ((i * 47 + 13) % INNER_WIDTH) - INNER_WIDTH / 2,
+        speed: 0.6 + (i % 3) * 0.2,
+      });
     }
-    // Refill phase
-    else if (frameInGeneration < DISSOLVE_DURATION + REFILL_DURATION) {
-      const refillFrame = frameInGeneration - DISSOLVE_DURATION;
-      fillProgress = interpolate(
-        refillFrame,
-        [0, REFILL_DURATION],
-        [0, 1],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
-      );
-      overallOpacity = 1;
-    }
-    // Hold phase
-    else {
-      fillProgress = 1;
-      overallOpacity = 1;
-    }
-  }
-
-  // Shimmer effect during dissolve
-  const isDissolving = !isFirstGeneration && frameInGeneration < DISSOLVE_DURATION;
-  const shimmerOffset = isDissolving
-    ? Math.sin(frameInGeneration * 0.8) * 3
-    : 0;
+    return pts;
+  }, []);
 
   return (
     <>
-      {/* Stream particles (visual effect connecting prompt to cavity) */}
-      {fillProgress < 1 && !isDissolving && (
-        <StreamParticles
-          sourceX={sourceX}
-          sourceY={sourceY}
-          targetY={CAVITY_Y}
-          progress={fillProgress}
-          localFrame={frameInGeneration}
-        />
-      )}
-
-      {/* Code lines in cavity */}
+      {/* Stream connection line */}
       <div
         style={{
-          position: 'absolute',
-          left: CAVITY_X,
-          top: CAVITY_Y,
-          width: CAVITY_WIDTH,
-          height: CAVITY_HEIGHT,
-          overflow: 'hidden',
-          opacity: overallOpacity,
+          position: "absolute",
+          left: CAVITY_X + CAVITY_WIDTH / 2 - 1,
+          top: STREAM_SOURCE_Y,
+          width: 2,
+          height: CAVITY_Y - STREAM_SOURCE_Y,
+          background: `linear-gradient(to bottom, ${CODE_TEXT_COLOR}00, ${CODE_TEXT_COLOR}66)`,
+          opacity: streamOpacity,
         }}
-      >
-        {currentCode.map((line, i) => {
-          const particle = particles[i];
-          if (!particle) return null;
+      />
 
-          // Each line appears based on fill progress and its delay
-          const maxDelay = (currentCode.length - 1) * 2;
-          const lineThreshold = maxDelay > 0 ? particle.delay / maxDelay : 0;
-          const lineVisible = fillProgress >= lineThreshold;
+      {/* Stream particles */}
+      {fillProgress > 0 && fillProgress < 1 && (
+        <>
+          {particles.map((p) => {
+            const yProgress =
+              ((frame * p.speed * 0.05 + p.id * 0.12) % 1);
+            const py = STREAM_SOURCE_Y + yProgress * (CAVITY_Y - STREAM_SOURCE_Y);
+            return (
+              <div
+                key={p.id}
+                style={{
+                  position: "absolute",
+                  left: CAVITY_X + CAVITY_WIDTH / 2 + p.xOffset * 0.3,
+                  top: py,
+                  width: 3,
+                  height: 3,
+                  borderRadius: "50%",
+                  backgroundColor: CODE_TEXT_COLOR,
+                  opacity: streamOpacity * 0.5,
+                }}
+              />
+            );
+          })}
+        </>
+      )}
 
-          if (!lineVisible && !isDissolving) return null;
-
-          // Line's individual entrance progress
-          // Ensure the input range is always strictly increasing
-          const lineEnd = Math.max(lineThreshold + 0.15, lineThreshold + 0.001);
-          const lineProgress = interpolate(
-            fillProgress,
-            [lineThreshold, lineEnd],
-            [0, 1],
-            { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-          );
-
-          // Animate Y from source toward final position
-          const lineY = interpolate(
-            lineProgress,
-            [0, 1],
-            [particle.y - CAVITY_Y - 30, particle.y - CAVITY_Y],
-            { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-          );
-
-          return (
+      {/* Dissolving previous code (during regeneration) */}
+      {!isFirstGen && localFrame < dissolveEnd && (
+        <div
+          style={{
+            position: "absolute",
+            left: INNER_X,
+            top: INNER_Y,
+            width: INNER_WIDTH,
+            height: INNER_HEIGHT,
+            overflow: "hidden",
+            opacity: dissolveOpacity,
+            filter: `blur(${interpolate(localFrame, [0, dissolveEnd], [0, 4], {
+              extrapolateRight: "clamp",
+            })}px)`,
+          }}
+        >
+          {prevLines.map((line, i) => (
             <div
-              key={`${generationIndex}-${i}`}
+              key={i}
               style={{
-                position: 'absolute',
-                left: 20,
-                top: lineY + shimmerOffset * (i % 2 === 0 ? 1 : -1),
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: 12,
                 color: CODE_TEXT_COLOR,
-                opacity: 0.6 * lineProgress,
-                whiteSpace: 'pre',
-                lineHeight: '18px',
+                lineHeight: `${LINE_HEIGHT}px`,
+                whiteSpace: "pre",
+              }}
+            >
+              {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Current generation code lines */}
+      <div
+        style={{
+          position: "absolute",
+          left: INNER_X,
+          top: INNER_Y,
+          width: INNER_WIDTH,
+          height: INNER_HEIGHT,
+          overflow: "hidden",
+        }}
+      >
+        {codeLines.map((line, i) => {
+          const isVisible = i < visibleLines;
+          const isLastVisible = i === visibleLines - 1 && visibleLines <= codeLines.length;
+          const lineOpacity = isVisible
+            ? isLastVisible
+              ? 0.6 * lastLineFade
+              : 0.6
+            : 0;
+          // Slight upward settle animation
+          const lineY = isVisible
+            ? isLastVisible
+              ? interpolate(lastLineFade, [0, 1], [8, 0])
+              : 0
+            : 12;
+
+          return (
+            <div
+              key={`${genIndex}-${i}`}
+              style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 12,
+                color: CODE_TEXT_COLOR,
+                opacity: lineOpacity,
+                lineHeight: `${LINE_HEIGHT}px`,
+                whiteSpace: "pre",
+                transform: `translateY(${lineY}px)`,
               }}
             >
               {line}
@@ -198,59 +217,26 @@ export const CodeFlow: React.FC = () => {
           );
         })}
       </div>
+
+      {/* Shimmer overlay during regeneration */}
+      {!isFirstGen && localFrame >= 0 && localFrame < dissolveEnd + 5 && (
+        <div
+          style={{
+            position: "absolute",
+            left: CAVITY_X + WALL_THICKNESS,
+            top: CAVITY_Y + WALL_THICKNESS,
+            width: CAVITY_WIDTH - 2 * WALL_THICKNESS,
+            height: CAVITY_HEIGHT - 2 * WALL_THICKNESS,
+            background: `radial-gradient(ellipse at 50% ${interpolate(
+              localFrame,
+              [0, dissolveEnd + 5],
+              [30, 70],
+              { extrapolateRight: "clamp" }
+            )}%, rgba(217, 148, 74, 0.08), transparent)`,
+            pointerEvents: "none",
+          }}
+        />
+      )}
     </>
   );
 };
-
-/**
- * Small glowing particles streaming from prompt to cavity during fill.
- */
-const StreamParticles: React.FC<{
-  sourceX: number;
-  sourceY: number;
-  targetY: number;
-  progress: number;
-  localFrame: number;
-}> = ({ sourceX, sourceY, targetY, progress, localFrame }) => {
-  const particleCount = 6;
-  const particles = useMemo(() => {
-    return Array.from({ length: particleCount }, (_, i) => ({
-      offsetX: (i - particleCount / 2) * 20 + (Math.sin(i * 2.5) * 15),
-      speed: 0.6 + (i % 3) * 0.2,
-      size: 3 + (i % 2) * 2,
-    }));
-  }, []);
-
-  return (
-    <>
-      {particles.map((p, i) => {
-        const t = ((localFrame * p.speed + i * 10) % 40) / 40; // 0..1 cycle
-        const px = sourceX + p.offsetX + Math.sin(t * Math.PI * 2) * 8;
-        const py = sourceY + t * (targetY - sourceY);
-        const particleOpacity = progress < 0.95
-          ? Math.sin(t * Math.PI) * 0.6
-          : 0;
-
-        return (
-          <div
-            key={i}
-            style={{
-              position: 'absolute',
-              left: px - p.size / 2,
-              top: py - p.size / 2,
-              width: p.size,
-              height: p.size,
-              borderRadius: '50%',
-              backgroundColor: CODE_TEXT_COLOR,
-              opacity: particleOpacity,
-              filter: 'blur(1px)',
-              pointerEvents: 'none',
-            }}
-          />
-        );
-      })}
-    </>
-  );
-};
-
-export default CodeFlow;

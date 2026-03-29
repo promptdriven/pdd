@@ -1,128 +1,125 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   MOLD_X,
   MOLD_Y,
   MOLD_WIDTH,
   MOLD_HEIGHT,
   MOLD_WALL_THICKNESS,
+  MOLD_OUTER_COLOR,
+  MOLD_CAVITY_COLOR,
+  CAVITY_X,
+  CAVITY_Y,
+  CAVITY_WIDTH,
+  CAVITY_HEIGHT,
   NOZZLE_X,
   NOZZLE_Y,
+  NOZZLE_WIDTH,
+  NOZZLE_HEIGHT,
+  NOZZLE_COLOR,
   EXISTING_WALLS,
   WALL_EXISTING_COLOR,
-  TEXT_PRIMARY,
 } from './constants';
 
 interface MoldCrossSectionProps {
-  wallsOpacity: number;
+  wallsOpacity?: number;
 }
 
 export const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
-  wallsOpacity,
+  wallsOpacity = 0.4,
 }) => {
-  const frame = useCurrentFrame();
-
-  // Subtle wall shimmer
-  const shimmer = interpolate(
-    frame % 120,
-    [0, 60, 120],
-    [0.35, 0.45, 0.35],
-    { extrapolateRight: 'clamp' }
-  );
-
-  const outerOpacity = Math.max(wallsOpacity, shimmer);
-
   return (
-    <svg
-      width={1920}
-      height={1080}
-      style={{ position: 'absolute', top: 0, left: 0 }}
-    >
-      <defs>
-        <filter id="wallGlow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="4" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-
-      {/* Outer mold walls */}
-      {/* Top wall */}
-      <rect
-        x={MOLD_X}
-        y={MOLD_Y}
-        width={MOLD_WIDTH}
-        height={MOLD_WALL_THICKNESS}
-        fill={WALL_EXISTING_COLOR}
-        opacity={outerOpacity}
-        filter="url(#wallGlow)"
-      />
-      {/* Bottom wall */}
-      <rect
-        x={MOLD_X}
-        y={MOLD_Y + MOLD_HEIGHT - MOLD_WALL_THICKNESS}
-        width={MOLD_WIDTH}
-        height={MOLD_WALL_THICKNESS}
-        fill={WALL_EXISTING_COLOR}
-        opacity={outerOpacity}
-        filter="url(#wallGlow)"
-      />
-      {/* Left wall */}
-      <rect
-        x={MOLD_X}
-        y={MOLD_Y}
-        width={MOLD_WALL_THICKNESS}
-        height={MOLD_HEIGHT}
-        fill={WALL_EXISTING_COLOR}
-        opacity={outerOpacity}
-        filter="url(#wallGlow)"
-      />
-      {/* Right wall */}
-      <rect
-        x={MOLD_X + MOLD_WIDTH - MOLD_WALL_THICKNESS}
-        y={MOLD_Y}
-        width={MOLD_WALL_THICKNESS}
-        height={MOLD_HEIGHT}
-        fill={WALL_EXISTING_COLOR}
-        opacity={outerOpacity}
-        filter="url(#wallGlow)"
+    <>
+      {/* Outer mold body */}
+      <div
+        style={{
+          position: 'absolute',
+          left: MOLD_X,
+          top: MOLD_Y,
+          width: MOLD_WIDTH,
+          height: MOLD_HEIGHT,
+          backgroundColor: MOLD_OUTER_COLOR,
+          borderRadius: 8,
+          opacity: 0.9,
+        }}
       />
 
-      {/* Nozzle */}
-      <polygon
-        points={`${NOZZLE_X - 20},${NOZZLE_Y - 30} ${NOZZLE_X + 20},${NOZZLE_Y - 30} ${NOZZLE_X + 8},${NOZZLE_Y} ${NOZZLE_X - 8},${NOZZLE_Y}`}
-        fill={WALL_EXISTING_COLOR}
-        opacity={outerOpacity * 0.8}
+      {/* Cavity (cut-out interior) */}
+      <div
+        style={{
+          position: 'absolute',
+          left: CAVITY_X,
+          top: CAVITY_Y,
+          width: CAVITY_WIDTH,
+          height: CAVITY_HEIGHT,
+          backgroundColor: MOLD_CAVITY_COLOR,
+          borderRadius: 4,
+        }}
       />
 
-      {/* Internal walls */}
+      {/* Nozzle at the top */}
+      <div
+        style={{
+          position: 'absolute',
+          left: NOZZLE_X,
+          top: NOZZLE_Y,
+          width: NOZZLE_WIDTH,
+          height: NOZZLE_HEIGHT,
+          backgroundColor: NOZZLE_COLOR,
+          borderRadius: '4px 4px 0 0',
+          opacity: 0.8,
+        }}
+      />
+      {/* Nozzle opening */}
+      <div
+        style={{
+          position: 'absolute',
+          left: NOZZLE_X + 15,
+          top: NOZZLE_Y + NOZZLE_HEIGHT - 10,
+          width: NOZZLE_WIDTH - 30,
+          height: 10 + MOLD_WALL_THICKNESS,
+          backgroundColor: MOLD_CAVITY_COLOR,
+          borderRadius: 2,
+        }}
+      />
+
+      {/* Existing internal walls */}
       {EXISTING_WALLS.map((wall, i) => (
-        <g key={`wall-${i}`}>
-          <rect
-            x={wall.x}
-            y={wall.y}
-            width={wall.width}
-            height={wall.height}
-            fill={WALL_EXISTING_COLOR}
-            opacity={outerOpacity}
-            filter="url(#wallGlow)"
-          />
-          {/* Wall label */}
-          <text
-            x={wall.x + wall.width / 2}
-            y={wall.y - 10}
-            textAnchor="middle"
-            fontFamily="'JetBrains Mono', monospace"
-            fontSize={11}
-            fill={TEXT_PRIMARY}
-            opacity={outerOpacity * 0.7}
-          >
-            {wall.label}
-          </text>
-        </g>
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            left: wall.x,
+            top: wall.y,
+            width: wall.width,
+            height: wall.height,
+            backgroundColor: WALL_EXISTING_COLOR,
+            opacity: wallsOpacity,
+            borderRadius: 3,
+            boxShadow: `0 0 8px ${WALL_EXISTING_COLOR}40`,
+          }}
+        />
       ))}
-    </svg>
+
+      {/* Wall labels for existing walls */}
+      {EXISTING_WALLS.map((wall, i) => (
+        <div
+          key={`label-${i}`}
+          style={{
+            position: 'absolute',
+            left: wall.x - 40,
+            top: wall.y + wall.height + 8,
+            width: wall.width + 80,
+            textAlign: 'center',
+            fontFamily: '"JetBrains Mono", monospace',
+            fontSize: 11,
+            color: '#94A3B8',
+            opacity: wallsOpacity * 0.8,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {wall.label}
+        </div>
+      ))}
+    </>
   );
 };

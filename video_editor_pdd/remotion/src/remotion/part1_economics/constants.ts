@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const SECTION_FPS = 30;
-export const SECTION_DURATION_SECONDS = 484.080;
+export const SECTION_DURATION_SECONDS = 457.680;
 export const SECTION_DURATION_FRAMES = Math.ceil(SECTION_FPS * SECTION_DURATION_SECONDS);
 
 const s2f = (seconds: number) => Math.round(seconds * SECTION_FPS);
@@ -12,37 +12,37 @@ export const BEATS = {
   VISUAL_01_START: s2f(23.540),
   VISUAL_01_END: s2f(47.100),
   VISUAL_02_START: s2f(47.540),
-  VISUAL_02_END: s2f(101.780),
-  VISUAL_03_START: s2f(102.060),
-  VISUAL_03_END: s2f(140.600),
-  VISUAL_04_START: s2f(140.780),
-  VISUAL_04_END: s2f(168.620),
-  VISUAL_05_START: s2f(163.060),
-  VISUAL_05_END: s2f(181.540),
-  VISUAL_06_START: s2f(168.860),
-  VISUAL_06_END: s2f(219.820),
-  VISUAL_07_START: s2f(223.600),
-  VISUAL_07_END: s2f(277.540),
-  VISUAL_08_START: s2f(277.740),
-  VISUAL_08_END: s2f(298.940),
-  VISUAL_09_START: s2f(299.160),
-  VISUAL_09_END: s2f(356.640),
-  VISUAL_10_START: s2f(356.640),
-  VISUAL_10_END: s2f(409.620),
-  VISUAL_11_START: s2f(409.780),
-  VISUAL_11_END: s2f(467.720),
-  VISUAL_12_START: s2f(455.920),
-  VISUAL_12_END: s2f(467.720),
-  VISUAL_13_START: s2f(468.480),
-  VISUAL_13_END: s2f(483.920),
-  VISUAL_14_START: s2f(472.368),
-  VISUAL_14_END: s2f(484.080),
-  VISUAL_15_START: s2f(472.368),
-  VISUAL_15_END: s2f(484.080),
-  VISUAL_16_START: s2f(475.500),
-  VISUAL_16_END: s2f(483.920),
-  VISUAL_17_START: s2f(476.209),
-  VISUAL_17_END: s2f(484.080),
+  VISUAL_02_END: s2f(101.640),
+  VISUAL_03_START: s2f(101.880),
+  VISUAL_03_END: s2f(142.300),
+  VISUAL_04_START: s2f(142.520),
+  VISUAL_04_END: s2f(169.300),
+  VISUAL_05_START: s2f(163.740),
+  VISUAL_05_END: s2f(182.340),
+  VISUAL_06_START: s2f(169.560),
+  VISUAL_06_END: s2f(220.880),
+  VISUAL_07_START: s2f(220.880),
+  VISUAL_07_END: s2f(258.960),
+  VISUAL_08_START: s2f(258.960),
+  VISUAL_08_END: s2f(281.480),
+  VISUAL_09_START: s2f(281.600),
+  VISUAL_09_END: s2f(338.860),
+  VISUAL_10_START: s2f(338.860),
+  VISUAL_10_END: s2f(391.840),
+  VISUAL_11_START: s2f(392.080),
+  VISUAL_11_END: s2f(443.440),
+  VISUAL_12_START: s2f(433.240),
+  VISUAL_12_END: s2f(443.440),
+  VISUAL_13_START: s2f(443.440),
+  VISUAL_13_END: s2f(457.680),
+  VISUAL_14_START: s2f(446.607),
+  VISUAL_14_END: s2f(457.680),
+  VISUAL_15_START: s2f(446.607),
+  VISUAL_15_END: s2f(457.680),
+  VISUAL_16_START: s2f(450.238),
+  VISUAL_16_END: s2f(457.680),
+  VISUAL_17_START: s2f(451.000),
+  VISUAL_17_END: s2f(457.680),
 };
 
 export const VISUAL_SEQUENCE = [
@@ -62,8 +62,8 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_13_START, end: BEATS.VISUAL_13_END, id: "14_split_developer_grandma", desc: "14 split developer grandma", lane: 0 },
   { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "19_double_meter_insight", desc: "19 double meter insight", lane: 0 },
   { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "18_key_insight_stillness", desc: "18 key insight stillness", lane: 1 },
-  { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "17_developer_codebase_zoomout", desc: "17 developer codebase zoomout", lane: 0 },
-  { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "20_try_it_yourself", desc: "20 try it yourself", lane: 0 },
+  { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "20_try_it_yourself", desc: "20 try it yourself", lane: 0 },
+  { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "17_developer_codebase_zoomout", desc: "17 developer codebase zoomout", lane: 0 },
 ];
 
 export const Part1EconomicsSectionProps = z.object({

@@ -1,152 +1,138 @@
-// constants.ts — Part3MoldParts09FiveGenerations
-// Colors, dimensions, generation data, and timing constants
-
-// ─── Canvas ───────────────────────────────────────────────────────────
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
+// ── Colors ──────────────────────────────────────────────────────────────────
 export const BG_COLOR = "#0A0F1A";
-
-// ─── Panel Layout ─────────────────────────────────────────────────────
-export const PANEL_WIDTH = 320;
-export const PANEL_HEIGHT = 400;
-export const PANEL_GAP = 24;
-export const PANEL_COUNT = 5;
-export const TOTAL_PANELS_WIDTH =
-  PANEL_COUNT * PANEL_WIDTH + (PANEL_COUNT - 1) * PANEL_GAP; // 1696
-export const PANELS_START_X = (CANVAS_WIDTH - TOTAL_PANELS_WIDTH) / 2; // 112
-export const PANEL_Y = 220;
-
 export const PANEL_BG = "#1E1E2E";
 export const PANEL_BORDER = "#334155";
-export const PANEL_BORDER_RADIUS = 8;
+export const HEADER_LABEL_COLOR = "#64748B";
+export const LABEL_TEXT_COLOR = "#E2E8F0";
 
-// ─── Status Colors ────────────────────────────────────────────────────
-export const FAIL_COLOR = "#EF4444";
-export const WARN_COLOR = "#FBBF24";
-export const PASS_COLOR = "#4ADE80";
+export const STATUS_RED = "#EF4444";
+export const STATUS_YELLOW = "#FBBF24";
+export const STATUS_GREEN = "#4ADE80";
 
-// ─── Typography ───────────────────────────────────────────────────────
-export const HEADER_FONT = "Inter, sans-serif";
-export const CODE_FONT = "'JetBrains Mono', 'Fira Code', 'Consolas', monospace";
-export const LABEL_FONT = "Inter, sans-serif";
+// ── Dimensions ──────────────────────────────────────────────────────────────
+export const CANVAS_W = 1920;
+export const CANVAS_H = 1080;
+export const PANEL_W = 320;
+export const PANEL_H = 400;
+export const PANEL_GAP = 24;
+export const PANEL_COUNT = 5;
+export const PANEL_TOTAL_W = PANEL_COUNT * PANEL_W + (PANEL_COUNT - 1) * PANEL_GAP; // 1696
+export const PANEL_START_X = (CANVAS_W - PANEL_TOTAL_W) / 2; // 112
+export const PANEL_Y = 220;
+export const PANEL_RADIUS = 8;
 
-export const HEADER_SIZE = 11;
-export const CODE_SIZE = 10;
-export const LABEL_SIZE = 20;
+export const STATUS_ICON_SIZE = 48;
+export const LABEL_Y = 700;
 
-export const HEADER_COLOR = "#64748B";
-export const LABEL_COLOR = "#E2E8F0";
+// ── Timing (frames @ 30fps) ────────────────────────────────────────────────
+export const TOTAL_FRAMES = 540;
 
-// ─── Animation Timing (frames) ───────────────────────────────────────
-export const PANEL_STAGGER = 8; // frames between each panel appearing
+// Panel appearance: panel 0 at frame 0, then 8-frame intervals
+export const PANEL_FIRST_FRAME = 0;
+export const PANEL_STAGGER = 8;
 export const PANEL_SLIDE_DURATION = 20;
-export const PANEL_SLIDE_DISTANCE = 30;
 
-export const STATUS_FAIL_START = 120;
-export const STATUS_WARN_START = 150;
-export const STATUS_PASS_START = 180;
+// Status stamps
+export const RED_X_FRAME = 120;
+export const YELLOW_WARN_FRAME = 150;
+export const GREEN_CHECK_FRAME = 180;
 
-export const HIGHLIGHT_START = 240;
+// Winner highlight
+export const HIGHLIGHT_FRAME = 240;
 export const HIGHLIGHT_SCALE_DURATION = 20;
 export const DIM_DURATION = 20;
-export const DIM_OPACITY = 0.4;
 
-export const LABEL_START = 330;
+// Label
+export const LABEL_FRAME = 330;
 export const LABEL_FADE_DURATION = 20;
 
-// ─── Status Icon Size ─────────────────────────────────────────────────
-export const STATUS_ICON_SIZE = 48;
-
-// ─── Generation Data ──────────────────────────────────────────────────
-export type GenerationStatus = "fail" | "partial" | "pass";
+// ── Per-generation faux code lines ──────────────────────────────────────────
+export interface CodeLine {
+  indent: number;
+  tokens: { text: string; color: string }[];
+}
 
 export interface GenerationData {
-  gen: number;
-  status: GenerationStatus;
-  icon: "x" | "warning" | "check";
-  color: string;
+  label: string;
+  status: "fail" | "partial" | "pass";
+  statusColor: string;
+  failLines: number[]; // indices of lines that are "red-highlighted" for fails
+  code: CodeLine[];
+}
+
+const KW = "#C678DD";    // purple keywords
+const FN = "#61AFEF";    // blue functions
+const STR = "#98C379";   // green strings
+const NUM = "#D19A66";   // orange numbers
+const CMT = "#5C6370";   // grey comments
+const VAR = "#E5C07B";   // yellow vars
+const TXT = "#ABB2BF";   // default text
+
+const sharedCodeBase: CodeLine[] = [
+  { indent: 0, tokens: [{ text: "export", color: KW }, { text: " ", color: TXT }, { text: "function", color: KW }, { text: " ", color: TXT }, { text: "validate", color: FN }, { text: "(input) {", color: TXT }] },
+  { indent: 1, tokens: [{ text: "const", color: KW }, { text: " schema ", color: VAR }, { text: "= ", color: TXT }, { text: "buildSchema", color: FN }, { text: "();", color: TXT }] },
+  { indent: 1, tokens: [{ text: "const", color: KW }, { text: " result ", color: VAR }, { text: "= schema.", color: TXT }, { text: "parse", color: FN }, { text: "(input);", color: TXT }] },
+  { indent: 1, tokens: [{ text: "if", color: KW }, { text: " (!result.ok) {", color: TXT }] },
+  { indent: 2, tokens: [{ text: "return", color: KW }, { text: " { error: result.msg };", color: TXT }] },
+  { indent: 1, tokens: [{ text: "}", color: TXT }] },
+  { indent: 1, tokens: [{ text: "return", color: KW }, { text: " { data: result.value };", color: TXT }] },
+  { indent: 0, tokens: [{ text: "}", color: TXT }] },
+];
+
+function variantCode(tweakLine: number, tweakTokens: { text: string; color: string }[]): CodeLine[] {
+  return sharedCodeBase.map((line, i) =>
+    i === tweakLine ? { ...line, tokens: tweakTokens } : line
+  );
 }
 
 export const GENERATIONS: GenerationData[] = [
-  { gen: 1, status: "fail", icon: "x", color: FAIL_COLOR },
-  { gen: 2, status: "fail", icon: "x", color: FAIL_COLOR },
-  { gen: 3, status: "partial", icon: "warning", color: WARN_COLOR },
-  { gen: 4, status: "partial", icon: "warning", color: WARN_COLOR },
-  { gen: 5, status: "pass", icon: "check", color: PASS_COLOR },
+  {
+    label: "Gen 1",
+    status: "fail",
+    statusColor: STATUS_RED,
+    failLines: [2, 4],
+    code: variantCode(2, [
+      { text: "const", color: KW }, { text: " result ", color: VAR },
+      { text: "= schema.", color: TXT }, { text: "validate", color: FN }, { text: "(input);", color: TXT },
+    ]),
+  },
+  {
+    label: "Gen 2",
+    status: "fail",
+    statusColor: STATUS_RED,
+    failLines: [3, 5],
+    code: variantCode(3, [
+      { text: "if", color: KW }, { text: " (result === ", color: TXT },
+      { text: "null", color: NUM }, { text: ") {", color: TXT },
+    ]),
+  },
+  {
+    label: "Gen 3",
+    status: "partial",
+    statusColor: STATUS_YELLOW,
+    failLines: [4],
+    code: variantCode(4, [
+      { text: "return", color: KW }, { text: " { error: ", color: TXT },
+      { text: "\"invalid\"", color: STR }, { text: " };", color: TXT },
+    ]),
+  },
+  {
+    label: "Gen 4",
+    status: "partial",
+    statusColor: STATUS_YELLOW,
+    failLines: [6],
+    code: variantCode(6, [
+      { text: "return", color: KW }, { text: " result.value;", color: TXT },
+      { text: " // ", color: CMT }, { text: "unwrapped", color: CMT },
+    ]),
+  },
+  {
+    label: "Gen 5",
+    status: "pass",
+    statusColor: STATUS_GREEN,
+    failLines: [],
+    code: sharedCodeBase,
+  },
 ];
 
-// ─── Faux Code Lines for each generation ──────────────────────────────
-export interface CodeLine {
-  text: string;
-  color: string;
-  indent: number;
-}
-
-const KEYWORD = "#C792EA";
-const STRING = "#C3E88D";
-const FUNC = "#82AAFF";
-const COMMENT = "#546E7A";
-const VARIABLE = "#EEFFFF";
-const NUMBER = "#F78C6C";
-const TYPE = "#FFCB6B";
-const ERROR_LINE = "#EF4444";
-
-export const GEN_CODE: CodeLine[][] = [
-  // Gen 1 — fails: wrong return type
-  [
-    { text: "export function validate(", indent: 0, color: KEYWORD },
-    { text: "  input: string", indent: 1, color: TYPE },
-    { text: "): boolean {", indent: 0, color: KEYWORD },
-    { text: "  const parsed = parse(input);", indent: 1, color: VARIABLE },
-    { text: "  return parsed.length;", indent: 1, color: ERROR_LINE },
-    { text: "  // ^^^ returns number", indent: 1, color: COMMENT },
-    { text: "}", indent: 0, color: KEYWORD },
-  ],
-  // Gen 2 — fails: missing null check
-  [
-    { text: "export function validate(", indent: 0, color: KEYWORD },
-    { text: "  input: string", indent: 1, color: TYPE },
-    { text: "): boolean {", indent: 0, color: KEYWORD },
-    { text: "  const result = check(input);", indent: 1, color: VARIABLE },
-    { text: "  return result.valid;", indent: 1, color: ERROR_LINE },
-    { text: "  // ^^^ result can be null", indent: 1, color: COMMENT },
-    { text: "}", indent: 0, color: KEYWORD },
-  ],
-  // Gen 3 — partial: edge case missed
-  [
-    { text: "export function validate(", indent: 0, color: KEYWORD },
-    { text: "  input: string", indent: 1, color: TYPE },
-    { text: "): boolean {", indent: 0, color: KEYWORD },
-    { text: "  if (!input) return false;", indent: 1, color: FUNC },
-    { text: "  const r = parse(input);", indent: 1, color: VARIABLE },
-    { text: "  return r !== null;", indent: 1, color: VARIABLE },
-    { text: "  // misses empty string", indent: 1, color: COMMENT },
-    { text: "}", indent: 0, color: KEYWORD },
-  ],
-  // Gen 4 — partial: off-by-one
-  [
-    { text: "export function validate(", indent: 0, color: KEYWORD },
-    { text: "  input: string", indent: 1, color: TYPE },
-    { text: "): boolean {", indent: 0, color: KEYWORD },
-    { text: "  if (!input) return false;", indent: 1, color: FUNC },
-    { text: "  const len = input.length;", indent: 1, color: VARIABLE },
-    { text: "  return len > 0 && len < 255;", indent: 1, color: VARIABLE },
-    { text: "  // should be <= 255", indent: 1, color: COMMENT },
-    { text: "}", indent: 0, color: KEYWORD },
-  ],
-  // Gen 5 — passes all tests
-  [
-    { text: "export function validate(", indent: 0, color: KEYWORD },
-    { text: "  input: string", indent: 1, color: TYPE },
-    { text: "): boolean {", indent: 0, color: KEYWORD },
-    { text: "  if (!input?.trim()) return false;", indent: 1, color: FUNC },
-    { text: "  const parsed = parse(input);", indent: 1, color: VARIABLE },
-    { text: "  if (!parsed) return false;", indent: 1, color: FUNC },
-    { text: "  return parsed.isValid();", indent: 1, color: STRING },
-    { text: "}", indent: 0, color: KEYWORD },
-  ],
-];
-
-// ─── Label Text ───────────────────────────────────────────────────────
-export const BOTTOM_LABEL =
-  "Generate five. Pick the one that passes all tests.";
+export const BOTTOM_LABEL = "Generate five. Pick the one that passes all tests.";

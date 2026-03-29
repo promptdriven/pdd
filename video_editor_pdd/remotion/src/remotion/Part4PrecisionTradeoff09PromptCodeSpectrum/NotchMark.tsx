@@ -11,18 +11,23 @@ import {
   NOTCH_OPACITY,
   NOTCH_LABEL_COLOR,
   NOTCH_LABEL_OPACITY,
-  NOTCH_FONT_SIZE,
-  LABEL_FONT_FAMILY,
-  NOTCH_POP_DURATION,
+  FONT_FAMILY,
+  PHASE_NOTCH_POP_DURATION,
 } from './constants';
 
 interface NotchMarkProps {
+  /** 0–1 fraction along the bar */
   fraction: number;
+  /** Label text below the notch */
   label: string;
-  /** The absolute frame at which this notch starts appearing */
+  /** Absolute frame at which this notch starts its pop-in */
   appearFrame: number;
 }
 
+/**
+ * A single notch mark on the spectrum — a small vertical tick
+ * with a tiny label, representing a "dip into code".
+ */
 export const NotchMark: React.FC<NotchMarkProps> = ({
   fraction,
   label,
@@ -33,28 +38,24 @@ export const NotchMark: React.FC<NotchMarkProps> = ({
 
   if (localFrame < 0) return null;
 
-  // ── Pop-in scale with easeOut(back) ──
-  const popScale = interpolate(
+  // Pop-in with easeOut(back) — overshoot scale
+  const scale = interpolate(
     localFrame,
-    [0, NOTCH_POP_DURATION],
+    [0, PHASE_NOTCH_POP_DURATION],
     [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.back(1.7)) }
-  );
-
-  const popOpacity = interpolate(
-    localFrame,
-    [0, NOTCH_POP_DURATION * 0.5],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.back(1.7)),
+    },
   );
 
   const notchX = BAR_X + BAR_WIDTH * fraction;
-  // Center the notch vertically on the bar
-  const notchTop = BAR_Y + (BAR_HEIGHT - NOTCH_HEIGHT) / 2;
+  const notchTop = BAR_Y + BAR_HEIGHT / 2 - NOTCH_HEIGHT / 2;
 
   return (
     <>
-      {/* Notch tick */}
+      {/* Vertical tick */}
       <div
         style={{
           position: 'absolute',
@@ -63,28 +64,27 @@ export const NotchMark: React.FC<NotchMarkProps> = ({
           width: NOTCH_WIDTH,
           height: NOTCH_HEIGHT,
           backgroundColor: NOTCH_COLOR,
-          opacity: NOTCH_OPACITY * popOpacity,
-          borderRadius: 1,
-          transform: `scaleY(${popScale})`,
+          opacity: NOTCH_OPACITY,
+          borderRadius: 2,
+          transform: `scaleY(${scale})`,
           transformOrigin: 'center center',
         }}
       />
 
-      {/* Notch label */}
+      {/* Label below bar */}
       <div
         style={{
           position: 'absolute',
           left: notchX,
           top: BAR_Y + BAR_HEIGHT + 8,
-          transform: `translateX(-50%) scale(${popScale})`,
+          transform: `translateX(-50%) scale(${scale})`,
           transformOrigin: 'center top',
-          fontFamily: LABEL_FONT_FAMILY,
-          fontSize: NOTCH_FONT_SIZE,
+          fontFamily: FONT_FAMILY,
+          fontSize: 9,
           fontWeight: 400,
           color: NOTCH_LABEL_COLOR,
-          opacity: NOTCH_LABEL_OPACITY * popOpacity,
+          opacity: NOTCH_LABEL_OPACITY * scale,
           whiteSpace: 'nowrap',
-          textAlign: 'center',
         }}
       >
         {label}
@@ -92,5 +92,3 @@ export const NotchMark: React.FC<NotchMarkProps> = ({
     </>
   );
 };
-
-export default NotchMark;

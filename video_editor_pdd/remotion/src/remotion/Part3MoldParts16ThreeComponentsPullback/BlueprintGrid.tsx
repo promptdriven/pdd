@@ -1,13 +1,12 @@
-// BlueprintGrid.tsx — subtle background grid
-import React from "react";
-import { AbsoluteFill } from "remotion";
+import React from 'react';
+import { AbsoluteFill } from 'remotion';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   GRID_SPACING,
   GRID_COLOR,
   GRID_OPACITY,
-} from "./constants";
+} from './constants';
 
 export const BlueprintGrid: React.FC = () => {
   const verticalLines: React.ReactNode[] = [];
@@ -23,6 +22,7 @@ export const BlueprintGrid: React.FC = () => {
         y2={CANVAS_HEIGHT}
         stroke={GRID_COLOR}
         strokeWidth={1}
+        opacity={GRID_OPACITY}
       />
     );
   }
@@ -37,18 +37,21 @@ export const BlueprintGrid: React.FC = () => {
         y2={y}
         stroke={GRID_COLOR}
         strokeWidth={1}
+        opacity={GRID_OPACITY}
       />
     );
   }
 
   return (
-    <AbsoluteFill style={{ opacity: GRID_OPACITY }}>
-      <svg width={CANVAS_WIDTH} height={CANVAS_HEIGHT}>
+    <AbsoluteFill>
+      <svg
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
         {verticalLines}
         {horizontalLines}
       </svg>
     </AbsoluteFill>
   );
 };
-
-export default BlueprintGrid;

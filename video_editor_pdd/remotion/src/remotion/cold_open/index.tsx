@@ -40,7 +40,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const ColdOpenSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 17.9;
+  const durationSeconds = 20.42;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE
     .filter((visual) => frame >= visual.start && frame < visual.end)

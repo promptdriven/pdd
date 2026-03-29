@@ -10,61 +10,64 @@ import {
   LEFT_COLOR,
   MID_COLOR,
   RIGHT_COLOR,
-  BAR_DRAW_START,
-  BAR_DRAW_DURATION,
-  ENDPOINT_LABEL_START,
-  ENDPOINT_LABEL_DURATION,
-  ENDPOINT_FONT_SIZE,
-  ENDPOINT_FONT_WEIGHT,
-  LABEL_FONT_FAMILY,
-  ZONE_FILL_COLOR,
-  ZONE_FILL_OPACITY,
-  SLIDER_START,
-  SLIDER_SLIDE_DURATION,
-  SLIDER_REST_FRACTION,
+  FONT_FAMILY,
+  PHASE_BAR_START,
+  PHASE_BAR_DRAW_DURATION,
+  PHASE_LABELS_START,
+  PHASE_LABELS_FADE_DURATION,
 } from './constants';
 
-const GRADIENT_ID = 'spectrum-gradient';
+const GRADIENT_ID = 'spectrumGradient';
 
+/**
+ * The horizontal spectrum bar that draws outward from center,
+ * plus the "Pure natural language" / "Pure code" endpoint labels.
+ */
 export const SpectrumBar: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // ── Bar draw-in from center ──
-  const drawProgress = interpolate(
+  // Bar "draws from center" by animating clipPath width
+  const barProgress = interpolate(
     frame,
-    [BAR_DRAW_START, BAR_DRAW_START + BAR_DRAW_DURATION],
+    [PHASE_BAR_START, PHASE_BAR_START + PHASE_BAR_DRAW_DURATION],
     [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.cubic),
+    },
   );
 
-  // The bar expands from center: clip it symmetrically
-  const visibleWidth = BAR_WIDTH * drawProgress;
-  const clipLeft = BAR_X + (BAR_WIDTH - visibleWidth) / 2;
-  const clipRight = clipLeft + visibleWidth;
-
-  // ── Endpoint labels ──
+  // Endpoint labels fade in slightly after bar starts
   const labelOpacity = interpolate(
     frame,
-    [ENDPOINT_LABEL_START, ENDPOINT_LABEL_START + ENDPOINT_LABEL_DURATION],
+    [PHASE_LABELS_START, PHASE_LABELS_START + PHASE_LABELS_FADE_DURATION],
     [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
   );
 
-  // ── Zone fill (prompt space) ──
-  const zoneFraction = interpolate(
-    frame,
-    [SLIDER_START, SLIDER_START + SLIDER_SLIDE_DURATION],
-    [0, SLIDER_REST_FRACTION],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  const zoneWidth = BAR_WIDTH * zoneFraction;
+  // Clip from center outward
+  const halfWidth = (BAR_WIDTH * barProgress) / 2;
+  const centerX = BAR_X + BAR_WIDTH / 2;
+  const clipLeft = centerX - halfWidth;
+  const clipRight = centerX + halfWidth;
 
   return (
     <>
-      {/* SVG gradient definition */}
+      {/* SVG for the gradient bar */}
       <svg
-        style={{ position: 'absolute', width: 0, height: 0 }}
-        aria-hidden="true"
+        width={BAR_WIDTH + 4}
+        height={BAR_HEIGHT + 4}
+        style={{
+          position: 'absolute',
+          left: BAR_X - 2,
+          top: BAR_Y - 2,
+          overflow: 'visible',
+        }}
       >
         <defs>
           <linearGradient id={GRADIENT_ID} x1="0%" y1="0%" x2="100%" y2="0%">
@@ -72,62 +75,38 @@ export const SpectrumBar: React.FC = () => {
             <stop offset="50%" stopColor={MID_COLOR} />
             <stop offset="100%" stopColor={RIGHT_COLOR} />
           </linearGradient>
+          <clipPath id="barClip">
+            <rect
+              x={clipLeft - BAR_X + 2}
+              y={0}
+              width={clipRight - clipLeft}
+              height={BAR_HEIGHT + 4}
+            />
+          </clipPath>
         </defs>
+        <rect
+          x={2}
+          y={2}
+          width={BAR_WIDTH}
+          height={BAR_HEIGHT}
+          rx={BAR_BORDER_RADIUS}
+          ry={BAR_BORDER_RADIUS}
+          fill={`url(#${GRADIENT_ID})`}
+          stroke={BAR_BORDER_COLOR}
+          strokeWidth={1}
+          clipPath="url(#barClip)"
+        />
       </svg>
 
-      {/* Spectrum bar (clipped for draw-in animation) */}
-      <div
-        style={{
-          position: 'absolute',
-          left: clipLeft,
-          top: BAR_Y,
-          width: clipRight - clipLeft,
-          height: BAR_HEIGHT,
-          overflow: 'hidden',
-          borderRadius: BAR_BORDER_RADIUS,
-        }}
-      >
-        <div
-          style={{
-            position: 'absolute',
-            left: -(clipLeft - BAR_X),
-            top: 0,
-            width: BAR_WIDTH,
-            height: BAR_HEIGHT,
-            borderRadius: BAR_BORDER_RADIUS,
-            background: `linear-gradient(to right, ${LEFT_COLOR}, ${MID_COLOR}, ${RIGHT_COLOR})`,
-            border: `1px solid ${BAR_BORDER_COLOR}`,
-            boxSizing: 'border-box',
-          }}
-        />
-      </div>
-
-      {/* Zone fill overlay (prompt space) */}
-      {zoneFraction > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            left: BAR_X,
-            top: BAR_Y,
-            width: zoneWidth,
-            height: BAR_HEIGHT,
-            borderRadius: `${BAR_BORDER_RADIUS}px 0 0 ${BAR_BORDER_RADIUS}px`,
-            backgroundColor: ZONE_FILL_COLOR,
-            opacity: ZONE_FILL_OPACITY,
-            pointerEvents: 'none',
-          }}
-        />
-      )}
-
-      {/* Left endpoint label */}
+      {/* Left label: "Pure natural language" */}
       <div
         style={{
           position: 'absolute',
           left: BAR_X,
-          top: BAR_Y - 30,
-          fontFamily: LABEL_FONT_FAMILY,
-          fontSize: ENDPOINT_FONT_SIZE,
-          fontWeight: ENDPOINT_FONT_WEIGHT,
+          top: BAR_Y - 32,
+          fontFamily: FONT_FAMILY,
+          fontSize: 16,
+          fontWeight: 600,
           color: LEFT_COLOR,
           opacity: labelOpacity,
           whiteSpace: 'nowrap',
@@ -136,19 +115,19 @@ export const SpectrumBar: React.FC = () => {
         Pure natural language
       </div>
 
-      {/* Right endpoint label */}
+      {/* Right label: "Pure code" */}
       <div
         style={{
           position: 'absolute',
           right: 1920 - (BAR_X + BAR_WIDTH),
-          top: BAR_Y - 30,
-          fontFamily: LABEL_FONT_FAMILY,
-          fontSize: ENDPOINT_FONT_SIZE,
-          fontWeight: ENDPOINT_FONT_WEIGHT,
+          top: BAR_Y - 32,
+          fontFamily: FONT_FAMILY,
+          fontSize: 16,
+          fontWeight: 600,
           color: RIGHT_COLOR,
           opacity: labelOpacity,
-          whiteSpace: 'nowrap',
           textAlign: 'right',
+          whiteSpace: 'nowrap',
         }}
       >
         Pure code
@@ -156,5 +135,3 @@ export const SpectrumBar: React.FC = () => {
     </>
   );
 };
-
-export default SpectrumBar;

@@ -1,63 +1,58 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  GRID_SPACING,
-  GRID_COLOR,
-  GRID_OPACITY,
-  CANVAS_W,
-  CANVAS_H,
-  BG_FADE_START,
-  BG_FADE_END,
-} from "./constants";
+import React from 'react';
+import { AbsoluteFill } from 'remotion';
 
-export const BlueprintGrid: React.FC = () => {
-  const frame = useCurrentFrame();
+interface BlueprintGridProps {
+  spacing: number;
+  color: string;
+  opacity: number;
+  width: number;
+  height: number;
+}
 
-  const opacity = interpolate(
-    frame,
-    [BG_FADE_START, BG_FADE_END],
-    [0, GRID_OPACITY],
-    { extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-  );
-
+export const BlueprintGrid: React.FC<BlueprintGridProps> = ({
+  spacing,
+  color,
+  opacity,
+  width,
+  height,
+}) => {
   const verticalLines: React.ReactNode[] = [];
   const horizontalLines: React.ReactNode[] = [];
 
-  for (let x = 0; x <= CANVAS_W; x += GRID_SPACING) {
+  for (let x = 0; x <= width; x += spacing) {
     verticalLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={CANVAS_H}
-        stroke={GRID_COLOR}
+        y2={height}
+        stroke={color}
         strokeWidth={1}
       />
     );
   }
 
-  for (let y = 0; y <= CANVAS_H; y += GRID_SPACING) {
+  for (let y = 0; y <= height; y += spacing) {
     horizontalLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={CANVAS_W}
+        x2={width}
         y2={y}
-        stroke={GRID_COLOR}
+        stroke={color}
         strokeWidth={1}
       />
     );
   }
 
   return (
-    <AbsoluteFill style={{ opacity }}>
+    <AbsoluteFill>
       <svg
-        width={CANVAS_W}
-        height={CANVAS_H}
-        viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
-        style={{ position: "absolute", top: 0, left: 0 }}
+        width={width}
+        height={height}
+        style={{ opacity, position: 'absolute', top: 0, left: 0 }}
       >
         {verticalLines}
         {horizontalLines}
@@ -65,5 +60,3 @@ export const BlueprintGrid: React.FC = () => {
     </AbsoluteFill>
   );
 };
-
-export default BlueprintGrid;

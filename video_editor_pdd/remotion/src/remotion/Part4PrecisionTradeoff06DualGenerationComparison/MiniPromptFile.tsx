@@ -1,5 +1,5 @@
-import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 
 interface MiniPromptFileProps {
   x: number;
@@ -10,7 +10,7 @@ interface MiniPromptFileProps {
   badge: string;
   lineCount: number;
   appearStart: number;
-  fadeDuration: number;
+  appearDuration: number;
 }
 
 const MiniPromptFile: React.FC<MiniPromptFileProps> = ({
@@ -22,75 +22,79 @@ const MiniPromptFile: React.FC<MiniPromptFileProps> = ({
   badge,
   lineCount,
   appearStart,
-  fadeDuration,
+  appearDuration,
 }) => {
   const frame = useCurrentFrame();
 
   const opacity = interpolate(
     frame,
-    [appearStart, appearStart + fadeDuration],
+    [appearStart, appearStart + appearDuration],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
   const scale = interpolate(
     frame,
-    [appearStart, appearStart + fadeDuration],
+    [appearStart, appearStart + appearDuration],
     [0.85, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  // Generate faint text lines to represent prompt content
-  const lines = Array.from({ length: lineCount }, (_, i) => {
-    const lineWidth = 40 + ((i * 37) % 50); // pseudo-random widths
-    return (
+  // Generate faint text lines to simulate prompt content
+  const lines: React.ReactNode[] = [];
+  const lineHeight = Math.min(14, (height - 40) / lineCount);
+  const visibleLines = Math.min(lineCount, Math.floor((height - 40) / lineHeight));
+
+  for (let i = 0; i < visibleLines; i++) {
+    const lineWidth = 30 + Math.random() * (width - 80);
+    lines.push(
       <div
         key={i}
         style={{
+          width: Math.min(lineWidth, width - 40),
           height: 2,
-          width: `${lineWidth}%`,
           backgroundColor: borderColor,
           opacity: 0.2,
-          marginBottom: 3,
+          marginBottom: lineHeight - 2,
           borderRadius: 1,
         }}
       />
     );
-  });
+  }
 
   return (
     <div
       style={{
-        position: "absolute",
-        left: x - width / 2,
+        position: 'absolute',
+        left: x,
         top: y,
         width,
         height,
         opacity,
         transform: `scale(${scale})`,
-        transformOrigin: "center top",
+        transformOrigin: 'center center',
       }}
     >
       {/* File container */}
       <div
         style={{
-          width: "100%",
-          height: "100%",
+          width: '100%',
+          height: '100%',
           border: `2px solid ${borderColor}`,
           borderRadius: 6,
-          backgroundColor: "rgba(10, 15, 26, 0.8)",
-          padding: 10,
-          overflow: "hidden",
-          boxSizing: "border-box",
-          borderOpacity: 0.4,
+          backgroundColor: 'rgba(255,255,255,0.03)',
+          padding: '20px 16px 16px',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          position: 'relative',
         }}
       >
         {lines}
@@ -99,16 +103,17 @@ const MiniPromptFile: React.FC<MiniPromptFileProps> = ({
       {/* Badge */}
       <div
         style={{
-          position: "absolute",
-          top: -12,
-          right: 10,
+          position: 'absolute',
+          top: -10,
+          left: width / 2 - 32,
           backgroundColor: borderColor,
-          color: "#0A0F1A",
-          fontFamily: "Inter, sans-serif",
+          color: '#0A0F1A',
+          fontFamily: 'Inter, sans-serif',
           fontSize: 11,
           fontWeight: 600,
-          padding: "2px 8px",
-          borderRadius: 4,
+          padding: '2px 10px',
+          borderRadius: 10,
+          whiteSpace: 'nowrap',
         }}
       >
         {badge}

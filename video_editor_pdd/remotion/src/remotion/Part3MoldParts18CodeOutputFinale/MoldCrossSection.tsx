@@ -1,174 +1,208 @@
 import React from "react";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
   NOZZLE_COLOR,
   WALLS_COLOR,
   CAVITY_COLOR,
-  CANVAS_WIDTH,
+  MOLD_GLOW_START,
+  MOLD_GLOW_END,
+  MOLD_GLOW_FROM,
+  MOLD_GLOW_TO,
 } from "./constants";
 
-interface MoldCrossSectionProps {
-  wallsGlow: number;
-  nozzleGlow: number;
-  cavityGlow: number;
-}
+/**
+ * Mold cross-section SVG showing nozzle, walls, and cavity.
+ * Glow intensifies from frame 40–60.
+ */
+export const MoldCrossSection: React.FC = () => {
+  const frame = useCurrentFrame();
 
-const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
-  wallsGlow,
-  nozzleGlow,
-  cavityGlow,
-}) => {
-  const moldWidth = 700;
-  const moldHeight = 350;
-  const centerX = CANVAS_WIDTH / 2;
+  const wallGlow = interpolate(
+    frame,
+    [MOLD_GLOW_START, MOLD_GLOW_END],
+    [MOLD_GLOW_FROM, MOLD_GLOW_TO],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
+
+  const nozzleGlow = interpolate(
+    frame,
+    [MOLD_GLOW_START, MOLD_GLOW_END],
+    [0.3, 0.5],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
+
+  const cavityGlow = interpolate(
+    frame,
+    [MOLD_GLOW_START, MOLD_GLOW_END],
+    [0.1, 0.25],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+  );
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: 150,
-        left: centerX - moldWidth / 2,
-        width: moldWidth,
-        height: moldHeight,
-        transform: "scale(0.7)",
-        transformOrigin: "center top",
-      }}
+    <svg
+      width={800}
+      height={350}
+      viewBox="0 0 800 350"
+      style={{ overflow: "visible" }}
     >
-      {/* Nozzle (top center funnel) */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: moldWidth / 2 - 30,
-          width: 60,
-          height: 80,
-          background: `linear-gradient(180deg, ${NOZZLE_COLOR} 0%, ${NOZZLE_COLOR}88 100%)`,
-          clipPath: "polygon(30% 0%, 70% 0%, 60% 100%, 40% 100%)",
-          boxShadow: `0 0 ${20 + nozzleGlow * 30}px ${NOZZLE_COLOR}`,
-          opacity: 0.7 + nozzleGlow,
-        }}
-      />
-      {/* Nozzle glow overlay */}
-      <div
-        style={{
-          position: "absolute",
-          top: -10,
-          left: moldWidth / 2 - 50,
-          width: 100,
-          height: 100,
-          borderRadius: "50%",
-          background: `radial-gradient(circle, ${NOZZLE_COLOR}${Math.round(nozzleGlow * 255)
-            .toString(16)
-            .padStart(2, "0")} 0%, transparent 70%)`,
-          pointerEvents: "none",
-        }}
-      />
+      <defs>
+        {/* Nozzle glow */}
+        <filter id="nozzleGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="12" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+        {/* Walls glow */}
+        <filter id="wallsGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="10" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+        {/* Cavity glow */}
+        <filter id="cavityGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="8" result="blur" />
+          <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
+      </defs>
 
-      {/* Left mold wall */}
-      <div
-        style={{
-          position: "absolute",
-          top: 60,
-          left: 40,
-          width: 120,
-          height: 260,
-          background: `linear-gradient(90deg, ${WALLS_COLOR}CC 0%, ${WALLS_COLOR}66 100%)`,
-          borderRadius: "8px 4px 4px 8px",
-          boxShadow: `0 0 ${15 + wallsGlow * 40}px ${WALLS_COLOR}`,
-          opacity: 0.6 + wallsGlow,
-        }}
-      />
-      {/* Left wall glow */}
-      <div
-        style={{
-          position: "absolute",
-          top: 100,
-          left: 20,
-          width: 160,
-          height: 200,
-          borderRadius: "50%",
-          background: `radial-gradient(ellipse, ${WALLS_COLOR}${Math.round(wallsGlow * 200)
-            .toString(16)
-            .padStart(2, "0")} 0%, transparent 70%)`,
-          pointerEvents: "none",
-        }}
-      />
+      {/* ---- LEFT MOLD HALF ---- */}
+      <g>
+        {/* Left wall */}
+        <rect
+          x={100}
+          y={60}
+          width={80}
+          height={260}
+          rx={6}
+          fill={WALLS_COLOR}
+          opacity={wallGlow}
+          filter="url(#wallsGlow)"
+        />
+        {/* Left wall inner edge */}
+        <rect
+          x={180}
+          y={80}
+          width={12}
+          height={220}
+          rx={2}
+          fill={WALLS_COLOR}
+          opacity={wallGlow * 1.2}
+        />
+      </g>
 
-      {/* Right mold wall */}
-      <div
-        style={{
-          position: "absolute",
-          top: 60,
-          right: 40,
-          width: 120,
-          height: 260,
-          background: `linear-gradient(270deg, ${WALLS_COLOR}CC 0%, ${WALLS_COLOR}66 100%)`,
-          borderRadius: "4px 8px 8px 4px",
-          boxShadow: `0 0 ${15 + wallsGlow * 40}px ${WALLS_COLOR}`,
-          opacity: 0.6 + wallsGlow,
-        }}
-      />
-      {/* Right wall glow */}
-      <div
-        style={{
-          position: "absolute",
-          top: 100,
-          right: 20,
-          width: 160,
-          height: 200,
-          borderRadius: "50%",
-          background: `radial-gradient(ellipse, ${WALLS_COLOR}${Math.round(wallsGlow * 200)
-            .toString(16)
-            .padStart(2, "0")} 0%, transparent 70%)`,
-          pointerEvents: "none",
-        }}
-      />
+      {/* ---- RIGHT MOLD HALF ---- */}
+      <g>
+        {/* Right wall */}
+        <rect
+          x={620}
+          y={60}
+          width={80}
+          height={260}
+          rx={6}
+          fill={WALLS_COLOR}
+          opacity={wallGlow}
+          filter="url(#wallsGlow)"
+        />
+        {/* Right wall inner edge */}
+        <rect
+          x={608}
+          y={80}
+          width={12}
+          height={220}
+          rx={2}
+          fill={WALLS_COLOR}
+          opacity={wallGlow * 1.2}
+        />
+      </g>
 
-      {/* Cavity (center space) */}
-      <div
-        style={{
-          position: "absolute",
-          top: 80,
-          left: 160,
-          width: moldWidth - 320,
-          height: 220,
-          background: `radial-gradient(ellipse, ${CAVITY_COLOR}${Math.round(cavityGlow * 180)
-            .toString(16)
-            .padStart(2, "0")} 0%, ${CAVITY_COLOR}11 60%, transparent 100%)`,
-          borderRadius: 12,
-          border: `1px solid ${CAVITY_COLOR}44`,
-        }}
-      />
+      {/* ---- NOZZLE (top center) ---- */}
+      <g filter="url(#nozzleGlow)">
+        {/* Nozzle body */}
+        <polygon
+          points="370,0 430,0 420,50 380,50"
+          fill={NOZZLE_COLOR}
+          opacity={nozzleGlow}
+        />
+        {/* Nozzle tip */}
+        <rect
+          x={390}
+          y={50}
+          width={20}
+          height={30}
+          rx={3}
+          fill={NOZZLE_COLOR}
+          opacity={nozzleGlow * 1.3}
+        />
+      </g>
 
-      {/* Bottom plate */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 30,
-          width: moldWidth - 60,
-          height: 30,
-          background: `linear-gradient(0deg, ${WALLS_COLOR}88 0%, ${WALLS_COLOR}44 100%)`,
-          borderRadius: "0 0 6px 6px",
-          boxShadow: `0 0 ${10 + wallsGlow * 25}px ${WALLS_COLOR}`,
-          opacity: 0.5 + wallsGlow * 0.5,
-        }}
-      />
+      {/* ---- CAVITY (center area) ---- */}
+      <g filter="url(#cavityGlow)">
+        <rect
+          x={200}
+          y={80}
+          width={400}
+          height={220}
+          rx={12}
+          fill={CAVITY_COLOR}
+          opacity={cavityGlow}
+        />
+        {/* Inner cavity detail lines */}
+        <rect
+          x={240}
+          y={120}
+          width={320}
+          height={3}
+          rx={1}
+          fill={CAVITY_COLOR}
+          opacity={cavityGlow * 0.6}
+        />
+        <rect
+          x={240}
+          y={160}
+          width={320}
+          height={3}
+          rx={1}
+          fill={CAVITY_COLOR}
+          opacity={cavityGlow * 0.6}
+        />
+        <rect
+          x={240}
+          y={200}
+          width={280}
+          height={3}
+          rx={1}
+          fill={CAVITY_COLOR}
+          opacity={cavityGlow * 0.6}
+        />
+        <rect
+          x={240}
+          y={240}
+          width={240}
+          height={3}
+          rx={1}
+          fill={CAVITY_COLOR}
+          opacity={cavityGlow * 0.6}
+        />
+      </g>
 
-      {/* Top plate */}
-      <div
-        style={{
-          position: "absolute",
-          top: 55,
-          left: 30,
-          width: moldWidth - 60,
-          height: 20,
-          background: `linear-gradient(180deg, ${WALLS_COLOR}88 0%, ${WALLS_COLOR}44 100%)`,
-          borderRadius: "6px 6px 0 0",
-          boxShadow: `0 0 ${10 + wallsGlow * 25}px ${WALLS_COLOR}`,
-          opacity: 0.5 + wallsGlow * 0.5,
-        }}
+      {/* ---- TOP & BOTTOM PLATES ---- */}
+      <rect
+        x={90}
+        y={50}
+        width={620}
+        height={10}
+        rx={3}
+        fill={WALLS_COLOR}
+        opacity={wallGlow * 0.8}
       />
-    </div>
+      <rect
+        x={90}
+        y={320}
+        width={620}
+        height={10}
+        rx={3}
+        fill={WALLS_COLOR}
+        opacity={wallGlow * 0.8}
+      />
+    </svg>
   );
 };
 

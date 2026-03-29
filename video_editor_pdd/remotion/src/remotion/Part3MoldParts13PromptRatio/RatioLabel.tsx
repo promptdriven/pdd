@@ -1,89 +1,106 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  RATIO_TEXT_COLOR,
-  PROMPT_COLOR,
-  RATIO_ANIM_DURATION,
-} from './constants';
+  RATIO_COLOR,
+  PROMPT_X,
+  PROMPT_Y,
+  PROMPT_WIDTH,
+  PROMPT_HEIGHT,
+  CODE_X,
+  CODE_Y,
+  CODE_HEIGHT,
+  RATIO_ANIM_START,
+  RATIO_ANIM_DUR,
+} from "./constants";
 
-export const RatioLabel: React.FC<{ startFrame: number }> = ({
-  startFrame,
-}) => {
+export const RatioLabel: React.FC = () => {
   const frame = useCurrentFrame();
-  const localFrame = frame - startFrame;
 
-  const opacity = interpolate(localFrame, [0, RATIO_ANIM_DURATION], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
-
-  const scale = interpolate(
-    localFrame,
-    [0, RATIO_ANIM_DURATION],
-    [0.8, 1.0],
+  const progress = interpolate(
+    frame,
+    [RATIO_ANIM_START, RATIO_ANIM_START + RATIO_ANIM_DUR],
+    [0, 1],
     {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.back(1.7)),
+      easing: Easing.out(Easing.back(1.4)),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
+
+  const opacity = interpolate(
+    frame,
+    [RATIO_ANIM_START, RATIO_ANIM_START + RATIO_ANIM_DUR],
+    [0, 1],
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  const scale = interpolate(progress, [0, 1], [0.8, 1]);
+
+  // Position: centered between prompt and code blocks
+  const labelX = (PROMPT_X + PROMPT_WIDTH + CODE_X) / 2;
+  // Vertically: below prompt block, roughly aligned
+  const labelY = PROMPT_Y + PROMPT_HEIGHT + 80;
+
+  // Connector line endpoints
+  const lineStartX = PROMPT_X + PROMPT_WIDTH;
+  const lineEndX = CODE_X;
+  const lineY = PROMPT_Y + PROMPT_HEIGHT / 2 + 20; // offset for label position
+  const codeMidY = CODE_Y + CODE_HEIGHT / 2;
 
   return (
     <div
       style={{
-        position: 'absolute',
-        left: 200,
-        right: 0,
-        top: 560,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: "100%",
+        height: "100%",
         opacity,
-        transform: `scale(${scale})`,
+        pointerEvents: "none",
       }}
     >
       {/* Connector line */}
-      <div
+      <svg
         style={{
-          position: 'absolute',
-          top: 24,
-          left: 350,
-          width: 520,
-          height: 2,
-          backgroundColor: PROMPT_COLOR,
-          opacity: 0.2,
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: "100%",
+          height: "100%",
         }}
-      />
+      >
+        <line
+          x1={lineStartX + 10}
+          y1={lineY}
+          x2={lineEndX - 10}
+          y2={codeMidY}
+          stroke={`rgba(217, 148, 74, 0.2)`}
+          strokeWidth={2}
+          strokeDasharray="6 4"
+        />
+      </svg>
 
       {/* Ratio text */}
       <div
         style={{
-          fontFamily: 'Inter, sans-serif',
+          position: "absolute",
+          left: labelX - 100,
+          top: labelY,
+          width: 200,
+          textAlign: "center",
+          fontFamily: "Inter, sans-serif",
           fontSize: 36,
           fontWeight: 700,
-          color: RATIO_TEXT_COLOR,
-          textAlign: 'center',
-          position: 'relative',
-          backgroundColor: '#0A0F1A',
-          padding: '4px 24px',
-          zIndex: 1,
+          color: RATIO_COLOR,
+          transform: `scale(${scale})`,
+          textShadow: `0 0 20px rgba(226, 232, 240, 0.3)`,
         }}
       >
         1:5 to 1:10
-      </div>
-
-      {/* Subtitle */}
-      <div
-        style={{
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 13,
-          color: '#94A3B8',
-          marginTop: 8,
-          textAlign: 'center',
-        }}
-      >
-        compression ratio
       </div>
     </div>
   );

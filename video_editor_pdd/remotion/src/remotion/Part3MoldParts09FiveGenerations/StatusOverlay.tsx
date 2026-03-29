@@ -1,150 +1,206 @@
-// StatusOverlay.tsx — Red X, Yellow Warning, Green Checkmark overlays
 import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import { STATUS_ICON_SIZE, FAIL_COLOR, WARN_COLOR, PASS_COLOR } from "./constants";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
+import {
+  PANEL_W,
+  PANEL_H,
+  STATUS_ICON_SIZE,
+  STATUS_RED,
+  STATUS_YELLOW,
+  STATUS_GREEN,
+  RED_X_FRAME,
+  YELLOW_WARN_FRAME,
+  GREEN_CHECK_FRAME,
+} from "./constants";
 
-// ─── Red X Icon ───────────────────────────────────────────────────────
-export const RedXIcon: React.FC<{ size: number }> = ({ size }) => (
-  <svg width={size} height={size} viewBox="0 0 48 48">
-    <circle cx="24" cy="24" r="22" fill={FAIL_COLOR} opacity={0.15} />
-    <line
-      x1="14"
-      y1="14"
-      x2="34"
-      y2="34"
-      stroke={FAIL_COLOR}
-      strokeWidth="4"
-      strokeLinecap="round"
-    />
-    <line
-      x1="34"
-      y1="14"
-      x2="14"
-      y2="34"
-      stroke={FAIL_COLOR}
-      strokeWidth="4"
-      strokeLinecap="round"
-    />
-  </svg>
+// ── Red X icon ──────────────────────────────────────────────────────────────
+const RedX: React.FC<{ progress: number; shake: number }> = ({ progress, shake }) => (
+  <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: `rgba(239, 68, 68, 0.08)`,
+      borderRadius: 8,
+      opacity: progress,
+      transform: `translateX(${shake}px) scale(${interpolate(progress, [0, 1], [1.4, 1])})`,
+    }}
+  >
+    <svg
+      width={STATUS_ICON_SIZE}
+      height={STATUS_ICON_SIZE}
+      viewBox="0 0 48 48"
+    >
+      <circle cx="24" cy="24" r="22" fill="rgba(239,68,68,0.15)" />
+      <line x1="14" y1="14" x2="34" y2="34" stroke={STATUS_RED} strokeWidth="4" strokeLinecap="round" />
+      <line x1="34" y1="14" x2="14" y2="34" stroke={STATUS_RED} strokeWidth="4" strokeLinecap="round" />
+    </svg>
+  </div>
 );
 
-// ─── Yellow Warning Triangle ──────────────────────────────────────────
-export const WarnIcon: React.FC<{ size: number }> = ({ size }) => (
-  <svg width={size} height={size} viewBox="0 0 48 48">
-    <polygon
-      points="24,6 44,42 4,42"
-      fill="none"
-      stroke={WARN_COLOR}
-      strokeWidth="3"
-      strokeLinejoin="round"
-    />
-    <line
-      x1="24"
-      y1="20"
-      x2="24"
-      y2="30"
-      stroke={WARN_COLOR}
-      strokeWidth="3"
-      strokeLinecap="round"
-    />
-    <circle cx="24" cy="36" r="2" fill={WARN_COLOR} />
-  </svg>
+// ── Yellow Warning ──────────────────────────────────────────────────────────
+const YellowWarning: React.FC<{ progress: number; wobble: number }> = ({ progress, wobble }) => (
+  <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: `rgba(251, 191, 36, 0.06)`,
+      borderRadius: 8,
+      opacity: progress,
+      transform: `rotate(${wobble}deg) scale(${interpolate(progress, [0, 1], [1.3, 1])})`,
+    }}
+  >
+    <svg
+      width={STATUS_ICON_SIZE}
+      height={STATUS_ICON_SIZE}
+      viewBox="0 0 48 48"
+    >
+      <path
+        d="M24 4 L44 42 L4 42 Z"
+        fill="rgba(251,191,36,0.15)"
+        stroke={STATUS_YELLOW}
+        strokeWidth="2.5"
+        strokeLinejoin="round"
+      />
+      <line x1="24" y1="18" x2="24" y2="30" stroke={STATUS_YELLOW} strokeWidth="3" strokeLinecap="round" />
+      <circle cx="24" cy="36" r="2" fill={STATUS_YELLOW} />
+    </svg>
+  </div>
 );
 
-// ─── Green Checkmark ──────────────────────────────────────────────────
-export const CheckIcon: React.FC<{ size: number }> = ({ size }) => (
-  <svg width={size} height={size} viewBox="0 0 48 48">
-    <circle cx="24" cy="24" r="22" fill={PASS_COLOR} opacity={0.15} />
-    <polyline
-      points="14,24 22,32 34,16"
-      fill="none"
-      stroke={PASS_COLOR}
-      strokeWidth="4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
-
-// ─── Status Overlay Container ─────────────────────────────────────────
-interface StatusOverlayProps {
-  type: "x" | "warning" | "check";
-  /** Frame offset relative to the Sequence this is placed in */
-  animationDuration: number;
-}
-
-export const StatusOverlay: React.FC<StatusOverlayProps> = ({
-  type,
-  animationDuration,
-}) => {
-  const frame = useCurrentFrame();
-  const size = STATUS_ICON_SIZE;
-
-  // Scale-in with overshoot for stamps
-  const scaleIn = interpolate(frame, [0, animationDuration], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.back(1.7)),
-  });
-
-  // Shake for X marks (3px horizontal shake over first 10 frames)
-  let shakeX = 0;
-  if (type === "x" && frame < 10) {
-    shakeX = Math.sin(frame * 4) * 3 * (1 - frame / 10);
-  }
-
-  // Wobble for warnings (rotation oscillation)
-  let wobbleRotation = 0;
-  if (type === "warning" && frame < 12) {
-    wobbleRotation = Math.sin(frame * 3) * 8 * (1 - frame / 12);
-  }
-
-  // Glow burst for checkmark
-  const glowOpacity =
-    type === "check"
-      ? interpolate(frame, [0, 15, 40], [0, 0.6, 0.3], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-        })
-      : 0;
-
-  return (
+// ── Green Checkmark ─────────────────────────────────────────────────────────
+const GreenCheck: React.FC<{ progress: number; burstRadius: number }> = ({ progress, burstRadius }) => (
+  <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: 8,
+      opacity: progress,
+      transform: `scale(${interpolate(progress, [0, 1], [0.5, 1])})`,
+    }}
+  >
+    {/* Radial glow burst */}
     <div
       style={{
         position: "absolute",
-        top: 0,
-        left: 0,
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        pointerEvents: "none",
+        width: burstRadius * 2,
+        height: burstRadius * 2,
+        borderRadius: "50%",
+        background: `radial-gradient(circle, rgba(74,222,128,0.25) 0%, transparent 70%)`,
       }}
+    />
+    <svg
+      width={STATUS_ICON_SIZE}
+      height={STATUS_ICON_SIZE}
+      viewBox="0 0 48 48"
     >
-      {/* Glow burst background for check */}
-      {type === "check" && (
-        <div
-          style={{
-            position: "absolute",
-            width: 120,
-            height: 120,
-            borderRadius: "50%",
-            background: `radial-gradient(circle, ${PASS_COLOR}60 0%, transparent 70%)`,
-            opacity: glowOpacity,
-          }}
-        />
-      )}
+      <circle cx="24" cy="24" r="22" fill="rgba(74,222,128,0.15)" />
+      <polyline
+        points="14,24 22,33 36,16"
+        fill="none"
+        stroke={STATUS_GREEN}
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  </div>
+);
 
-      <div
-        style={{
-          transform: `scale(${scaleIn}) translateX(${shakeX}px) rotate(${wobbleRotation}deg)`,
-        }}
-      >
-        {type === "x" && <RedXIcon size={size} />}
-        {type === "warning" && <WarnIcon size={size} />}
-        {type === "check" && <CheckIcon size={size} />}
+// ── Status overlay per-panel ────────────────────────────────────────────────
+interface StatusOverlayProps {
+  panelIndex: number;
+  status: "fail" | "partial" | "pass";
+  x: number;
+  y: number;
+}
+
+export const StatusOverlay: React.FC<StatusOverlayProps> = ({
+  panelIndex,
+  status,
+  x,
+  y,
+}) => {
+  const frame = useCurrentFrame();
+
+  if (status === "fail") {
+    const startFrame = RED_X_FRAME + (panelIndex === 1 ? 5 : 0); // slight stagger between panels 1 & 2
+    const localFrame = frame - startFrame;
+    if (localFrame < 0) return null;
+
+    const progress = interpolate(localFrame, [0, 10], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.back(1.7)),
+    });
+
+    // Shake: quick lateral oscillation
+    const shakeAmount =
+      localFrame < 10
+        ? 3 * Math.sin(localFrame * 3) * (1 - localFrame / 10)
+        : 0;
+
+    return (
+      <div style={{ position: "absolute", left: x, top: y, width: PANEL_W, height: PANEL_H, pointerEvents: "none" }}>
+        <RedX progress={progress} shake={shakeAmount} />
       </div>
-    </div>
-  );
+    );
+  }
+
+  if (status === "partial") {
+    const stagger = panelIndex === 3 ? 5 : 0;
+    const startFrame = YELLOW_WARN_FRAME + stagger;
+    const localFrame = frame - startFrame;
+    if (localFrame < 0) return null;
+
+    const progress = interpolate(localFrame, [0, 12], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.elastic(1)),
+    });
+
+    // Wobble
+    const wobble =
+      localFrame < 18
+        ? 6 * Math.sin(localFrame * 1.5) * Math.exp(-localFrame * 0.12)
+        : 0;
+
+    return (
+      <div style={{ position: "absolute", left: x, top: y, width: PANEL_W, height: PANEL_H, pointerEvents: "none" }}>
+        <YellowWarning progress={progress} wobble={wobble} />
+      </div>
+    );
+  }
+
+  if (status === "pass") {
+    const localFrame = frame - GREEN_CHECK_FRAME;
+    if (localFrame < 0) return null;
+
+    const progress = interpolate(localFrame, [0, 15], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.exp),
+    });
+
+    // Burst expands then settles
+    const burstRadius = interpolate(localFrame, [0, 15, 40], [10, 80, 50], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+
+    return (
+      <div style={{ position: "absolute", left: x, top: y, width: PANEL_W, height: PANEL_H, pointerEvents: "none" }}>
+        <GreenCheck progress={progress} burstRadius={burstRadius} />
+      </div>
+    );
+  }
+
+  return null;
 };

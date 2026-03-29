@@ -1,21 +1,17 @@
-import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import React, { useMemo } from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 
 interface TestIndicatorsProps {
   count: number;
   dotSize: number;
   color: string;
   dotOpacity: number;
-  /** Center x of the prompt file the tests surround */
-  centerX: number;
-  /** Top y of the prompt file */
-  topY: number;
-  /** Width of the prompt file */
-  promptW: number;
-  /** Height of the prompt file */
-  promptH: number;
+  targetX: number;
+  targetY: number;
+  targetW: number;
+  targetH: number;
   appearStart: number;
-  fadeDuration: number;
+  appearDuration: number;
 }
 
 const TestIndicators: React.FC<TestIndicatorsProps> = ({
@@ -23,109 +19,75 @@ const TestIndicators: React.FC<TestIndicatorsProps> = ({
   dotSize,
   color,
   dotOpacity,
-  centerX,
-  topY,
-  promptW,
-  promptH,
+  targetX,
+  targetY,
+  targetW,
+  targetH,
   appearStart,
-  fadeDuration,
+  appearDuration,
 }) => {
   const frame = useCurrentFrame();
 
   const opacity = interpolate(
     frame,
-    [appearStart, appearStart + fadeDuration],
+    [appearStart, appearStart + appearDuration],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  // Generate positions around the prompt file
-  const gap = 3;
-  const margin = 12; // space between prompt edge and dots
-  const left = centerX - promptW / 2 - margin;
-  const right = centerX + promptW / 2 + margin;
-  const top = topY - margin;
-  const bottom = topY + promptH + margin;
+  // Arrange dots around the prompt file in a frame pattern
+  const dots = useMemo(() => {
+    const positions: { x: number; y: number }[] = [];
+    const spacing = 10;
+    const margin = 14;
 
-  const positions: { x: number; y: number }[] = [];
-  const step = dotSize + gap;
+    // Top edge
+    let placed = 0;
+    const topY = targetY - margin;
+    for (let dx = 0; placed < count; dx += spacing) {
+      if (dx > targetW + margin * 2) break;
+      positions.push({ x: targetX - margin + dx, y: topY });
+      placed++;
+    }
 
-  // Top row
-  for (let x = left; x <= right && positions.length < count; x += step) {
-    positions.push({ x, y: top });
-  }
-  // Right column
-  for (
-    let y = top + step;
-    y <= bottom - step && positions.length < count;
-    y += step
-  ) {
-    positions.push({ x: right, y });
-  }
-  // Bottom row (right to left)
-  for (let x = right; x >= left && positions.length < count; x -= step) {
-    positions.push({ x, y: bottom });
-  }
-  // Left column (bottom to top)
-  for (
-    let y = bottom - step;
-    y >= top + step && positions.length < count;
-    y -= step
-  ) {
-    positions.push({ x: left, y });
-  }
+    // Right edge
+    const rightX = targetX + targetW + margin;
+    for (let dy = 0; placed < count; dy += spacing) {
+      if (dy > targetH + margin * 2) break;
+      positions.push({ x: rightX, y: targetY - margin + dy });
+      placed++;
+    }
 
-  // If still more to place, add a second ring
-  const outerMargin = margin + step + 4;
-  const outerLeft = centerX - promptW / 2 - outerMargin;
-  const outerRight = centerX + promptW / 2 + outerMargin;
-  const outerTop = topY - outerMargin;
-  const outerBottom = topY + promptH + outerMargin;
+    // Bottom edge (right to left)
+    const bottomY = targetY + targetH + margin;
+    for (let dx = targetW + margin * 2; placed < count; dx -= spacing) {
+      if (dx < 0) break;
+      positions.push({ x: targetX - margin + dx, y: bottomY });
+      placed++;
+    }
 
-  // Top outer
-  for (
-    let x = outerLeft;
-    x <= outerRight && positions.length < count;
-    x += step
-  ) {
-    positions.push({ x, y: outerTop });
-  }
-  // Right outer
-  for (
-    let y = outerTop + step;
-    y <= outerBottom && positions.length < count;
-    y += step
-  ) {
-    positions.push({ x: outerRight, y });
-  }
-  // Bottom outer
-  for (
-    let x = outerRight;
-    x >= outerLeft && positions.length < count;
-    x -= step
-  ) {
-    positions.push({ x, y: outerBottom });
-  }
-  // Left outer
-  for (
-    let y = outerBottom - step;
-    y >= outerTop + step && positions.length < count;
-    y -= step
-  ) {
-    positions.push({ x: outerLeft, y });
-  }
+    // Left edge (bottom to top)
+    const leftX = targetX - margin;
+    for (let dy = targetH + margin * 2; placed < count; dy -= spacing) {
+      if (dy < 0) break;
+      positions.push({ x: leftX, y: targetY - margin + dy });
+      placed++;
+    }
+
+    return positions.slice(0, count);
+  }, [count, targetX, targetY, targetW, targetH]);
 
   return (
-    <div style={{ opacity }}>
-      {positions.slice(0, count).map((pos, i) => (
+    <div style={{ position: 'absolute', left: 0, top: 0, opacity }}>
+      {dots.map((pos, i) => (
         <div
           key={i}
           style={{
-            position: "absolute",
+            position: 'absolute',
             left: pos.x,
             top: pos.y,
             width: dotSize,

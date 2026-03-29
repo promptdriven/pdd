@@ -1,56 +1,30 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  TEAM_COLOR,
-  SUCCESS_GREEN,
-  DB_ICON_X,
-  DB_ICON_Y,
-  DB_ICON_WIDTH,
-  DB_ICON_HEIGHT,
-} from "./constants";
+import { TEAL, MINT_GREEN } from "./constants";
 
-// ─── Flow Arrow (solid) ───
-interface FlowArrowProps {
-  fromX: number;
-  fromY: number;
-  toX: number;
-  toY: number;
-  startFrame: number;
-  durationFrames: number;
-  label: string;
+interface DatabaseFeedbackProps {
+  arrowStart: number;
+  arrowEnd: number;
+  dbAppearStart: number;
+  dbAppearEnd: number;
+  dashedArrowStart: number;
+  dashedArrowEnd: number;
 }
 
-export const FlowArrow: React.FC<FlowArrowProps> = ({
-  fromX,
-  fromY,
-  toX,
-  toY,
-  startFrame,
-  durationFrames,
-  label,
+const DatabaseFeedback: React.FC<DatabaseFeedbackProps> = ({
+  arrowStart,
+  arrowEnd,
+  dbAppearStart,
+  dbAppearEnd,
+  dashedArrowStart,
+  dashedArrowEnd,
 }) => {
   const frame = useCurrentFrame();
-  const localFrame = Math.max(0, frame - startFrame);
 
-  const progress = interpolate(localFrame, [0, durationFrames], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.inOut(Easing.cubic),
-  });
-
-  const opacity = interpolate(localFrame, [0, 10], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Interpolated endpoint
-  const currentX = fromX + (toX - fromX) * progress;
-  const currentY = fromY + (toY - fromY) * progress;
-
-  // Label travels along the arrow
-  const labelProgress = interpolate(
-    localFrame,
-    [10, durationFrames - 5],
+  // Arrow animation progress
+  const arrowProgress = interpolate(
+    frame,
+    [arrowStart, arrowEnd],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -58,282 +32,308 @@ export const FlowArrow: React.FC<FlowArrowProps> = ({
       easing: Easing.inOut(Easing.cubic),
     }
   );
-  const labelX = fromX + (toX - fromX) * labelProgress;
-  const labelY = fromY + (toY - fromY) * labelProgress - 18;
 
-  return (
-    <svg
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: 1920,
-        height: 1080,
-        pointerEvents: "none",
-        opacity,
-      }}
-    >
-      {/* Arrow line */}
-      <line
-        x1={fromX}
-        y1={fromY}
-        x2={currentX}
-        y2={currentY}
-        stroke={TEAM_COLOR}
-        strokeWidth={2.5}
-        opacity={0.5}
-      />
-      {/* Arrow head */}
-      {progress > 0.1 && (
-        <polygon
-          points={`${currentX},${currentY} ${currentX - 8},${currentY - 12} ${currentX + 8},${currentY - 12}`}
-          fill={TEAM_COLOR}
-          opacity={0.6}
-        />
-      )}
-      {/* Traveling label */}
-      {localFrame > 10 && (
-        <text
-          x={labelX}
-          y={labelY}
-          textAnchor="middle"
-          fontFamily="'JetBrains Mono', monospace"
-          fontSize={11}
-          fill={SUCCESS_GREEN}
-          opacity={interpolate(
-            localFrame,
-            [10, 20, durationFrames - 10, durationFrames],
-            [0, 0.9, 0.9, 0.5],
-            { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-          )}
-        >
-          {label}
-        </text>
-      )}
-    </svg>
+  // Database icon fade in
+  const dbOpacity = interpolate(
+    frame,
+    [dbAppearStart, dbAppearEnd],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
-};
 
-// ─── Dashed Arrow ───
-interface DashedArrowProps {
-  fromX: number;
-  fromY: number;
-  toX: number;
-  toY: number;
-  startFrame: number;
-  label: string;
-}
-
-export const DashedArrow: React.FC<DashedArrowProps> = ({
-  fromX,
-  fromY,
-  toX,
-  toY,
-  startFrame,
-  label,
-}) => {
-  const frame = useCurrentFrame();
-  const localFrame = Math.max(0, frame - startFrame);
-
-  const opacity = interpolate(localFrame, [0, 20], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Dash animation offset
-  const dashOffset = localFrame * 1.5;
-
-  return (
-    <svg
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: 1920,
-        height: 1080,
-        pointerEvents: "none",
-        opacity: opacity * 0.4,
-      }}
-    >
-      <line
-        x1={fromX}
-        y1={fromY}
-        x2={toX}
-        y2={toY}
-        stroke={TEAM_COLOR}
-        strokeWidth={2}
-        strokeDasharray="8 6"
-        strokeDashoffset={-dashOffset}
-      />
-      {/* Arrow head */}
-      <polygon
-        points={`${toX},${toY} ${toX - 6},${toY - 10} ${toX + 6},${toY - 10}`}
-        fill={TEAM_COLOR}
-        opacity={0.5}
-      />
-      {/* Label */}
-      <text
-        x={toX}
-        y={toY + 22}
-        textAnchor="middle"
-        fontFamily="Inter, sans-serif"
-        fontSize={13}
-        fontWeight={600}
-        fill={TEAM_COLOR}
-        opacity={0.7}
-      >
-        {label}
-      </text>
-    </svg>
-  );
-};
-
-// ─── Database Icon ───
-interface DatabaseIconProps {
-  fadeStartFrame: number;
-  pulseStartFrame: number;
-}
-
-export const DatabaseIcon: React.FC<DatabaseIconProps> = ({
-  fadeStartFrame,
-  pulseStartFrame,
-}) => {
-  const frame = useCurrentFrame();
-
-  const localFadeFrame = Math.max(0, frame - fadeStartFrame);
-  const opacity = interpolate(localFadeFrame, [0, 15], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Pulse effect when data arrives
-  const pulseLocal = Math.max(0, frame - pulseStartFrame);
-  const pulseScale =
-    pulseLocal > 0
-      ? 1 +
-        interpolate(pulseLocal % 30, [0, 15, 30], [0, 0.08, 0], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.inOut(Easing.sin),
-        })
+  // Database pulse
+  const dbPulse =
+    frame >= dbAppearEnd
+      ? Math.sin(((frame - dbAppearEnd) / 15) * Math.PI * 2) * 0.15 + 1
       : 1;
 
-  const cx = DB_ICON_X;
-  const cy = DB_ICON_Y;
-  const w = DB_ICON_WIDTH;
-  const h = DB_ICON_HEIGHT;
+  // Dashed arrow to future generations
+  const dashedProgress = interpolate(
+    frame,
+    [dashedArrowStart, dashedArrowEnd],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    }
+  );
+
+  // Flow particle along the main arrow
+  const particleT = arrowProgress;
+
+  // Arrow path from right code panel to database
+  const arrowFromX = 1100;
+  const arrowFromY = 460;
+  const arrowToX = 960;
+  const arrowToY = 740;
+
+  const particleX = arrowFromX + (arrowToX - arrowFromX) * particleT;
+  const particleY = arrowFromY + (arrowToY - arrowFromY) * particleT;
+
+  // Dashed arrow from database to future
+  const dashedFromY = 840;
+  const dashedToY = 940;
+
+  // "(prompt, code)" label along arrow
+  const labelOpacity = interpolate(
+    frame,
+    [arrowStart + 10, arrowStart + 25],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
 
   return (
     <div
       style={{
         position: "absolute",
-        left: cx - w / 2 - 60,
-        top: cy - h / 2 - 20,
-        width: w + 120,
-        height: h + 60,
-        opacity,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
+        top: 0,
+        left: 0,
+        width: 1920,
+        height: 1080,
       }}
     >
       <svg
-        width={w + 20}
-        height={h + 10}
-        style={{ transform: `scale(${pulseScale})` }}
+        width={1920}
+        height={1080}
+        style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Cylinder body */}
-        <rect
-          x={10}
-          y={15}
-          width={w}
-          height={h - 15}
-          rx={4}
-          fill={TEAM_COLOR}
-          fillOpacity={0.2}
-          stroke={TEAM_COLOR}
-          strokeWidth={2}
-        />
-        {/* Top ellipse */}
-        <ellipse
-          cx={10 + w / 2}
-          cy={15}
-          rx={w / 2}
-          ry={10}
-          fill={TEAM_COLOR}
-          fillOpacity={0.3}
-          stroke={TEAM_COLOR}
-          strokeWidth={2}
-        />
-        {/* Bottom ellipse (rim) */}
-        <ellipse
-          cx={10 + w / 2}
-          cy={h}
-          rx={w / 2}
-          ry={10}
-          fill="none"
-          stroke={TEAM_COLOR}
-          strokeWidth={2}
-        />
-        {/* Inner lines for disk detail */}
-        <ellipse
-          cx={10 + w / 2}
-          cy={30}
-          rx={w / 2 - 2}
-          ry={6}
-          fill="none"
-          stroke={TEAM_COLOR}
-          strokeWidth={1}
-          opacity={0.3}
-        />
+        {/* Main flow arrow from code to database */}
+        {arrowProgress > 0 && (
+          <>
+            <defs>
+              <marker
+                id="arrowhead-teal"
+                markerWidth="10"
+                markerHeight="7"
+                refX="10"
+                refY="3.5"
+                orient="auto"
+              >
+                <polygon
+                  points="0 0, 10 3.5, 0 7"
+                  fill={TEAL}
+                  opacity={0.7}
+                />
+              </marker>
+            </defs>
+            <line
+              x1={arrowFromX}
+              y1={arrowFromY}
+              x2={arrowFromX + (arrowToX - arrowFromX) * arrowProgress}
+              y2={arrowFromY + (arrowToY - arrowFromY) * arrowProgress}
+              stroke={TEAL}
+              strokeWidth={3}
+              opacity={0.5}
+              markerEnd={arrowProgress > 0.9 ? "url(#arrowhead-teal)" : undefined}
+            />
+
+            {/* Flow particle */}
+            {arrowProgress > 0.05 && arrowProgress < 0.95 && (
+              <circle
+                cx={particleX}
+                cy={particleY}
+                r={6}
+                fill={TEAL}
+                opacity={0.8}
+              >
+                <animate
+                  attributeName="r"
+                  values="4;8;4"
+                  dur="0.5s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            )}
+          </>
+        )}
+
+        {/* Database icon (cylinder) */}
+        {dbOpacity > 0 && (
+          <g
+            transform={`translate(960, 790) scale(${dbPulse})`}
+            opacity={dbOpacity}
+          >
+            {/* Cylinder body */}
+            <rect
+              x={-40}
+              y={-15}
+              width={80}
+              height={45}
+              rx={4}
+              fill={TEAL}
+              opacity={0.2}
+              stroke={TEAL}
+              strokeWidth={2}
+            />
+            {/* Top ellipse */}
+            <ellipse
+              cx={0}
+              cy={-15}
+              rx={40}
+              ry={12}
+              fill={TEAL}
+              opacity={0.25}
+              stroke={TEAL}
+              strokeWidth={2}
+            />
+            {/* Bottom ellipse */}
+            <ellipse
+              cx={0}
+              cy={30}
+              rx={40}
+              ry={12}
+              fill="none"
+              stroke={TEAL}
+              strokeWidth={2}
+            />
+            {/* Data lines inside */}
+            <line
+              x1={-20}
+              y1={0}
+              x2={20}
+              y2={0}
+              stroke={TEAL}
+              strokeWidth={1.5}
+              opacity={0.5}
+            />
+            <line
+              x1={-15}
+              y1={10}
+              x2={15}
+              y2={10}
+              stroke={TEAL}
+              strokeWidth={1.5}
+              opacity={0.4}
+            />
+          </g>
+        )}
+
+        {/* Dashed arrow to future generations */}
+        {dashedProgress > 0 && (
+          <>
+            <defs>
+              <marker
+                id="arrowhead-teal-dashed"
+                markerWidth="8"
+                markerHeight="6"
+                refX="8"
+                refY="3"
+                orient="auto"
+              >
+                <polygon
+                  points="0 0, 8 3, 0 6"
+                  fill={TEAL}
+                  opacity={0.4}
+                />
+              </marker>
+            </defs>
+            <line
+              x1={960}
+              y1={dashedFromY}
+              x2={960}
+              y2={dashedFromY + (dashedToY - dashedFromY) * dashedProgress}
+              stroke={TEAL}
+              strokeWidth={2}
+              strokeDasharray="8 4"
+              opacity={0.35}
+              markerEnd={
+                dashedProgress > 0.9
+                  ? "url(#arrowhead-teal-dashed)"
+                  : undefined
+              }
+            />
+          </>
+        )}
       </svg>
-      {/* Label */}
-      <div
-        style={{
-          fontFamily: "Inter, sans-serif",
-          fontSize: 14,
-          fontWeight: 600,
-          color: TEAM_COLOR,
-          marginTop: 6,
-          textAlign: "center",
-          whiteSpace: "nowrap",
-        }}
-      >
-        Grounding Database
-      </div>
+
+      {/* "(prompt, code)" label along arrow */}
+      {arrowProgress > 0.1 && (
+        <div
+          style={{
+            position: "absolute",
+            left: particleX + 15,
+            top: particleY - 10,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 11,
+            color: MINT_GREEN,
+            opacity: labelOpacity * 0.85,
+            whiteSpace: "nowrap",
+          }}
+        >
+          (prompt, code)
+        </div>
+      )}
+
+      {/* Database label */}
+      {dbOpacity > 0 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 960 - 80,
+            top: 838,
+            width: 160,
+            textAlign: "center",
+            fontFamily: "Inter, sans-serif",
+            fontSize: 14,
+            fontWeight: 600,
+            color: TEAL,
+            opacity: dbOpacity * 0.9,
+          }}
+        >
+          Grounding Database
+        </div>
+      )}
+
+      {/* "Future Generations" label */}
+      {dashedProgress > 0.5 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 960 - 80,
+            top: 950,
+            width: 160,
+            textAlign: "center",
+            fontFamily: "Inter, sans-serif",
+            fontSize: 13,
+            fontWeight: 500,
+            color: TEAL,
+            opacity: interpolate(
+              dashedProgress,
+              [0.5, 1],
+              [0, 0.7],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+            ),
+          }}
+        >
+          Future Generations
+        </div>
+      )}
+
+      {/* pdd fix terminal note */}
+      {dbOpacity > 0.5 && (
+        <div
+          style={{
+            position: "absolute",
+            left: 1060,
+            top: 790,
+            fontFamily: "'JetBrains Mono', monospace",
+            fontSize: 11,
+            color: MINT_GREEN,
+            opacity: interpolate(
+              dbOpacity,
+              [0.5, 1],
+              [0, 0.7],
+              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+            ),
+            whiteSpace: "nowrap",
+          }}
+        >
+          pdd fix → cloud
+        </div>
+      )}
     </div>
   );
 };
 
-// ─── Terminal Note ───
-interface TerminalNoteProps {
-  startFrame: number;
-}
-
-export const TerminalNote: React.FC<TerminalNoteProps> = ({ startFrame }) => {
-  const frame = useCurrentFrame();
-  const localFrame = Math.max(0, frame - startFrame);
-
-  const opacity = interpolate(localFrame, [0, 20], [0, 0.85], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: DB_ICON_X - 140,
-        top: DB_ICON_Y + 65,
-        opacity,
-        fontFamily: "'JetBrains Mono', monospace",
-        fontSize: 11,
-        color: SUCCESS_GREEN,
-        textAlign: "center",
-        width: 280,
-      }}
-    >
-      pdd fix → (prompt, code) → cloud
-    </div>
-  );
-};
+export default DatabaseFeedback;

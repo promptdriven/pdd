@@ -1,167 +1,157 @@
+// TableRow.tsx — Animated table row with accent border and slide-in
 import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
-
-const COL_WIDTHS = [200, 300, 200];
-const TABLE_W = 800;
-const ROW_BG = "#0F172A";
-const ROW_BORDER = "#1E293B";
-const VALUE_COLOR = "#E2E8F0";
-const PAREN_COLOR = "#94A3B8";
-const OWNER_COLOR = "#CDD6F4";
-const ACCENT_W = 3;
-const ROW_H = 60;
-const TESTS_ACCENT = "#4A90D9";
+import { interpolate, Easing } from "remotion";
+import {
+  TABLE_CENTER_X,
+  TABLE_WIDTH,
+  ROW_HEIGHT,
+  CELL_PADDING_H,
+  ACCENT_BORDER_WIDTH,
+  ROW_BG,
+  ROW_BORDER_COLOR,
+  ROW_BORDER_WIDTH,
+  COLUMN_WIDTHS,
+  FONT_FAMILY,
+  COMPONENT_FONT_SIZE,
+  COMPONENT_FONT_WEIGHT,
+  VALUE_FONT_SIZE,
+  VALUE_FONT_WEIGHT,
+  PARENTHETICAL_FONT_SIZE,
+  PARENTHETICAL_TEXT_COLOR,
+  VALUE_TEXT_COLOR,
+  OWNER_TEXT_COLOR,
+  ROW_SLIDE_DURATION,
+  ROW_SLIDE_DISTANCE,
+  TESTS_GLOW_DURATION,
+} from "./constants";
+import type { TableRowData } from "./constants";
 
 interface TableRowProps {
-  component: string;
-  encodes: string;
-  parenthetical: string;
-  owner: string;
-  accentColor: string;
-  /** Frame at which this row starts animating */
-  startFrame: number;
-  /** Vertical position (top) */
+  row: TableRowData;
   topY: number;
+  /** Frame offset within this row's Sequence (starts at 0) */
+  localFrame: number;
+  isTestsRow: boolean;
 }
 
-export const TableRowItem: React.FC<TableRowProps> = ({
-  component,
-  encodes,
-  parenthetical,
-  owner,
-  accentColor,
-  startFrame,
+const TableRow: React.FC<TableRowProps> = ({
+  row,
   topY,
+  localFrame,
+  isTestsRow,
 }) => {
-  const frame = useCurrentFrame();
-
-  const localFrame = frame - startFrame;
-
-  // Slide in from left
-  const slideX = interpolate(localFrame, [0, 20], [-40, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.cubic),
-  });
-
-  const opacity = interpolate(localFrame, [0, 20], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.cubic),
-  });
-
-  // Tests row glow effect
-  const isTestsRow = accentColor === TESTS_ACCENT;
-  let glowOpacity = 0;
-  if (isTestsRow && localFrame >= 20) {
-    const glowLocal = localFrame - 20;
-    glowOpacity = interpolate(glowLocal, [0, 10, 25], [0, 0.35, 0], {
+  // Slide from left
+  const translateX = interpolate(
+    localFrame,
+    [0, ROW_SLIDE_DURATION],
+    [-ROW_SLIDE_DISTANCE, 0],
+    {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    });
-  }
+      easing: Easing.out(Easing.cubic),
+    }
+  );
 
-  if (localFrame < 0) return null;
+  const opacity = interpolate(localFrame, [0, ROW_SLIDE_DURATION], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+
+  // Tests row glow effect — ramp up then fade
+  let glowBoxShadow = "none";
+  if (isTestsRow) {
+    const peakFrame = ROW_SLIDE_DURATION + TESTS_GLOW_DURATION;
+    const fadeEndFrame = peakFrame + 20;
+    const glowAlpha = interpolate(
+      localFrame,
+      [ROW_SLIDE_DURATION, peakFrame, fadeEndFrame],
+      [0, 0.3, 0.05],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.quad),
+      }
+    );
+    glowBoxShadow = `0 0 20px rgba(74, 144, 217, ${glowAlpha})`;
+  }
 
   return (
     <div
       style={{
         position: "absolute",
+        left: TABLE_CENTER_X,
         top: topY,
-        left: (1920 - TABLE_W) / 2,
-        width: TABLE_W,
-        height: ROW_H,
+        width: TABLE_WIDTH,
+        height: ROW_HEIGHT,
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: ROW_BG,
+        borderBottom: `${ROW_BORDER_WIDTH}px solid ${ROW_BORDER_COLOR}`,
+        borderLeft: `${ACCENT_BORDER_WIDTH}px solid ${row.color}`,
         opacity,
-        transform: `translateX(${slideX}px)`,
+        transform: `translateX(${translateX}px)`,
+        boxShadow: glowBoxShadow,
       }}
     >
-      {/* Glow behind row for Tests */}
-      {isTestsRow && glowOpacity > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            inset: -4,
-            borderRadius: 4,
-            boxShadow: `0 0 20px 4px ${TESTS_ACCENT}`,
-            opacity: glowOpacity,
-            pointerEvents: "none",
-          }}
-        />
-      )}
-
+      {/* Component name column */}
       <div
         style={{
-          width: "100%",
-          height: "100%",
-          backgroundColor: ROW_BG,
-          borderBottom: `1px solid ${ROW_BORDER}`,
-          borderLeft: `${ACCENT_W}px solid ${accentColor}`,
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
+          width: COLUMN_WIDTHS[0],
+          paddingLeft: CELL_PADDING_H,
+          paddingRight: CELL_PADDING_H,
+          fontFamily: FONT_FAMILY,
+          fontSize: COMPONENT_FONT_SIZE,
+          fontWeight: COMPONENT_FONT_WEIGHT,
+          color: row.color,
         }}
       >
-        {/* Component name */}
-        <div
-          style={{
-            width: COL_WIDTHS[0] - ACCENT_W,
-            paddingLeft: 24 - ACCENT_W,
-            paddingRight: 24,
-            fontFamily: "Inter, sans-serif",
-            fontSize: 16,
-            fontWeight: 700,
-            color: accentColor,
-          }}
-        >
-          {component}
-        </div>
+        {row.component}
+      </div>
 
-        {/* Encodes */}
-        <div
-          style={{
-            width: COL_WIDTHS[1],
-            paddingLeft: 24,
-            paddingRight: 24,
-            fontFamily: "Inter, sans-serif",
-            fontSize: 16,
-            fontWeight: 400,
-            color: VALUE_COLOR,
-            display: "flex",
-            alignItems: "baseline",
-            gap: 6,
-          }}
-        >
-          <span>{encodes}</span>
-          {parenthetical && (
-            <span
-              style={{
-                fontSize: 14,
-                color: PAREN_COLOR,
-              }}
-            >
-              {parenthetical}
-            </span>
-          )}
-        </div>
+      {/* Encodes column */}
+      <div
+        style={{
+          width: COLUMN_WIDTHS[1],
+          paddingLeft: CELL_PADDING_H,
+          paddingRight: CELL_PADDING_H,
+          fontFamily: FONT_FAMILY,
+          fontSize: VALUE_FONT_SIZE,
+          fontWeight: VALUE_FONT_WEIGHT,
+          color: VALUE_TEXT_COLOR,
+        }}
+      >
+        {row.encodes}
+        {row.parenthetical ? (
+          <span
+            style={{
+              fontSize: PARENTHETICAL_FONT_SIZE,
+              color: PARENTHETICAL_TEXT_COLOR,
+              marginLeft: 6,
+            }}
+          >
+            {row.parenthetical}
+          </span>
+        ) : null}
+      </div>
 
-        {/* Owner */}
-        <div
-          style={{
-            width: COL_WIDTHS[2],
-            paddingLeft: 24,
-            paddingRight: 24,
-            fontFamily: "Inter, sans-serif",
-            fontSize: 16,
-            fontWeight: 400,
-            color: OWNER_COLOR,
-          }}
-        >
-          {owner}
-        </div>
+      {/* Owner column */}
+      <div
+        style={{
+          width: COLUMN_WIDTHS[2],
+          paddingLeft: CELL_PADDING_H,
+          paddingRight: CELL_PADDING_H,
+          fontFamily: FONT_FAMILY,
+          fontSize: VALUE_FONT_SIZE,
+          fontWeight: VALUE_FONT_WEIGHT,
+          color: OWNER_TEXT_COLOR,
+        }}
+      >
+        {row.owner}
       </div>
     </div>
   );
 };
 
-export default TableRowItem;
+export default TableRow;

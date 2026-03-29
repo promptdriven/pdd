@@ -1,6 +1,12 @@
 import React from 'react';
 import { AbsoluteFill } from 'remotion';
-import { GRID_SPACING, GRID_COLOR, GRID_OPACITY, WIDTH, HEIGHT } from './constants';
+import {
+  GRID_SPACING,
+  GRID_COLOR,
+  GRID_OPACITY,
+  WIDTH,
+  HEIGHT,
+} from './constants';
 
 export const BlueprintGrid: React.FC = () => {
   const verticalLines: number[] = [];
@@ -13,8 +19,8 @@ export const BlueprintGrid: React.FC = () => {
   }
 
   return (
-    <AbsoluteFill>
-      <svg width={WIDTH} height={HEIGHT} style={{ position: 'absolute', top: 0, left: 0 }}>
+    <AbsoluteFill style={{ opacity: GRID_OPACITY }}>
+      <svg width={WIDTH} height={HEIGHT}>
         {verticalLines.map((x) => (
           <line
             key={`v-${x}`}
@@ -24,7 +30,6 @@ export const BlueprintGrid: React.FC = () => {
             y2={HEIGHT}
             stroke={GRID_COLOR}
             strokeWidth={1}
-            opacity={GRID_OPACITY}
           />
         ))}
         {horizontalLines.map((y) => (
@@ -36,7 +41,6 @@ export const BlueprintGrid: React.FC = () => {
             y2={y}
             stroke={GRID_COLOR}
             strokeWidth={1}
-            opacity={GRID_OPACITY}
           />
         ))}
       </svg>

@@ -2,23 +2,26 @@
 
 ### Feat
 
-- add manual audio sync acceptance locks
-- agentic auto deps (#733) (#751)
+- **auto-deps embedding retrieval**: new `embed_retrieve` module pre-filters candidates by cosine similarity before LLM reranking when >50 candidates (`PDD_EMBEDDING_MODEL` env var, defaults to `text-embedding-3-small`)
+- **auto-deps documentation support**: `--include-docs` flag discovers `.md`/`.txt`/`.rst` documentation files alongside code as dependency candidates
+- **auto-deps inline dedup**: post-processing pass removes prompt content that duplicates included files via `difflib.SequenceMatcher` (disable with `--no-dedup`)
+- **auto-deps parallel summarization**: `--concurrency N` flag parallelizes LLM summarization calls via `ThreadPoolExecutor`
+- **agentic change scope enforcement**: architecture.json edits after Step 10 are scoped to changed files only; unrelated entries are reverted as hallucinations
+- **agentic sync PR branch augmentation**: architecture.json is augmented from the PR branch before basename validation, preventing new-module entries from being rejected
 
 ### Fix
 
-- harden stage 5 transcript validation
-- handle non-fast-forward push errors in _push_with_retry (#999)
-- flag transcript boundary hallucinations
-- harden veo chain staging and stale detection
+- handle non-fast-forward push errors in `_push_with_retry` by retrying with `--force-with-lease`
 
 ### Refactor
 
-- update and clean up Remotion animation components across multiple economics and paradigm shift modules
-- consolidate code editor components, update chart styles, and refresh narration assets across Remotion scenes
-- update CI validation prompt instructions and refine cold open audit specifications
-- update PDD explainer specifications and optimize Remotion cold open components and layouts
-- update PDD explainer specifications and reorganize Remotion video components
+- add `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>` metadata tags across auto-deps prompt files for architecture sync
+- rewrite auto-deps example files (`auto_deps_main`, `insert_includes`, `maintenance`, `embed_retrieve`) with comprehensive mock-based test scenarios
+
+### Docs
+
+- update README with auto-deps documentation support, dedup, two-stage retrieval, new CLI flags, and `PDD_EMBEDDING_MODEL` / `PDD_AUTO_DEPS_CONCURRENCY` env vars
+- add "Documentation as Dependencies" section to prompting guide
 
 ## v0.0.190 (2026-03-27)
 

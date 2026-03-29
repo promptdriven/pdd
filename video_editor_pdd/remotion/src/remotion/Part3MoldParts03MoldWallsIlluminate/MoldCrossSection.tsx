@@ -1,99 +1,92 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
-  MOLD_STROKE_COLOR,
-  MOLD_STROKE_WIDTH,
+  MOLD_X,
+  MOLD_Y,
+  MOLD_WIDTH,
+  MOLD_HEIGHT,
+  MOLD_WALL_THICKNESS,
+  MOLD_OUTER_STROKE,
+  MOLD_OUTER_STROKE_WIDTH,
   WALL_COLOR,
   DIMMED_OPACITY,
-  MOLD_OUTER_WIDTH,
-  MOLD_OUTER_HEIGHT,
-  MOLD_INNER_WIDTH,
-  MOLD_INNER_HEIGHT,
   NOZZLE_WIDTH,
   NOZZLE_HEIGHT,
   ZOOM_START,
   ZOOM_END,
   ZOOM_FROM,
   ZOOM_TO,
+  WALL_SEGMENT_POSITIONS,
+  WALL_DATA,
+  WALL_GLOW_MIN,
+  WALL_GLOW_MAX,
+  WALL_GLOW_DURATION,
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
 } from './constants';
 
-/**
- * MoldCrossSection renders the mold shape:
- * - Outer shell (rectangle)
- * - Nozzle at the top (dimmed)
- * - Cavity interior (dimmed)
- * - Left and right walls (bright, glowing)
- *
- * The whole mold zooms from 1.0 to 1.15 in the first 30 frames.
- */
 export const MoldCrossSection: React.FC = () => {
   const frame = useCurrentFrame();
 
   // Zoom animation
   const scale = interpolate(frame, [ZOOM_START, ZOOM_END], [ZOOM_FROM, ZOOM_TO], {
-    easing: Easing.inOut(Easing.ease),
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
+    easing: Easing.inOut(Easing.cubic),
   });
 
-  // Walls brighten during zoom
-  const wallBrightness = interpolate(frame, [0, 30], [0.3, 1.0], {
+  // Nozzle/cavity dim during transition (frames 0-30)
+  const dimProgress = interpolate(frame, [0, 30], [0.3, DIMMED_OPACITY], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
   });
 
-  // Nozzle and cavity dim during zoom
-  const dimFactor = interpolate(frame, [0, 30], [0.4, DIMMED_OPACITY], {
-    easing: Easing.inOut(Easing.ease),
+  // Walls brighten during transition (frames 0-30)
+  const wallBrightness = interpolate(frame, [0, 30], [0.3, 1.0], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
   });
 
-  const cx = CANVAS_WIDTH / 2;
-  const cy = CANVAS_HEIGHT / 2;
+  const centerX = CANVAS_WIDTH / 2;
+  const centerY = CANVAS_HEIGHT / 2;
 
-  // Outer shell rect
-  const outerX = cx - MOLD_OUTER_WIDTH / 2;
-  const outerY = cy - MOLD_OUTER_HEIGHT / 2;
+  // Nozzle position (top center of mold)
+  const nozzleX = MOLD_X + (MOLD_WIDTH - NOZZLE_WIDTH) / 2;
+  const nozzleY = MOLD_Y - NOZZLE_HEIGHT;
 
-  // Inner cavity rect
-  const innerX = cx - MOLD_INNER_WIDTH / 2;
-  const innerY = cy - MOLD_INNER_HEIGHT / 2;
-
-  // Nozzle (top center, above outer shell)
-  const nozzleX = cx - NOZZLE_WIDTH / 2;
-  const nozzleY = outerY - NOZZLE_HEIGHT;
-
-  // Wall segments: left wall and right wall of the mold
-  const leftWallX = innerX;
-  const rightWallX = innerX + MOLD_INNER_WIDTH;
+  // Cavity interior
+  const cavityX = MOLD_X + MOLD_WALL_THICKNESS;
+  const cavityY = MOLD_Y + MOLD_WALL_THICKNESS;
+  const cavityW = MOLD_WIDTH - 2 * MOLD_WALL_THICKNESS;
+  const cavityH = MOLD_HEIGHT - 2 * MOLD_WALL_THICKNESS;
 
   return (
     <div
       style={{
         position: 'absolute',
-        top: 0,
-        left: 0,
         width: CANVAS_WIDTH,
         height: CANVAS_HEIGHT,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
         transform: `scale(${scale})`,
-        transformOrigin: 'center center',
+        transformOrigin: `${centerX}px ${centerY}px`,
       }}
     >
       <svg
         width={CANVAS_WIDTH}
         height={CANVAS_HEIGHT}
-        viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
+        style={{ position: 'absolute', top: 0, left: 0 }}
       >
         <defs>
-          <filter id="wallGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <filter id="wallGlow">
             <feGaussianBlur stdDeviation="6" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <filter id="segmentGlow">
+            <feGaussianBlur stdDeviation="8" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
               <feMergeNode in="SourceGraphic" />
@@ -101,98 +94,155 @@ export const MoldCrossSection: React.FC = () => {
           </filter>
         </defs>
 
-        {/* Outer shell */}
+        {/* Nozzle (dimmed) */}
         <rect
-          x={outerX}
-          y={outerY}
-          width={MOLD_OUTER_WIDTH}
-          height={MOLD_OUTER_HEIGHT}
+          x={nozzleX}
+          y={nozzleY}
+          width={NOZZLE_WIDTH}
+          height={NOZZLE_HEIGHT}
           fill="none"
-          stroke={MOLD_STROKE_COLOR}
-          strokeWidth={MOLD_STROKE_WIDTH}
+          stroke={MOLD_OUTER_STROKE}
+          strokeWidth={MOLD_OUTER_STROKE_WIDTH}
+          opacity={dimProgress}
+        />
+        {/* Nozzle channel */}
+        <rect
+          x={nozzleX + 20}
+          y={nozzleY}
+          width={NOZZLE_WIDTH - 40}
+          height={NOZZLE_HEIGHT + 10}
+          fill={WALL_COLOR}
+          opacity={dimProgress * 0.3}
+        />
+
+        {/* Outer mold shell */}
+        <rect
+          x={MOLD_X}
+          y={MOLD_Y}
+          width={MOLD_WIDTH}
+          height={MOLD_HEIGHT}
+          fill="none"
+          stroke={MOLD_OUTER_STROKE}
+          strokeWidth={MOLD_OUTER_STROKE_WIDTH}
           rx={4}
         />
 
-        {/* Nozzle (dimmed) */}
-        <g opacity={dimFactor}>
-          <rect
-            x={nozzleX}
-            y={nozzleY}
-            width={NOZZLE_WIDTH}
-            height={NOZZLE_HEIGHT}
-            fill="none"
-            stroke={MOLD_STROKE_COLOR}
-            strokeWidth={2}
-            rx={2}
-          />
-          {/* Nozzle opening into mold */}
-          <line
-            x1={cx - 15}
-            y1={outerY}
-            x2={cx + 15}
-            y2={outerY}
-            stroke={WALL_COLOR}
-            strokeWidth={2}
-          />
-        </g>
-
-        {/* Cavity interior (dimmed) */}
+        {/* Left wall (full) */}
         <rect
-          x={innerX}
-          y={innerY}
-          width={MOLD_INNER_WIDTH}
-          height={MOLD_INNER_HEIGHT}
+          x={MOLD_X}
+          y={MOLD_Y}
+          width={MOLD_WALL_THICKNESS}
+          height={MOLD_HEIGHT}
           fill={WALL_COLOR}
-          fillOpacity={dimFactor * 0.1}
-          stroke={MOLD_STROKE_COLOR}
-          strokeWidth={1}
-          strokeOpacity={dimFactor}
+          opacity={wallBrightness * 0.25}
+          filter="url(#wallGlow)"
           rx={2}
         />
 
-        {/* Left wall — bright, with glow */}
-        <line
-          x1={leftWallX}
-          y1={innerY}
-          x2={leftWallX}
-          y2={innerY + MOLD_INNER_HEIGHT}
-          stroke={WALL_COLOR}
-          strokeWidth={MOLD_STROKE_WIDTH}
-          opacity={wallBrightness}
+        {/* Right wall (full) */}
+        <rect
+          x={MOLD_X + MOLD_WIDTH - MOLD_WALL_THICKNESS}
+          y={MOLD_Y}
+          width={MOLD_WALL_THICKNESS}
+          height={MOLD_HEIGHT}
+          fill={WALL_COLOR}
+          opacity={wallBrightness * 0.25}
           filter="url(#wallGlow)"
+          rx={2}
         />
 
-        {/* Right wall — bright, with glow */}
-        <line
-          x1={rightWallX}
-          y1={innerY}
-          x2={rightWallX}
-          y2={innerY + MOLD_INNER_HEIGHT}
-          stroke={WALL_COLOR}
-          strokeWidth={MOLD_STROKE_WIDTH}
-          opacity={wallBrightness}
+        {/* Bottom wall */}
+        <rect
+          x={MOLD_X}
+          y={MOLD_Y + MOLD_HEIGHT - MOLD_WALL_THICKNESS}
+          width={MOLD_WIDTH}
+          height={MOLD_WALL_THICKNESS}
+          fill={WALL_COLOR}
+          opacity={wallBrightness * 0.2}
           filter="url(#wallGlow)"
+          rx={2}
         />
 
-        {/* Horizontal wall segments connecting left-right (top and bottom) */}
-        <line
-          x1={innerX}
-          y1={innerY}
-          x2={innerX + MOLD_INNER_WIDTH}
-          y2={innerY}
-          stroke={WALL_COLOR}
-          strokeWidth={2}
-          opacity={wallBrightness * 0.6}
+        {/* Top wall */}
+        <rect
+          x={MOLD_X}
+          y={MOLD_Y}
+          width={MOLD_WIDTH}
+          height={MOLD_WALL_THICKNESS}
+          fill={WALL_COLOR}
+          opacity={wallBrightness * 0.2}
+          filter="url(#wallGlow)"
+          rx={2}
         />
-        <line
-          x1={innerX}
-          y1={innerY + MOLD_INNER_HEIGHT}
-          x2={innerX + MOLD_INNER_WIDTH}
-          y2={innerY + MOLD_INNER_HEIGHT}
-          stroke={WALL_COLOR}
-          strokeWidth={2}
-          opacity={wallBrightness * 0.6}
+
+        {/* Cavity interior (dimmed) */}
+        <rect
+          x={cavityX}
+          y={cavityY}
+          width={cavityW}
+          height={cavityH}
+          fill={WALL_COLOR}
+          opacity={dimProgress * 0.08}
+          rx={2}
         />
+
+        {/* Illuminated wall segments */}
+        {WALL_DATA.map((wall, index) => {
+          const seg = WALL_SEGMENT_POSITIONS[index];
+          const segFrame = frame - wall.frameIn;
+
+          const glowOpacity =
+            segFrame < 0
+              ? WALL_GLOW_MIN
+              : interpolate(
+                  segFrame,
+                  [0, WALL_GLOW_DURATION],
+                  [WALL_GLOW_MIN, WALL_GLOW_MAX],
+                  {
+                    extrapolateLeft: 'clamp',
+                    extrapolateRight: 'clamp',
+                    easing: Easing.out(Easing.quad),
+                  }
+                );
+
+          return (
+            <rect
+              key={`wall-seg-${index}`}
+              x={seg.x}
+              y={seg.y}
+              width={seg.width}
+              height={seg.height}
+              fill={WALL_COLOR}
+              opacity={glowOpacity}
+              filter="url(#segmentGlow)"
+              rx={2}
+            />
+          );
+        })}
+
+        {/* Decorative inner wall ridges */}
+        {[200, 320, 440, 560, 680].map((yOff) => (
+          <React.Fragment key={`ridge-${yOff}`}>
+            <line
+              x1={MOLD_X + MOLD_WALL_THICKNESS}
+              y1={MOLD_Y + yOff}
+              x2={MOLD_X + MOLD_WALL_THICKNESS + 15}
+              y2={MOLD_Y + yOff}
+              stroke={WALL_COLOR}
+              strokeWidth={1}
+              opacity={wallBrightness * 0.15}
+            />
+            <line
+              x1={MOLD_X + MOLD_WIDTH - MOLD_WALL_THICKNESS}
+              y1={MOLD_Y + yOff}
+              x2={MOLD_X + MOLD_WIDTH - MOLD_WALL_THICKNESS - 15}
+              y2={MOLD_Y + yOff}
+              stroke={WALL_COLOR}
+              strokeWidth={1}
+              opacity={wallBrightness * 0.15}
+            />
+          </React.Fragment>
+        ))}
       </svg>
     </div>
   );

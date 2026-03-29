@@ -1,225 +1,206 @@
-import React from 'react';
+import React from "react";
 import {
   CHART_LEFT,
-  CHART_RIGHT,
   CHART_TOP,
-  CHART_BOTTOM,
+  CHART_WIDTH,
+  CHART_HEIGHT,
   GRID_COLOR,
   GRID_OPACITY,
-  GRID_LINES_Y,
-  GENERATE_LINE_COLOR,
-  PATCH_LINE_COLOR,
-  GENERATE_LINE_WIDTH,
-  PATCH_LINE_WIDTH,
-  DEBT_LINE_WIDTH,
+  GRID_INTERVAL,
+  GENERATE_COLOR,
+  GENERATE_WIDTH,
+  GENERATE_POINTS,
+  PATCH_COLOR,
+  PATCH_SOLID_WIDTH,
+  PATCH_DASHED_WIDTH,
+  PATCH_POINTS,
+  DEBT_POINTS,
   DEBT_AREA_COLOR,
   DEBT_AREA_OPACITY,
-  GENERATE_LINE_DATA,
-  PATCH_LINE_DATA,
-  DEBT_LINE_DATA,
+  CHART_MIN_YEAR,
+  CHART_MAX_YEAR,
+  CHART_MIN_COST,
+  CHART_MAX_COST,
+  YEAR_LABELS,
   DATE_MARKER_COLOR,
   DATE_MARKER_OPACITY,
-  YEAR_MARKERS,
-  yearToX,
-  costToY,
   LABEL_DIMMED_OPACITY,
-} from './constants';
+} from "./constants";
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function toChartX(year: number): number {
+  return (
+    CHART_LEFT +
+    ((year - CHART_MIN_YEAR) / (CHART_MAX_YEAR - CHART_MIN_YEAR)) * CHART_WIDTH
+  );
+}
+
+function toChartY(cost: number): number {
+  return (
+    CHART_TOP +
+    CHART_HEIGHT -
+    ((cost - CHART_MIN_COST) / (CHART_MAX_COST - CHART_MIN_COST)) * CHART_HEIGHT
+  );
+}
+
+function pointsToSvgPath(points: { x: number; y: number }[]): string {
+  return points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${toChartX(p.x).toFixed(1)} ${toChartY(p.y).toFixed(1)}`)
+    .join(" ");
+}
+
+function pointsToAreaPath(
+  topPoints: { x: number; y: number }[],
+  bottomPoints: { x: number; y: number }[]
+): string {
+  const top = topPoints.map(
+    (p, i) => `${i === 0 ? "M" : "L"} ${toChartX(p.x).toFixed(1)} ${toChartY(p.y).toFixed(1)}`
+  );
+  const bottom = [...bottomPoints]
+    .reverse()
+    .map((p) => `L ${toChartX(p.x).toFixed(1)} ${toChartY(p.y).toFixed(1)}`);
+  return [...top, ...bottom, "Z"].join(" ");
+}
+
+// ── Crossing-point coordinates (exported for reuse) ─────────────────────
+export const CROSSING_CX = toChartX(2025.6);
+export const CROSSING_CY = (() => {
+  // Interpolate the generate line at 2025.6
+  const before = GENERATE_POINTS.find((p) => p.x === 2025.6);
+  if (before) return toChartY(before.y);
+  // Fallback: average of patch and generate at that year
+  return toChartY(26);
+})();
+
+// ── Chart labels ────────────────────────────────────────────────────────────
+const LEGEND_ITEMS = [
+  { label: "Cost to generate", color: GENERATE_COLOR, dashed: false },
+  { label: "Immediate patch", color: PATCH_COLOR, dashed: false },
+  { label: "Total cost with debt", color: PATCH_COLOR, dashed: true },
+];
 
 interface CodeCostChartProps {
-  dimOpacity: number;
+  dimOpacity?: number;
 }
 
-function dataToSvgPath(data: [number, number][]): string {
-  return data
-    .map(([year, cost], i) => {
-      const x = yearToX(year);
-      const y = costToY(cost);
-      return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-    })
-    .join(' ');
-}
+export const CodeCostChart: React.FC<CodeCostChartProps> = ({
+  dimOpacity = LABEL_DIMMED_OPACITY,
+}) => {
+  // Build horizontal grid lines
+  const gridLines: React.ReactNode[] = [];
+  for (let y = CHART_TOP; y <= CHART_TOP + CHART_HEIGHT; y += GRID_INTERVAL) {
+    gridLines.push(
+      <line
+        key={`grid-${y}`}
+        x1={CHART_LEFT}
+        y1={y}
+        x2={CHART_LEFT + CHART_WIDTH}
+        y2={y}
+        stroke={GRID_COLOR}
+        strokeOpacity={GRID_OPACITY}
+        strokeWidth={1}
+      />
+    );
+  }
 
-function dataToAreaPath(
-  upper: [number, number][],
-  lower: [number, number][]
-): string {
-  // Forward along upper, then backward along lower
-  const forwardParts = upper.map(([year, cost], i) => {
-    const x = yearToX(year);
-    const y = costToY(cost);
-    return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-  });
-  const reverseParts = [...lower].reverse().map(([year, cost]) => {
-    const x = yearToX(year);
-    const y = costToY(cost);
-    return `L ${x} ${y}`;
-  });
-  return [...forwardParts, ...reverseParts, 'Z'].join(' ');
-}
-
-export const CodeCostChart: React.FC<CodeCostChartProps> = ({ dimOpacity }) => {
-  const generatePath = dataToSvgPath(GENERATE_LINE_DATA);
-  const patchPath = dataToSvgPath(PATCH_LINE_DATA);
-  const debtPath = dataToSvgPath(DEBT_LINE_DATA);
-  const debtAreaPath = dataToAreaPath(DEBT_LINE_DATA, PATCH_LINE_DATA);
+  const debtAreaPath = pointsToAreaPath(DEBT_POINTS, PATCH_POINTS);
 
   return (
     <svg
       width={1920}
       height={1080}
       viewBox="0 0 1920 1080"
-      style={{ position: 'absolute', top: 0, left: 0 }}
+      style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
     >
-      {/* Grid lines */}
-      {GRID_LINES_Y.map((y) => (
-        <line
-          key={y}
-          x1={CHART_LEFT}
-          y1={y}
-          x2={CHART_RIGHT}
-          y2={y}
-          stroke={GRID_COLOR}
-          strokeOpacity={GRID_OPACITY}
-          strokeWidth={1}
-        />
-      ))}
+      {/* Grid */}
+      {gridLines}
 
-      {/* Year markers on x-axis */}
-      {YEAR_MARKERS.map((year) => {
-        const x = yearToX(year);
-        return (
-          <text
-            key={year}
-            x={x}
-            y={CHART_BOTTOM + 35}
-            fill={DATE_MARKER_COLOR}
-            fillOpacity={DATE_MARKER_OPACITY}
-            fontSize={14}
-            fontFamily="Inter, sans-serif"
-            textAnchor="middle"
-          >
-            {year}
-          </text>
-        );
-      })}
-
-      {/* Shaded debt area between amber lines */}
+      {/* Debt shaded area between amber lines */}
       <path
         d={debtAreaPath}
         fill={DEBT_AREA_COLOR}
         fillOpacity={DEBT_AREA_OPACITY}
       />
 
-      {/* Generate line (blue) — well below */}
+      {/* Total cost with debt line (amber dashed) */}
       <path
-        d={generatePath}
-        stroke={GENERATE_LINE_COLOR}
-        strokeWidth={GENERATE_LINE_WIDTH}
+        d={pointsToSvgPath(DEBT_POINTS)}
         fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        stroke={PATCH_COLOR}
+        strokeWidth={PATCH_DASHED_WIDTH}
+        strokeDasharray="10 6"
+        strokeOpacity={0.9}
       />
 
       {/* Immediate patch line (amber solid) */}
       <path
-        d={patchPath}
-        stroke={PATCH_LINE_COLOR}
-        strokeWidth={PATCH_LINE_WIDTH}
+        d={pointsToSvgPath(PATCH_POINTS)}
         fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        stroke={PATCH_COLOR}
+        strokeWidth={PATCH_SOLID_WIDTH}
       />
 
-      {/* Total cost with debt (amber dashed) */}
+      {/* Generate line (blue) */}
       <path
-        d={debtPath}
-        stroke={PATCH_LINE_COLOR}
-        strokeWidth={DEBT_LINE_WIDTH}
+        d={pointsToSvgPath(GENERATE_POINTS)}
         fill="none"
-        strokeDasharray="10 6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        stroke={GENERATE_COLOR}
+        strokeWidth={GENERATE_WIDTH}
       />
+
+      {/* Crossing dot */}
+      <circle
+        cx={CROSSING_CX}
+        cy={CROSSING_CY}
+        r={5}
+        fill={GENERATE_COLOR}
+        stroke="#FFFFFF"
+        strokeWidth={2}
+      />
+
+      {/* Year labels (dimmed) */}
+      {YEAR_LABELS.map((yr) => (
+        <text
+          key={yr}
+          x={toChartX(yr)}
+          y={CHART_TOP + CHART_HEIGHT + 30}
+          fill={DATE_MARKER_COLOR}
+          fillOpacity={DATE_MARKER_OPACITY}
+          fontSize={14}
+          fontFamily="Inter, sans-serif"
+          textAnchor="middle"
+        >
+          {yr}
+        </text>
+      ))}
 
       {/* Legend */}
-      <g opacity={dimOpacity}>
-        {/* Generate legend */}
-        <line
-          x1={CHART_LEFT}
-          y1={CHART_TOP - 40}
-          x2={CHART_LEFT + 30}
-          y2={CHART_TOP - 40}
-          stroke={GENERATE_LINE_COLOR}
-          strokeWidth={3}
-        />
-        <text
-          x={CHART_LEFT + 40}
-          y={CHART_TOP - 35}
-          fill={GENERATE_LINE_COLOR}
-          fontSize={14}
-          fontFamily="Inter, sans-serif"
-          opacity={LABEL_DIMMED_OPACITY}
-        >
-          Cost to generate
-        </text>
-
-        {/* Patch legend */}
-        <line
-          x1={CHART_LEFT + 220}
-          y1={CHART_TOP - 40}
-          x2={CHART_LEFT + 250}
-          y2={CHART_TOP - 40}
-          stroke={PATCH_LINE_COLOR}
-          strokeWidth={3}
-        />
-        <text
-          x={CHART_LEFT + 260}
-          y={CHART_TOP - 35}
-          fill={PATCH_LINE_COLOR}
-          fontSize={14}
-          fontFamily="Inter, sans-serif"
-          opacity={LABEL_DIMMED_OPACITY}
-        >
-          Immediate patch
-        </text>
-
-        {/* Debt legend */}
-        <line
-          x1={CHART_LEFT + 460}
-          y1={CHART_TOP - 40}
-          x2={CHART_LEFT + 490}
-          y2={CHART_TOP - 40}
-          stroke={PATCH_LINE_COLOR}
-          strokeWidth={2.5}
-          strokeDasharray="10 6"
-        />
-        <text
-          x={CHART_LEFT + 500}
-          y={CHART_TOP - 35}
-          fill={PATCH_LINE_COLOR}
-          fontSize={14}
-          fontFamily="Inter, sans-serif"
-          opacity={LABEL_DIMMED_OPACITY}
-        >
-          Total cost with debt
-        </text>
-      </g>
-
-      {/* Y-axis label */}
-      <text
-        x={CHART_LEFT - 20}
-        y={CHART_TOP + (CHART_BOTTOM - CHART_TOP) / 2}
-        fill="#64748B"
-        fillOpacity={dimOpacity}
-        fontSize={14}
-        fontFamily="Inter, sans-serif"
-        textAnchor="middle"
-        transform={`rotate(-90, ${CHART_LEFT - 20}, ${CHART_TOP + (CHART_BOTTOM - CHART_TOP) / 2})`}
-      >
-        Relative Cost
-      </text>
+      {LEGEND_ITEMS.map((item, i) => {
+        const legendX = CHART_LEFT + 20;
+        const legendY = CHART_TOP + 20 + i * 24;
+        return (
+          <g key={item.label} opacity={dimOpacity}>
+            <line
+              x1={legendX}
+              y1={legendY}
+              x2={legendX + 30}
+              y2={legendY}
+              stroke={item.color}
+              strokeWidth={2.5}
+              strokeDasharray={item.dashed ? "6 4" : "none"}
+            />
+            <text
+              x={legendX + 38}
+              y={legendY + 4}
+              fill="#E2E8F0"
+              fontSize={14}
+              fontFamily="Inter, sans-serif"
+            >
+              {item.label}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 };
-
-export default CodeCostChart;

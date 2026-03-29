@@ -1,158 +1,158 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  CANVAS_W,
-  CANVAS_H,
-  GHOST_WALLS_COLOR,
-  GHOST_WALLS_OPACITY,
-  GHOST_NOZZLE_COLOR,
-  GHOST_NOZZLE_OPACITY,
-  GHOST_CAVITY_COLOR,
-  GHOST_CAVITY_OPACITY,
-  GHOST_STROKE_WIDTH,
-  GHOST_DRAW_START,
-  GHOST_DRAW_DURATION,
-  PULSE_CYCLE_FRAMES,
-  FADEOUT_START,
-  FADEOUT_DURATION,
-} from "./constants";
+import React from 'react';
+import { AbsoluteFill, interpolate } from 'remotion';
+
+interface GhostMoldProps {
+  drawProgress: number; // 0..1 for stroke-dashoffset animation
+  frame: number; // absolute frame for pulse calculations
+}
 
 /**
- * Ghost mold cross-section: three outlined regions (walls, nozzle, cavity)
- * drawn via stroke-dashoffset animation, with subtle pulsing during hold.
+ * A ghostly SVG cross-section of an injection mold with three regions:
+ * walls, nozzle, and cavity — drawn at very low opacity to foreshadow
+ * the "three parts" thesis.
  */
-export const GhostMold: React.FC = () => {
-  const frame = useCurrentFrame();
+export const GhostMold: React.FC<GhostMoldProps> = ({
+  drawProgress,
+  frame,
+}) => {
+  const PULSE_CYCLE = 60;
 
-  // Stroke draw-in progress (0→1 over GHOST_DRAW_DURATION starting at GHOST_DRAW_START)
-  const drawProgress = interpolate(
-    frame,
-    [GHOST_DRAW_START, GHOST_DRAW_START + GHOST_DRAW_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
+  // Each region pulses in sequence: walls at 0, nozzle at 20, cavity at 40
+  const wallsPulse = interpolate(
+    frame % PULSE_CYCLE,
+    [0, 15, 30],
+    [0, 1, 0],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
+  const nozzlePulse = interpolate(
+    frame % PULSE_CYCLE,
+    [20, 35, 50],
+    [0, 1, 0],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
+  const cavityPulse = interpolate(
+    frame % PULSE_CYCLE,
+    [40, 55, 59],
+    [0, 1, 0],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
-  // Fade-out at end
-  const fadeOut = interpolate(
-    frame,
-    [FADEOUT_START, FADEOUT_START + FADEOUT_DURATION],
-    [1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.in(Easing.quad) }
-  );
+  // Base opacities with subtle pulse overlay
+  const wallsOpacity = 0.04 + wallsPulse * 0.02;
+  const nozzleOpacity = 0.03 + nozzlePulse * 0.015;
+  const cavityOpacity = 0.03 + cavityPulse * 0.015;
 
-  // Pulsing: walls pulse on phase 0, nozzle on phase 1, cavity on phase 2
-  const pulseForRegion = (phaseOffset: number): number => {
-    if (frame < GHOST_DRAW_START + GHOST_DRAW_DURATION) return 1;
-    const cycleFrame = (frame - (GHOST_DRAW_START + GHOST_DRAW_DURATION) + phaseOffset * 20) % PULSE_CYCLE_FRAMES;
-    return interpolate(
-      cycleFrame,
-      [0, PULSE_CYCLE_FRAMES / 2, PULSE_CYCLE_FRAMES],
-      [1, 1.8, 1],
-      { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.sin) }
-    );
+  // Stroke dashoffset for draw-on animation
+  const totalPathLength = 1200;
+  const dashOffset = totalPathLength * (1 - drawProgress);
+
+  const strokeDashProps = {
+    strokeDasharray: totalPathLength,
+    strokeDashoffset: dashOffset,
   };
 
-  const wallsPulse = pulseForRegion(0);
-  const nozzlePulse = pulseForRegion(1);
-  const cavityPulse = pulseForRegion(2);
-
-  // Mold outline path lengths (approximate)
-  const wallsPathLength = 900;
-  const nozzlePathLength = 300;
-  const cavityPathLength = 500;
-
-  const cx = CANVAS_W / 2;
-  const cy = CANVAS_H / 2;
-
   return (
-    <AbsoluteFill style={{ opacity: fadeOut }}>
+    <AbsoluteFill
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+      }}
+    >
       <svg
-        width={CANVAS_W}
-        height={CANVAS_H}
-        viewBox={`0 0 ${CANVAS_W} ${CANVAS_H}`}
-        style={{ position: "absolute", top: 0, left: 0 }}
+        width={600}
+        height={500}
+        viewBox="0 0 600 500"
+        style={{ position: 'absolute', top: 290, left: 660 }}
       >
-        {/* Walls region — outer mold shell */}
-        <path
-          d={`
-            M ${cx - 200} ${cy - 140}
-            L ${cx + 200} ${cy - 140}
-            L ${cx + 200} ${cy + 140}
-            L ${cx - 200} ${cy + 140}
-            Z
-            M ${cx - 160} ${cy - 100}
-            L ${cx + 160} ${cy - 100}
-            L ${cx + 160} ${cy + 100}
-            L ${cx - 160} ${cy + 100}
-            Z
-          `}
+        {/* Walls region — outer rectangular shell */}
+        <rect
+          x={50}
+          y={50}
+          width={500}
+          height={400}
+          rx={8}
           fill="none"
-          stroke={GHOST_WALLS_COLOR}
-          strokeWidth={GHOST_STROKE_WIDTH}
-          strokeOpacity={GHOST_WALLS_OPACITY * wallsPulse}
-          strokeDasharray={wallsPathLength}
-          strokeDashoffset={wallsPathLength * (1 - drawProgress)}
-          fillRule="evenodd"
+          stroke="#4A90D9"
+          strokeWidth={1.5}
+          opacity={wallsOpacity}
+          {...strokeDashProps}
+        />
+        {/* Inner wall contour */}
+        <rect
+          x={80}
+          y={80}
+          width={440}
+          height={340}
+          rx={4}
+          fill="none"
+          stroke="#4A90D9"
+          strokeWidth={1.5}
+          opacity={wallsOpacity}
+          {...strokeDashProps}
         />
 
-        {/* Nozzle region — top funnel */}
+        {/* Nozzle region — funnel shape at top center */}
         <path
-          d={`
-            M ${cx - 30} ${cy - 140}
-            L ${cx - 15} ${cy - 180}
-            L ${cx + 15} ${cy - 180}
-            L ${cx + 30} ${cy - 140}
-            M ${cx - 8} ${cy - 180}
-            L ${cx - 8} ${cy - 210}
-            L ${cx + 8} ${cy - 210}
-            L ${cx + 8} ${cy - 180}
-          `}
+          d="M260 50 L260 20 Q300 0 340 20 L340 50"
           fill="none"
-          stroke={GHOST_NOZZLE_COLOR}
-          strokeWidth={GHOST_STROKE_WIDTH}
-          strokeOpacity={GHOST_NOZZLE_OPACITY * nozzlePulse}
-          strokeDasharray={nozzlePathLength}
-          strokeDashoffset={nozzlePathLength * (1 - drawProgress)}
+          stroke="#D9944A"
+          strokeWidth={1.5}
+          opacity={nozzleOpacity}
+          {...strokeDashProps}
+        />
+        {/* Nozzle channel into mold */}
+        <path
+          d="M285 50 L285 120 Q300 140 315 120 L315 50"
+          fill="none"
+          stroke="#D9944A"
+          strokeWidth={1.5}
+          opacity={nozzleOpacity}
+          {...strokeDashProps}
         />
 
-        {/* Cavity region — inner shape */}
+        {/* Cavity region — the interior shape being molded */}
         <path
-          d={`
-            M ${cx - 100} ${cy - 50}
-            C ${cx - 100} ${cy - 80}, ${cx - 60} ${cy - 90}, ${cx} ${cy - 90}
-            C ${cx + 60} ${cy - 90}, ${cx + 100} ${cy - 80}, ${cx + 100} ${cy - 50}
-            L ${cx + 100} ${cy + 50}
-            C ${cx + 100} ${cy + 80}, ${cx + 60} ${cy + 90}, ${cx} ${cy + 90}
-            C ${cx - 60} ${cy + 90}, ${cx - 100} ${cy + 80}, ${cx - 100} ${cy + 50}
-            Z
-          `}
+          d="M150 180 Q150 140 220 140 L380 140 Q450 140 450 180
+             L450 350 Q450 390 380 390 L220 390 Q150 390 150 350 Z"
           fill="none"
-          stroke={GHOST_CAVITY_COLOR}
-          strokeWidth={GHOST_STROKE_WIDTH}
-          strokeOpacity={GHOST_CAVITY_OPACITY * cavityPulse}
-          strokeDasharray={cavityPathLength}
-          strokeDashoffset={cavityPathLength * (1 - drawProgress)}
+          stroke="#4AD9A0"
+          strokeWidth={1.5}
+          opacity={cavityOpacity}
+          {...strokeDashProps}
+        />
+        {/* Interior cavity detail */}
+        <path
+          d="M200 200 L400 200 L400 340 L200 340 Z"
+          fill="none"
+          stroke="#4AD9A0"
+          strokeWidth={1}
+          opacity={cavityOpacity * 0.7}
+          {...strokeDashProps}
         />
 
-        {/* Small channel lines connecting nozzle to cavity */}
+        {/* Parting line indicators */}
         <line
-          x1={cx}
-          y1={cy - 140}
-          x2={cx}
-          y2={cy - 90}
-          stroke={GHOST_NOZZLE_COLOR}
-          strokeWidth={GHOST_STROKE_WIDTH}
-          strokeOpacity={GHOST_NOZZLE_OPACITY * nozzlePulse * 0.7}
-          strokeDasharray={50}
-          strokeDashoffset={50 * (1 - drawProgress)}
+          x1={50}
+          y1={250}
+          x2={80}
+          y2={250}
+          stroke="#4A90D9"
+          strokeWidth={1}
+          opacity={wallsOpacity * 0.8}
+          strokeDasharray={4}
+        />
+        <line
+          x1={520}
+          y1={250}
+          x2={550}
+          y2={250}
+          stroke="#4A90D9"
+          strokeWidth={1}
+          opacity={wallsOpacity * 0.8}
+          strokeDasharray={4}
         />
       </svg>
     </AbsoluteFill>
   );
 };
-
-export default GhostMold;

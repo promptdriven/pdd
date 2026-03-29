@@ -1,71 +1,57 @@
-import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
-import {
-  ARROW_STROKE_WIDTH,
-  ARROW_OPACITY,
-  ARROW_LENGTH,
-  ARROW_DRAW_DURATION,
-  STEP_HEIGHT,
-} from "./constants";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import { ARROW_THICKNESS, ARROW_LENGTH, ARROW_DRAW_DURATION } from './constants';
 
 interface FlowArrowProps {
   color: string;
-  startFrame: number;
-  centerX: number;
-  y: number; // top of the arrow (bottom of previous step)
+  appearFrame: number;
 }
 
-export const FlowArrow: React.FC<FlowArrowProps> = ({
-  color,
-  startFrame,
-  centerX,
-  y,
-}) => {
+export const FlowArrow: React.FC<FlowArrowProps> = ({ color, appearFrame }) => {
   const frame = useCurrentFrame();
-  const drawFrame = startFrame + 5; // arrow draws 5 frames after step appears
 
+  // Arrow draws in after step appears (5 frames after step)
+  const drawStart = appearFrame + 5;
   const progress = interpolate(
     frame,
-    [drawFrame, drawFrame + ARROW_DRAW_DURATION],
+    [drawStart, drawStart + ARROW_DRAW_DURATION],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.quad) }
   );
 
-  if (progress <= 0) return null;
-
-  const arrowTop = y + STEP_HEIGHT;
-  const drawnLength = ARROW_LENGTH * progress;
+  const lineHeight = (ARROW_LENGTH - 6) * progress;
+  const arrowHeadOpacity = progress > 0.7 ? interpolate(progress, [0.7, 1], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }) : 0;
 
   return (
-    <svg
+    <div
       style={{
-        position: "absolute",
-        left: centerX - 8,
-        top: arrowTop,
-        width: 16,
+        width: 20,
         height: ARROW_LENGTH,
-        overflow: "visible",
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
       }}
     >
-      {/* Main line */}
-      <line
-        x1={8}
-        y1={0}
-        x2={8}
-        y2={Math.max(0, drawnLength)}
-        stroke={color}
-        strokeWidth={ARROW_STROKE_WIDTH}
-        opacity={ARROW_OPACITY}
+      {/* Vertical line */}
+      <div
+        style={{
+          width: ARROW_THICKNESS,
+          height: lineHeight,
+          backgroundColor: color,
+          borderRadius: 1,
+        }}
       />
-      {/* Arrowhead */}
-      {progress > 0.7 && (
-        <polygon
-          points={`4,${ARROW_LENGTH - 6} 8,${ARROW_LENGTH} 12,${ARROW_LENGTH - 6}`}
-          fill={color}
-          opacity={ARROW_OPACITY * interpolate(progress, [0.7, 1], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" })}
-        />
-      )}
-    </svg>
+      {/* Arrow head */}
+      <svg
+        width={10}
+        height={8}
+        viewBox="0 0 10 8"
+        style={{ opacity: arrowHeadOpacity, marginTop: -1 }}
+      >
+        <path d="M5 8 L0 0 L10 0 Z" fill={color} />
+      </svg>
+    </div>
   );
 };
 

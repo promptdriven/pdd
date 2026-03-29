@@ -1,138 +1,130 @@
-import React from 'react';
-import { useCurrentFrame, interpolate } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate } from "remotion";
 import {
   CODE_BG,
-  CODE_BORDER_RADIUS,
-  CODE_PADDING,
   CODE_BLOCK_X,
   CODE_BLOCK_Y,
   CODE_BLOCK_WIDTH,
+  CODE_BLOCK_PADDING,
+  CODE_BLOCK_BORDER_RADIUS,
+  CODE_FONT_SIZE,
+  CODE_LINE_HEIGHT,
   CODE_TYPE_START,
-  VERILOG_CODE_LINES,
-  VERILOG_CODE_FLAT,
-  TYPE_SPEED,
-} from './constants';
+  CODE_TYPE_END,
+  VERILOG_LINES,
+  tokenizeLine,
+  tokenColor,
+} from "./constants";
 
-/**
- * Renders the Verilog code block with a typewriter effect.
- * Code types in character by character from CODE_TYPE_START.
- */
 export const CodeBlock: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const totalChars = VERILOG_CODE_FLAT.length;
-  const typingFrames = totalChars * TYPE_SPEED;
+  // Calculate total characters typed so far
+  const typeFrame = frame - CODE_TYPE_START;
+  if (typeFrame < 0) return null;
 
-  // How many characters are visible at this frame
-  const charsVisible = Math.floor(
-    interpolate(
-      frame,
-      [CODE_TYPE_START, CODE_TYPE_START + typingFrames],
-      [0, totalChars],
-      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-    )
+  const totalChars = VERILOG_LINES.join("\n").length;
+  const maxFrames = CODE_TYPE_END - CODE_TYPE_START;
+  const charsTyped = Math.min(
+    Math.floor(typeFrame * (totalChars / maxFrames)),
+    totalChars
   );
 
-  // Container opacity — appears at CODE_TYPE_START
-  const containerOpacity = interpolate(
-    frame,
-    [CODE_TYPE_START, CODE_TYPE_START + 10],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
+  // Container fade in
+  const containerOpacity = interpolate(typeFrame, [0, 10], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
-  if (frame < CODE_TYPE_START) return null;
-
-  // Walk through lines and tokens, rendering only up to charsVisible
-  let charsSoFar = 0;
-  const renderedLines: React.ReactNode[] = [];
-
-  for (let lineIdx = 0; lineIdx < VERILOG_CODE_LINES.length; lineIdx++) {
-    const line = VERILOG_CODE_LINES[lineIdx];
-    const lineStartChar = charsSoFar;
-
-    // Account for newline between lines (except first)
-    if (lineIdx > 0) charsSoFar += 1; // \n
-
-    if (charsSoFar >= charsVisible) break;
-
-    const tokenSpans: React.ReactNode[] = [];
-
-    for (let tokenIdx = 0; tokenIdx < line.tokens.length; tokenIdx++) {
-      const token = line.tokens[tokenIdx];
-      const tokenStartChar = charsSoFar;
-      const tokenLen = token.value.length;
-
-      if (tokenStartChar >= charsVisible) break;
-
-      const visibleLen = Math.min(tokenLen, charsVisible - tokenStartChar);
-      const visibleText = token.value.slice(0, visibleLen);
-
-      tokenSpans.push(
-        <span key={`${lineIdx}-${tokenIdx}`} style={{ color: token.color }}>
-          {visibleText}
-        </span>
-      );
-
-      charsSoFar += tokenLen;
-    }
-
-    // If we haven't started this line yet, skip
-    if (lineStartChar + (lineIdx > 0 ? 1 : 0) >= charsVisible) break;
-
-    renderedLines.push(
-      <div key={`line-${lineIdx}`} style={{ minHeight: 24, lineHeight: '24px' }}>
-        {tokenSpans}
-      </div>
-    );
-
-    // If line text not fully consumed, still advance charsSoFar past the full line
-    // (it's already advanced token by token above)
-  }
-
-  // Blinking cursor
-  const cursorVisible = Math.floor(frame / 15) % 2 === 0;
+  // Build the visible text with syntax highlighting
+  let charCount = 0;
 
   return (
     <div
       style={{
-        position: 'absolute',
+        position: "absolute",
         left: CODE_BLOCK_X,
         top: CODE_BLOCK_Y,
         width: CODE_BLOCK_WIDTH,
         backgroundColor: CODE_BG,
-        borderRadius: CODE_BORDER_RADIUS,
-        padding: CODE_PADDING,
-        fontFamily: '"JetBrains Mono", "Fira Code", "Courier New", monospace',
-        fontSize: 16,
-        fontWeight: 400,
+        borderRadius: CODE_BLOCK_BORDER_RADIUS,
+        padding: CODE_BLOCK_PADDING,
         opacity: containerOpacity,
-        boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+        fontSize: CODE_FONT_SIZE,
+        lineHeight: `${CODE_LINE_HEIGHT}px`,
+        boxShadow: "0 4px 24px rgba(0,0,0,0.4)",
+        border: "1px solid rgba(74, 144, 217, 0.2)",
       }}
     >
-      {/* Window chrome dots */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-        <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#FF5F56' }} />
-        <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#FFBD2E' }} />
-        <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#27C93F' }} />
-      </div>
+      {/* Line numbers gutter + code */}
+      {VERILOG_LINES.map((line, lineIdx) => {
+        const lineStart = charCount;
+        const lineLen = line.length + (lineIdx < VERILOG_LINES.length - 1 ? 1 : 0); // +1 for newline
+        charCount += lineLen;
 
-      {/* Code content */}
-      <div>
-        {renderedLines}
-        {charsVisible < totalChars && cursorVisible && (
-          <span
-            style={{
-              display: 'inline-block',
-              width: 8,
-              height: 18,
-              backgroundColor: '#E2E8F0',
-              verticalAlign: 'text-bottom',
-              marginLeft: 1,
-            }}
-          />
-        )}
-      </div>
+        if (lineStart >= charsTyped) return null;
+
+        const visibleChars = Math.min(charsTyped - lineStart, line.length);
+        const visibleText = line.slice(0, visibleChars);
+        const tokens = tokenizeLine(visibleText);
+
+        return (
+          <div key={lineIdx} style={{ display: "flex", minHeight: CODE_LINE_HEIGHT }}>
+            {/* Line number */}
+            <span
+              style={{
+                width: 36,
+                textAlign: "right",
+                paddingRight: 16,
+                color: "#546E7A",
+                userSelect: "none",
+                flexShrink: 0,
+                opacity: 0.6,
+              }}
+            >
+              {lineIdx + 1}
+            </span>
+            {/* Code content */}
+            <span style={{ whiteSpace: "pre" }}>
+              {tokens.map((token, ti) => (
+                <span key={ti} style={{ color: tokenColor(token.type) }}>
+                  {token.text}
+                </span>
+              ))}
+              {/* Cursor at typing position */}
+              {visibleChars < line.length && visibleChars === charsTyped - lineStart && (
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 2,
+                    height: CODE_FONT_SIZE,
+                    backgroundColor: "#E2E8F0",
+                    marginLeft: 1,
+                    opacity: frame % 30 < 15 ? 1 : 0.3,
+                  }}
+                />
+              )}
+            </span>
+          </div>
+        );
+      })}
+      {/* Cursor at end */}
+      {charsTyped >= totalChars && (
+        <span
+          style={{
+            display: "inline-block",
+            width: 2,
+            height: CODE_FONT_SIZE,
+            backgroundColor: "#E2E8F0",
+            marginLeft: 1,
+            opacity: frame % 30 < 15 ? 1 : 0.3,
+            position: "relative",
+            top: -CODE_LINE_HEIGHT,
+            left: 52 + VERILOG_LINES[VERILOG_LINES.length - 1].length * (CODE_FONT_SIZE * 0.6),
+          }}
+        />
+      )}
     </div>
   );
 };

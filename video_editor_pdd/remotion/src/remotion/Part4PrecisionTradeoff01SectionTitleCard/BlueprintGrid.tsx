@@ -1,66 +1,55 @@
-import React from 'react';
-import { AbsoluteFill, interpolate, useCurrentFrame } from 'remotion';
-import { CANVAS, COLORS, OPACITIES, TIMING } from './constants';
+import React from "react";
+import { AbsoluteFill } from "remotion";
+import {
+  WIDTH,
+  HEIGHT,
+  GRID_SPACING,
+  GRID_LINE_COLOR,
+  GRID_LINE_OPACITY,
+} from "./constants";
 
-export const BlueprintGrid: React.FC = () => {
-  const frame = useCurrentFrame();
-  const spacing = 60;
-
-  const bgOpacity = interpolate(frame, [0, TIMING.bgFadeEnd], [0, 1], {
-    extrapolateRight: 'clamp',
-  });
-
-  const gridOpacity = interpolate(frame, [0, TIMING.bgFadeEnd], [0, OPACITIES.blueprintGrid], {
-    extrapolateRight: 'clamp',
-  });
-
+export const BlueprintGrid: React.FC<{ opacity: number }> = ({ opacity }) => {
   const verticalLines: React.ReactNode[] = [];
   const horizontalLines: React.ReactNode[] = [];
 
-  for (let x = 0; x <= CANVAS.WIDTH; x += spacing) {
+  for (let x = 0; x <= WIDTH; x += GRID_SPACING) {
     verticalLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={CANVAS.HEIGHT}
-        stroke={COLORS.blueprintGrid}
-        strokeWidth={0.5}
+        y2={HEIGHT}
+        stroke={GRID_LINE_COLOR}
+        strokeWidth={1}
+        opacity={GRID_LINE_OPACITY}
       />
     );
   }
 
-  for (let y = 0; y <= CANVAS.HEIGHT; y += spacing) {
+  for (let y = 0; y <= HEIGHT; y += GRID_SPACING) {
     horizontalLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={CANVAS.WIDTH}
+        x2={WIDTH}
         y2={y}
-        stroke={COLORS.blueprintGrid}
-        strokeWidth={0.5}
+        stroke={GRID_LINE_COLOR}
+        strokeWidth={1}
+        opacity={GRID_LINE_OPACITY}
       />
     );
   }
 
   return (
-    <AbsoluteFill>
-      <AbsoluteFill
-        style={{
-          backgroundColor: COLORS.background,
-          opacity: bgOpacity,
-        }}
-      />
-      <svg
-        width={CANVAS.WIDTH}
-        height={CANVAS.HEIGHT}
-        style={{ opacity: gridOpacity, position: 'absolute' }}
-      >
+    <AbsoluteFill style={{ opacity }}>
+      <svg width={WIDTH} height={HEIGHT} viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
         {verticalLines}
         {horizontalLines}
       </svg>
     </AbsoluteFill>
   );
 };
+
+export default BlueprintGrid;

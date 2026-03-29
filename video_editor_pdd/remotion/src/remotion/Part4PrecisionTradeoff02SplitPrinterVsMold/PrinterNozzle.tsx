@@ -1,94 +1,53 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import {
+  PANEL_WIDTH,
+  CANVAS_HEIGHT,
+  NOZZLE_COLOR,
+  NOZZLE_WIDTH,
+  NOZZLE_HEIGHT,
+  DOT_COLOR,
+  DOT_OPACITY,
+  DOT_SIZE,
+  TRAIL_COLOR,
+  TRAIL_OPACITY,
+  PHASE_ANIMATE_START,
+  PHASE_COMPLETE,
+  generateNozzlePath,
+} from './constants';
 
-const PRINTER_ACCENT = '#4A90D9';
-const NOZZLE_COLOR = '#E2E8F0';
-const DOT_SIZE = 6;
-const TRAIL_OPACITY = 0.15;
-const GRID_SPACING = 40;
-const GRID_ORIGIN_X = 80;
-const GRID_ORIGIN_Y = 80;
-const GRID_COLS = 20;
-const GRID_ROWS = 10;
+const nozzlePath = generateNozzlePath();
+const TOTAL_POINTS = nozzlePath.length;
+// Nozzle deposits from frame 30 to frame 420 (390 frames)
+const DEPOSIT_FRAMES = PHASE_COMPLETE - PHASE_ANIMATE_START;
 
-interface GridPoint {
-  x: number;
-  y: number;
-  col: number;
-  row: number;
-}
-
-// Generate serpentine path
-const NOZZLE_PATH: GridPoint[] = (() => {
-  const points: GridPoint[] = [];
-  for (let row = 0; row < GRID_ROWS; row++) {
-    if (row % 2 === 0) {
-      for (let col = 0; col < GRID_COLS; col++) {
-        points.push({
-          x: GRID_ORIGIN_X + col * GRID_SPACING,
-          y: GRID_ORIGIN_Y + row * GRID_SPACING,
-          col,
-          row,
-        });
-      }
-    } else {
-      for (let col = GRID_COLS - 1; col >= 0; col--) {
-        points.push({
-          x: GRID_ORIGIN_X + col * GRID_SPACING,
-          y: GRID_ORIGIN_Y + row * GRID_SPACING,
-          col,
-          row,
-        });
-      }
-    }
-  }
-  return points;
-})();
-
-interface PrinterNozzleProps {
-  panelWidth: number;
-  panelHeight: number;
-}
-
-export const PrinterNozzle: React.FC<PrinterNozzleProps> = ({
-  panelWidth,
-  panelHeight,
-}) => {
+export const PrinterNozzle: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Nozzle starts at frame 30, deposits over frames 30..390
-  const depositFrames = 360; // frames 30-390
-  const localFrame = Math.max(0, frame - 30);
-  const totalPoints = NOZZLE_PATH.length;
+  // How far through the deposition are we (0 to TOTAL_POINTS)
+  const depositProgress = interpolate(
+    frame,
+    [PHASE_ANIMATE_START, PHASE_COMPLETE],
+    [0, TOTAL_POINTS],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
 
-  // How many points deposited so far (linear mechanical movement)
-  const progress = Math.min(1, localFrame / depositFrames);
-  const depositedCount = Math.floor(progress * totalPoints);
-
-  // Current nozzle position — interpolate between last deposited and next
-  const exactIndex = progress * totalPoints;
-  const currentIndex = Math.min(Math.floor(exactIndex), totalPoints - 1);
-  const nextIndex = Math.min(currentIndex + 1, totalPoints - 1);
-  const subProgress = exactIndex - currentIndex;
-
-  const nozzleX =
-    NOZZLE_PATH[currentIndex].x +
-    (NOZZLE_PATH[nextIndex].x - NOZZLE_PATH[currentIndex].x) * subProgress;
-  const nozzleY =
-    NOZZLE_PATH[currentIndex].y +
-    (NOZZLE_PATH[nextIndex].y - NOZZLE_PATH[currentIndex].y) * subProgress;
+  const currentPointIndex = Math.min(Math.floor(depositProgress), TOTAL_POINTS - 1);
+  const currentPoint = nozzlePath[currentPointIndex];
 
   // Deposited dots
   const dots: React.ReactNode[] = [];
-  for (let i = 0; i < depositedCount && i < totalPoints; i++) {
-    const pt = NOZZLE_PATH[i];
-    // Each dot scales in over 4 frames after deposit
-    const depositFrame = (i / totalPoints) * depositFrames + 30;
-    const dotAge = frame - depositFrame;
+  const trailSegments: React.ReactNode[] = [];
+
+  for (let i = 0; i <= currentPointIndex; i++) {
+    const pt = nozzlePath[i];
+    // Each dot appears at its specific frame
+    const dotFrame = PHASE_ANIMATE_START + (i / TOTAL_POINTS) * DEPOSIT_FRAMES;
+    const dotAge = frame - dotFrame;
     const dotScale = interpolate(dotAge, [0, 4], [0, 1], {
-      easing: Easing.out(Easing.quad),
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
     });
 
     dots.push(
@@ -97,54 +56,55 @@ export const PrinterNozzle: React.FC<PrinterNozzleProps> = ({
         cx={pt.x}
         cy={pt.y}
         r={(DOT_SIZE / 2) * dotScale}
-        fill={PRINTER_ACCENT}
-        opacity={0.6}
+        fill={DOT_COLOR}
+        fillOpacity={DOT_OPACITY}
       />
     );
+
+    // Trail line connecting dots
+    if (i > 0) {
+      const prevPt = nozzlePath[i - 1];
+      trailSegments.push(
+        <line
+          key={`trail-${i}`}
+          x1={prevPt.x}
+          y1={prevPt.y}
+          x2={pt.x}
+          y2={pt.y}
+          stroke={TRAIL_COLOR}
+          strokeOpacity={TRAIL_OPACITY}
+          strokeWidth={1}
+        />
+      );
+    }
   }
 
-  // Trail line connecting deposited points
-  const trailPoints = NOZZLE_PATH.slice(0, depositedCount + 1);
-  const trailPath =
-    trailPoints.length > 1
-      ? trailPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
-      : '';
-
-  // Nozzle visibility
-  const nozzleOpacity = frame >= 30 && frame <= 420 ? 1 : 0;
+  // Only render nozzle if we've started depositing
+  const showNozzle = frame >= PHASE_ANIMATE_START && frame < PHASE_COMPLETE + 30;
 
   return (
     <svg
-      width={panelWidth}
-      height={panelHeight}
+      width={PANEL_WIDTH}
+      height={CANVAS_HEIGHT}
       style={{ position: 'absolute', top: 0, left: 0 }}
     >
-      {/* Trail line */}
-      {trailPath && (
-        <path
-          d={trailPath}
-          stroke={PRINTER_ACCENT}
-          strokeWidth={1}
-          fill="none"
-          opacity={TRAIL_OPACITY}
-        />
-      )}
+      {/* Trail lines */}
+      {trailSegments}
 
       {/* Deposited dots */}
       {dots}
 
-      {/* Nozzle — chevron pointing down */}
-      {nozzleOpacity > 0 && (
-        <g
-          transform={`translate(${nozzleX}, ${nozzleY})`}
-          opacity={nozzleOpacity}
-        >
-          <polygon
-            points="-10,-14 10,-14 0,-2"
-            fill={NOZZLE_COLOR}
-          />
-          <rect x={-1} y={-2} width={2} height={4} fill={NOZZLE_COLOR} />
-        </g>
+      {/* Nozzle head (chevron/triangle pointing down) */}
+      {showNozzle && currentPoint && (
+        <polygon
+          points={`
+            ${currentPoint.x},${currentPoint.y - NOZZLE_HEIGHT - 4}
+            ${currentPoint.x - NOZZLE_WIDTH / 2},${currentPoint.y - NOZZLE_HEIGHT - 4 - NOZZLE_HEIGHT}
+            ${currentPoint.x + NOZZLE_WIDTH / 2},${currentPoint.y - NOZZLE_HEIGHT - 4 - NOZZLE_HEIGHT}
+          `}
+          fill={NOZZLE_COLOR}
+          opacity={0.9}
+        />
       )}
     </svg>
   );

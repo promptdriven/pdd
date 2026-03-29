@@ -1,17 +1,14 @@
-// FlowLabel.tsx — animated label for each pipeline stage
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import { LABEL_FADE_FRAMES } from "./constants";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import { LABEL_FADE_IN_FRAMES } from './constants';
 
 interface FlowLabelProps {
   text: string;
   color: string;
   x: number;
   y: number;
-  /** Frame at which this label begins fading in (relative to parent Sequence) */
-  appearFrame: number;
-  /** Optional connecting line to the mold */
-  lineToX?: number;
+  /** Local start frame (relative to the Sequence this lives in) */
+  componentLabel?: string;
 }
 
 export const FlowLabel: React.FC<FlowLabelProps> = ({
@@ -19,77 +16,73 @@ export const FlowLabel: React.FC<FlowLabelProps> = ({
   color,
   x,
   y,
-  appearFrame,
-  lineToX,
+  componentLabel,
 }) => {
   const frame = useCurrentFrame();
-  const localFrame = frame - appearFrame;
 
-  if (localFrame < 0) return null;
+  const opacity = interpolate(frame, [0, LABEL_FADE_IN_FRAMES], [0, 1], {
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
-  const opacity = interpolate(
-    localFrame,
-    [0, LABEL_FADE_FRAMES],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  const slideX = interpolate(
-    localFrame,
-    [0, LABEL_FADE_FRAMES],
-    [x < 960 ? -20 : 20, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  const translateX = interpolate(frame, [0, LABEL_FADE_IN_FRAMES], [20, 0], {
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
   return (
-    <g opacity={opacity} transform={`translate(${slideX}, 0)`}>
-      {/* Connecting dashed line */}
-      {lineToX !== undefined && (
-        <line
-          x1={x + (x < 960 ? text.length * 8 : -10)}
-          y1={y}
-          x2={lineToX}
-          y2={y}
-          stroke={color}
-          strokeWidth={1}
-          strokeDasharray="4 3"
-          opacity={0.5}
-        />
-      )}
-
-      {/* Background pill */}
-      <rect
-        x={x - 8}
-        y={y - 14}
-        width={text.length * 9 + 16}
-        height={26}
-        rx={4}
-        fill={color}
-        opacity={0.12}
+    <div
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y,
+        opacity,
+        transform: `translateX(${translateX}px)`,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+      }}
+    >
+      {/* Connector line */}
+      <div
+        style={{
+          position: 'absolute',
+          left: -40,
+          top: '50%',
+          width: 36,
+          height: 2,
+          backgroundColor: color,
+          opacity: 0.5,
+          transform: 'translateY(-50%)',
+        }}
       />
-
-      {/* Label text */}
-      <text
-        x={x}
-        y={y + 4}
-        fill={color}
-        fontSize={14}
-        fontFamily="Inter, sans-serif"
-        fontWeight={600}
-        opacity={0.92}
+      <span
+        style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 600,
+          color,
+          lineHeight: 1.2,
+          whiteSpace: 'nowrap',
+        }}
       >
         {text}
-      </text>
-    </g>
+      </span>
+      {componentLabel && (
+        <span
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 11,
+            fontWeight: 400,
+            color,
+            opacity: 0.6,
+            lineHeight: 1.2,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {componentLabel}
+        </span>
+      )}
+    </div>
   );
 };
-
-export default FlowLabel;

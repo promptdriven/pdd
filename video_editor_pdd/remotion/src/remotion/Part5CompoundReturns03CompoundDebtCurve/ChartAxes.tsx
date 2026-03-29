@@ -1,152 +1,143 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 import {
   CHART_LEFT,
   CHART_RIGHT,
   CHART_TOP,
   CHART_BOTTOM,
+  CHART_WIDTH,
+  CHART_HEIGHT,
   AXIS_COLOR,
   AXIS_LABEL_COLOR,
-  AXES_DURATION,
-  X_LABELS,
-  Y_LABELS,
+  GRID_COLOR,
+  GRID_OPACITY,
+  GRID_SPACING,
+  AXES_SETTLE_END,
+  X_MAX,
 } from './constants';
 
 export const ChartAxes: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Axes draw in over AXES_DURATION frames with easeOut(quad)
-  const drawProgress = interpolate(frame, [0, AXES_DURATION], [0, 1], {
+  const axisOpacity = interpolate(frame, [0, AXES_SETTLE_END], [0, 1], {
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  const labelOpacity = interpolate(frame, [AXES_DURATION * 0.5, AXES_DURATION], [0, 0.4], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  // Generate horizontal grid lines
+  const gridLines: number[] = [];
+  for (let y = CHART_TOP + GRID_SPACING; y < CHART_BOTTOM; y += GRID_SPACING) {
+    gridLines.push(y);
+  }
 
-  // X-axis: horizontal line at y=800
-  const xAxisEndX = CHART_LEFT + (CHART_RIGHT - CHART_LEFT) * drawProgress;
-  // Y-axis: vertical line at x=200
-  const yAxisEndY = CHART_BOTTOM - (CHART_BOTTOM - CHART_TOP) * drawProgress;
-
-  // X-axis label positions
-  const xLabelPositions = X_LABELS.map((_, i) => {
-    const t = (i + 0.5) / X_LABELS.length;
-    return CHART_LEFT + t * (CHART_RIGHT - CHART_LEFT);
-  });
-
-  // Y-axis label positions
-  const yLabelPositions = Y_LABELS.map((_, i) => {
-    const t = (i + 0.5) / Y_LABELS.length;
-    return CHART_BOTTOM - t * (CHART_BOTTOM - CHART_TOP);
-  });
+  // X-axis tick labels (0, 2, 4, ... 20)
+  const xTicks: number[] = [];
+  for (let i = 0; i <= X_MAX; i += 2) {
+    xTicks.push(i);
+  }
 
   return (
-    <>
+    <div style={{ position: 'absolute', inset: 0, opacity: axisOpacity }}>
+      {/* Horizontal grid lines */}
       <svg
         width={1920}
         height={1080}
         style={{ position: 'absolute', top: 0, left: 0 }}
       >
-        {/* X-axis */}
+        {gridLines.map((y) => (
+          <line
+            key={`grid-h-${y}`}
+            x1={CHART_LEFT}
+            y1={y}
+            x2={CHART_RIGHT}
+            y2={y}
+            stroke={GRID_COLOR}
+            strokeWidth={1}
+            opacity={GRID_OPACITY}
+          />
+        ))}
+
+        {/* X-axis line */}
         <line
           x1={CHART_LEFT}
           y1={CHART_BOTTOM}
-          x2={xAxisEndX}
+          x2={CHART_RIGHT}
           y2={CHART_BOTTOM}
           stroke={AXIS_COLOR}
-          strokeWidth={2}
-          opacity={0.5}
+          strokeWidth={1.5}
         />
-        {/* Y-axis */}
+
+        {/* Y-axis line */}
         <line
           x1={CHART_LEFT}
-          y1={CHART_BOTTOM}
+          y1={CHART_TOP}
           x2={CHART_LEFT}
-          y2={yAxisEndY}
+          y2={CHART_BOTTOM}
           stroke={AXIS_COLOR}
-          strokeWidth={2}
-          opacity={0.5}
+          strokeWidth={1.5}
         />
       </svg>
 
-      {/* Axis title: Time */}
+      {/* X-axis label */}
       <div
         style={{
           position: 'absolute',
-          left: (CHART_LEFT + CHART_RIGHT) / 2,
+          left: CHART_LEFT,
           top: CHART_BOTTOM + 50,
-          transform: 'translateX(-50%)',
+          width: CHART_WIDTH,
+          textAlign: 'center',
           fontFamily: 'Inter, sans-serif',
           fontSize: 14,
+          fontWeight: 400,
           color: AXIS_LABEL_COLOR,
-          opacity: labelOpacity,
-          letterSpacing: '0.05em',
-          textTransform: 'uppercase' as const,
+          opacity: 0.6,
         }}
       >
-        Time
+        Time (maintenance cycles)
       </div>
 
-      {/* Axis title: Cost */}
+      {/* Y-axis label */}
       <div
         style={{
           position: 'absolute',
-          left: CHART_LEFT - 60,
-          top: (CHART_TOP + CHART_BOTTOM) / 2,
-          transform: 'translateY(-50%) rotate(-90deg)',
+          left: CHART_LEFT - 120,
+          top: CHART_TOP + CHART_HEIGHT / 2,
           fontFamily: 'Inter, sans-serif',
           fontSize: 14,
+          fontWeight: 400,
           color: AXIS_LABEL_COLOR,
-          opacity: labelOpacity,
-          letterSpacing: '0.05em',
-          textTransform: 'uppercase' as const,
+          opacity: 0.6,
+          transform: 'rotate(-90deg)',
+          transformOrigin: 'center center',
+          whiteSpace: 'nowrap',
         }}
       >
-        Cost
+        Cumulative Cost
       </div>
 
-      {/* X-axis labels */}
-      {X_LABELS.map((label, i) => (
-        <div
-          key={`x-${i}`}
-          style={{
-            position: 'absolute',
-            left: xLabelPositions[i],
-            top: CHART_BOTTOM + 15,
-            transform: 'translateX(-50%)',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 11,
-            color: AXIS_LABEL_COLOR,
-            opacity: labelOpacity,
-          }}
-        >
-          {label}
-        </div>
-      ))}
-
-      {/* Y-axis labels */}
-      {Y_LABELS.map((label, i) => (
-        <div
-          key={`y-${i}`}
-          style={{
-            position: 'absolute',
-            left: CHART_LEFT - 40,
-            top: yLabelPositions[i],
-            transform: 'translateY(-50%)',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 11,
-            color: AXIS_LABEL_COLOR,
-            opacity: labelOpacity,
-            textAlign: 'right' as const,
-            width: 30,
-          }}
-        >
-          {label}
-        </div>
-      ))}
-    </>
+      {/* X-axis tick labels */}
+      {xTicks.map((tick) => {
+        const xPos =
+          CHART_LEFT + (tick / X_MAX) * CHART_WIDTH;
+        return (
+          <div
+            key={`xtick-${tick}`}
+            style={{
+              position: 'absolute',
+              left: xPos,
+              top: CHART_BOTTOM + 10,
+              transform: 'translateX(-50%)',
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 14,
+              fontWeight: 400,
+              color: AXIS_LABEL_COLOR,
+              opacity: 0.6,
+            }}
+          >
+            {tick}
+          </div>
+        );
+      })}
+    </div>
   );
 };

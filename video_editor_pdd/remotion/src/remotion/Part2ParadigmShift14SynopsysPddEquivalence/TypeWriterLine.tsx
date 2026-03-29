@@ -1,64 +1,56 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { useCurrentFrame } from "remotion";
 import {
   FONT_FAMILY,
-  LINE_FONT_SIZE,
-  CENTER_X,
-  CHAR_DELAY_FRAMES,
+  MAIN_FONT_SIZE,
+  CHAR_DELAY,
+  ARROW_CHAR,
+  ARROW_COLOR,
+  CANVAS_WIDTH,
 } from "./constants";
 import type { TextSegment } from "./constants";
 
 interface TypeWriterLineProps {
   segments: TextSegment[];
-  y: number;
   startFrame: number;
+  y: number;
 }
 
-/**
- * Renders a typewriter-style line with multiple styled segments.
- * Characters appear at CHAR_DELAY_FRAMES per character, linear.
- */
+interface CharInfo {
+  char: string;
+  color: string;
+  weight: number;
+  globalIndex: number;
+}
+
 export const TypeWriterLine: React.FC<TypeWriterLineProps> = ({
   segments,
-  y,
   startFrame,
+  y,
 }) => {
   const frame = useCurrentFrame();
+
+  // Build a flat list of characters with their styles
+  const chars: CharInfo[] = useMemo(() => {
+    const result: CharInfo[] = [];
+    let idx = 0;
+    for (const seg of segments) {
+      for (const char of seg.text) {
+        result.push({
+          char,
+          color: char === ARROW_CHAR ? ARROW_COLOR : seg.color,
+          weight: seg.weight,
+          globalIndex: idx,
+        });
+        idx++;
+      }
+    }
+    return result;
+  }, [segments]);
+
   const elapsed = frame - startFrame;
-
-  if (elapsed < 0) return null;
-
-  // Total character count across all segments
-  const totalChars = segments.reduce((sum, s) => sum + s.text.length, 0);
-  const charsToShow = Math.min(
-    totalChars,
-    Math.floor(elapsed / CHAR_DELAY_FRAMES)
-  );
-
-  // Build visible spans
-  let charsRemaining = charsToShow;
-  const spans: React.ReactNode[] = [];
-
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (charsRemaining <= 0) break;
-
-    const visibleCount = Math.min(seg.text.length, charsRemaining);
-    const visibleText = seg.text.slice(0, visibleCount);
-    charsRemaining -= visibleCount;
-
-    spans.push(
-      <span
-        key={i}
-        style={{
-          color: seg.color,
-          fontWeight: seg.fontWeight,
-        }}
-      >
-        {visibleText}
-      </span>
-    );
-  }
+  // +1 so the first character is visible on the start frame
+  const visibleCount = Math.max(0, Math.floor(elapsed / CHAR_DELAY) + 1);
 
   return (
     <div
@@ -66,26 +58,27 @@ export const TypeWriterLine: React.FC<TypeWriterLineProps> = ({
         position: "absolute",
         top: y,
         left: 0,
-        width: CENTER_X * 2,
-        textAlign: "center",
+        width: CANVAS_WIDTH,
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
         fontFamily: FONT_FAMILY,
-        fontSize: LINE_FONT_SIZE,
-        lineHeight: 1.4,
+        fontSize: MAIN_FONT_SIZE,
         whiteSpace: "pre",
       }}
     >
-      {spans}
-      {/* Blinking cursor while typing */}
-      {charsToShow < totalChars && (
+      {chars.map((c, i) => (
         <span
+          key={i}
           style={{
-            color: "#E2E8F0",
-            opacity: Math.sin(elapsed * 0.3) > 0 ? 0.85 : 0,
+            color: c.color,
+            fontWeight: c.weight,
+            opacity: i < visibleCount ? 1 : 0,
           }}
         >
-          |
+          {c.char}
         </span>
-      )}
+      ))}
     </div>
   );
 };

@@ -1,120 +1,113 @@
-// ============================================================
-// DrawingHand.tsx – Stylized vector hand silhouette holding a pencil.
-// Moves across the schematic, slows down, and fades out.
-// ============================================================
 import React from 'react';
-import { interpolate, Easing } from 'remotion';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import {
+  HAND_COLOR,
+  HAND_OPACITY,
+  HAND_FADE_START,
+  HAND_FADE_DURATION,
+} from './constants';
 
-interface DrawingHandProps {
-  frame: number;
-  handColor: string;
-  handOpacity: number;
-  fadeOutStart: number;
-  fadeOutDuration: number;
-  /** Bounding box for hand movement */
-  areaWidth: number;
-  areaHeight: number;
-}
+/**
+ * Stylised drawing hand with pencil that decelerates and fades out.
+ * The hand "draws" by oscillating horizontally, slowing over time.
+ */
+const DrawingHand: React.FC = () => {
+  const frame = useCurrentFrame();
 
-export const DrawingHand: React.FC<DrawingHandProps> = ({
-  frame,
-  handColor,
-  handOpacity,
-  fadeOutStart,
-  fadeOutDuration,
-  areaWidth,
-  areaHeight,
-}) => {
-  // Hand position — decelerating movement (easeOutCubic)
-  const moveProgress = interpolate(frame, [0, 300], [0, 1], {
+  // Speed factor: 1 → 0 over 0..270 (easeOutCubic deceleration)
+  const speed = interpolate(frame, [0, 270], [1, 0], {
+    easing: Easing.out(Easing.poly(3)),
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.poly(3)),
   });
 
-  // Hand traces a path across the schematic area
-  const handX = areaWidth * 0.3 + moveProgress * areaWidth * 0.35;
-  const handY =
-    areaHeight * 0.4 +
-    Math.sin(moveProgress * Math.PI * 4) * 60 * (1 - moveProgress);
-
-  // Pencil wobble (decreasing amplitude as hand slows)
-  const wobbleAmp = (1 - moveProgress) * 6;
-  const wobbleX = Math.sin(frame * 0.3) * wobbleAmp;
-  const wobbleY = Math.cos(frame * 0.4) * wobbleAmp;
-
-  // Opacity: steady, then fade out
+  // Opacity: full → 0 at fade
   const opacity = interpolate(
     frame,
-    [0, fadeOutStart, fadeOutStart + fadeOutDuration],
-    [handOpacity, handOpacity, 0],
+    [HAND_FADE_START, HAND_FADE_START + HAND_FADE_DURATION],
+    [HAND_OPACITY, 0],
     {
+      easing: Easing.in(Easing.poly(2)),
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.poly(2)),
-    },
+    }
   );
+
+  // Horizontal oscillation (drawing motion)
+  const oscillation = Math.sin(frame * 0.3) * 30 * speed;
+  // Vertical drift (small)
+  const drift = Math.cos(frame * 0.17) * 12 * speed;
+
+  // Hand position – starts near centre, drifts
+  const handX = 960 + oscillation + frame * 0.2 * speed;
+  const handY = 540 + drift - frame * 0.15 * speed;
 
   if (opacity <= 0.01) return null;
 
   return (
     <svg
-      width={120}
-      height={140}
+      width={1920}
+      height={1080}
       style={{
         position: 'absolute',
-        left: handX + wobbleX - 40,
-        top: handY + wobbleY - 80,
-        opacity,
+        top: 0,
+        left: 0,
         pointerEvents: 'none',
       }}
-      viewBox="0 0 120 140"
     >
-      {/* Pencil */}
-      <line
-        x1={45}
-        y1={10}
-        x2={60}
-        y2={70}
-        stroke={handColor}
-        strokeWidth={4}
-        strokeLinecap="round"
-      />
-      {/* Pencil tip */}
-      <polygon points="58,66 62,66 60,78" fill={handColor} />
-
-      {/* Simplified hand shape */}
-      <path
-        d={`
-          M 40 70
-          C 35 65, 30 68, 32 75
-          L 30 90
-          C 28 95, 30 100, 35 100
-          L 50 105
-          C 55 108, 60 110, 65 108
-          L 80 100
-          C 88 96, 90 90, 85 84
-          L 78 78
-          C 75 72, 68 68, 60 70
-          Z
-        `}
-        fill={handColor}
-        opacity={0.85}
-      />
-
-      {/* Fingers curled around pencil */}
-      <path
-        d={`
-          M 48 72
-          C 50 68, 55 66, 58 68
-          M 52 75
-          C 54 71, 58 70, 61 72
-        `}
-        stroke={handColor}
-        strokeWidth={2}
-        fill="none"
-        opacity={0.7}
-      />
+      <g
+        transform={`translate(${handX}, ${handY})`}
+        opacity={opacity}
+      >
+        {/* Pencil */}
+        <line
+          x1={0}
+          y1={0}
+          x2={-40}
+          y2={-55}
+          stroke={HAND_COLOR}
+          strokeWidth={4}
+          strokeLinecap="round"
+        />
+        {/* Pencil tip */}
+        <polygon
+          points="0,0 -6,-8 6,-8"
+          fill={HAND_COLOR}
+          transform="rotate(35)"
+        />
+        {/* Simplified hand silhouette */}
+        <ellipse
+          cx={-30}
+          cy={-50}
+          rx={22}
+          ry={14}
+          fill={HAND_COLOR}
+          opacity={0.6}
+          transform="rotate(-15, -30, -50)"
+        />
+        {/* Thumb */}
+        <ellipse
+          cx={-14}
+          cy={-35}
+          rx={8}
+          ry={5}
+          fill={HAND_COLOR}
+          opacity={0.5}
+          transform="rotate(20, -14, -35)"
+        />
+        {/* Fingers wrapped */}
+        <ellipse
+          cx={-42}
+          cy={-44}
+          rx={10}
+          ry={6}
+          fill={HAND_COLOR}
+          opacity={0.45}
+          transform="rotate(-25, -42, -44)"
+        />
+      </g>
     </svg>
   );
 };
+
+export default DrawingHand;

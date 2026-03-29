@@ -1,65 +1,67 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 
 interface PulsingGlowProps {
   cx: number;
   cy: number;
-  radius: number;
   color: string;
+  radius: number;
   minOpacity: number;
   maxOpacity: number;
   cycleFrames: number;
   startFrame: number;
+  brighterAfterFrame?: number;
+  brighterMaxOpacity?: number;
 }
 
 export const PulsingGlow: React.FC<PulsingGlowProps> = ({
   cx,
   cy,
-  radius,
   color,
+  radius,
   minOpacity,
   maxOpacity,
   cycleFrames,
   startFrame,
+  brighterAfterFrame = Infinity,
+  brighterMaxOpacity = 0.35,
 }) => {
   const frame = useCurrentFrame();
-  const elapsed = frame - startFrame;
+  const localFrame = frame - startFrame;
 
-  if (elapsed < 0) return null;
+  if (localFrame < 0) return null;
 
-  // Determine pulse intensity: second pulse (frame 90-150 relative to pulse start)
-  // is brighter per spec
-  const isSecondPulsePhase = elapsed >= 60 && elapsed < 120;
-  const effectiveMax = isSecondPulsePhase ? maxOpacity * 1.5 : maxOpacity;
+  const effectiveMax =
+    frame >= brighterAfterFrame ? brighterMaxOpacity : maxOpacity;
 
-  // Sine-based pulse on cycleFrames period
-  const cycleProgress = (elapsed % cycleFrames) / cycleFrames;
-  const pulseOpacity = interpolate(
+  // Progress through the cycle — 0→1 maps to one full pulse
+  const cycleProgress = (localFrame % cycleFrames) / cycleFrames;
+
+  // Pulse: ease from min → max → min using sine easing
+  const pulseValue = interpolate(
     cycleProgress,
     [0, 0.5, 1],
     [minOpacity, effectiveMax, minOpacity],
     {
       easing: Easing.inOut(Easing.sin),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
 
   return (
     <div
       style={{
-        position: 'absolute',
+        position: "absolute",
         left: cx - radius * 2,
         top: cy - radius * 2,
         width: radius * 4,
         height: radius * 4,
-        borderRadius: '50%',
+        borderRadius: "50%",
         background: `radial-gradient(circle, ${color} 0%, transparent 70%)`,
-        opacity: pulseOpacity,
-        pointerEvents: 'none',
+        opacity: pulseValue,
+        pointerEvents: "none",
       }}
     />
   );
 };
-
-export default PulsingGlow;

@@ -1,204 +1,179 @@
-import React from 'react';
+import React from "react";
 import {
   AbsoluteFill,
   useCurrentFrame,
   interpolate,
   Easing,
   Sequence,
-} from 'remotion';
+} from "remotion";
+import "../_shared/load-inter-font";
 import {
   BG_COLOR,
-  CROSSING_X,
-  CROSSING_Y,
-  PULSE_GLOW_COLOR,
-  PULSE_RADIUS,
-  PULSE_MIN_OPACITY,
-  PULSE_MAX_OPACITY,
-  PULSE_CYCLE_FRAMES,
   LABEL_COLOR,
-  LABEL_DIMMED_OPACITY,
-  REFRAME_UNDERLINE_COLOR,
-  REFRAME_UNDERLINE_OPACITY,
-  CHART_FADE_IN_START,
-  CHART_FADE_IN_END,
+  WE_ARE_HERE_OPACITY,
+  ACCENT_UNDERLINE_COLOR,
+  ACCENT_UNDERLINE_OPACITY,
+  CROSSING_GLOW_COLOR,
+  CROSSING_GLOW_RADIUS,
+  CROSSING_GLOW_MIN_OPACITY,
+  CROSSING_GLOW_MAX_OPACITY,
+  CROSSING_PULSE_CYCLE,
+  FADE_IN_END,
   PULSE_START,
+  REEMPH_START,
   REFRAME_TEXT_START,
-  REFRAME_TEXT_END,
-  CHART_FADE_OUT_START,
-  CHART_FADE_OUT_END,
-} from './constants';
-import { CodeCostChart } from './CodeCostChart';
-import { PulsingGlow } from './PulsingGlow';
+  FADE_OUT_START,
+  FADE_OUT_END,
+  TOTAL_FRAMES,
+} from "./constants";
+import { CodeCostChart, CROSSING_CX, CROSSING_CY } from "./CodeCostChart";
+import { PulsingGlow } from "./PulsingGlow";
 
+// ── Default props ───────────────────────────────────────────────────────────
 export const defaultPart5CompoundReturns08EconomicsCrossingCallbackProps = {};
 
+// ── Main component ──────────────────────────────────────────────────────────
 export const Part5CompoundReturns08EconomicsCrossingCallback: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Chart fade-in: frames 0-30
-  const chartFadeIn = interpolate(
+  // ── Fade in (frames 0-30) ─────────────────────────────────────────────
+  const fadeIn = interpolate(frame, [0, FADE_IN_END], [0.15, 1], {
+    easing: Easing.out(Easing.quad),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // ── "We are here" label re-emphasis (frames 90-120) ───────────────────
+  const weAreHereOpacity = interpolate(
     frame,
-    [CHART_FADE_IN_START, CHART_FADE_IN_END],
-    [0, 1],
+    [PULSE_START, REEMPH_START, REEMPH_START + 20, REEMPH_START + 40],
+    [
+      WE_ARE_HERE_OPACITY,
+      WE_ARE_HERE_OPACITY,
+      0.9,
+      WE_ARE_HERE_OPACITY,
+    ],
     {
-      easing: Easing.out(Easing.quad),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.sin),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
 
-  // Chart fade-out: frames 270-300
-  const chartFadeOut = interpolate(
-    frame,
-    [CHART_FADE_OUT_START, CHART_FADE_OUT_END],
-    [1, 0],
-    {
-      easing: Easing.in(Easing.quad),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    }
-  );
-
-  // Combined chart opacity
-  const chartOpacity = Math.min(chartFadeIn, chartFadeOut);
-
-  // "We are here" label: visible from frame 30, re-emphasized at frame 90
-  const weAreHereBaseOpacity = frame >= PULSE_START ? 0.6 : 0;
-  const weAreHereReemphasis =
-    frame >= 90 && frame < 150
-      ? interpolate(frame, [90, 105, 120, 150], [0.6, 0.85, 0.85, 0.6], {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-        })
-      : weAreHereBaseOpacity;
-  const weAreHereOpacity = Math.max(weAreHereBaseOpacity, weAreHereReemphasis);
-
-  // Reframe text fade-in: frames 150-180
+  // ── "The economics changed." text fade in (frames 150-180) ────────────
   const reframeOpacity = interpolate(
     frame,
-    [REFRAME_TEXT_START, REFRAME_TEXT_END],
+    [REFRAME_TEXT_START, REFRAME_TEXT_START + 30],
     [0, 1],
     {
       easing: Easing.out(Easing.quad),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
     }
   );
+
+  // ── Fade out (frames 270-300) ─────────────────────────────────────────
+  const fadeOut = interpolate(frame, [FADE_OUT_START, FADE_OUT_END], [1, 0], {
+    easing: Easing.in(Easing.quad),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // Master opacity: fade in then fade out
+  const masterOpacity = frame < FADE_OUT_START ? fadeIn : fadeIn * fadeOut;
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        fontFamily: 'Inter, sans-serif',
+        fontFamily: "Inter, sans-serif",
       }}
     >
-      {/* Chart layer with fade in/out */}
+      {/* Chart (all elements at final position, dimmed labels) */}
       <div
         style={{
-          position: 'absolute',
+          position: "absolute",
           top: 0,
           left: 0,
           width: 1920,
           height: 1080,
-          opacity: chartOpacity,
+          opacity: masterOpacity,
         }}
       >
-        <CodeCostChart dimOpacity={LABEL_DIMMED_OPACITY} />
-      </div>
+        <CodeCostChart />
 
-      {/* Crossing point pulsing glow — starts at frame 30 */}
-      <Sequence from={PULSE_START} durationInFrames={270 - PULSE_START}>
-        <div style={{ opacity: chartOpacity }}>
+        {/* Crossing point pulsing glow */}
+        <Sequence from={PULSE_START} durationInFrames={TOTAL_FRAMES - PULSE_START}>
           <PulsingGlow
-            cx={CROSSING_X}
-            cy={CROSSING_Y}
-            radius={PULSE_RADIUS}
-            color={PULSE_GLOW_COLOR}
-            minOpacity={PULSE_MIN_OPACITY}
-            maxOpacity={PULSE_MAX_OPACITY}
-            cycleFrames={PULSE_CYCLE_FRAMES}
+            cx={CROSSING_CX}
+            cy={CROSSING_CY}
+            color={CROSSING_GLOW_COLOR}
+            radius={CROSSING_GLOW_RADIUS}
+            minOpacity={CROSSING_GLOW_MIN_OPACITY}
+            maxOpacity={CROSSING_GLOW_MAX_OPACITY}
+            cycleFrames={CROSSING_PULSE_CYCLE}
             startFrame={0}
+            brighterAfterFrame={REEMPH_START - PULSE_START}
+            brighterMaxOpacity={0.35}
           />
-        </div>
-      </Sequence>
+        </Sequence>
 
-      {/* Crossing point dot */}
-      {frame >= PULSE_START && (
-        <div
-          style={{
-            position: 'absolute',
-            left: CROSSING_X - 5,
-            top: CROSSING_Y - 5,
-            width: 10,
-            height: 10,
-            borderRadius: '50%',
-            backgroundColor: '#FFFFFF',
-            opacity: chartOpacity * 0.8,
-          }}
-        />
-      )}
-
-      {/* "We are here." label — dimmed at 0.6, re-emphasized briefly */}
-      {frame >= PULSE_START && (
-        <div
-          style={{
-            position: 'absolute',
-            left: CROSSING_X + 40,
-            top: CROSSING_Y + 8,
-            opacity: weAreHereOpacity * chartOpacity,
-          }}
-        >
-          <span
+        {/* "We are here." label — dimmed, near crossing point */}
+        {frame >= PULSE_START && (
+          <div
             style={{
-              fontFamily: 'Inter, sans-serif',
+              position: "absolute",
+              left: CROSSING_CX + 40,
+              top: CROSSING_CY - 10,
+              color: LABEL_COLOR,
+              opacity: weAreHereOpacity,
               fontSize: 24,
               fontWeight: 700,
-              color: LABEL_COLOR,
+              whiteSpace: "nowrap",
+              pointerEvents: "none",
             }}
           >
             We are here.
-          </span>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
 
-      {/* "The economics changed." reframe text */}
-      {frame >= REFRAME_TEXT_START && (
+      {/* "The economics changed." — reframe text below chart */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 880,
+          width: 1920,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          opacity: reframeOpacity * masterOpacity,
+          pointerEvents: "none",
+        }}
+      >
         <div
           style={{
-            position: 'absolute',
-            top: 880,
-            left: 0,
-            width: 1920,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            opacity: reframeOpacity * chartFadeOut,
+            fontSize: 22,
+            fontWeight: 700,
+            color: LABEL_COLOR,
+            textAlign: "center",
           }}
         >
-          <span
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 22,
-              fontWeight: 700,
-              color: LABEL_COLOR,
-              opacity: 0.95,
-            }}
-          >
-            The economics changed.
-          </span>
-          {/* Subtle underline glow */}
-          <div
-            style={{
-              marginTop: 4,
-              width: 200,
-              height: 3,
-              borderRadius: 2,
-              background: REFRAME_UNDERLINE_COLOR,
-              opacity: REFRAME_UNDERLINE_OPACITY,
-            }}
-          />
+          The economics changed.
         </div>
-      )}
+        {/* Subtle underline glow */}
+        <div
+          style={{
+            width: 200,
+            height: 3,
+            marginTop: 6,
+            borderRadius: 2,
+            background: ACCENT_UNDERLINE_COLOR,
+            opacity: ACCENT_UNDERLINE_OPACITY,
+          }}
+        />
+      </div>
     </AbsoluteFill>
   );
 };

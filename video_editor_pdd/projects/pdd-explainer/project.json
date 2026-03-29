@@ -20,7 +20,7 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 17.962667,
+      "durationSeconds": 20.48,
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_darning",
@@ -38,7 +38,7 @@
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
       "durationSeconds": 484.16,
-      "offsetSeconds": 17.962667,
+      "offsetSeconds": 20.48,
       "compositions": [
         "01_section_title_card",
         "02_sock_price_chart",
@@ -68,7 +68,7 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 228.224,
-      "offsetSeconds": 502.12266700000004,
+      "offsetSeconds": 504.64000000000004,
       "compositions": [
         "01_section_title_card",
         "04_mold_production_counter",
@@ -92,7 +92,7 @@
       "remotionDir": "S03-Part3MoldParts",
       "compositionId": "Part3MoldPartsSection",
       "durationSeconds": 345.962667,
-      "offsetSeconds": 730.346667,
+      "offsetSeconds": 732.864,
       "compositions": [
         "01_section_title_card",
         "02_mold_cross_section",
@@ -122,7 +122,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 108.352,
-      "offsetSeconds": 1076.309334,
+      "offsetSeconds": 1078.826667,
       "compositions": [
         "01_section_title_card",
         "02_split_printer_vs_mold",
@@ -144,7 +144,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 119.253333,
-      "offsetSeconds": 1184.6613340000001,
+      "offsetSeconds": 1187.1786670000001,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -164,7 +164,7 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 34.944,
-      "offsetSeconds": 1303.914667,
+      "offsetSeconds": 1306.4320000000002,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -184,7 +184,7 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 15.488,
-      "offsetSeconds": 1338.858667,
+      "offsetSeconds": 1341.3760000000002,
       "compositions": [
         "03_pdd_triangle",
         "04_dissolve_regenerate_loop",

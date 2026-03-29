@@ -1,128 +1,150 @@
-import React from 'react';
+import React from "react";
 import {
   AbsoluteFill,
   interpolate,
   useCurrentFrame,
   Easing,
-} from 'remotion';
-import {
-  BG_COLOR,
-  PANEL_SLIDE_IN_END,
-  PANEL_SLIDE_OUT_START,
-  PANEL_SLIDE_OUT_END,
-  PURPLE_ACCENT,
-} from './constants';
-import { MoldCrossSection } from './MoldCrossSection';
-import { AnnotationPanel } from './AnnotationPanel';
-import { ConnectorLines } from './ConnectorLines';
+} from "remotion";
+import MoldCrossSection from "./MoldCrossSection";
+import AnnotationPanel from "./AnnotationPanel";
+import ConnectorLines from "./ConnectorLines";
 
+// ── Timing constants ───────────────────────────────────────
+// Panel slide in: 0..30
+const SLIDE_IN_START = 0;
+const SLIDE_IN_END = 30;
+
+// Word-by-word text: 30..90  (handled inside AnnotationPanel)
+// Emphasis: 90..110           (handled inside AnnotationPanel)
+// Italic: 150..170            (handled inside AnnotationPanel)
+// Badges: 210..230            (handled inside AnnotationPanel)
+
+// Connectors + wall transition: 270..360
+const CONNECTORS_START = 270;
+const CONNECTORS_END = 300;
+const WALL_TRANSITION_START = 270;
+const WALL_TRANSITION_END = 360;
+
+// Panel slide out: 720..750
+const SLIDE_OUT_START = 720;
+const SLIDE_OUT_END = 750;
+
+// Mold restore: 720..780
+const MOLD_DIM_END = 30;         // mold dims over first 30 frames
+const MOLD_RESTORE_START = 720;
+const MOLD_RESTORE_END = 780;
+
+// ── Proven wall connector targets ──────────────────────────
+const CONNECTOR_TARGETS = [
+  { wallX: 350, wallY: 500 },  // wall index 1
+  { wallX: 650, wallY: 500 },  // wall index 3
+];
+
+// ── Props ──────────────────────────────────────────────────
 export const defaultPart3MoldParts10Z3FormalProofProps = {};
 
-/**
- * Section 3.10 — Z3 Formal Proof Sidebar Annotation
- *
- * A sidebar panel slides in from the right, overlaying a dimmed mold cross-section.
- * The panel contains word-by-word text about Z3/SMT formal verification,
- * emphasis lines, logo badges, and animated connector lines to proven mold walls.
- *
- * Duration: 780 frames (26s @ 30fps)
- */
 export const Part3MoldParts10Z3FormalProof: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Mold dims to 0.3 during annotation, returns to full at exit
-  const moldDimIn = interpolate(frame, [0, PANEL_SLIDE_IN_END], [0.7, 0.3], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
+  // ── Mold opacity ─────────────────────────────────────────
+  // Dims to 0.3 over first 30 frames, restores 720..780
+  const moldDimProgress = interpolate(frame, [0, MOLD_DIM_END], [1, 0.3], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),
   });
-  const moldDimOut = interpolate(
+  const moldRestoreProgress = interpolate(
     frame,
-    [PANEL_SLIDE_OUT_START, PANEL_SLIDE_OUT_END],
-    [0.3, 0.7],
+    [MOLD_RESTORE_START, MOLD_RESTORE_END],
+    [0.3, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+  );
+  const moldOpacity = frame < MOLD_RESTORE_START ? moldDimProgress : moldRestoreProgress;
+
+  // ── Panel slide-in ───────────────────────────────────────
+  const slideInProgress = interpolate(
+    frame,
+    [SLIDE_IN_START, SLIDE_IN_END],
+    [0, 1],
     {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
+  );
+
+  // ── Panel slide-out ──────────────────────────────────────
+  const slideOutProgress = interpolate(
+    frame,
+    [SLIDE_OUT_START, SLIDE_OUT_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
       easing: Easing.in(Easing.cubic),
     }
   );
-  const moldOpacity =
-    frame < PANEL_SLIDE_OUT_START ? moldDimIn : moldDimOut;
 
-  // Subtle background grid pattern
-  const gridOpacity = 0.03;
+  // ── Connector draw progress ──────────────────────────────
+  const connectorDraw = interpolate(
+    frame,
+    [CONNECTORS_START, CONNECTORS_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // ── Wall transition (blue → purple) ──────────────────────
+  const wallProvenProgress = interpolate(
+    frame,
+    [WALL_TRANSITION_START, WALL_TRANSITION_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.sin),
+    }
+  );
+
+  // After slide-out, walls retain purple
+  const retainPurple = frame >= SLIDE_OUT_START;
+
+  // Should connectors be visible?
+  const connectorsVisible = frame >= CONNECTORS_START && frame < SLIDE_OUT_END;
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
-        fontFamily: 'Inter, system-ui, sans-serif',
+        backgroundColor: "#0A0F1A",
+        overflow: "hidden",
       }}
     >
-      {/* Subtle grid overlay */}
-      <svg
-        width={1920}
-        height={1080}
-        style={{ position: 'absolute', top: 0, left: 0, opacity: gridOpacity }}
-      >
-        <defs>
-          <pattern
-            id="gridPattern"
-            width={60}
-            height={60}
-            patternUnits="userSpaceOnUse"
-          >
-            <path
-              d="M 60 0 L 0 0 0 60"
-              fill="none"
-              stroke="#FFFFFF"
-              strokeWidth={0.5}
-            />
-          </pattern>
-        </defs>
-        <rect width={1920} height={1080} fill="url(#gridPattern)" />
-      </svg>
-
-      {/* Ambient purple glow in background */}
-      <div
-        style={{
-          position: 'absolute',
-          left: 200,
-          top: 300,
-          width: 400,
-          height: 400,
-          borderRadius: '50%',
-          background: `radial-gradient(circle, ${PURPLE_ACCENT}08 0%, transparent 70%)`,
-          pointerEvents: 'none',
-        }}
+      {/* Dimmed mold cross-section on left side */}
+      <MoldCrossSection
+        moldOpacity={moldOpacity}
+        provenProgress={wallProvenProgress}
+        retainPurple={retainPurple}
       />
 
-      {/* Mold cross-section (left side) */}
-      <MoldCrossSection dimOpacity={moldOpacity} />
+      {/* Annotation panel (slides in from right) */}
+      <AnnotationPanel
+        slideInProgress={slideInProgress}
+        slideOutProgress={slideOutProgress}
+        localFrame={frame}
+      />
 
       {/* Connector lines from panel to proven walls */}
-      <ConnectorLines />
-
-      {/* Annotation panel (right side) */}
-      <AnnotationPanel />
-
-      {/* Section label — visible from frame 0 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 40,
-          right: 60,
-          fontFamily: 'Inter, system-ui, sans-serif',
-          fontSize: 13,
-          fontWeight: 500,
-          color: PURPLE_ACCENT,
-          opacity: 0.5,
-          letterSpacing: 2,
-          textTransform: 'uppercase',
-        }}
-      >
-        Formal Verification
-      </div>
+      {connectorsVisible && (
+        <ConnectorLines
+          drawProgress={connectorDraw}
+          originX={1000}
+          originY={490}
+          targets={CONNECTOR_TARGETS}
+        />
+      )}
     </AbsoluteFill>
   );
 };

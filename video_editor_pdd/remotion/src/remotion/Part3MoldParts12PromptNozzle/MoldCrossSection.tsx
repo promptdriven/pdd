@@ -1,65 +1,55 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  MOLD_CENTER_X,
+  WALL_COLOR,
+  WALL_DIM_OPACITY,
+  WALL_GLOW_OPACITY,
+  NOZZLE_COLOR,
+  NOZZLE_GLOW_BLUR,
+  NOZZLE_GLOW_OPACITY,
+  MOLD_LEFT,
   MOLD_TOP,
-  MOLD_WIDTH,
-  MOLD_HEIGHT,
+  MOLD_OUTER_W,
+  MOLD_OUTER_H,
   MOLD_WALL_THICKNESS,
+  MOLD_INNER_W,
+  MOLD_INNER_H,
+  MOLD_INNER_LEFT,
+  MOLD_INNER_TOP,
+  NOZZLE_X,
+  NOZZLE_Y,
   NOZZLE_WIDTH,
   NOZZLE_HEIGHT,
-  WALL_BLUE,
-  AMBER,
+  MOLD_CENTER_X,
   PHASE_NOZZLE_GLOW_END,
   PHASE_HOLD_START,
-  DURATION_FRAMES,
+  TOTAL_FRAMES,
 } from "./constants";
 
-interface MoldCrossSectionProps {
-  wallsOpacity: number;
-  nozzleGlowOpacity: number;
-}
-
-export const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
-  wallsOpacity,
-  nozzleGlowOpacity,
-}) => {
+export const MoldCrossSection: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Nozzle glow animates in over first 30 frames
-  const glowProgress = interpolate(frame, [0, PHASE_NOZZLE_GLOW_END], [0, 1], {
-    extrapolateLeft: "clamp",
+  // Nozzle glows in over first 30 frames
+  const nozzleGlow = interpolate(frame, [0, PHASE_NOZZLE_GLOW_END], [0, 1], {
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.quad),
   });
 
-  // Walls dim from 0.5 to wallsOpacity over first 30 frames
-  const currentWallOpacity = interpolate(
+  // Walls dim at start, glow at end (600-720)
+  const wallOpacity = interpolate(
     frame,
-    [0, PHASE_NOZZLE_GLOW_END],
-    [0.5, wallsOpacity],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
+    [0, PHASE_NOZZLE_GLOW_END, PHASE_HOLD_START, TOTAL_FRAMES],
+    [0.3, WALL_DIM_OPACITY, WALL_DIM_OPACITY, WALL_GLOW_OPACITY],
+    { extrapolateRight: "clamp" }
   );
 
-  // Walls glow at end (600-720)
-  const wallGlowOpacity = interpolate(
+  // Wall glow at end
+  const wallGlowBlur = interpolate(
     frame,
-    [PHASE_HOLD_START, PHASE_HOLD_START + 60, DURATION_FRAMES],
-    [currentWallOpacity, 0.6, 0.6],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
+    [PHASE_HOLD_START, TOTAL_FRAMES],
+    [0, 8],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
-
-  const moldLeft = MOLD_CENTER_X - MOLD_WIDTH / 2;
-  const moldRight = MOLD_CENTER_X + MOLD_WIDTH / 2;
-  const nozzleLeft = MOLD_CENTER_X - NOZZLE_WIDTH / 2;
-  const nozzleRight = MOLD_CENTER_X + NOZZLE_WIDTH / 2;
-  const nozzleTopY = MOLD_TOP - NOZZLE_HEIGHT;
 
   return (
     <svg
@@ -69,14 +59,17 @@ export const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
     >
       <defs>
         <filter id="nozzleGlow">
-          <feGaussianBlur stdDeviation="15" result="blur" />
+          <feGaussianBlur
+            stdDeviation={NOZZLE_GLOW_BLUR}
+            result="blur"
+          />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
         <filter id="wallGlow">
-          <feGaussianBlur stdDeviation="6" result="blur" />
+          <feGaussianBlur stdDeviation={wallGlowBlur} result="blur" />
           <feMerge>
             <feMergeNode in="blur" />
             <feMergeNode in="SourceGraphic" />
@@ -84,74 +77,53 @@ export const MoldCrossSection: React.FC<MoldCrossSectionProps> = ({
         </filter>
       </defs>
 
-      {/* Mold walls — U-shape */}
-      <g opacity={wallGlowOpacity} filter={frame >= PHASE_HOLD_START ? "url(#wallGlow)" : undefined}>
-        {/* Left wall */}
-        <rect
-          x={moldLeft}
-          y={MOLD_TOP}
-          width={MOLD_WALL_THICKNESS}
-          height={MOLD_HEIGHT}
-          fill={WALL_BLUE}
-        />
-        {/* Right wall */}
-        <rect
-          x={moldRight - MOLD_WALL_THICKNESS}
-          y={MOLD_TOP}
-          width={MOLD_WALL_THICKNESS}
-          height={MOLD_HEIGHT}
-          fill={WALL_BLUE}
-        />
-        {/* Bottom wall */}
-        <rect
-          x={moldLeft}
-          y={MOLD_TOP + MOLD_HEIGHT - MOLD_WALL_THICKNESS}
-          width={MOLD_WIDTH}
-          height={MOLD_WALL_THICKNESS}
-          fill={WALL_BLUE}
-        />
-        {/* Top-left wall (left of nozzle) */}
-        <rect
-          x={moldLeft}
-          y={MOLD_TOP}
-          width={nozzleLeft - moldLeft}
-          height={MOLD_WALL_THICKNESS}
-          fill={WALL_BLUE}
-        />
-        {/* Top-right wall (right of nozzle) */}
-        <rect
-          x={nozzleRight}
-          y={MOLD_TOP}
-          width={moldRight - nozzleRight}
-          height={MOLD_WALL_THICKNESS}
-          fill={WALL_BLUE}
-        />
-      </g>
+      {/* Outer mold walls */}
+      <rect
+        x={MOLD_LEFT}
+        y={MOLD_TOP}
+        width={MOLD_OUTER_W}
+        height={MOLD_OUTER_H}
+        rx={6}
+        fill="none"
+        stroke={WALL_COLOR}
+        strokeWidth={MOLD_WALL_THICKNESS}
+        opacity={wallOpacity}
+        filter={wallGlowBlur > 0 ? "url(#wallGlow)" : undefined}
+      />
 
-      {/* Nozzle — funnel shape */}
-      <g
-        opacity={glowProgress * nozzleGlowOpacity}
-        filter="url(#nozzleGlow)"
-      >
-        {/* Nozzle body — trapezoid using polygon */}
+      {/* Inner cavity (dark) */}
+      <rect
+        x={MOLD_INNER_LEFT}
+        y={MOLD_INNER_TOP}
+        width={MOLD_INNER_W}
+        height={MOLD_INNER_H}
+        fill="#0A0F1A"
+        opacity={0.8}
+      />
+
+      {/* Nozzle (trapezoid shape at top center) */}
+      <g opacity={nozzleGlow} filter="url(#nozzleGlow)">
+        {/* Nozzle body - trapezoid */}
         <polygon
           points={`
-            ${MOLD_CENTER_X - NOZZLE_WIDTH * 1.2},${nozzleTopY}
-            ${MOLD_CENTER_X + NOZZLE_WIDTH * 1.2},${nozzleTopY}
-            ${nozzleRight},${MOLD_TOP}
-            ${nozzleLeft},${MOLD_TOP}
+            ${NOZZLE_X},${NOZZLE_Y + NOZZLE_HEIGHT}
+            ${NOZZLE_X + NOZZLE_WIDTH},${NOZZLE_Y + NOZZLE_HEIGHT}
+            ${NOZZLE_X + NOZZLE_WIDTH - 15},${NOZZLE_Y}
+            ${NOZZLE_X + 15},${NOZZLE_Y}
           `}
-          fill={AMBER}
-          opacity={0.7}
+          fill={NOZZLE_COLOR}
+          opacity={NOZZLE_GLOW_OPACITY}
+          stroke={NOZZLE_COLOR}
+          strokeWidth={2}
         />
-        {/* Nozzle opening — small rect at bottom */}
+        {/* Nozzle opening */}
         <rect
-          x={nozzleLeft}
-          y={MOLD_TOP - 4}
-          width={NOZZLE_WIDTH}
-          height={8}
-          fill={AMBER}
-          opacity={0.9}
+          x={MOLD_CENTER_X - 15}
+          y={NOZZLE_Y + NOZZLE_HEIGHT - 5}
+          width={30}
+          height={15}
+          fill={NOZZLE_COLOR}
+          opacity={0.7}
         />
       </g>
     </svg>

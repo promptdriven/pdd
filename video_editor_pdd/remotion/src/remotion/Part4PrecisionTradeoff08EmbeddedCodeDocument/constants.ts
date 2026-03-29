@@ -1,100 +1,103 @@
-// === Colors ===
-export const BG_CANVAS = '#0A0F1A';
-export const DOC_BG = '#0F172A';
-export const DOC_BORDER = '#1E293B';
-export const CODE_BG = '#111827';
-export const CODE_BORDER = '#334155';
-export const CODE_ACCENT = '#64748B';
-export const CODE_TEXT_COLOR = '#A5F3FC';
-export const HEADING_COLOR = '#E2E8F0';
-export const PROSE_COLOR = '#CBD5E1';
-export const ANNOTATION_PROSE_COLOR = '#D9944A';
-export const ANNOTATION_CODE_COLOR = '#4A90D9';
-export const BOTTOM_LABEL_COLOR = '#94A3B8';
-export const CODE_GLOW_COLOR = '#4A90D9';
+// ── Canvas ──────────────────────────────────────────────────────────────────
+export const WIDTH = 1920;
+export const HEIGHT = 1080;
+export const FPS = 30;
+export const DURATION_FRAMES = 840;
 
-// === Dimensions ===
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
+// ── Background & Document ───────────────────────────────────────────────────
+export const BG_COLOR = "#0A0F1A";
+export const DOC_BG = "#0F172A";
+export const DOC_BORDER = "#1E293B";
 export const DOC_WIDTH = 1000;
 export const DOC_HEIGHT = 720;
-export const DOC_X = (CANVAS_WIDTH - DOC_WIDTH) / 2; // 460
+export const DOC_X = (WIDTH - DOC_WIDTH) / 2; // 460
 export const DOC_Y = 140;
 export const DOC_PADDING = 48;
-export const DOC_BORDER_RADIUS = 12;
-export const CODE_BORDER_RADIUS = 6;
-export const CODE_ACCENT_WIDTH = 3;
+export const DOC_RADIUS = 12;
 
-// === Typography ===
+// ── Code Block ──────────────────────────────────────────────────────────────
+export const CODE_BG = "#111827";
+export const CODE_BORDER = "#334155";
+export const CODE_ACCENT_COLOR = "#64748B";
+export const CODE_ACCENT_WIDTH = 3;
+export const CODE_RADIUS = 6;
+export const CODE_GLOW_COLOR = "#4A90D9";
+export const CODE_GLOW_OPACITY = 0.08;
+export const CODE_TEXT_COLOR = "#A5F3FC";
+
+// ── Typography Colors ───────────────────────────────────────────────────────
+export const HEADING_COLOR = "#E2E8F0";
+export const PROSE_COLOR = "#CBD5E1";
+export const PROSE_OPACITY = 0.85;
+export const ANNOTATION_NL_COLOR = "#D9944A";
+export const ANNOTATION_CODE_COLOR = "#4A90D9";
+export const ANNOTATION_OPACITY = 0.5;
+export const BOTTOM_LABEL_COLOR = "#94A3B8";
+
+// ── Typography Sizes ────────────────────────────────────────────────────────
 export const HEADING_SIZE = 20;
 export const PROSE_SIZE = 15;
 export const CODE_SIZE = 13;
 export const ANNOTATION_SIZE = 13;
 export const BOTTOM_LABEL_SIZE = 18;
-export const PROSE_LINE_HEIGHT = 1.6;
-export const PARAGRAPH_SPACING = 20;
 
-// === Animation Frames ===
-export const TOTAL_FRAMES = 840;
-export const FPS = 30;
+// ── Animation Keyframes ─────────────────────────────────────────────────────
+export const DOC_FADE_IN_START = 0;
+export const DOC_FADE_IN_END = 30;
 
-// Document fade-in
-export const DOC_FADE_START = 0;
-export const DOC_FADE_DURATION = 30;
+export const PROSE_TOP_START = 0;
+export const PROSE_TOP_END = 180; // text reveals over this range
 
-// Text reveal
-export const TEXT_REVEAL_START = 30;
-export const TEXT_LINE_RATE = 8; // frames per line
+export const CODE_BLOCK_START = 180;
+export const CODE_BLOCK_ANIM_END = 200; // 20-frame scale-in
+export const CODE_GLOW_END = 215; // glow finishes 15 frames after code start
 
-// Code block appear
-export const CODE_APPEAR_START = 180;
-export const CODE_APPEAR_DURATION = 20;
-export const CODE_GLOW_DURATION = 15;
+export const PROSE_BOTTOM_START = 300;
+export const PROSE_BOTTOM_END = 380;
 
-// Below-code prose
-export const BELOW_CODE_START = 300;
-
-// Annotations
-export const ANNOTATIONS_START = 300;
+export const ANNOTATION_START = 300;
 export const ANNOTATION_DRAW_DURATION = 20;
 
-// Bottom label
 export const BOTTOM_LABEL_START = 420;
 export const BOTTOM_LABEL_FADE_DURATION = 20;
 
-// Fade out
 export const FADE_OUT_START = 780;
-export const FADE_OUT_DURATION = 60;
+export const FADE_OUT_END = 840;
 
-// === Document Content ===
-export const DOC_HEADING = '## Parser Module';
+// ── Content ─────────────────────────────────────────────────────────────────
+export const DOC_HEADING = "## Parser Module";
 
-export const PROSE_ABOVE_CODE = [
-  'Parse incoming JSON payloads according to the defined',
-  'schema. Validate required fields, check type constraints,',
-  'and normalize nested structures before processing.',
-  '',
-  'Handle malformed input by returning structured errors',
-  'with descriptive messages and field-level context.',
-  'Support nested objects up to 5 levels deep.',
-  '',
+export const PROSE_ABOVE_LINES = [
+  "Parse incoming JSON payloads according to the",
+  "defined schema. Validate required fields, enforce",
+  "type constraints, and normalize optional values.",
+  "",
+  "Handle malformed input by returning structured",
+  "error objects with field-level diagnostics.",
+  "Support nested objects up to 5 levels deep.",
+  "",
+  "Preserve original key ordering in output maps.",
+  "Strip unknown keys silently unless strict mode",
+  "is enabled via configuration flag.",
 ];
 
-export const EMBEDDED_CODE = [
-  'def compare_priority(a: Task, b: Task) -> int:',
-  '    """Strict ordering for priority queue insertion."""',
-  '    if a.deadline != b.deadline:',
-  '        return -1 if a.deadline < b.deadline else 1',
-  '    if a.weight != b.weight:',
-  '        return -1 if a.weight > b.weight else 1',
-  '    # Tiebreak: lower ID = older task = higher priority',
-  '    return -1 if a.id < b.id else (0 if a.id == b.id else 1)',
+export const EMBEDDED_CODE_LINES = [
+  "def compare_entries(a: Entry, b: Entry) -> int:",
+  '    """Stable comparison for priority queue."""',
+  "    if a.priority != b.priority:",
+  "        return -1 if a.priority > b.priority else 1",
+  "    if a.timestamp != b.timestamp:",
+  "        return -1 if a.timestamp < b.timestamp else 1",
+  "    # Fall back to insertion order for determinism",
+  "    return a.seq - b.seq",
 ];
 
-export const PROSE_BELOW_CODE = [
-  'For all other formatting, follow standard conventions.',
-  'Return values should use the unified response envelope.',
-  'Log structured metadata for every processed payload.',
+export const PROSE_BELOW_LINES = [
+  "For all other formatting, follow standard",
+  "conventions as defined in the style guide.",
+  "Emit structured logs for each parse operation.",
+  "Ensure idempotency across repeated invocations.",
 ];
 
-export const BOTTOM_LABEL_TEXT = 'The boundary between prompt and code is fluid.';
+export const BOTTOM_LABEL_TEXT =
+  "The boundary between prompt and code is fluid.";

@@ -1,125 +1,180 @@
 import React from "react";
 import {
   AbsoluteFill,
-  interpolate,
+  Sequence,
   useCurrentFrame,
+  interpolate,
   Easing,
 } from "remotion";
-import { TableRow } from "./TableRow";
-import { SummaryLine } from "./SummaryLine";
 import {
   BG_COLOR,
-  LABEL_COLOR,
-  PATCHING_COLOR,
-  PDD_COLOR,
-  TABLE_WIDTH,
+  TABLE_LEFT,
+  TABLE_TOP,
   COL_WIDTH,
-  HEADER_HEIGHT,
-  TABLE_BORDER_RADIUS,
-  TABLE_X,
-  TABLE_Y,
-  TABLE_FADE_START,
-  TABLE_FADE_DURATION,
+  ROW_HEIGHT,
+  HEADER_FONT_SIZE,
+  HEADER_FONT_WEIGHT,
+  HEADER_LETTER_SPACING,
+  HEADER_INVESTMENT_COLOR,
+  HEADER_PATCHING_COLOR,
+  HEADER_PDD_COLOR,
+  BORDER_COLOR,
+  HEADER_FADE_DURATION,
+  UNDERLINE_DRAW_DURATION,
+  HEADER_UNDERLINE_Y,
   ROW1_START,
   ROW2_START,
   ROW3_START,
+  GLOW_START,
   TABLE_ROWS,
 } from "./constants";
+import { AnimatedTableRow } from "./AnimatedTableRow";
+import { GlowSweep } from "./GlowSweep";
 
+// ── Default Props ───────────────────────────────────────────────────
 export const defaultPart5CompoundReturns05InvestmentComparisonTableProps = {};
 
-export const Part5CompoundReturns05InvestmentComparisonTable: React.FC = () => {
+// ── Header Sub-component ────────────────────────────────────────────
+const TableHeader: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Table container fade-in
-  const containerOpacity = interpolate(
-    frame - TABLE_FADE_START,
-    [0, TABLE_FADE_DURATION],
+  // Start at 0.3 so content is visible from frame 0, fade to full
+  const opacity = interpolate(frame, [0, HEADER_FADE_DURATION], [0.3, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+
+  // Underline draw animation (width grows from 0 to full)
+  const underlineProgress = interpolate(
+    frame,
+    [0, UNDERLINE_DRAW_DURATION],
     [0, 1],
     {
-      easing: Easing.out(Easing.quad),
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
     }
   );
 
-  const headerLabelStyle = (
-    color: string,
-    align: "left" | "center"
-  ): React.CSSProperties => ({
-    width: COL_WIDTH,
-    height: HEADER_HEIGHT,
+  const headerStyle: React.CSSProperties = {
+    fontFamily: "Inter, sans-serif",
+    fontSize: HEADER_FONT_SIZE,
+    fontWeight: HEADER_FONT_WEIGHT,
+    letterSpacing: HEADER_LETTER_SPACING,
+    textTransform: "uppercase",
+    height: 40,
     display: "flex",
     alignItems: "center",
-    justifyContent: align === "center" ? "center" : "flex-start",
-    paddingLeft: align === "left" ? 24 : 0,
+    paddingLeft: 24,
+    paddingRight: 16,
     boxSizing: "border-box",
-    fontFamily: "Inter, sans-serif",
-    fontSize: 12,
-    fontWeight: 600,
-    color,
-    opacity: 0.5,
-    letterSpacing: 2,
-    textTransform: "uppercase" as const,
-  });
+  };
 
-  const rowStarts = [ROW1_START, ROW2_START, ROW3_START];
+  const tableWidth = COL_WIDTH * 3;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: TABLE_LEFT,
+        top: TABLE_TOP,
+        width: tableWidth,
+        opacity,
+      }}
+    >
+      {/* Header labels */}
+      <div style={{ display: "flex", flexDirection: "row" }}>
+        <div style={{ ...headerStyle, width: COL_WIDTH, color: HEADER_INVESTMENT_COLOR }}>
+          INVESTMENT
+        </div>
+        <div
+          style={{
+            ...headerStyle,
+            width: COL_WIDTH,
+            color: HEADER_PATCHING_COLOR,
+            opacity: 0.7,
+          }}
+        >
+          PATCHING
+        </div>
+        <div
+          style={{
+            ...headerStyle,
+            width: COL_WIDTH,
+            color: HEADER_PDD_COLOR,
+            opacity: 0.7,
+          }}
+        >
+          PDD
+        </div>
+      </div>
+
+      {/* Header underline */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 40,
+          width: tableWidth * underlineProgress,
+          height: 2,
+          backgroundColor: BORDER_COLOR,
+          opacity: 0.5,
+        }}
+      />
+    </div>
+  );
+};
+
+// ── Main Component ──────────────────────────────────────────────────
+export const Part5CompoundReturns05InvestmentComparisonTable: React.FC = () => {
+  // Row vertical positions: after header (TABLE_TOP + 40 header + 2 underline + gap)
+  const firstRowY = HEADER_UNDERLINE_Y + 12;
+  const row1Y = firstRowY;
+  const row2Y = firstRowY + ROW_HEIGHT;
+  const row3Y = firstRowY + ROW_HEIGHT * 2;
+
+  // Glow sweep region covers PDD column across all rows
+  const glowRegionX = TABLE_LEFT + COL_WIDTH * 2;
+  const glowRegionY = firstRowY;
+  const glowRegionHeight = ROW_HEIGHT * 3;
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        overflow: "hidden",
+        fontFamily: "Inter, sans-serif",
       }}
     >
-      {/* Table container */}
-      <div
-        style={{
-          position: "absolute",
-          left: TABLE_X,
-          top: TABLE_Y,
-          width: TABLE_WIDTH,
-          opacity: containerOpacity,
-          border: `1px solid rgba(51, 65, 85, 0.3)`,
-          borderRadius: TABLE_BORDER_RADIUS,
-          overflow: "hidden",
-          backgroundColor: BG_COLOR,
-        }}
-      >
-        {/* Header row */}
-        <div
-          style={{
-            display: "flex",
-            width: "100%",
-            height: HEADER_HEIGHT,
-            backgroundColor: `rgba(30, 41, 59, 0.4)`,
-          }}
-        >
-          <div style={headerLabelStyle(LABEL_COLOR, "left")}>INVESTMENT</div>
-          <div style={headerLabelStyle(PATCHING_COLOR, "center")}>
-            PATCHING
-          </div>
-          <div style={headerLabelStyle(PDD_COLOR, "center")}>PDD</div>
-        </div>
+      {/* Table Header */}
+      <Sequence from={0} durationInFrames={270}>
+        <TableHeader />
+      </Sequence>
 
-        {/* Data rows */}
-        {TABLE_ROWS.map((row, i) => (
-          <TableRow
-            key={row.investment}
-            investment={row.investment}
-            icon={row.icon}
-            patching={row.patching}
-            pdd={row.pdd}
-            pddGlow={row.pddGlow}
-            pddOpacity={row.pddOpacity}
-            alternate={row.alternate}
-            rowStart={rowStarts[i]}
-          />
-        ))}
-      </div>
+      {/* Row 1: Fix a bug */}
+      <Sequence from={ROW1_START} durationInFrames={270 - ROW1_START}>
+        <AnimatedTableRow rowData={TABLE_ROWS[0]} rowY={row1Y} />
+      </Sequence>
 
-      {/* Summary line */}
-      <SummaryLine />
+      {/* Row 2: Improve code */}
+      <Sequence from={ROW2_START} durationInFrames={270 - ROW2_START}>
+        <AnimatedTableRow rowData={TABLE_ROWS[1]} rowY={row2Y} />
+      </Sequence>
+
+      {/* Row 3: Document intent */}
+      <Sequence from={ROW3_START} durationInFrames={270 - ROW3_START}>
+        <AnimatedTableRow rowData={TABLE_ROWS[2]} rowY={row3Y} />
+      </Sequence>
+
+      {/* PDD column glow sweep */}
+      <Sequence from={GLOW_START} durationInFrames={270 - GLOW_START}>
+        <GlowSweep
+          regionX={glowRegionX}
+          regionY={glowRegionY}
+          regionWidth={COL_WIDTH}
+          regionHeight={glowRegionHeight}
+        />
+      </Sequence>
     </AbsoluteFill>
   );
 };

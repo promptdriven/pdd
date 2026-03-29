@@ -1,16 +1,30 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  AMBER,
-  NOZZLE_LABELS,
+  NOZZLE_COLOR,
   MOLD_CENTER_X,
-  NOZZLE_TIP_Y,
+  NOZZLE_Y,
+  NOZZLE_HEIGHT,
+  NOZZLE_LABELS,
   PHASE_LABELS_START,
-  PHASE_LABELS_STAGGER,
 } from "./constants";
+
+interface LabelEntry {
+  text: string;
+  direction: "left" | "right" | "top";
+  dx: number;
+  dy: number;
+}
+
+const LABEL_STAGGER = 15; // frames between each label
+const LABEL_ANIM_DURATION = 20;
+const FLOAT_DISTANCE = 40;
 
 export const NozzleLabels: React.FC = () => {
   const frame = useCurrentFrame();
+
+  const anchorX = MOLD_CENTER_X;
+  const anchorY = NOZZLE_Y + NOZZLE_HEIGHT / 2;
 
   return (
     <svg
@@ -18,72 +32,61 @@ export const NozzleLabels: React.FC = () => {
       height={1080}
       style={{ position: "absolute", top: 0, left: 0 }}
     >
-      {NOZZLE_LABELS.map((label, i) => {
-        const labelStart = PHASE_LABELS_START + i * PHASE_LABELS_STAGGER;
-        const labelEnd = labelStart + 20;
-
-        const progress = interpolate(frame, [labelStart, labelEnd], [0, 1], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.out(Easing.cubic),
-        });
-
-        // Float-in offsets based on direction
-        let offsetX = 0;
-        let offsetY = 0;
-        if (label.direction === "left") offsetX = -40;
-        if (label.direction === "right") offsetX = 40;
-        if (label.direction === "top") offsetY = -40;
-
-        const currentX = label.x + offsetX * (1 - progress);
-        const currentY = label.y + offsetY * (1 - progress);
-
-        // Connector line endpoints: from label to nozzle center-top
-        const nozzleConnectX = MOLD_CENTER_X;
-        const nozzleConnectY = NOZZLE_TIP_Y - 10;
-
-        // Line draw progress (starts slightly after label appears)
-        const lineProgress = interpolate(
+      {NOZZLE_LABELS.map((label: LabelEntry, i: number) => {
+        const labelStart = PHASE_LABELS_START + i * LABEL_STAGGER;
+        const progress = interpolate(
           frame,
-          [labelStart + 5, labelEnd + 5],
+          [labelStart, labelStart + LABEL_ANIM_DURATION],
           [0, 1],
-          {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-            easing: Easing.out(Easing.cubic),
-          }
+          { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
         );
 
-        // Compute the line end point based on lineProgress
-        const lineEndX =
-          currentX +
-          (nozzleConnectX - currentX) * lineProgress;
-        const lineEndY =
-          currentY +
-          18 +
-          (nozzleConnectY - (currentY + 18)) * lineProgress;
+        const targetX = anchorX + label.dx;
+        const targetY = anchorY + label.dy;
+
+        // Float in from the label's direction
+        let startOffsetX = 0;
+        let startOffsetY = 0;
+        if (label.direction === "left") startOffsetX = -FLOAT_DISTANCE;
+        if (label.direction === "right") startOffsetX = FLOAT_DISTANCE;
+        if (label.direction === "top") startOffsetY = -FLOAT_DISTANCE;
+
+        const currentX = targetX + startOffsetX * (1 - progress);
+        const currentY = targetY + startOffsetY * (1 - progress);
+
+        // Connector line from label to nozzle anchor
+        const lineOpacity = progress * 0.3;
 
         return (
           <g key={label.text} opacity={progress}>
             {/* Connector line */}
             <line
-              x1={currentX + (label.direction === "right" ? 0 : label.text.length * 8)}
-              y1={currentY + 18}
-              x2={lineEndX}
-              y2={lineEndY}
-              stroke={AMBER}
+              x1={anchorX}
+              y1={anchorY}
+              x2={currentX}
+              y2={currentY}
+              stroke={NOZZLE_COLOR}
               strokeWidth={1}
-              opacity={0.3}
+              opacity={lineOpacity}
+            />
+            {/* Small dot at line end */}
+            <circle
+              cx={currentX}
+              cy={currentY}
+              r={3}
+              fill={NOZZLE_COLOR}
+              opacity={lineOpacity}
             />
             {/* Label text */}
             <text
               x={currentX}
-              y={currentY}
-              fill={AMBER}
-              fontFamily="Inter, sans-serif"
+              y={currentY - 10}
+              fill={NOZZLE_COLOR}
               fontSize={16}
+              fontFamily="Inter, sans-serif"
               fontWeight={600}
-              dominantBaseline="hanging"
+              textAnchor="middle"
+              dominantBaseline="auto"
             >
               {label.text}
             </text>

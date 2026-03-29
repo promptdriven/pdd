@@ -1,35 +1,34 @@
-// ── Canvas ──
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
-export const BACKGROUND_COLOR = "#0A0F1A";
-export const TOTAL_FRAMES = 420;
-
-// ── Blueprint Grid ──
-export const GRID_SPACING = 60;
+// ── Background & Grid ──────────────────────────────────────────────
+export const BG_COLOR = "#0A0F1A";
 export const GRID_COLOR = "#1E293B";
 export const GRID_OPACITY = 0.08;
+export const GRID_SPACING = 60;
 
-// ── Mold Dimensions ──
-export const MOLD_CENTER_X = 960;
-export const MOLD_CENTER_Y = 540;
-export const MOLD_OUTER_WIDTH = 600;
-export const MOLD_OUTER_HEIGHT = 400;
-export const MOLD_INNER_WIDTH = 400;
-export const MOLD_INNER_HEIGHT = 280;
-export const MOLD_CORNER_RADIUS = 8;
+// ── Canvas ─────────────────────────────────────────────────────────
+export const CANVAS_W = 1920;
+export const CANVAS_H = 1080;
+export const CENTER_X = 960;
+export const CENTER_Y = 540;
+
+// ── Mold outline ───────────────────────────────────────────────────
+export const OUTER_W = 600;
+export const OUTER_H = 400;
+export const INNER_W = 400;
+export const INNER_H = 280;
 export const MOLD_STROKE_COLOR = "#334155";
 export const MOLD_STROKE_WIDTH = 3;
+export const MOLD_CORNER_RADIUS = 8;
 
-// ── Nozzle ──
-export const NOZZLE_WIDTH = 80;
-export const NOZZLE_HEIGHT = 60;
+// Nozzle dimensions (funnel top)
+export const NOZZLE_TOP_W = 80;
+export const NOZZLE_BOTTOM_W = 36;
+export const NOZZLE_H = 50;
 
-// ── Region Colors ──
+// ── Regions ────────────────────────────────────────────────────────
 export const WALLS_COLOR = "#4A90D9";
 export const NOZZLE_COLOR = "#D9944A";
 export const CAVITY_COLOR = "#4AD9A0";
 
-// ── Region Glow ──
 export const WALLS_GLOW_RADIUS = 12;
 export const WALLS_GLOW_OPACITY = 0.3;
 export const NOZZLE_GLOW_RADIUS = 12;
@@ -37,24 +36,57 @@ export const NOZZLE_GLOW_OPACITY = 0.3;
 export const CAVITY_GLOW_RADIUS = 8;
 export const CAVITY_GLOW_OPACITY = 0.2;
 
-// ── Animation Timing (frames) ──
-export const OUTLINE_DRAW_START = 0;
-export const OUTLINE_DRAW_DURATION = 30;
-export const WALLS_HIGHLIGHT_FRAME = 60;
-export const NOZZLE_HIGHLIGHT_FRAME = 150;
-export const CAVITY_HIGHLIGHT_FRAME = 240;
-export const REGION_GLOW_DURATION = 30;
-export const LABEL_FADE_DELAY = 15; // after region glow starts
-export const LABEL_FADE_DURATION = 15;
-export const PULSE_START_FRAME = 300;
-export const PULSE_CYCLE_FRAMES = 45;
+export interface RegionDef {
+  id: string;
+  label: string;
+  color: string;
+  highlightFrame: number;
+  glowRadius: number;
+  glowOpacity: number;
+  labelPosition: "left" | "top" | "bottom";
+}
 
-// ── Typography ──
+export const REGIONS: RegionDef[] = [
+  {
+    id: "walls",
+    label: "TESTS",
+    color: WALLS_COLOR,
+    highlightFrame: 60,
+    glowRadius: WALLS_GLOW_RADIUS,
+    glowOpacity: WALLS_GLOW_OPACITY,
+    labelPosition: "left",
+  },
+  {
+    id: "nozzle",
+    label: "PROMPT",
+    color: NOZZLE_COLOR,
+    highlightFrame: 150,
+    glowRadius: NOZZLE_GLOW_RADIUS,
+    glowOpacity: NOZZLE_GLOW_OPACITY,
+    labelPosition: "top",
+  },
+  {
+    id: "cavity",
+    label: "GROUNDING",
+    color: CAVITY_COLOR,
+    highlightFrame: 240,
+    glowRadius: CAVITY_GLOW_RADIUS,
+    glowOpacity: CAVITY_GLOW_OPACITY,
+    labelPosition: "bottom",
+  },
+];
+
+// ── Animation timing ───────────────────────────────────────────────
+export const TOTAL_FRAMES = 420;
+export const MOLD_DRAW_FRAMES = 30;
+export const REGION_GLOW_FRAMES = 30;
+export const LABEL_FADE_FRAMES = 15;
+export const PULSE_CYCLE_FRAMES = 45;
+export const PULSE_START_FRAME = 300;
+
+// ── Typography ─────────────────────────────────────────────────────
 export const LABEL_FONT_FAMILY = "Inter, sans-serif";
 export const LABEL_FONT_SIZE = 18;
 export const LABEL_FONT_WEIGHT = 700;
-
-// ── Connector Lines ──
 export const CONNECTOR_LINE_WIDTH = 1;
 export const CONNECTOR_LINE_OPACITY = 0.4;
-export const CONNECTOR_LINE_LENGTH = 60;

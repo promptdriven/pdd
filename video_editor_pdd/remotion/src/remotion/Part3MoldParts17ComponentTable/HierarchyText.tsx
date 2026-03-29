@@ -1,118 +1,143 @@
+// HierarchyText.tsx — Pulsing hierarchy line with highlighted phrases
 import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import { interpolate, Easing } from "remotion";
+import {
+  CANVAS_WIDTH,
+  FONT_FAMILY,
+  HIERARCHY_FONT_SIZE,
+  HIERARCHY_FONT_WEIGHT,
+  HIERARCHY_EMPHASIS_WEIGHT,
+  HIERARCHY_TEXT_COLOR,
+  TESTS_COLOR,
+  HIERARCHY_Y,
+  SUBTEXT_Y,
+  SUBTEXT_FONT_SIZE,
+  SUBTEXT_FONT_WEIGHT,
+  SUBTEXT_COLOR,
+  HIERARCHY_FADE_START,
+  HIERARCHY_FADE_DURATION,
+  SUBTEXT_FADE_START,
+  SUBTEXT_FADE_DURATION,
+  PULSE_CYCLE_FRAMES,
+  PULSE_GLOW_OPACITY,
+  PULSE_GLOW_BLUR,
+} from "./constants";
 
-const TESTS_BLUE = "#4A90D9";
-const TEXT_COLOR = "#E2E8F0";
-const SUBTEXT_COLOR = "#94A3B8";
-const PULSE_CYCLE = 30;
+interface HierarchyTextProps {
+  absoluteFrame: number;
+}
 
-export const HierarchyText: React.FC = () => {
-  const frame = useCurrentFrame();
+const HierarchyText: React.FC<HierarchyTextProps> = ({ absoluteFrame }) => {
+  // Hierarchy line fade-in
+  const hierarchyLocalFrame = absoluteFrame - HIERARCHY_FADE_START;
+  const hierarchyOpacity = interpolate(
+    hierarchyLocalFrame,
+    [0, HIERARCHY_FADE_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
 
-  // ─── Main hierarchy line (starts at frame 180) ───
-  const hierLocal = frame - 180;
-  const hierOpacity = interpolate(hierLocal, [0, 20], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
+  // Pulse effect for "tests win" and "Always" — only after fully visible
+  const pulseFrame = Math.max(0, hierarchyLocalFrame - HIERARCHY_FADE_DURATION);
+  const pulseProgress = (pulseFrame % PULSE_CYCLE_FRAMES) / PULSE_CYCLE_FRAMES;
+  const pulseValue = interpolate(
+    pulseProgress,
+    [0, 0.5, 1],
+    [0, 1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+  const glowIntensity = pulseValue * PULSE_GLOW_OPACITY;
+  const glowBlur = PULSE_GLOW_BLUR;
 
-  // Pulsing glow for the hierarchy line
-  const pulsePhase = hierLocal > 20 ? (hierLocal - 20) % PULSE_CYCLE : 0;
-  const pulseGlow = hierLocal > 20
-    ? interpolate(
-        pulsePhase,
-        [0, PULSE_CYCLE / 2, PULSE_CYCLE - 1],
-        [0.08, 0.15, 0.08],
-        {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-          easing: Easing.inOut(Easing.sin),
-        }
-      )
-    : 0;
+  // Subtext fade-in
+  const subtextLocalFrame = absoluteFrame - SUBTEXT_FADE_START;
+  const subtextOpacity = interpolate(
+    subtextLocalFrame,
+    [0, SUBTEXT_FADE_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
 
-  // ─── Subtext line (starts at frame 240) ───
-  const subLocal = frame - 240;
-  const subOpacity = interpolate(subLocal, [0, 20], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
+  const showHierarchy = absoluteFrame >= HIERARCHY_FADE_START;
+  const showSubtext = absoluteFrame >= SUBTEXT_FADE_START;
 
   return (
     <>
-      {/* Main hierarchy line */}
-      {hierLocal >= 0 && (
+      {/* Hierarchy line */}
+      {showHierarchy && (
         <div
           style={{
             position: "absolute",
-            top: 620,
+            top: HIERARCHY_Y,
             left: 0,
-            width: 1920,
-            display: "flex",
-            justifyContent: "center",
-            opacity: hierOpacity,
+            width: CANVAS_WIDTH,
+            textAlign: "center",
+            fontFamily: FONT_FAMILY,
+            fontSize: HIERARCHY_FONT_SIZE,
+            fontWeight: HIERARCHY_FONT_WEIGHT,
+            color: HIERARCHY_TEXT_COLOR,
+            opacity: hierarchyOpacity,
           }}
         >
-          <div
+          <span>When these conflict, </span>
+          <span
             style={{
-              fontFamily: "Inter, sans-serif",
-              fontSize: 18,
-              fontWeight: 600,
-              color: TEXT_COLOR,
-              textShadow: `0 0 10px rgba(74, 144, 217, ${pulseGlow})`,
-              textAlign: "center",
+              fontWeight: HIERARCHY_EMPHASIS_WEIGHT,
+              color: TESTS_COLOR,
+              textShadow:
+                hierarchyLocalFrame > HIERARCHY_FADE_DURATION
+                  ? `0 0 ${glowBlur}px rgba(74, 144, 217, ${glowIntensity})`
+                  : "none",
             }}
           >
-            <span>When these conflict, </span>
-            <span
-              style={{
-                fontWeight: 700,
-                color: TESTS_BLUE,
-              }}
-            >
-              tests win
-            </span>
-            <span>. </span>
-            <span
-              style={{
-                fontWeight: 700,
-                color: TESTS_BLUE,
-              }}
-            >
-              Always
-            </span>
-            <span>.</span>
-          </div>
+            tests win
+          </span>
+          <span>. </span>
+          <span
+            style={{
+              fontWeight: HIERARCHY_EMPHASIS_WEIGHT,
+              color: TESTS_COLOR,
+              textShadow:
+                hierarchyLocalFrame > HIERARCHY_FADE_DURATION
+                  ? `0 0 ${glowBlur}px rgba(74, 144, 217, ${glowIntensity})`
+                  : "none",
+            }}
+          >
+            Always
+          </span>
+          <span>.</span>
         </div>
       )}
 
       {/* Subtext */}
-      {subLocal >= 0 && (
+      {showSubtext && (
         <div
           style={{
             position: "absolute",
-            top: 660,
+            top: SUBTEXT_Y,
             left: 0,
-            width: 1920,
-            display: "flex",
-            justifyContent: "center",
-            opacity: subOpacity,
+            width: CANVAS_WIDTH,
+            textAlign: "center",
+            fontFamily: FONT_FAMILY,
+            fontSize: SUBTEXT_FONT_SIZE,
+            fontWeight: SUBTEXT_FONT_WEIGHT,
+            color: SUBTEXT_COLOR,
+            opacity: subtextOpacity,
           }}
         >
-          <div
-            style={{
-              fontFamily: "Inter, sans-serif",
-              fontSize: 14,
-              fontWeight: 400,
-              color: SUBTEXT_COLOR,
-              textAlign: "center",
-            }}
-          >
-            The walls override the specification. The specification overrides the
-            style.
-          </div>
+          The walls override the specification. The specification overrides the
+          style.
         </div>
       )}
     </>

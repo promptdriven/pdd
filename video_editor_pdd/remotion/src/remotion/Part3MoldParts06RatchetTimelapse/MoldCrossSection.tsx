@@ -7,262 +7,269 @@ import {
   MOLD_HEIGHT,
   MOLD_BASE_COLOR,
   WALL_COLOR,
-  WALL_LABEL_COLOR,
+  LABEL_TEXT_COLOR,
   LIQUID_COLOR,
   FLASH_COLOR,
   BASE_WALLS,
   WALL_CYCLES,
   NEW_WALL_POSITIONS,
-  CYCLE_FRAMES,
-  FLASH_DURATION,
-  WALL_SLIDE_DURATION,
-  RECONFORM_START,
-  TOTAL_FRAMES,
+  FLASH_FRAMES,
+  WALL_SLIDE_FRAMES,
 } from './constants';
 
-// ── Outer mold shell ────────────────────────────────────────────
-const MoldShell: React.FC = () => {
-  const left = MOLD_CENTER_X - MOLD_WIDTH / 2;
-  const top = MOLD_CENTER_Y - MOLD_HEIGHT / 2;
+/** Red flash overlay for each bug-discovery cycle */
+const BugFlash: React.FC<{ cycleStartFrame: number }> = ({ cycleStartFrame }) => {
+  const frame = useCurrentFrame();
+  const localFrame = frame - cycleStartFrame;
+  if (localFrame < 0 || localFrame >= FLASH_FRAMES) return null;
 
-  return (
-    <>
-      {/* Outer mold body */}
-      <div
-        style={{
-          position: 'absolute',
-          left,
-          top,
-          width: MOLD_WIDTH,
-          height: MOLD_HEIGHT,
-          border: `3px solid ${MOLD_BASE_COLOR}`,
-          borderRadius: 8,
-          background: 'rgba(15, 23, 42, 0.6)',
-        }}
-      />
-      {/* Mold label */}
-      <div
-        style={{
-          position: 'absolute',
-          left: left + 10,
-          top: top - 28,
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 13,
-          color: MOLD_BASE_COLOR,
-          fontWeight: 600,
-          opacity: 0.8,
-        }}
-      >
-        MOLD CROSS-SECTION
-      </div>
-    </>
-  );
-};
-
-// ── Single wall segment ─────────────────────────────────────────
-interface WallSegmentProps {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  label: string;
-  opacity: number;
-  glowIntensity?: number;
-}
-
-const WallSegment: React.FC<WallSegmentProps> = ({
-  x,
-  y,
-  width,
-  height,
-  label,
-  opacity,
-  glowIntensity = 0,
-}) => {
-  const isVertical = height > width;
-  const labelX = isVertical ? x + 18 : x;
-  const labelY = isVertical ? y + height / 2 - 6 : y - 16;
-
-  return (
-    <>
-      <div
-        style={{
-          position: 'absolute',
-          left: x,
-          top: y,
-          width,
-          height,
-          backgroundColor: WALL_COLOR,
-          opacity,
-          borderRadius: 2,
-          boxShadow: glowIntensity > 0
-            ? `0 0 ${8 + glowIntensity * 12}px rgba(74,144,217,${0.3 + glowIntensity * 0.4})`
-            : 'none',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          left: labelX,
-          top: labelY,
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 11,
-          color: WALL_LABEL_COLOR,
-          opacity: opacity * 0.85,
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </div>
-    </>
-  );
-};
-
-// ── Liquid fill ─────────────────────────────────────────────────
-const LiquidFill: React.FC<{ reconformProgress: number }> = ({ reconformProgress }) => {
-  const left = MOLD_CENTER_X - MOLD_WIDTH / 2 + 20;
-  const top = MOLD_CENTER_Y - MOLD_HEIGHT / 2 + 20;
-  const w = MOLD_WIDTH - 40;
-  const h = MOLD_HEIGHT - 40;
-
-  // Liquid slightly wobbles during reconform
-  const wobble = Math.sin(reconformProgress * Math.PI * 2) * 3;
+  const opacity = interpolate(localFrame, [0, FLASH_FRAMES], [0.35, 0], {
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.exp),
+  });
 
   return (
     <div
       style={{
         position: 'absolute',
-        left: left + wobble,
-        top: top + Math.abs(wobble) * 0.5,
-        width: w - Math.abs(wobble) * 2,
-        height: h - Math.abs(wobble),
-        background: `radial-gradient(ellipse at center, ${LIQUID_COLOR}33, ${LIQUID_COLOR}11)`,
-        borderRadius: 6,
-        border: `1px solid ${LIQUID_COLOR}44`,
-      }}
-    />
-  );
-};
-
-// ── Red flash overlay ───────────────────────────────────────────
-const BugFlash: React.FC<{ progress: number }> = ({ progress }) => {
-  const opacity = interpolate(progress, [0, 1], [0.5, 0], { extrapolateRight: 'clamp' });
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        left: MOLD_CENTER_X - MOLD_WIDTH / 2 - 20,
-        top: MOLD_CENTER_Y - MOLD_HEIGHT / 2 - 20,
-        width: MOLD_WIDTH + 40,
-        height: MOLD_HEIGHT + 40,
-        background: `radial-gradient(ellipse at center, ${FLASH_COLOR}66, transparent 70%)`,
+        left: MOLD_CENTER_X - MOLD_WIDTH / 2 - 40,
+        top: MOLD_CENTER_Y - MOLD_HEIGHT / 2 - 40,
+        width: MOLD_WIDTH + 80,
+        height: MOLD_HEIGHT + 80,
+        backgroundColor: FLASH_COLOR,
         opacity,
+        borderRadius: 12,
         pointerEvents: 'none',
       }}
     />
   );
 };
 
-// ── Composed mold with animated walls ───────────────────────────
-export const MoldCrossSection: React.FC = () => {
+/** A single new wall that slides in */
+const NewWall: React.FC<{
+  cycleIndex: number;
+  label: string;
+  side: 'left' | 'right';
+  startFrame: number;
+}> = ({ cycleIndex, label, side, startFrame }) => {
   const frame = useCurrentFrame();
+  const pos = NEW_WALL_POSITIONS[cycleIndex];
+  if (!pos) return null;
 
-  // Determine which cycles have completed
-  const activeCycleCount = Math.min(
-    WALL_CYCLES.length,
-    Math.floor(frame / CYCLE_FRAMES) + 1
+  const wallEntryStart = startFrame + FLASH_FRAMES;
+  const localFrame = frame - wallEntryStart;
+
+  if (localFrame < 0) return null;
+
+  const slideDistance = 150;
+  const slideOffset = interpolate(
+    Math.min(localFrame, WALL_SLIDE_FRAMES),
+    [0, WALL_SLIDE_FRAMES],
+    [side === 'left' ? -slideDistance : slideDistance, 0],
+    {
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.back(1.4)),
+    }
   );
 
-  // Hold phase glow (frames 216-270)
-  const holdGlow =
-    frame >= 216
-      ? Math.sin(((frame - 216) / 54) * Math.PI * 2) * 0.3 + 0.3
-      : 0;
+  const wallOpacity = interpolate(
+    Math.min(localFrame, WALL_SLIDE_FRAMES),
+    [0, 6],
+    [0, 1],
+    { extrapolateRight: 'clamp' }
+  );
 
-  // Reconform wobble accumulator
-  let reconformProgress = 0;
-  for (let i = 0; i < activeCycleCount; i++) {
-    const cycleStart = i * CYCLE_FRAMES;
-    const reconformFrame = frame - (cycleStart + RECONFORM_START);
-    if (reconformFrame > 0 && reconformFrame < 20) {
-      reconformProgress = interpolate(reconformFrame, [0, 20], [0, 1], {
+  return (
+    <g
+      transform={`translate(${slideOffset}, 0)`}
+      opacity={wallOpacity}
+    >
+      {/* Wall segment */}
+      <rect
+        x={pos.x - pos.wallWidth / 2}
+        y={pos.y - pos.wallHeight / 2}
+        width={pos.wallWidth}
+        height={pos.wallHeight}
+        fill={WALL_COLOR}
+        rx={2}
+      />
+      {/* Glow */}
+      <rect
+        x={pos.x - pos.wallWidth / 2 - 2}
+        y={pos.y - pos.wallHeight / 2 - 2}
+        width={pos.wallWidth + 4}
+        height={pos.wallHeight + 4}
+        fill="none"
+        stroke={WALL_COLOR}
+        strokeWidth={2}
+        opacity={0.3}
+        rx={3}
+      />
+      {/* Label */}
+      <text
+        x={pos.x + pos.labelOffsetX}
+        y={pos.y + pos.labelOffsetY}
+        fill={LABEL_TEXT_COLOR}
+        fontSize={11}
+        fontFamily="'JetBrains Mono', monospace"
+        textAnchor={side === 'left' ? 'end' : 'start'}
+        dominantBaseline="middle"
+      >
+        {label}
+      </text>
+    </g>
+  );
+};
+
+/** Liquid inside the mold that reconforms when walls are added */
+const LiquidFill: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  // The liquid progressively shrinks as more walls are added
+  const wallCount = WALL_CYCLES.filter(
+    (c) => frame >= c.startFrame + FLASH_FRAMES + WALL_SLIDE_FRAMES
+  ).length;
+
+  const shrinkFactor = interpolate(wallCount, [0, 4], [1, 0.65], {
+    extrapolateRight: 'clamp',
+  });
+
+  // Subtle wobble during reconform phases
+  let wobble = 0;
+  for (const cycle of WALL_CYCLES) {
+    const reconformStart = cycle.startFrame + FLASH_FRAMES + WALL_SLIDE_FRAMES;
+    const localFrame = frame - reconformStart;
+    if (localFrame >= 0 && localFrame < 20) {
+      wobble += interpolate(localFrame, [0, 10, 20], [4, -2, 0], {
         extrapolateRight: 'clamp',
       });
     }
   }
 
+  const baseLeft = MOLD_CENTER_X - (MOLD_WIDTH * 0.35 * shrinkFactor);
+  const baseTop = MOLD_CENTER_Y - (MOLD_HEIGHT * 0.3 * shrinkFactor);
+  const liquidW = MOLD_WIDTH * 0.7 * shrinkFactor;
+  const liquidH = MOLD_HEIGHT * 0.6 * shrinkFactor;
+
   return (
-    <>
-      <MoldShell />
-      <LiquidFill reconformProgress={reconformProgress} />
+    <rect
+      x={baseLeft + wobble}
+      y={baseTop}
+      width={liquidW}
+      height={liquidH}
+      fill={LIQUID_COLOR}
+      opacity={0.25}
+      rx={8}
+    />
+  );
+};
 
-      {/* Pre-existing base walls — visible from frame 0 */}
-      {BASE_WALLS.map((wall, i) => (
-        <WallSegment
-          key={`base-${i}`}
-          x={wall.x}
-          y={wall.y}
-          width={wall.width}
-          height={wall.height}
-          label={wall.label}
-          opacity={0.7}
-          glowIntensity={holdGlow}
+/** Glow pulse on all walls in the final hold segment (frames 216-270) */
+const FinalGlow: React.FC = () => {
+  const frame = useCurrentFrame();
+  if (frame < 216) return null;
+
+  const pulse = interpolate(
+    (frame - 216) % 30,
+    [0, 15, 30],
+    [0.15, 0.35, 0.15],
+    { extrapolateRight: 'clamp' }
+  );
+
+  return (
+    <rect
+      x={MOLD_CENTER_X - MOLD_WIDTH / 2 - 20}
+      y={MOLD_CENTER_Y - MOLD_HEIGHT / 2 - 20}
+      width={MOLD_WIDTH + 40}
+      height={MOLD_HEIGHT + 40}
+      fill="none"
+      stroke={WALL_COLOR}
+      strokeWidth={3}
+      opacity={pulse}
+      rx={10}
+    />
+  );
+};
+
+export const MoldCrossSection: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: 1920,
+        height: 1080,
+      }}
+    >
+      <svg width={1920} height={1080} style={{ position: 'absolute', left: 0, top: 0 }}>
+        {/* Outer mold shell */}
+        <rect
+          x={MOLD_CENTER_X - MOLD_WIDTH / 2}
+          y={MOLD_CENTER_Y - MOLD_HEIGHT / 2}
+          width={MOLD_WIDTH}
+          height={MOLD_HEIGHT}
+          fill="none"
+          stroke={MOLD_BASE_COLOR}
+          strokeWidth={4}
+          rx={8}
         />
+
+        {/* Liquid fill */}
+        <LiquidFill />
+
+        {/* Base walls (pre-existing, 5 walls) */}
+        {BASE_WALLS.map((wall, i) => (
+          <g key={`base-${i}`}>
+            <rect
+              x={wall.x - wall.wallWidth / 2}
+              y={wall.y - wall.wallHeight / 2}
+              width={wall.wallWidth}
+              height={wall.wallHeight}
+              fill={WALL_COLOR}
+              opacity={0.6}
+              rx={2}
+              transform={
+                wall.rotation
+                  ? `rotate(${wall.rotation} ${wall.x} ${wall.y})`
+                  : undefined
+              }
+            />
+            <text
+              x={wall.x + 15}
+              y={wall.y}
+              fill={LABEL_TEXT_COLOR}
+              fontSize={10}
+              fontFamily="'JetBrains Mono', monospace"
+              opacity={0.5}
+              dominantBaseline="middle"
+            >
+              {wall.label}
+            </text>
+          </g>
+        ))}
+
+        {/* New walls sliding in per cycle */}
+        {WALL_CYCLES.map((cycle, i) => (
+          <NewWall
+            key={`new-${i}`}
+            cycleIndex={i}
+            label={cycle.label}
+            side={cycle.side}
+            startFrame={cycle.startFrame}
+          />
+        ))}
+
+        {/* Final glow pulse */}
+        <FinalGlow />
+      </svg>
+
+      {/* Bug flash overlays */}
+      {WALL_CYCLES.map((cycle, i) => (
+        <BugFlash key={`flash-${i}`} cycleStartFrame={cycle.startFrame} />
       ))}
-
-      {/* New walls sliding in per cycle */}
-      {WALL_CYCLES.map((cycle, i) => {
-        const cycleStart = i * CYCLE_FRAMES;
-        const pos = NEW_WALL_POSITIONS[i];
-
-        // Red flash (0–8 frames into cycle)
-        const flashLocalFrame = frame - cycleStart;
-        const showFlash = flashLocalFrame >= 0 && flashLocalFrame < FLASH_DURATION;
-        const flashProgress = showFlash
-          ? interpolate(flashLocalFrame, [0, FLASH_DURATION], [0, 1], {
-              extrapolateRight: 'clamp',
-              easing: Easing.out(Easing.exp),
-            })
-          : 1;
-
-        // Wall slide-in (starts 8 frames into cycle, 20 frames long)
-        const slideStart = cycleStart + FLASH_DURATION;
-        const slideLocalFrame = frame - slideStart;
-        const slideProgress =
-          slideLocalFrame >= 0
-            ? interpolate(
-                Math.min(slideLocalFrame, WALL_SLIDE_DURATION),
-                [0, WALL_SLIDE_DURATION],
-                [0, 1],
-                {
-                  extrapolateRight: 'clamp',
-                  easing: Easing.out(Easing.back(1.4)),
-                }
-              )
-            : 0;
-
-        if (frame < cycleStart) return null;
-
-        const slideOffset = cycle.side === 'left' ? -150 : 150;
-        const currentOffset = slideOffset * (1 - slideProgress);
-
-        return (
-          <React.Fragment key={`cycle-${i}`}>
-            {showFlash && <BugFlash progress={flashProgress} />}
-            {slideLocalFrame >= 0 && (
-              <WallSegment
-                x={pos.x + currentOffset}
-                y={pos.y}
-                width={pos.width}
-                height={pos.height}
-                label={cycle.label}
-                opacity={slideProgress}
-                glowIntensity={holdGlow}
-              />
-            )}
-          </React.Fragment>
-        );
-      })}
-    </>
+    </div>
   );
 };

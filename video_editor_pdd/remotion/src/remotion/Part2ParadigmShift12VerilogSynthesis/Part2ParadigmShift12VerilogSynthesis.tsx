@@ -1,88 +1,90 @@
-import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import { BG_COLOR } from './constants';
-import { BlueprintGrid } from './BlueprintGrid';
-import { SchematicDissolve } from './SchematicDissolve';
-import { CodeBlock } from './CodeBlock';
-import { SynthesisChip } from './SynthesisChip';
-import { GateStream } from './GateStream';
+import React from "react";
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+} from "remotion";
+import { BG_COLOR, TOTAL_FRAMES, WIDTH, HEIGHT } from "./constants";
+import { BlueprintGrid } from "./BlueprintGrid";
+import { SchematicDissolve } from "./SchematicDissolve";
+import { CodeBlock } from "./CodeBlock";
+import { SynthesisChip } from "./SynthesisChip";
+import { GateStream } from "./GateStream";
 
 export const defaultPart2ParadigmShift12VerilogSynthesisProps = {};
 
 /**
  * Section 2.12: Verilog Synthesis — Schematic to Code
  *
- * A transformation animation showing:
- * 1. Dense schematic dissolves (0–60)
- * 2. Verilog code types in (60–150)
- * 3. Synthesis chip appears (150–210)
- * 4. Gate stream flows out (210–360)
- *
- * Duration: 360 frames (12s @ 30fps)
+ * Animation sequence (360 frames @ 30fps = 12s):
+ *   0–60:   Dense schematic dissolves (particle scatter)
+ *   60–150: Verilog code types in line by line
+ *   150–210: Synthesis chip fades in, input arrow pulses
+ *   210–300: Code flows in, gate symbols stream out
+ *   300–360: Gate stream continues, hold
  */
 export const Part2ParadigmShift12VerilogSynthesis: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Subtle label for the abstraction level, fades in after code is typed
-  const abstractionLabelOpacity = interpolate(
-    frame,
-    [120, 150],
-    [0, 0.85],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
+  // Section title fade (visible from frame 0 for readability, fades out as code types in)
+  const titleOpacity = interpolate(frame, [0, 10, 50, 70], [0.85, 0.85, 0.85, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // Progression label at bottom
+  const progressLabels = [
+    { text: "Hand-drawn Schematic", start: 0, end: 60 },
+    { text: "Hardware Description Language", start: 60, end: 150 },
+    { text: "Automatic Synthesis", start: 150, end: 361 },
+  ];
+
+  const activeLabel = progressLabels.find(
+    (l) => frame >= l.start && frame < l.end
   );
 
-  // "Generated Gates" label appears when gate stream starts
-  const gatesLabelOpacity = interpolate(
-    frame,
-    [220, 250],
-    [0, 0.85],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
-  );
+  const labelOpacity = activeLabel
+    ? interpolate(
+        frame,
+        [activeLabel.start, activeLabel.start + 15, activeLabel.end - 15, activeLabel.end],
+        [0, 0.85, 0.85, 0],
+        { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+      )
+    : 0;
 
-  // Stage indicators along the bottom
-  const stageProgress = interpolate(
-    frame,
-    [0, 60, 150, 210, 300],
-    [0, 1, 2, 3, 3],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
+  // Bottom progression bar
+  const progress = interpolate(frame, [0, TOTAL_FRAMES], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
-  const stages = ['Schematic', 'HDL Code', 'Synthesis', 'Gate Netlist'];
+  // Abstraction level indicator
+  const abstractionLevel = interpolate(frame, [0, 60, 150, 360], [1, 2, 3, 3], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const abstractionOpacity = interpolate(frame, [0, 20], [0, 0.78], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        overflow: 'hidden',
+        width: WIDTH,
+        height: HEIGHT,
+        overflow: "hidden",
       }}
     >
       {/* Blueprint grid background */}
       <BlueprintGrid />
 
-      {/* Phase 1: Schematic dissolves (frames 0–60) */}
+      {/* Phase 1: Schematic dissolve (frames 0–60) */}
       <SchematicDissolve />
 
-      {/* Phase 2: Verilog code types in (frames 60–150) */}
+      {/* Phase 2: Verilog code typing (frames 60–150+) */}
       <CodeBlock />
-
-      {/* Label: "Hardware Description Language" */}
-      {frame >= 120 && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 560,
-            top: 62,
-            fontFamily: 'Inter, system-ui, sans-serif',
-            fontSize: 18,
-            fontWeight: 600,
-            color: '#C792EA',
-            opacity: abstractionLabelOpacity,
-            letterSpacing: 1,
-          }}
-        >
-          Verilog HDL
-        </div>
-      )}
 
       {/* Phase 3: Synthesis chip (frames 150+) */}
       <SynthesisChip />
@@ -90,109 +92,147 @@ export const Part2ParadigmShift12VerilogSynthesis: React.FC = () => {
       {/* Phase 4: Gate stream (frames 210+) */}
       <GateStream />
 
-      {/* Label: "Auto-Generated Gates" */}
-      {frame >= 220 && (
+      {/* Section title overlay */}
+      <div
+        style={{
+          position: "absolute",
+          top: 40,
+          left: 0,
+          width: WIDTH,
+          textAlign: "center",
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 28,
+          fontWeight: 600,
+          color: "#E2E8F0",
+          opacity: titleOpacity,
+          letterSpacing: 1,
+          textShadow: "0 2px 8px rgba(0,0,0,0.5)",
+        }}
+      >
+        Verilog Synthesis
+      </div>
+
+      {/* Progression label */}
+      {activeLabel && (
         <div
           style={{
-            position: 'absolute',
-            right: 180,
-            top: 530,
-            fontFamily: 'Inter, system-ui, sans-serif',
-            fontSize: 18,
-            fontWeight: 600,
-            color: '#5AAA6E',
-            opacity: gatesLabelOpacity,
-            letterSpacing: 0.5,
+            position: "absolute",
+            bottom: 80,
+            left: 0,
+            width: WIDTH,
+            textAlign: "center",
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 20,
+            fontWeight: 500,
+            color: "#94A3B8",
+            opacity: labelOpacity,
+            letterSpacing: 1,
           }}
         >
-          Gate-Level Netlist
+          {activeLabel.text}
         </div>
       )}
 
-      {/* Abstraction flow arrow (bottom) */}
+      {/* Abstraction level indicator (top-right) */}
       <div
         style={{
-          position: 'absolute',
-          bottom: 60,
-          left: 0,
-          width: 1920,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          gap: 0,
+          position: "absolute",
+          top: 40,
+          right: 60,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          opacity: abstractionOpacity,
         }}
       >
-        {stages.map((stage, i) => {
-          const isActive = stageProgress >= i;
-          const isCurrent = Math.floor(stageProgress) === i;
+        <span
+          style={{
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 11,
+            color: "#546E7A",
+            letterSpacing: 1.5,
+            marginBottom: 6,
+            textTransform: "uppercase",
+          }}
+        >
+          Abstraction
+        </span>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[1, 2, 3].map((level) => (
+            <div
+              key={level}
+              style={{
+                width: 24,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor:
+                  level <= Math.round(abstractionLevel)
+                    ? "#4A90D9"
+                    : "rgba(74, 144, 217, 0.15)",
+                transition: "background-color 0.3s",
+              }}
+            />
+          ))}
+        </div>
+      </div>
 
+      {/* Bottom progress bar */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 40,
+          left: 100,
+          width: WIDTH - 200,
+          height: 3,
+          backgroundColor: "rgba(74, 144, 217, 0.1)",
+          borderRadius: 2,
+        }}
+      >
+        <div
+          style={{
+            width: `${progress * 100}%`,
+            height: "100%",
+            backgroundColor: "#4A90D9",
+            borderRadius: 2,
+            opacity: 0.6,
+          }}
+        />
+      </div>
+
+      {/* Progress stages (schematic → code → gates) */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 50,
+          left: 100,
+          width: WIDTH - 200,
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        {[
+          { label: "Schematic", at: 0 },
+          { label: "Code", at: 0.42 },
+          { label: "Gates", at: 0.83 },
+        ].map((stage, si) => {
+          const isActive = progress >= stage.at;
           return (
-            <React.Fragment key={stage}>
-              {/* Stage dot + label */}
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  opacity: isActive ? 0.9 : 0.25,
-                  transition: 'opacity 0.3s',
-                }}
-              >
-                <div
-                  style={{
-                    width: isCurrent ? 14 : 10,
-                    height: isCurrent ? 14 : 10,
-                    borderRadius: '50%',
-                    backgroundColor: isActive ? '#4A90D9' : '#334155',
-                    border: isCurrent ? '2px solid #93C5FD' : 'none',
-                    marginBottom: 8,
-                  }}
-                />
-                <span
-                  style={{
-                    fontFamily: 'Inter, system-ui, sans-serif',
-                    fontSize: 13,
-                    fontWeight: isCurrent ? 600 : 400,
-                    color: isActive ? '#CBD5E1' : '#475569',
-                  }}
-                >
-                  {stage}
-                </span>
-              </div>
-
-              {/* Connector line between stages */}
-              {i < stages.length - 1 && (
-                <div
-                  style={{
-                    width: 100,
-                    height: 2,
-                    backgroundColor: stageProgress > i ? '#4A90D9' : '#334155',
-                    opacity: stageProgress > i ? 0.7 : 0.25,
-                    marginBottom: 24,
-                    marginLeft: 8,
-                    marginRight: 8,
-                    borderRadius: 1,
-                  }}
-                />
-              )}
-            </React.Fragment>
+            <span
+              key={si}
+              style={{
+                fontFamily: "'Inter', sans-serif",
+                fontSize: 10,
+                color: isActive ? "#4A90D9" : "#546E7A",
+                opacity: isActive ? 0.8 : 0.4,
+                letterSpacing: 1,
+                textTransform: "uppercase",
+              }}
+            >
+              {stage.label}
+            </span>
           );
         })}
       </div>
-
-      {/* Horizontal rule / divider above stage indicators */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 110,
-          left: 200,
-          right: 200,
-          height: 2,
-          backgroundColor: '#4A90D9',
-          opacity: 0.7,
-          borderRadius: 1,
-        }}
-      />
     </AbsoluteFill>
   );
 };

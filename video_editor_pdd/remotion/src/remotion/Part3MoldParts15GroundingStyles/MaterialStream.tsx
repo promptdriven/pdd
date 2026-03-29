@@ -1,187 +1,194 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  STREAM_WIDTH,
-  STREAM_HEIGHT,
-  CANVAS_WIDTH,
-  type MaterialStreamData,
-} from "./constants";
 
 interface MaterialStreamProps {
-  stream: MaterialStreamData;
+  color: string;
+  label: string;
   y: number;
-  delayFrames: number;
+  width: number;
+  height: number;
+  streamStyle: "angular" | "smooth" | "organic";
+  animStartFrame: number;
+  fadeOutStart: number;
+  fadeOutEnd: number;
 }
 
 const MaterialStream: React.FC<MaterialStreamProps> = ({
-  stream,
+  color,
+  label,
   y,
-  delayFrames,
+  width,
+  height,
+  streamStyle,
+  animStartFrame,
+  fadeOutStart,
+  fadeOutEnd,
 }) => {
   const frame = useCurrentFrame();
-  const localFrame = Math.max(0, frame - delayFrames);
 
-  // Stream flows in from left
-  const progress = interpolate(localFrame, [0, 60], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.inOut(Easing.sin),
-  });
-
-  const barWidth = STREAM_WIDTH * progress;
-  const barX = (CANVAS_WIDTH - STREAM_WIDTH) / 2;
-
-  // Opacity fade-in
-  const opacity = interpolate(localFrame, [0, 15], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Angular texture blocks for OOP
-  const renderAngularTexture = () => {
-    const blockCount = 8;
-    return Array.from({ length: blockCount }).map((_, i) => {
-      const blockX = (barWidth / blockCount) * i;
-      const blockW = barWidth / blockCount - 3;
-      if (blockW <= 0) return null;
-      return (
-        <rect
-          key={i}
-          x={blockX + 2}
-          y={4}
-          width={Math.max(0, blockW)}
-          height={STREAM_HEIGHT - 8}
-          rx={2}
-          fill={stream.color}
-          opacity={0.5 + (i % 2) * 0.3}
-        />
-      );
-    });
-  };
-
-  // Smooth flowing shapes for Functional
-  const renderSmoothTexture = () => {
-    const waveOffset = localFrame * 2;
-    const points: string[] = [];
-    const steps = 40;
-    for (let i = 0; i <= steps; i++) {
-      const px = (barWidth / steps) * i;
-      const py =
-        STREAM_HEIGHT / 2 +
-        Math.sin((i / steps) * Math.PI * 4 + waveOffset * 0.05) * 8;
-      points.push(`${px},${py}`);
+  // Stream grows from left to right
+  const progress = interpolate(
+    frame,
+    [animStartFrame, animStartFrame + 60],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.sin),
     }
-    // Close the path along the bottom
-    points.push(`${barWidth},${STREAM_HEIGHT}`);
-    points.push(`0,${STREAM_HEIGHT}`);
-    return (
-      <polygon
-        points={points.join(" ")}
-        fill={stream.color}
-        opacity={0.6}
-      />
-    );
-  };
+  );
 
-  // Organic pattern for Your Team's Style
-  const renderOrganicTexture = () => {
-    const blobCount = 5;
-    return Array.from({ length: blobCount }).map((_, i) => {
-      const cx = (barWidth / (blobCount + 1)) * (i + 1);
-      const baseR = 12 + Math.sin(i * 1.5 + localFrame * 0.03) * 4;
-      const ry = baseR * 0.7;
-      if (cx <= 0 || cx > barWidth) return null;
-      return (
-        <ellipse
-          key={i}
-          cx={cx}
-          cy={STREAM_HEIGHT / 2}
-          rx={baseR}
-          ry={ry}
-          fill={stream.color}
-          opacity={0.4 + Math.sin(i + localFrame * 0.05) * 0.2}
-        />
-      );
-    });
-  };
+  // Fade out for crossfade into Phase 2
+  const opacity = interpolate(
+    frame,
+    [fadeOutStart, fadeOutEnd],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
 
+  const currentWidth = width * progress;
+  const centerX = 960;
+  const startX = centerX - width / 2;
+
+  // Texture pattern based on style
   const renderTexture = () => {
-    switch (stream.style) {
-      case "angular":
-        return renderAngularTexture();
-      case "smooth":
-        return renderSmoothTexture();
-      case "organic":
-        return renderOrganicTexture();
+    if (streamStyle === "angular") {
+      // Angular blocky texture for OOP
+      const blocks: React.ReactNode[] = [];
+      const blockCount = Math.floor(progress * 8);
+      for (let i = 0; i < blockCount; i++) {
+        const bx = startX + 20 + i * 70;
+        if (bx < startX + currentWidth - 30) {
+          blocks.push(
+            <rect
+              key={i}
+              x={bx}
+              y={y + 8}
+              width={25}
+              height={height - 16}
+              rx={2}
+              fill={color}
+              opacity={0.5}
+            />
+          );
+        }
+      }
+      return blocks;
     }
+
+    if (streamStyle === "smooth") {
+      // Smooth flowing wave for Functional
+      const wavePhase = frame * 0.08;
+      const points: string[] = [];
+      const steps = 30;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        if (t * width > currentWidth) break;
+        const px = startX + t * width;
+        const py =
+          y + height / 2 + Math.sin(t * 6 + wavePhase) * (height * 0.25);
+        points.push(`${px},${py}`);
+      }
+      if (points.length < 2) return null;
+      return (
+        <polyline
+          points={points.join(" ")}
+          fill="none"
+          stroke={color}
+          strokeWidth={3}
+          opacity={0.5}
+        />
+      );
+    }
+
+    // Organic pattern for "Your Team's Style"
+    const circles: React.ReactNode[] = [];
+    const circleCount = Math.floor(progress * 6);
+    for (let i = 0; i < circleCount; i++) {
+      const cx = startX + 40 + i * 95;
+      if (cx < startX + currentWidth - 20) {
+        const pulse =
+          Math.sin(frame * 0.1 + i * 1.2) * 3;
+        circles.push(
+          <circle
+            key={i}
+            cx={cx}
+            cy={y + height / 2}
+            r={10 + pulse}
+            fill={color}
+            opacity={0.35}
+          />
+        );
+      }
+    }
+    return circles;
   };
 
   return (
     <div
       style={{
         position: "absolute",
-        left: barX,
-        top: y,
+        top: 0,
+        left: 0,
+        width: 1920,
+        height: 1080,
         opacity,
-        width: STREAM_WIDTH,
-        height: STREAM_HEIGHT + 30,
       }}
     >
-      {/* Stream bar */}
       <svg
-        width={STREAM_WIDTH}
-        height={STREAM_HEIGHT}
-        style={{ overflow: "visible" }}
+        width={1920}
+        height={1080}
+        style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Background track */}
-        <rect
-          x={0}
-          y={0}
-          width={STREAM_WIDTH}
-          height={STREAM_HEIGHT}
-          rx={STREAM_HEIGHT / 2}
-          fill={stream.color}
-          opacity={0.1}
-        />
-        {/* Clip for the animated fill */}
+        {/* Main gradient bar */}
         <defs>
-          <clipPath id={`stream-clip-${stream.style}`}>
-            <rect
-              x={0}
-              y={0}
-              width={barWidth}
-              height={STREAM_HEIGHT}
-              rx={STREAM_HEIGHT / 2}
-            />
-          </clipPath>
+          <linearGradient
+            id={`stream-grad-${label}`}
+            x1="0%"
+            y1="0%"
+            x2="100%"
+            y2="0%"
+          >
+            <stop offset="0%" stopColor={color} stopOpacity={0.8} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.3} />
+          </linearGradient>
         </defs>
-        <g clipPath={`url(#stream-clip-${stream.style})`}>
-          {/* Solid fill */}
-          <rect
-            x={0}
-            y={0}
-            width={STREAM_WIDTH}
-            height={STREAM_HEIGHT}
-            rx={STREAM_HEIGHT / 2}
-            fill={stream.color}
-            opacity={0.3}
-          />
-          {/* Texture overlay */}
-          {renderTexture()}
-        </g>
+        <rect
+          x={startX}
+          y={y}
+          width={currentWidth}
+          height={height}
+          rx={height / 2}
+          fill={`url(#stream-grad-${label})`}
+        />
+        {/* Texture overlay */}
+        {renderTexture()}
       </svg>
+
       {/* Label */}
       <div
         style={{
+          position: "absolute",
+          top: y + height / 2 - 10,
+          left: startX - 140,
+          width: 130,
+          textAlign: "right",
           fontFamily: "Inter, sans-serif",
           fontSize: 16,
           fontWeight: 600,
-          color: stream.color,
-          marginTop: 6,
-          textAlign: "center",
+          color,
+          opacity: interpolate(
+            frame,
+            [animStartFrame, animStartFrame + 20],
+            [0, 1],
+            { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+          ),
         }}
       >
-        {stream.label}
+        {label}
       </div>
     </div>
   );

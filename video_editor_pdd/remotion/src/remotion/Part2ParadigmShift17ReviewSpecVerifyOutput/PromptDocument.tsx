@@ -1,163 +1,169 @@
-import React from "react";
-import { interpolate, Easing } from "remotion";
-import {
-  PANEL_BG,
-  TEXT_COLOR,
-  AMBER_ACCENT,
-  PROMPT_X,
-  PROMPT_Y,
-  PROMPT_WIDTH,
-  PANEL_RADIUS,
-  PANEL_PADDING,
-  HEADER_FONT_SIZE,
-  HEADER_LETTER_SPACING,
-  PROMPT_TEXT_SIZE,
-  PROMPT_FADE_DURATION,
-  PROMPT_LINES,
-  MORPH_START,
-  MORPH_DURATION,
-} from "./constants";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 
-/**
- * Left panel: a compact prompt document with amber aura.
- * Receives `localFrame` = frame relative to its Sequence start.
- */
 interface PromptDocumentProps {
-  localFrame: number;
-  globalFrame: number;
+  lines: string[];
+  headerColor: string;
+  textColor: string;
+  panelBg: string;
+  auraColor: string;
+  auraOpacity: number;
+  auraBlur: number;
+  x: number;
+  y: number;
+  width: number;
+  padding: number;
+  borderRadius: number;
+  fadeStartFrame: number;
+  fadeDuration: number;
+  morphProgress: number; // 0 = normal, 1 = morphed
 }
 
-export const PromptDocument: React.FC<PromptDocumentProps> = ({
-  localFrame,
-  globalFrame,
+const PromptDocument: React.FC<PromptDocumentProps> = ({
+  lines,
+  headerColor,
+  textColor,
+  panelBg,
+  auraColor,
+  auraOpacity,
+  auraBlur,
+  x,
+  y,
+  width,
+  padding,
+  borderRadius,
+  fadeStartFrame,
+  fadeDuration,
+  morphProgress,
 }) => {
+  const frame = useCurrentFrame();
+  const relativeFrame = frame - fadeStartFrame;
+
   // Panel fade-in
   const panelOpacity = interpolate(
-    localFrame,
-    [0, PROMPT_FADE_DURATION],
+    relativeFrame,
+    [0, fadeDuration],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
 
-  // Slide in from left
+  // Slide from left
   const slideX = interpolate(
-    localFrame,
-    [0, PROMPT_FADE_DURATION],
+    relativeFrame,
+    [0, fadeDuration],
     [-40, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
   );
 
-  // Aura builds up over slightly longer than fade
-  const auraOpacity = interpolate(
-    localFrame,
-    [0, PROMPT_FADE_DURATION + 15],
-    [0, 0.15],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  // Header appearance
+  const headerOpacity = interpolate(
+    relativeFrame,
+    [5, 20],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
-  // Lines populate progressively
-  const linesVisible = Math.min(
-    PROMPT_LINES.length,
-    Math.floor(
-      interpolate(
-        localFrame,
-        [5, PROMPT_FADE_DURATION + 40],
-        [0, PROMPT_LINES.length],
-        { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-      )
+  // Lines populate over time (staggered)
+  const visibleLines = Math.floor(
+    interpolate(
+      relativeFrame,
+      [10, fadeDuration + 30],
+      [0, lines.length],
+      { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
     )
   );
 
-  // Morph effect: subtle glow intensification when morph begins
-  const morphProgress =
-    globalFrame >= MORPH_START
-      ? interpolate(
-          globalFrame,
-          [MORPH_START, MORPH_START + MORPH_DURATION],
-          [0, 1],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
-        )
-      : 0;
+  // Aura builds up
+  const currentAuraOpacity = interpolate(
+    relativeFrame,
+    [fadeDuration, fadeDuration + 30],
+    [0, auraOpacity],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
 
-  const morphAuraIntensity = 0.15 + morphProgress * 0.2;
-  const morphBlurRadius = 20 + morphProgress * 15;
+  // Morph effect: slight glow pulse and text shift
+  const morphGlow = interpolate(
+    morphProgress,
+    [0, 0.5, 1],
+    [1, 1.3, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
 
-  const containerHeight = PANEL_PADDING * 2 + 28 + PROMPT_LINES.length * 22;
+  const morphHue = interpolate(
+    morphProgress,
+    [0, 0.5, 1],
+    [0, 15, 0],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+  );
+
+  if (relativeFrame < 0) return null;
 
   return (
     <div
       style={{
-        position: "absolute",
-        left: PROMPT_X + slideX,
-        top: PROMPT_Y,
-        width: PROMPT_WIDTH,
-        height: containerHeight,
+        position: 'absolute',
+        left: x + slideX,
+        top: y,
+        width,
         opacity: panelOpacity,
+        filter: `hue-rotate(${morphHue}deg)`,
       }}
     >
-      {/* Amber aura glow */}
+      {/* Amber aura */}
       <div
         style={{
-          position: "absolute",
-          inset: -20,
-          borderRadius: PANEL_RADIUS + 20,
-          boxShadow: `0 0 ${morphBlurRadius}px ${Math.round(morphBlurRadius * 0.6)}px ${AMBER_ACCENT}`,
-          opacity: globalFrame >= MORPH_START ? morphAuraIntensity : auraOpacity,
-          pointerEvents: "none",
+          position: 'absolute',
+          inset: -auraBlur,
+          borderRadius: borderRadius + auraBlur,
+          background: auraColor,
+          opacity: currentAuraOpacity * morphGlow,
+          filter: `blur(${auraBlur}px)`,
+          pointerEvents: 'none',
         }}
       />
 
-      {/* Panel background */}
+      {/* Panel */}
       <div
         style={{
-          position: "relative",
-          width: "100%",
-          height: "100%",
-          backgroundColor: PANEL_BG,
-          borderRadius: PANEL_RADIUS,
-          padding: PANEL_PADDING,
-          boxSizing: "border-box",
-          overflow: "hidden",
+          position: 'relative',
+          background: panelBg,
+          borderRadius,
+          padding,
+          overflow: 'hidden',
         }}
       >
         {/* Header */}
         <div
           style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: HEADER_FONT_SIZE,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 12,
             fontWeight: 700,
-            color: AMBER_ACCENT,
-            letterSpacing: HEADER_LETTER_SPACING,
+            color: headerColor,
+            letterSpacing: 3,
             marginBottom: 16,
+            opacity: headerOpacity,
           }}
         >
           PROMPT
         </div>
 
-        {/* Prompt text lines */}
-        {PROMPT_LINES.map((line, i) => {
-          const isVisible = i < linesVisible;
-          const isHeader = line.startsWith("#");
-          return (
+        {/* Prompt lines */}
+        <div style={{ fontFamily: 'Inter, sans-serif', fontSize: 14, lineHeight: '22px' }}>
+          {lines.map((line, i) => (
             <div
               key={i}
               style={{
-                fontFamily: "Inter, sans-serif",
-                fontSize: PROMPT_TEXT_SIZE,
-                fontWeight: isHeader ? 600 : 400,
-                color: isHeader ? AMBER_ACCENT : TEXT_COLOR,
-                opacity: isVisible ? 0.95 : 0,
-                lineHeight: "22px",
-                height: 22,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                transition: "none",
+                color: textColor,
+                opacity: i < visibleLines ? 0.92 : 0,
+                transition: 'opacity 0.1s',
+                minHeight: line === '' ? 11 : undefined,
+                whiteSpace: 'pre-wrap',
               }}
             >
-              {line || "\u00A0"}
+              {line || '\u00A0'}
             </div>
-          );
-        })}
+          ))}
+        </div>
       </div>
     </div>
   );

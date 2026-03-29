@@ -1,203 +1,174 @@
-// MoldCrossSection.tsx — fully annotated mold with nozzle, cavity, walls, exit
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { AbsoluteFill, interpolate, useCurrentFrame, Easing } from 'remotion';
 import {
-  MOLD_CENTER_X,
-  MOLD_TOP,
-  MOLD_LEFT,
-  MOLD_WIDTH,
-  MOLD_HEIGHT,
-  NOZZLE_WIDTH,
-  NOZZLE_HEIGHT,
-  NOZZLE_TOP,
-  EXIT_WIDTH,
-  EXIT_HEIGHT,
-  EXIT_TOP,
-  COLOR_PROMPT,
-  COLOR_GROUNDING,
-  COLOR_WALLS,
-  COLOR_SHELL,
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
+  MOLD_SHELL_COLOR,
+  MOLD_SHELL_STROKE,
+  NOZZLE_COLOR,
   NOZZLE_GLOW_OPACITY,
+  WALL_COLOR,
   WALL_GLOW_OPACITY,
+  CAVITY_COLOR,
   CAVITY_FILL_OPACITY,
-  MOLD_FADE_FRAMES,
-} from "./constants";
+  MOLD_CENTER_X,
+  MOLD_WIDTH,
+  MOLD_LEFT,
+  MOLD_RIGHT,
+  NOZZLE_TOP,
+  NOZZLE_BOTTOM,
+  NOZZLE_NECK_WIDTH,
+  CAVITY_TOP,
+  CAVITY_BOTTOM,
+  WALL_THICKNESS,
+  EXIT_TOP,
+  EXIT_BOTTOM,
+  EXIT_NECK_WIDTH,
+  MOLD_FADE_IN_FRAMES,
+  LABEL_MUTED_COLOR,
+} from './constants';
 
 export const MoldCrossSection: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const fadeIn = interpolate(frame, [0, MOLD_FADE_FRAMES], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  const opacity = interpolate(frame, [0, MOLD_FADE_IN_FRAMES], [0, 1], {
+    extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
-  const nozzleLeft = MOLD_CENTER_X - NOZZLE_WIDTH / 2;
-  const exitLeft = MOLD_CENTER_X - EXIT_WIDTH / 2;
+  const nozzleLeft = MOLD_CENTER_X - NOZZLE_NECK_WIDTH / 2;
+  const nozzleRight = MOLD_CENTER_X + NOZZLE_NECK_WIDTH / 2;
+  const exitLeft = MOLD_CENTER_X - EXIT_NECK_WIDTH / 2;
+  const exitRight = MOLD_CENTER_X + EXIT_NECK_WIDTH / 2;
+
+  // Outer mold shell path (full cross-section)
+  const shellPath = `
+    M ${nozzleLeft} ${NOZZLE_TOP}
+    L ${nozzleLeft} ${NOZZLE_BOTTOM}
+    L ${MOLD_LEFT} ${NOZZLE_BOTTOM}
+    L ${MOLD_LEFT} ${EXIT_TOP}
+    L ${exitLeft} ${EXIT_TOP}
+    L ${exitLeft} ${EXIT_BOTTOM}
+    M ${exitRight} ${EXIT_BOTTOM}
+    L ${exitRight} ${EXIT_TOP}
+    L ${MOLD_RIGHT} ${EXIT_TOP}
+    L ${MOLD_RIGHT} ${NOZZLE_BOTTOM}
+    L ${nozzleRight} ${NOZZLE_BOTTOM}
+    L ${nozzleRight} ${NOZZLE_TOP}
+  `;
 
   return (
-    <svg
-      width={1920}
-      height={1080}
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        opacity: fadeIn,
-      }}
-    >
-      <defs>
-        {/* Glow filters */}
-        <filter id="nozzleGlow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="8" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <filter id="wallGlow" x="-50%" y="-50%" width="200%" height="200%">
-          <feGaussianBlur stdDeviation="6" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
+    <AbsoluteFill style={{ opacity }}>
+      <svg
+        width={CANVAS_WIDTH}
+        height={CANVAS_HEIGHT}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        <defs>
+          {/* Nozzle glow filter */}
+          <filter id="nozzleGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="8" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          {/* Wall glow filter */}
+          <filter id="wallGlow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="6" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
 
-      {/* Cavity fill — teal at low opacity */}
-      <rect
-        x={MOLD_LEFT + 20}
-        y={MOLD_TOP + 20}
-        width={MOLD_WIDTH - 40}
-        height={MOLD_HEIGHT - 40}
-        rx={8}
-        fill={COLOR_GROUNDING}
-        opacity={CAVITY_FILL_OPACITY}
-      />
-
-      {/* Outer shell */}
-      <rect
-        x={MOLD_LEFT}
-        y={MOLD_TOP}
-        width={MOLD_WIDTH}
-        height={MOLD_HEIGHT}
-        rx={12}
-        fill="none"
-        stroke={COLOR_SHELL}
-        strokeWidth={3}
-      />
-
-      {/* Nozzle (top entry) — amber glow */}
-      <g filter="url(#nozzleGlow)">
-        {/* Nozzle funnel shape */}
-        <path
-          d={`
-            M ${nozzleLeft - 20} ${NOZZLE_TOP}
-            L ${nozzleLeft + NOZZLE_WIDTH + 20} ${NOZZLE_TOP}
-            L ${nozzleLeft + NOZZLE_WIDTH} ${NOZZLE_TOP + NOZZLE_HEIGHT}
-            L ${nozzleLeft} ${NOZZLE_TOP + NOZZLE_HEIGHT}
-            Z
-          `}
-          fill="none"
-          stroke={COLOR_PROMPT}
-          strokeWidth={3}
-          opacity={NOZZLE_GLOW_OPACITY}
-        />
-        {/* Nozzle opening */}
+        {/* Cavity fill */}
         <rect
-          x={MOLD_CENTER_X - 25}
-          y={MOLD_TOP - 5}
-          width={50}
-          height={25}
-          rx={4}
-          fill={COLOR_PROMPT}
-          opacity={0.15}
-          stroke={COLOR_PROMPT}
-          strokeWidth={2}
+          x={MOLD_LEFT + WALL_THICKNESS}
+          y={CAVITY_TOP}
+          width={MOLD_WIDTH - WALL_THICKNESS * 2}
+          height={CAVITY_BOTTOM - CAVITY_TOP}
+          fill={CAVITY_COLOR}
+          opacity={CAVITY_FILL_OPACITY}
         />
-      </g>
 
-      {/* Left wall — blue glow */}
-      <g filter="url(#wallGlow)">
+        {/* Nozzle region glow */}
+        <rect
+          x={nozzleLeft}
+          y={NOZZLE_TOP}
+          width={NOZZLE_NECK_WIDTH}
+          height={NOZZLE_BOTTOM - NOZZLE_TOP}
+          fill={NOZZLE_COLOR}
+          opacity={NOZZLE_GLOW_OPACITY}
+          filter="url(#nozzleGlow)"
+          rx={4}
+        />
+
+        {/* Wall regions (left and right) */}
         <rect
           x={MOLD_LEFT}
-          y={MOLD_TOP}
-          width={20}
-          height={MOLD_HEIGHT}
-          rx={4}
-          fill={COLOR_WALLS}
-          opacity={WALL_GLOW_OPACITY * 0.5}
+          y={CAVITY_TOP}
+          width={WALL_THICKNESS}
+          height={CAVITY_BOTTOM - CAVITY_TOP}
+          fill={WALL_COLOR}
+          opacity={WALL_GLOW_OPACITY}
+          filter="url(#wallGlow)"
         />
-      </g>
-
-      {/* Right wall — blue glow */}
-      <g filter="url(#wallGlow)">
         <rect
-          x={MOLD_LEFT + MOLD_WIDTH - 20}
-          y={MOLD_TOP}
-          width={20}
-          height={MOLD_HEIGHT}
-          rx={4}
-          fill={COLOR_WALLS}
-          opacity={WALL_GLOW_OPACITY * 0.5}
+          x={MOLD_RIGHT - WALL_THICKNESS}
+          y={CAVITY_TOP}
+          width={WALL_THICKNESS}
+          height={CAVITY_BOTTOM - CAVITY_TOP}
+          fill={WALL_COLOR}
+          opacity={WALL_GLOW_OPACITY}
+          filter="url(#wallGlow)"
         />
-      </g>
 
-      {/* Exit (bottom) */}
-      <rect
-        x={exitLeft}
-        y={EXIT_TOP}
-        width={EXIT_WIDTH}
-        height={EXIT_HEIGHT}
-        rx={6}
-        fill="none"
-        stroke={COLOR_SHELL}
-        strokeWidth={2}
-      />
-      {/* Exit opening indicator */}
-      <rect
-        x={MOLD_CENTER_X - 20}
-        y={MOLD_TOP + MOLD_HEIGHT - 5}
-        width={40}
-        height={15}
-        rx={3}
-        fill={COLOR_SHELL}
-        opacity={0.3}
-      />
+        {/* Outer shell */}
+        <path
+          d={shellPath}
+          fill="none"
+          stroke={MOLD_SHELL_COLOR}
+          strokeWidth={MOLD_SHELL_STROKE}
+          strokeLinejoin="round"
+        />
 
-      {/* Component labels — dim supporting text */}
-      <text
-        x={MOLD_LEFT - 30}
-        y={NOZZLE_TOP + NOZZLE_HEIGHT / 2 + 5}
-        fill="#64748B"
-        fontSize={12}
-        fontFamily="Inter, sans-serif"
-        textAnchor="end"
-      >
-        Nozzle
-      </text>
-      <text
-        x={MOLD_LEFT - 30}
-        y={MOLD_TOP + MOLD_HEIGHT / 2 + 5}
-        fill="#64748B"
-        fontSize={12}
-        fontFamily="Inter, sans-serif"
-        textAnchor="end"
-      >
-        Cavity
-      </text>
-      <text
-        x={MOLD_LEFT + MOLD_WIDTH + 30}
-        y={MOLD_TOP + MOLD_HEIGHT / 2 + 5}
-        fill="#64748B"
-        fontSize={12}
-        fontFamily="Inter, sans-serif"
-        textAnchor="start"
-      >
-        Walls
-      </text>
-    </svg>
+        {/* Component labels on the left side */}
+        <text
+          x={MOLD_LEFT - 30}
+          y={(NOZZLE_TOP + NOZZLE_BOTTOM) / 2}
+          fill={LABEL_MUTED_COLOR}
+          fontSize={12}
+          fontFamily="Inter, sans-serif"
+          textAnchor="end"
+          dominantBaseline="middle"
+        >
+          Nozzle
+        </text>
+        <text
+          x={MOLD_LEFT - 30}
+          y={(CAVITY_TOP + CAVITY_BOTTOM) / 2}
+          fill={LABEL_MUTED_COLOR}
+          fontSize={12}
+          fontFamily="Inter, sans-serif"
+          textAnchor="end"
+          dominantBaseline="middle"
+        >
+          Cavity
+        </text>
+        <text
+          x={MOLD_LEFT - 30}
+          y={(EXIT_TOP + EXIT_BOTTOM) / 2}
+          fill={LABEL_MUTED_COLOR}
+          fontSize={12}
+          fontFamily="Inter, sans-serif"
+          textAnchor="end"
+          dominantBaseline="middle"
+        >
+          Exit
+        </text>
+      </svg>
+    </AbsoluteFill>
   );
 };
-
-export default MoldCrossSection;

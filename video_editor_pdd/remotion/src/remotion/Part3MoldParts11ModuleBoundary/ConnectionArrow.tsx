@@ -1,45 +1,15 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { ARROW_COLOR, ARROW_OPACITY, ARROW_DRAW_DURATION } from './constants';
 
 interface ConnectionArrowProps {
   fromX: number;
   fromY: number;
   toX: number;
   toY: number;
-  color: string;
-  opacity: number;
-  strokeWidth: number;
   dashed: boolean;
-  /** Frame at which this arrow starts drawing (relative to component mount) */
-  drawStart: number;
-  drawDuration?: number;
-  /** Extra opacity multiplier for dimming */
-  opacityMultiplier?: number;
-}
-
-/**
- * Shortens a line segment by `margin` px from each end
- * so arrows don't overlap the module boxes.
- */
-function shortenLine(
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-  margin: number
-): [number, number, number, number] {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len === 0) return [x1, y1, x2, y2];
-  const ux = dx / len;
-  const uy = dy / len;
-  return [
-    x1 + ux * margin,
-    y1 + uy * margin,
-    x2 - ux * margin,
-    y2 - uy * margin,
-  ];
+  drawStartFrame: number;
+  arrowOpacity: number;
 }
 
 export const ConnectionArrow: React.FC<ConnectionArrowProps> = ({
@@ -47,70 +17,71 @@ export const ConnectionArrow: React.FC<ConnectionArrowProps> = ({
   fromY,
   toX,
   toY,
-  color,
-  opacity,
-  strokeWidth,
   dashed,
-  drawStart,
-  drawDuration = 20,
-  opacityMultiplier = 1,
+  drawStartFrame,
+  arrowOpacity,
 }) => {
   const frame = useCurrentFrame();
 
-  const [sx, sy, ex, ey] = shortenLine(fromX, fromY, toX, toY, 60);
+  const dx = toX - fromX;
+  const dy = toY - fromY;
+  const length = Math.sqrt(dx * dx + dy * dy);
 
-  const dx = ex - sx;
-  const dy = ey - sy;
-  const lineLen = Math.sqrt(dx * dx + dy * dy);
+  // Shorten line to not overlap with module boxes
+  const shortenStart = 50;
+  const shortenEnd = 50;
+  const nx = dx / length;
+  const ny = dy / length;
 
-  // Draw progress: 0 → 1
+  const startX = fromX + nx * shortenStart;
+  const startY = fromY + ny * shortenStart;
+  const endX = toX - nx * shortenEnd;
+  const endY = toY - ny * shortenEnd;
+
+  // Draw animation progress
   const drawProgress = interpolate(
     frame,
-    [drawStart, drawStart + drawDuration],
+    [drawStartFrame, drawStartFrame + ARROW_DRAW_DURATION],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  // Arrowhead points
-  const angle = Math.atan2(dy, dx);
-  const headLen = 8;
-  const headAngle = Math.PI / 6;
+  if (drawProgress <= 0) return null;
 
-  const ah1x = ex - headLen * Math.cos(angle - headAngle);
-  const ah1y = ey - headLen * Math.sin(angle - headAngle);
-  const ah2x = ex - headLen * Math.cos(angle + headAngle);
-  const ah2y = ey - headLen * Math.sin(angle + headAngle);
-
-  // Stroke-dasharray / dashoffset for draw animation
-  const dashArray = dashed ? "6 4" : `${lineLen}`;
-  const dashOffset = dashed ? 0 : lineLen * (1 - drawProgress);
-
-  const arrowOpacity = drawProgress * opacity * opacityMultiplier;
+  // Arrowhead
+  const arrowSize = 8;
+  const angle = Math.atan2(endY - startY, endX - startX);
+  const arrowX1 =
+    endX - arrowSize * Math.cos(angle - Math.PI / 6);
+  const arrowY1 =
+    endY - arrowSize * Math.sin(angle - Math.PI / 6);
+  const arrowX2 =
+    endX - arrowSize * Math.cos(angle + Math.PI / 6);
+  const arrowY2 =
+    endY - arrowSize * Math.sin(angle + Math.PI / 6);
 
   return (
-    <g opacity={arrowOpacity}>
+    <g opacity={arrowOpacity * ARROW_OPACITY}>
       <line
-        x1={sx}
-        y1={sy}
-        x2={ex}
-        y2={ey}
-        stroke={color}
-        strokeWidth={strokeWidth}
-        strokeDasharray={dashArray}
-        strokeDashoffset={dashed ? undefined : dashOffset}
+        x1={startX}
+        y1={startY}
+        x2={startX + (endX - startX) * drawProgress}
+        y2={startY + (endY - startY) * drawProgress}
+        stroke={ARROW_COLOR}
+        strokeWidth={1.5}
+        strokeDasharray={dashed ? '6 4' : 'none'}
       />
-      {/* Arrowhead towards "to" */}
-      {drawProgress > 0.5 && (
+      {drawProgress > 0.9 && (
         <polygon
-          points={`${ex},${ey} ${ah1x},${ah1y} ${ah2x},${ah2y}`}
-          fill={color}
-          opacity={interpolate(drawProgress, [0.5, 1], [0, 1], {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
+          points={`${endX},${endY} ${arrowX1},${arrowY1} ${arrowX2},${arrowY2}`}
+          fill={ARROW_COLOR}
+          opacity={interpolate(drawProgress, [0.9, 1], [0, 1], {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
           })}
         />
       )}

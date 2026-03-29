@@ -1,5 +1,6 @@
-import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { NODE_FILL, ROOT_BORDER_RADIUS } from './constants';
 
 interface FlowNodeProps {
   text: string;
@@ -35,44 +36,44 @@ export const FlowNode: React.FC<FlowNodeProps> = ({
     [fadeStartFrame, fadeStartFrame + fadeDuration],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
   const scale = interpolate(
     frame,
     [fadeStartFrame, fadeStartFrame + fadeDuration],
-    [0.9, 1],
+    [0.85, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         left: x - width / 2,
         top: y - height / 2,
         width,
         height,
-        backgroundColor: "#1E1E2E",
+        backgroundColor: NODE_FILL,
         border: `2px solid ${borderColor}`,
-        borderRadius: 8,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
+        borderRadius: ROOT_BORDER_RADIUS,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
         opacity,
         transform: `scale(${scale})`,
       }}
     >
       <span
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: 'Inter, sans-serif',
           fontSize,
           fontWeight,
           color: textColor,

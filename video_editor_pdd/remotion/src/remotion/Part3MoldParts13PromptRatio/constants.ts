@@ -1,155 +1,202 @@
 // ── Canvas ──
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
-export const TOTAL_FRAMES = 540;
+export const BACKGROUND_COLOR = "#0A0F1A";
+export const DURATION_FRAMES = 540;
 export const FPS = 30;
 
-// ── Background ──
-export const BG_COLOR = '#0A0F1A';
-
 // ── Colors ──
-export const PROMPT_COLOR = '#D9944A';
-export const CODE_BORDER_COLOR = '#334155';
-export const CODE_LABEL_COLOR = '#64748B';
-export const RATIO_TEXT_COLOR = '#E2E8F0';
-export const BLOCK_BG_COLOR = '#1E1E2E';
-export const RED_TINT = '#EF4444';
-export const RED_LABEL_COLOR = '#F87171';
-export const GREEN_TINT = '#4ADE80';
-export const SUBLABEL_COLOR = '#94A3B8';
+export const BLOCK_BG = "#1E1E2E";
+export const PROMPT_ACCENT = "#D9944A";
+export const CODE_BORDER = "#334155";
+export const CODE_LABEL_COLOR = "#64748B";
+export const RATIO_COLOR = "#E2E8F0";
+export const SUBLABEL_COLOR = "#94A3B8";
+export const RED_TINT = "#EF4444";
+export const RED_LABEL = "#F87171";
+export const GREEN_TINT = "#4ADE80";
 
-// ── Phase 1: Prompt Block ──
+// ── Phase 1: Prompt block ──
 export const PROMPT_X = 200;
 export const PROMPT_Y = 300;
 export const PROMPT_WIDTH = 300;
 export const PROMPT_HEIGHT = 200;
 
-// ── Phase 1: Code Block ──
+// ── Phase 1: Code block ──
 export const CODE_X = 600;
 export const CODE_Y = 180;
 export const CODE_WIDTH = 1150;
 export const CODE_HEIGHT = 600;
 
-// ── Phase 2: Context Windows ──
-export const WINDOW_WIDTH = 400;
-export const WINDOW_HEIGHT = 500;
-export const LEFT_WINDOW_X = 310;
-export const RIGHT_WINDOW_X = 1210;
-export const WINDOW_Y = 200;
+// ── Phase 2: Context windows ──
+export const CTX_WINDOW_WIDTH = 400;
+export const CTX_WINDOW_HEIGHT = 500;
+export const CTX_LEFT_X = 300;
+export const CTX_RIGHT_X = 1220;
+export const CTX_Y = 260;
 
-// ── Animation Frames ──
-export const PHASE1_START = 0;
-export const CODE_BLOCK_START = 30;
-export const RATIO_START = 90;
+// ── Animation frame boundaries ──
+export const PROMPT_FADE_START = 0;
+export const PROMPT_FADE_DUR = 20;
+export const CODE_FADE_START = 30;
+export const CODE_FADE_DUR = 20;
+export const RATIO_ANIM_START = 90;
+export const RATIO_ANIM_DUR = 20;
 export const PHASE1_HOLD_END = 210;
 export const CROSSFADE_START = 210;
-export const CROSSFADE_DURATION = 30;
+export const CROSSFADE_DUR = 60;
 export const LEFT_FILL_START = 270;
+export const LEFT_FILL_DUR = 30;
 export const RIGHT_FILL_START = 330;
+export const RIGHT_FILL_DUR = 30;
 export const EMPHASIS_START = 390;
-export const HOLD_START = 450;
+export const EMPHASIS_DUR = 15;
 
-// ── Fade/Animation Durations ──
-export const BLOCK_FADE_DURATION = 20;
-export const RATIO_ANIM_DURATION = 20;
-export const WINDOW_FILL_DURATION = 30;
-export const EMPHASIS_PULSE_DURATION = 15;
-
-// ── Sample Prompt Text ──
+// ── Prompt text content (12 lines) ──
 export const PROMPT_LINES: string[] = [
-  'Create a UserAuth module that:',
-  '- Accepts JWT tokens via Bearer header',
-  '- Validates against RS256 public key',
-  '- Extracts user_id and role claims',
-  '- Returns typed AuthContext object',
-  '- Rejects expired tokens with 401',
-  '- Caches validation for 5 minutes',
-  '- Logs auth failures to audit trail',
-  '- Supports refresh token rotation',
-  '- Exposes /auth/me endpoint',
-  '- Rate limits to 100 req/min',
-  '- Integrates with session store',
-  '- Provides middleware wrapper',
-  '- Emits auth.success events',
-  '- Handles CORS preflight',
+  "Generate an injection mold module for",
+  "ABS plastic with 2mm wall thickness.",
+  "",
+  "Requirements:",
+  "- Two-plate mold, single cavity",
+  "- Side gate at parting line",
+  "- Ejector pins at 4 corners",
+  "- Cooling channels: 10mm diameter",
+  "- Draft angle: 1.5 degrees",
+  "",
+  "Output: OpenSCAD with parametric",
+  "dimensions and assembly comments.",
 ];
 
-// ── Sample Code Lines (representing ~200 lines, showing ~40 visible) ──
+// ── Generated code lines (40 visible, representing ~200) ──
 export const CODE_LINES: string[] = [
-  'import { verify, decode } from "jsonwebtoken";',
-  'import { Request, Response, NextFunction } from "express";',
-  'import { RedisClient } from "./cache";',
-  'import { AuditLogger } from "./audit";',
-  '',
-  'interface AuthContext {',
-  '  userId: string;',
-  '  role: "admin" | "user" | "viewer";',
-  '  sessionId: string;',
-  '  expiresAt: number;',
-  '}',
-  '',
-  'interface TokenPayload {',
-  '  sub: string;',
-  '  role: string;',
-  '  iat: number;',
-  '  exp: number;',
-  '  jti: string;',
-  '}',
-  '',
-  'const CACHE_TTL = 300; // 5 minutes',
-  'const RATE_LIMIT = 100;',
-  'const RATE_WINDOW = 60000; // 1 min',
-  '',
-  'export class UserAuthModule {',
-  '  private cache: RedisClient;',
-  '  private logger: AuditLogger;',
-  '  private publicKey: string;',
-  '',
-  '  constructor(config: AuthConfig) {',
-  '    this.cache = new RedisClient(config);',
-  '    this.logger = new AuditLogger();',
-  '    this.publicKey = config.rsaPublicKey;',
-  '  }',
-  '',
-  '  async validate(token: string) {',
-  '    const cached = await this.cache.get(token);',
-  '    if (cached) return JSON.parse(cached);',
-  '    const payload = verify(token, this.publicKey,',
-  '      { algorithms: ["RS256"] });',
-  '    await this.cache.set(token, payload, CACHE_TTL);',
-  '    return payload as AuthContext;',
-  '  }',
+  "// Auto-generated: injection_mold_abs.scad",
+  "// Module: single-cavity two-plate mold",
+  "",
+  "include <MCAD/units.scad>;",
+  "",
+  "// ── Parameters ──",
+  "wall_thickness   = 2.0;    // mm",
+  "draft_angle      = 1.5;    // degrees",
+  "gate_type        = \"side\"; // at parting line",
+  "cooling_diameter = 10.0;   // mm",
+  "ejector_count    = 4;",
+  "",
+  "module mold_cavity(w, h, d) {",
+  "  difference() {",
+  "    cube([w + wall_thickness*2,",
+  "          h + wall_thickness*2,",
+  "          d + wall_thickness], center=true);",
+  "    translate([0, 0, wall_thickness/2])",
+  "      cube([w, h, d], center=true);",
+  "  }",
+  "}",
+  "",
+  "module cooling_channel(len) {",
+  "  rotate([90, 0, 0])",
+  "    cylinder(h=len, d=cooling_diameter,",
+  "             center=true, $fn=32);",
+  "}",
+  "",
+  "module ejector_pin(pos) {",
+  "  translate(pos)",
+  "    cylinder(h=20, d=3, $fn=16);",
+  "}",
+  "",
+  "module side_gate(w, h) {",
+  "  translate([w/2, 0, 0])",
+  "    cube([5, 2, h/3], center=true);",
+  "}",
+  "",
+  "// ── Assembly ──",
+  "module mold_assembly() {",
+  "  // A-plate (cavity side)",
+  "  mold_cavity(80, 60, 30);",
+  "",
+  "  // Cooling system",
+  "  for (y = [-20, 20])",
+  "    translate([0, y, -10])",
+  "      cooling_channel(120);",
+  "",
+  "  // Ejector pins",
+  "  pin_positions = [",
+  "    [-30, -20, 0], [30, -20, 0],",
+  "    [-30,  20, 0], [30,  20, 0]",
+  "  ];",
+  "  for (p = pin_positions)",
+  "    ejector_pin(p);",
+  "}",
+  "",
+  "// Render",
+  "mold_assembly();",
 ];
 
-// ── Context Window: Dense Code Lines ──
-export const DENSE_CODE_LINES: string[] = [
-  'fn validate_token(&self, t: &str) -> Result<Claims>',
-  '  let decoded = decode(t, &self.key, RS256)?;',
-  '  if decoded.exp < now() { return Err(Expired) }',
-  '  let claims = decoded.claims.as_ref();',
-  '  self.cache.insert(t.to_owned(), claims.clone());',
-  '  Ok(claims) } fn refresh(&mut self, r: &str) ->',
-  '  Result<TokenPair> { let old = self.validate(r)?;',
-  '  let new_access = sign(&old.sub, &self.priv_key)?;',
-  '  let new_refresh = generate_refresh()?; self.store',
-  '  .rotate(old.jti, &new_refresh)?; Ok(TokenPair {',
-  '  access: new_access, refresh: new_refresh }) }',
-  '  fn middleware(&self) -> impl Fn(Req, Res, Next)',
-  '  { let auth = self.clone(); move |req, res, next|',
-  '  { match req.header("Authorization") { Some(h) =>',
-  '  { let t = h.strip_prefix("Bearer ")?; match auth',
-];
+// ── Syntax highlight color map ──
+export const SYNTAX_COMMENT = "#6A9955";
+export const SYNTAX_KEYWORD = "#569CD6";
+export const SYNTAX_STRING = "#CE9178";
+export const SYNTAX_NUMBER = "#B5CEA8";
+export const SYNTAX_FUNCTION = "#DCDCAA";
+export const SYNTAX_DEFAULT = "#D4D4D4";
 
-// ── Context Window: Clean Prompt Lines ──
-export const CLEAN_PROMPT_LINES: string[] = [
-  'Module 1: UserAuth — JWT validation, RS256',
-  'Module 2: SessionStore — Redis-backed sessions',
-  'Module 3: RateLimiter — sliding window, 100/min',
-  'Module 4: AuditLog — structured auth event logging',
-  'Module 5: CORS — preflight + origin allowlist',
-  'Module 6: TokenRotation — refresh token cycling',
-  'Module 7: Middleware — Express auth wrapper',
-  'Module 8: EventBus — auth.success / auth.fail',
-  'Module 9: HealthCheck — /auth/status endpoint',
-  'Module 10: Config — env-based key management',
+// ── Dense code filler for context window (raw code) ──
+export const DENSE_CODE_FILLER = Array.from({ length: 60 }, (_, i) => {
+  const templates = [
+    "fn process_chunk(&mut self, buf: &[u8]) -> Result<()> {",
+    "  let hash = self.hasher.update(buf);",
+    "  self.state.push(hash.finalize());",
+    "  if self.state.len() > MAX_CHUNKS { self.flush()?; }",
+    "  Ok(())",
+    "}",
+    "impl Iterator for TokenStream {",
+    "  type Item = Token;",
+    "  fn next(&mut self) -> Option<Self::Item> {",
+    "    self.buffer.pop_front()",
+    "  }",
+    "}",
+  ];
+  return templates[i % templates.length];
+});
+
+// ── Clean prompt filler for context window (prompts) ──
+export const CLEAN_PROMPT_FILLER: string[] = [
+  "Module 1: Core geometry engine",
+  "  - Generate parametric body",
+  "  - Apply draft angles to all faces",
+  "",
+  "Module 2: Gating system",
+  "  - Side gate at parting line",
+  "  - Runner layout for balanced flow",
+  "",
+  "Module 3: Cooling system",
+  "  - Conformal cooling channels",
+  "  - Baffle placement strategy",
+  "",
+  "Module 4: Ejection system",
+  "  - Pin placement and sizing",
+  "  - Sleeve ejector for deep cores",
+  "",
+  "Module 5: Mold base selection",
+  "  - Standard base dimensions",
+  "  - Plate thickness calculation",
+  "",
+  "Module 6: Venting design",
+  "  - Vent depth and width",
+  "  - Parting line vent placement",
+  "",
+  "Module 7: Surface finish spec",
+  "  - SPI classification mapping",
+  "  - Texture region definition",
+  "",
+  "Module 8: Tolerance analysis",
+  "  - Shrinkage compensation",
+  "  - Dimensional tolerance stack",
+  "",
+  "Module 9: Assembly sequence",
+  "  - Component mating order",
+  "  - Fastener specification",
+  "",
+  "Module 10: Quality validation",
+  "  - Fill simulation check",
+  "  - Warp and sink analysis",
 ];

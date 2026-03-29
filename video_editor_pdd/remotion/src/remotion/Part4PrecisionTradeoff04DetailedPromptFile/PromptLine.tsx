@@ -1,80 +1,83 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
+  MONO_FONT,
+  CODE_FONT_SIZE,
+  LINE_NUMBER_SIZE,
+  LINE_HEIGHT,
   GUTTER_WIDTH,
   GUTTER_INDICATOR_WIDTH,
-  LINE_HEIGHT,
   TEXT_COLOR,
   LINE_NUMBER_COLOR,
   ACCENT_AMBER,
-  CONTENT_REVEAL_START,
-  LINES_PER_FRAME,
-} from './constants';
+} from "./constants";
 
-interface PromptLineProps {
+export interface PromptLineProps {
   lineNumber: number;
   text: string;
-  index: number;
-  isHighlight: boolean;
-  section: string;
+  isHighlighted: boolean;
+  /** Frame at which this line's gutter indicator starts animating */
+  gutterAnimStartFrame: number;
+  /** Y offset within the content area */
+  yOffset: number;
+  /** Whether this line is visible (has been revealed) */
+  isVisible: boolean;
 }
 
 export const PromptLine: React.FC<PromptLineProps> = ({
   lineNumber,
   text,
-  index,
-  isHighlight,
-  section,
+  isHighlighted,
+  gutterAnimStartFrame,
+  yOffset,
+  isVisible,
 }) => {
   const frame = useCurrentFrame();
 
-  // Each line reveals based on scroll progress
-  const revealFrame = CONTENT_REVEAL_START + index / LINES_PER_FRAME;
-  const lineOpacity = interpolate(frame, [revealFrame, revealFrame + 4], [0, 1], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
+  if (!isVisible) return null;
 
-  // Gutter indicator fades in slightly after the line
-  const gutterDelay = revealFrame + 2;
-  const gutterOpacity = interpolate(frame, [gutterDelay, gutterDelay + 4], [0, 0.5], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing: Easing.out(Easing.quad),
-  });
+  // Gutter indicator opacity — fades in over 4 frames with easeOut quad
+  const gutterOpacity = interpolate(
+    frame,
+    [gutterAnimStartFrame, gutterAnimStartFrame + 4],
+    [0, 0.5],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
 
-  // Section-specific colors for keywords
-  const isHeader = section === 'header';
-  const isSectionHeading = text.startsWith('##');
-  const isComment = text.startsWith('#') && !isSectionHeading;
+  // Highlighted edge-case lines get brighter gutter
+  const gutterFinalOpacity = isHighlighted
+    ? gutterOpacity * 1.6 // up to 0.8
+    : gutterOpacity;
 
-  let lineColor = TEXT_COLOR;
-  if (isHeader || isComment) lineColor = '#8B9CB8';
-  if (isSectionHeading) lineColor = '#E2E8F0';
-  if (isHighlight && !isSectionHeading && !isComment && text.trim() !== '') {
-    lineColor = '#E8C88A';
-  }
+  // Text color slightly brighter for highlighted sections
+  const lineTextColor = isHighlighted ? "#E2E8F0" : TEXT_COLOR;
 
   return (
     <div
       style={{
-        display: 'flex',
-        alignItems: 'center',
+        position: "absolute",
+        top: yOffset,
+        left: 0,
+        right: 0,
         height: LINE_HEIGHT,
-        opacity: lineOpacity,
-        position: 'relative',
+        display: "flex",
+        alignItems: "center",
       }}
     >
       {/* Gutter indicator bar */}
       <div
         style={{
-          position: 'absolute',
+          position: "absolute",
           left: 0,
           top: 2,
           width: GUTTER_INDICATOR_WIDTH,
           height: LINE_HEIGHT - 4,
           backgroundColor: ACCENT_AMBER,
-          opacity: text.trim() !== '' ? gutterOpacity : 0,
+          opacity: gutterFinalOpacity,
           borderRadius: 1,
         }}
       />
@@ -83,29 +86,30 @@ export const PromptLine: React.FC<PromptLineProps> = ({
       <div
         style={{
           width: GUTTER_WIDTH,
-          textAlign: 'right',
+          textAlign: "right",
           paddingRight: 12,
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 12,
+          fontFamily: MONO_FONT,
+          fontSize: LINE_NUMBER_SIZE,
           color: LINE_NUMBER_COLOR,
           opacity: 0.4,
-          userSelect: 'none',
+          userSelect: "none",
           flexShrink: 0,
         }}
       >
         {lineNumber}
       </div>
 
-      {/* Text content */}
+      {/* Code text */}
       <div
         style={{
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 13,
-          color: lineColor,
+          fontFamily: MONO_FONT,
+          fontSize: CODE_FONT_SIZE,
+          color: lineTextColor,
           opacity: 0.9,
-          whiteSpace: 'pre',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
+          whiteSpace: "pre",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          paddingLeft: 8,
         }}
       >
         {text}
@@ -113,5 +117,3 @@ export const PromptLine: React.FC<PromptLineProps> = ({
     </div>
   );
 };
-
-export default PromptLine;

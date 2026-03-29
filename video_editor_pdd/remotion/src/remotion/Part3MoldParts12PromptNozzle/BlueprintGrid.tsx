@@ -1,40 +1,32 @@
 import React from "react";
 import { AbsoluteFill } from "remotion";
-import {
-  WIDTH,
-  HEIGHT,
-  GRID_SPACING,
-  GRID_COLOR,
-  GRID_OPACITY,
-} from "./constants";
+import { CANVAS_W, CANVAS_H, GRID_SPACING, GRID_COLOR, GRID_OPACITY } from "./constants";
 
 export const BlueprintGrid: React.FC = () => {
-  const lines: React.ReactNode[] = [];
+  const verticalLines: React.ReactNode[] = [];
+  const horizontalLines: React.ReactNode[] = [];
 
-  // Vertical lines
-  for (let x = 0; x <= WIDTH; x += GRID_SPACING) {
-    lines.push(
+  for (let x = 0; x <= CANVAS_W; x += GRID_SPACING) {
+    verticalLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={HEIGHT}
+        y2={CANVAS_H}
         stroke={GRID_COLOR}
         strokeWidth={1}
         opacity={GRID_OPACITY}
       />
     );
   }
-
-  // Horizontal lines
-  for (let y = 0; y <= HEIGHT; y += GRID_SPACING) {
-    lines.push(
+  for (let y = 0; y <= CANVAS_H; y += GRID_SPACING) {
+    horizontalLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={WIDTH}
+        x2={CANVAS_W}
         y2={y}
         stroke={GRID_COLOR}
         strokeWidth={1}
@@ -45,8 +37,9 @@ export const BlueprintGrid: React.FC = () => {
 
   return (
     <AbsoluteFill>
-      <svg width={WIDTH} height={HEIGHT} style={{ position: "absolute" }}>
-        {lines}
+      <svg width={CANVAS_W} height={CANVAS_H} style={{ position: "absolute" }}>
+        {verticalLines}
+        {horizontalLines}
       </svg>
     </AbsoluteFill>
   );

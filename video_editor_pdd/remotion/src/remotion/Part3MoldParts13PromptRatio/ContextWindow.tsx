@@ -1,244 +1,272 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  BLOCK_BG_COLOR,
-  WINDOW_WIDTH,
-  WINDOW_HEIGHT,
-  WINDOW_FILL_DURATION,
-  EMPHASIS_PULSE_DURATION,
-  DENSE_CODE_LINES,
-  CLEAN_PROMPT_LINES,
+  BLOCK_BG,
   RED_TINT,
-  RED_LABEL_COLOR,
+  RED_LABEL,
   GREEN_TINT,
   SUBLABEL_COLOR,
-} from './constants';
+  CTX_WINDOW_WIDTH,
+  CTX_WINDOW_HEIGHT,
+  CTX_LEFT_X,
+  CTX_RIGHT_X,
+  CTX_Y,
+  DENSE_CODE_FILLER,
+  CLEAN_PROMPT_FILLER,
+  LEFT_FILL_START,
+  LEFT_FILL_DUR,
+  RIGHT_FILL_START,
+  RIGHT_FILL_DUR,
+  EMPHASIS_START,
+  EMPHASIS_DUR,
+  CROSSFADE_START,
+  CROSSFADE_DUR,
+} from "./constants";
 
-interface ContextWindowProps {
-  side: 'left' | 'right';
+interface WindowPanelProps {
   x: number;
-  y: number;
-  fillStartFrame: number;
-  emphasisFrame: number;
+  tintColor: string;
+  label: string;
+  sublabel: string;
+  sublabelColor: string;
+  sublabelWeight: number;
+  lines: string[];
+  lineFontSize: number;
+  lineColor: string;
+  fillProgress: number;
+  emphasisGlow?: number;
 }
 
-export const ContextWindow: React.FC<ContextWindowProps> = ({
-  side,
+const WindowPanel: React.FC<WindowPanelProps> = ({
   x,
-  y,
-  fillStartFrame,
-  emphasisFrame,
+  tintColor,
+  label,
+  sublabel,
+  sublabelColor,
+  sublabelWeight,
+  lines,
+  lineFontSize,
+  lineColor,
+  fillProgress,
+  emphasisGlow = 0,
 }) => {
-  const frame = useCurrentFrame();
-
-  const isLeft = side === 'left';
-  const tintColor = isLeft ? RED_TINT : GREEN_TINT;
-  const labelColor = isLeft ? RED_LABEL_COLOR : GREEN_TINT;
-  const label = isLeft
-    ? '15,000 tokens of raw code'
-    : 'Prompts for 10 modules';
-  const sublabel = isLeft ? 'Dense. Hard to parse.' : '';
-  const emphasisText = isLeft ? '' : '10\u00D7 more system knowledge';
-  const lines = isLeft ? DENSE_CODE_LINES : CLEAN_PROMPT_LINES;
-
-  // Fill animation
-  const fillProgress = interpolate(
-    frame,
-    [fillStartFrame, fillStartFrame + WINDOW_FILL_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  // Content opacity
-  const contentOpacity = fillProgress;
-
-  // Emphasis glow (right side only)
-  const glowOpacity = !isLeft
-    ? interpolate(
-        frame,
-        [
-          emphasisFrame,
-          emphasisFrame + EMPHASIS_PULSE_DURATION / 2,
-          emphasisFrame + EMPHASIS_PULSE_DURATION,
-        ],
-        [0, 0.6, 0.3],
-        {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.inOut(Easing.sin),
-        }
-      )
-    : 0;
-
-  // Label fade
-  const labelOpacity = interpolate(
-    frame,
-    [fillStartFrame + 10, fillStartFrame + 25],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    }
-  );
-
-  // Emphasis text fade
-  const emphasisOpacity = !isLeft
-    ? interpolate(
-        frame,
-        [emphasisFrame, emphasisFrame + EMPHASIS_PULSE_DURATION],
-        [0, 1],
-        {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.out(Easing.quad),
-        }
-      )
-    : 0;
+  const visibleLines = Math.floor(fillProgress * lines.length);
 
   return (
     <div
       style={{
-        position: 'absolute',
+        position: "absolute",
         left: x,
-        top: y,
-        width: WINDOW_WIDTH,
+        top: CTX_Y,
+        width: CTX_WINDOW_WIDTH,
       }}
     >
       {/* Label */}
       <div
         style={{
-          fontFamily: 'Inter, sans-serif',
+          fontFamily: "Inter, sans-serif",
           fontSize: 14,
           fontWeight: 600,
-          color: labelColor,
-          marginBottom: 6,
-          opacity: labelOpacity,
+          color: tintColor,
+          marginBottom: 8,
         }}
       >
         {label}
       </div>
 
-      {/* Sublabel */}
-      {sublabel && (
-        <div
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 12,
-            color: SUBLABEL_COLOR,
-            marginBottom: 8,
-            opacity: labelOpacity,
-          }}
-        >
-          {sublabel}
-        </div>
-      )}
-
-      {/* Emphasis text (right window) */}
-      {emphasisText && (
-        <div
-          style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 14,
-            fontWeight: 700,
-            color: GREEN_TINT,
-            marginBottom: 8,
-            opacity: emphasisOpacity,
-          }}
-        >
-          {emphasisText}
-        </div>
-      )}
-
-      {/* Window rect */}
+      {/* Window rectangle */}
       <div
         style={{
-          width: WINDOW_WIDTH,
-          height: WINDOW_HEIGHT,
-          backgroundColor: BLOCK_BG_COLOR,
-          border: `1px solid rgba(${isLeft ? '239, 68, 68' : '74, 222, 128'}, 0.2)`,
+          width: CTX_WINDOW_WIDTH,
+          height: CTX_WINDOW_HEIGHT,
+          backgroundColor: BLOCK_BG,
+          border: `2px solid rgba(${tintColor === RED_TINT ? "239, 68, 68" : "74, 222, 128"}, 0.2)`,
           borderRadius: 8,
           padding: 10,
-          overflow: 'hidden',
-          boxSizing: 'border-box',
-          position: 'relative',
+          overflow: "hidden",
+          boxSizing: "border-box",
+          boxShadow: emphasisGlow > 0
+            ? `0 0 ${emphasisGlow * 30}px rgba(74, 222, 128, ${emphasisGlow * 0.3})`
+            : "none",
         }}
       >
-        {/* Glow effect for right window */}
-        {!isLeft && (
+        {lines.slice(0, visibleLines).map((line, i) => (
           <div
+            key={i}
             style={{
-              position: 'absolute',
-              inset: -2,
-              borderRadius: 10,
-              boxShadow: `0 0 30px rgba(74, 222, 128, ${glowOpacity})`,
-              pointerEvents: 'none',
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: lineFontSize,
+              lineHeight: `${lineFontSize + 3}px`,
+              color: lineColor,
+              whiteSpace: "pre",
+              opacity: tintColor === RED_TINT ? 0.4 : 0.8,
             }}
-          />
-        )}
-
-        {/* Content lines */}
-        <div style={{ opacity: contentOpacity }}>
-          {isLeft
-            ? /* Dense code lines, repeated to fill space */
-              Array.from({ length: 35 }, (_, i) => {
-                const line = lines[i % lines.length];
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      fontFamily: 'JetBrains Mono, monospace',
-                      fontSize: 8,
-                      lineHeight: '12px',
-                      color: RED_LABEL_COLOR,
-                      opacity: 0.35,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    {line}
-                  </div>
-                );
-              })
-            : /* Clean prompt lines */
-              lines.map((line, i) => (
-                <div
-                  key={i}
-                  style={{
-                    fontFamily: 'Inter, sans-serif',
-                    fontSize: 10,
-                    lineHeight: '16px',
-                    color: GREEN_TINT,
-                    opacity: 0.8,
-                    padding: '6px 8px',
-                    marginBottom: 4,
-                    backgroundColor: 'rgba(74, 222, 128, 0.05)',
-                    borderRadius: 4,
-                    borderLeft: '2px solid rgba(74, 222, 128, 0.3)',
-                  }}
-                >
-                  {line}
-                </div>
-              ))}
-        </div>
-
-        {/* Fill progress bar at bottom */}
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            width: `${fillProgress * 100}%`,
-            height: 3,
-            backgroundColor: tintColor,
-            opacity: 0.4,
-            borderRadius: '0 0 8px 8px',
-          }}
-        />
+          >
+            {line || "\u00A0"}
+          </div>
+        ))}
       </div>
+
+      {/* Sublabel */}
+      <div
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: tintColor === RED_TINT ? 12 : 14,
+          fontWeight: sublabelWeight,
+          color: sublabelColor,
+          marginTop: 8,
+          textShadow:
+            emphasisGlow > 0
+              ? `0 0 ${emphasisGlow * 15}px rgba(74, 222, 128, 0.5)`
+              : "none",
+        }}
+      >
+        {sublabel}
+      </div>
+    </div>
+  );
+};
+
+export const ContextWindowComparison: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  // Overall phase 2 opacity (crossfade in)
+  const phaseOpacity = interpolate(
+    frame,
+    [CROSSFADE_START, CROSSFADE_START + CROSSFADE_DUR],
+    [0, 1],
+    {
+      easing: Easing.inOut(Easing.cubic),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  // Left window fill progress
+  const leftFill = interpolate(
+    frame,
+    [LEFT_FILL_START, LEFT_FILL_START + LEFT_FILL_DUR],
+    [0, 1],
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  // Right window fill progress
+  const rightFill = interpolate(
+    frame,
+    [RIGHT_FILL_START, RIGHT_FILL_START + RIGHT_FILL_DUR],
+    [0, 1],
+    {
+      easing: Easing.out(Easing.quad),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  // Emphasis glow on right window
+  const emphasisRaw = interpolate(
+    frame,
+    [
+      EMPHASIS_START,
+      EMPHASIS_START + EMPHASIS_DUR / 2,
+      EMPHASIS_START + EMPHASIS_DUR,
+    ],
+    [0, 1, 0.6],
+    {
+      easing: Easing.inOut(Easing.sin),
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  // Title
+  const titleOpacity = interpolate(
+    frame,
+    [CROSSFADE_START + 10, CROSSFADE_START + 30],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: "100%",
+        height: "100%",
+        opacity: phaseOpacity,
+      }}
+    >
+      {/* Section title */}
+      <div
+        style={{
+          position: "absolute",
+          top: 100,
+          width: "100%",
+          textAlign: "center",
+          fontFamily: "Inter, sans-serif",
+          fontSize: 24,
+          fontWeight: 600,
+          color: "#E2E8F0",
+          opacity: titleOpacity,
+          letterSpacing: "-0.02em",
+        }}
+      >
+        Context Window Comparison
+      </div>
+
+      {/* "vs" divider */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: CTX_Y + CTX_WINDOW_HEIGHT / 2 + 30,
+          transform: "translate(-50%, -50%)",
+          fontFamily: "Inter, sans-serif",
+          fontSize: 18,
+          fontWeight: 600,
+          color: SUBLABEL_COLOR,
+          opacity: titleOpacity * 0.8,
+        }}
+      >
+        vs
+      </div>
+
+      {/* Left: Raw code window */}
+      <WindowPanel
+        x={CTX_LEFT_X}
+        tintColor={RED_TINT}
+        label="15,000 tokens of raw code"
+        sublabel="Dense. Hard to parse."
+        sublabelColor={SUBLABEL_COLOR}
+        sublabelWeight={400}
+        lines={DENSE_CODE_FILLER}
+        lineFontSize={8}
+        lineColor={RED_LABEL}
+        fillProgress={leftFill}
+      />
+
+      {/* Right: Prompts window */}
+      <WindowPanel
+        x={CTX_RIGHT_X}
+        tintColor={GREEN_TINT}
+        label="Prompts for 10 modules"
+        sublabel="10× more system knowledge"
+        sublabelColor={GREEN_TINT}
+        sublabelWeight={700}
+        lines={CLEAN_PROMPT_FILLER}
+        lineFontSize={10}
+        lineColor={GREEN_TINT}
+        fillProgress={rightFill}
+        emphasisGlow={emphasisRaw}
+      />
     </div>
   );
 };

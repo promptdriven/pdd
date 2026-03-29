@@ -79,7 +79,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
 
 export const Part3MoldPartsSection: React.FC = () => {
   const fps = 30;
-  const durationSeconds = 345.88;
+  const durationSeconds = 365.8;
   const frame = useCurrentFrame();
   const activeVisuals = VISUAL_SEQUENCE
     .filter((visual) => frame >= visual.start && frame < visual.end)

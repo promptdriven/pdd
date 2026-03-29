@@ -1,5 +1,5 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
   CHIP_OUTLINE,
   CHIP_FILL_OPACITY,
@@ -10,172 +10,217 @@ import {
   CHIP_HEIGHT,
   CHIP_FADE_START,
   CHIP_FADE_END,
+  CODE_KEYWORD,
+  GATE_COLOR,
   GATE_STREAM_START,
-  SYNTAX_KEYWORD,
-} from './constants';
+  WIDTH,
+} from "./constants";
 
-/**
- * Renders the synthesis processor chip with input/output arrows.
- * Fades in from CHIP_FADE_START. Input arrow pulses once gate stream begins.
- */
+const CHIP_FADE_DURATION = 30; // frames for chip to fade in
+
 export const SynthesisChip: React.FC = () => {
   const frame = useCurrentFrame();
 
-  if (frame < CHIP_FADE_START) return null;
+  const chipFrame = frame - CHIP_FADE_START;
+  if (chipFrame < 0) return null;
 
-  // Fade in
-  const fadeIn = interpolate(
-    frame,
-    [CHIP_FADE_START, CHIP_FADE_END],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.out(Easing.cubic) }
-  );
+  const chipOpacity = interpolate(chipFrame, [0, CHIP_FADE_DURATION], [0, 1], {
+    easing: Easing.out(Easing.cubic),
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
-  // Arrow pulse (easeInOut sine, 30-frame cycle)
-  const pulsePhase = frame >= GATE_STREAM_START
-    ? interpolate(
-        (frame - GATE_STREAM_START) % 30,
-        [0, 15, 30],
-        [0, 1, 0],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: Easing.inOut(Easing.sin) }
-      )
-    : 0;
+  // Arrow pulse for input (before gate stream starts)
+  const pulseCycle = frame % 30;
+  const inputPulse = interpolate(pulseCycle, [0, 15, 30], [0.4, 1, 0.4], {
+    easing: Easing.inOut(Easing.sin),
+  });
 
-  const arrowGlow = 0.5 + pulsePhase * 0.5;
+  // Code symbol flow into chip (left side)
+  const showInputFlow = frame >= CHIP_FADE_END && frame < GATE_STREAM_START + 120;
+  // Gate symbol flow out of chip (right side)
+  const showOutputFlow = frame >= GATE_STREAM_START;
 
-  // Code symbols flowing into the chip (left side)
-  const codeSymbols = ['m', 'o', 'd', 'u', 'l', 'e', ' ', '@', '+', '='];
-  const symbolsVisible = frame >= GATE_STREAM_START;
-
-  // Chip pin decorations
-  const pinCount = 6;
-  const pinSpacing = CHIP_HEIGHT / (pinCount + 1);
+  const chipLeft = CHIP_X - CHIP_WIDTH / 2;
+  const chipTop = CHIP_Y - CHIP_HEIGHT / 2;
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        left: CHIP_X - CHIP_WIDTH / 2 - 200,
-        top: CHIP_Y - CHIP_HEIGHT / 2 - 40,
-        width: CHIP_WIDTH + 400,
-        height: CHIP_HEIGHT + 80,
-        opacity: fadeIn,
-      }}
-    >
+    <div style={{ position: "absolute", top: 0, left: 0, width: WIDTH, height: 1080, opacity: chipOpacity }}>
       <svg
-        width={CHIP_WIDTH + 400}
-        height={CHIP_HEIGHT + 80}
-        viewBox={`0 0 ${CHIP_WIDTH + 400} ${CHIP_HEIGHT + 80}`}
+        width={WIDTH}
+        height={1080}
+        style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Input arrow (left) */}
-        <line
-          x1={30}
-          y1={(CHIP_HEIGHT + 80) / 2}
-          x2={195}
-          y2={(CHIP_HEIGHT + 80) / 2}
-          stroke={CHIP_OUTLINE}
-          strokeWidth={2}
-          opacity={arrowGlow}
-        />
-        <polygon
-          points={`195,${(CHIP_HEIGHT + 80) / 2 - 6} 205,${(CHIP_HEIGHT + 80) / 2} 195,${(CHIP_HEIGHT + 80) / 2 + 6}`}
-          fill={CHIP_OUTLINE}
-          opacity={arrowGlow}
-        />
-
-        {/* Flowing code symbols into chip */}
-        {symbolsVisible &&
-          codeSymbols.map((sym, i) => {
-            const progress = ((frame - GATE_STREAM_START + i * 8) % 80) / 80;
-            const sx = 40 + progress * 150;
-            const symOpacity = progress < 0.1 ? progress / 0.1 : progress > 0.85 ? (1 - progress) / 0.15 : 0.8;
-            return (
-              <text
-                key={`sym-${i}`}
-                x={sx}
-                y={(CHIP_HEIGHT + 80) / 2 - 12}
-                fill={SYNTAX_KEYWORD}
-                fontSize={12}
-                fontFamily='"JetBrains Mono", monospace'
-                opacity={symOpacity}
-              >
-                {sym}
-              </text>
-            );
-          })}
-
         {/* Chip body */}
         <rect
-          x={200}
-          y={40}
+          x={chipLeft}
+          y={chipTop}
           width={CHIP_WIDTH}
           height={CHIP_HEIGHT}
-          rx={6}
-          ry={6}
+          rx={8}
+          ry={8}
           fill={CHIP_OUTLINE}
           fillOpacity={CHIP_FILL_OPACITY}
           stroke={CHIP_OUTLINE}
           strokeWidth={2}
         />
 
-        {/* Chip pins (left) */}
-        {Array.from({ length: pinCount }).map((_, i) => (
+        {/* Chip pins (top) */}
+        {Array.from({ length: 6 }).map((_, i) => (
           <rect
-            key={`pin-l-${i}`}
-            x={192}
-            y={40 + pinSpacing * (i + 1) - 3}
-            width={10}
-            height={6}
+            key={`pin-t-${i}`}
+            x={chipLeft + 20 + i * 28}
+            y={chipTop - 12}
+            width={8}
+            height={12}
             fill={CHIP_OUTLINE}
             opacity={0.6}
-            rx={1}
+          />
+        ))}
+        {/* Chip pins (bottom) */}
+        {Array.from({ length: 6 }).map((_, i) => (
+          <rect
+            key={`pin-b-${i}`}
+            x={chipLeft + 20 + i * 28}
+            y={chipTop + CHIP_HEIGHT}
+            width={8}
+            height={12}
+            fill={CHIP_OUTLINE}
+            opacity={0.6}
           />
         ))}
 
-        {/* Chip pins (right) */}
-        {Array.from({ length: pinCount }).map((_, i) => (
-          <rect
-            key={`pin-r-${i}`}
-            x={200 + CHIP_WIDTH - 2}
-            y={40 + pinSpacing * (i + 1) - 3}
-            width={10}
-            height={6}
-            fill={CHIP_OUTLINE}
-            opacity={0.6}
-            rx={1}
-          />
-        ))}
-
-        {/* Label: SYNTHESIS */}
-        <text
-          x={200 + CHIP_WIDTH / 2}
-          y={40 + CHIP_HEIGHT / 2 + 5}
-          textAnchor="middle"
-          fill={CHIP_LABEL_COLOR}
-          fontSize={14}
-          fontFamily='Inter, system-ui, sans-serif'
-          fontWeight={600}
-          letterSpacing={2}
-        >
-          SYNTHESIS
-        </text>
-
-        {/* Output arrow (right) */}
+        {/* Input arrow (left side) */}
         <line
-          x1={200 + CHIP_WIDTH + 8}
-          y1={(CHIP_HEIGHT + 80) / 2}
-          x2={CHIP_WIDTH + 370}
-          y2={(CHIP_HEIGHT + 80) / 2}
-          stroke={CHIP_OUTLINE}
+          x1={chipLeft - 120}
+          y1={CHIP_Y}
+          x2={chipLeft - 4}
+          y2={CHIP_Y}
+          stroke={CODE_KEYWORD}
           strokeWidth={2}
-          opacity={arrowGlow}
+          opacity={inputPulse}
+          markerEnd="url(#arrowIn)"
         />
-        <polygon
-          points={`${CHIP_WIDTH + 370},${(CHIP_HEIGHT + 80) / 2 - 6} ${CHIP_WIDTH + 380},${(CHIP_HEIGHT + 80) / 2} ${CHIP_WIDTH + 370},${(CHIP_HEIGHT + 80) / 2 + 6}`}
-          fill={CHIP_OUTLINE}
-          opacity={arrowGlow}
+        <defs>
+          <marker
+            id="arrowIn"
+            markerWidth={10}
+            markerHeight={7}
+            refX={10}
+            refY={3.5}
+            orient="auto"
+          >
+            <polygon points="0 0, 10 3.5, 0 7" fill={CODE_KEYWORD} />
+          </marker>
+          <marker
+            id="arrowOut"
+            markerWidth={10}
+            markerHeight={7}
+            refX={10}
+            refY={3.5}
+            orient="auto"
+          >
+            <polygon points="0 0, 10 3.5, 0 7" fill={GATE_COLOR} />
+          </marker>
+        </defs>
+
+        {/* Output arrow (right side) */}
+        <line
+          x1={chipLeft + CHIP_WIDTH + 4}
+          y1={CHIP_Y}
+          x2={chipLeft + CHIP_WIDTH + 120}
+          y2={CHIP_Y}
+          stroke={GATE_COLOR}
+          strokeWidth={2}
+          opacity={showOutputFlow ? 1 : inputPulse * 0.5}
+          markerEnd="url(#arrowOut)"
         />
+
+        {/* Input code symbols flowing in */}
+        {showInputFlow &&
+          Array.from({ length: 5 }).map((_, i) => {
+            const flowFrame = (frame - CHIP_FADE_END + i * 12) % 60;
+            const fx = interpolate(flowFrame, [0, 60], [chipLeft - 200, chipLeft - 10], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            });
+            const fOpacity = interpolate(flowFrame, [0, 10, 50, 60], [0, 0.9, 0.9, 0], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            });
+            const symbols = ["{", "=", ";", "<=", "@"];
+            return (
+              <text
+                key={`in-${i}`}
+                x={fx}
+                y={CHIP_Y + 4}
+                fill={CODE_KEYWORD}
+                opacity={fOpacity}
+                fontSize={14}
+                fontFamily="'JetBrains Mono', monospace"
+                textAnchor="middle"
+              >
+                {symbols[i]}
+              </text>
+            );
+          })}
       </svg>
+
+      {/* SYNTHESIS label */}
+      <div
+        style={{
+          position: "absolute",
+          left: chipLeft,
+          top: chipTop,
+          width: CHIP_WIDTH,
+          height: CHIP_HEIGHT,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 14,
+          fontWeight: 600,
+          color: CHIP_LABEL_COLOR,
+          letterSpacing: 2,
+          opacity: 0.9,
+        }}
+      >
+        SYNTHESIS
+      </div>
+
+      {/* "Verilog" label above input arrow */}
+      <div
+        style={{
+          position: "absolute",
+          left: chipLeft - 180,
+          top: CHIP_Y - 30,
+          fontFamily: "'Inter', sans-serif",
+          fontSize: 12,
+          color: CODE_KEYWORD,
+          opacity: 0.78,
+          letterSpacing: 1,
+        }}
+      >
+        VERILOG HDL
+      </div>
+
+      {/* "Gate Netlist" label above output arrow */}
+      {showOutputFlow && (
+        <div
+          style={{
+            position: "absolute",
+            left: chipLeft + CHIP_WIDTH + 30,
+            top: CHIP_Y - 30,
+            fontFamily: "'Inter', sans-serif",
+            fontSize: 12,
+            color: GATE_COLOR,
+            opacity: 0.78,
+            letterSpacing: 1,
+          }}
+        >
+          GATE NETLIST
+        </div>
+      )}
     </div>
   );
 };

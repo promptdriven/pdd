@@ -1,10 +1,11 @@
-import React from "react";
+import React from 'react';
 import {
   AbsoluteFill,
   useCurrentFrame,
   interpolate,
   Easing,
-} from "remotion";
+  Sequence,
+} from 'remotion';
 import {
   BG_COLOR,
   WINDOW_FRAME_COLOR,
@@ -13,7 +14,6 @@ import {
   PROMPT_TEXT_COLOR,
   BLUE_ACCENT,
   GREEN_ACCENT,
-  LABEL_COLOR,
   EDITOR_X,
   EDITOR_Y,
   EDITOR_WIDTH,
@@ -25,169 +25,159 @@ import {
   TITLE_BAR_HEIGHT,
   WINDOW_BORDER_RADIUS,
   EDITOR_FADE_DURATION,
+  TERMINAL_FADE_START,
   TERMINAL_FADE_DURATION,
-  TYPEWRITER_CHAR_FRAMES,
-  TEST_CASCADE_RATE,
-  SUMMARY_FADE_DURATION,
+  TEST_CASCADE_START,
+  TEST_COUNT,
+  TESTS_PER_FRAME,
+  WALLS_START,
+  SUMMARY_START,
+  LABEL_FADE_START,
   LABEL_FADE_DURATION,
   FADEOUT_START,
   FADEOUT_DURATION,
-  PROMPT_FILENAME,
-  PROMPT_LINE_COUNT,
-  TEST_COUNT,
-  TERMINAL_COMMAND,
+  TOTAL_FRAMES,
   PROMPT_LINES,
   TEST_NAMES,
-} from "./constants";
-import { TestWalls } from "./TestWalls";
+  FONT_MONO,
+  FONT_SANS,
+} from './constants';
+import { TestWalls } from './TestWalls';
 
-// ─── Default Props ───────────────────────────────────────────────────────────
+// ─── Default Props ───────────────────────────────────────────────
 export const defaultPart4PrecisionTradeoff05MinimalPromptWithTestsProps = {};
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
-
-/** Editor window showing the compact prompt file */
-const PromptEditor: React.FC<{ opacity: number }> = ({ opacity }) => {
+// ─── Editor Window ───────────────────────────────────────────────
+const EditorWindow: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Lines appear during frames 0-30 (all visible once editor is in)
-  const visibleLines = Math.min(
-    PROMPT_LINES.length,
-    Math.floor(
-      interpolate(frame, [0, 30], [1, PROMPT_LINES.length], {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-      })
-    )
-  );
+  const opacity = interpolate(frame, [0, EDITOR_FADE_DURATION], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         left: EDITOR_X,
         top: EDITOR_Y,
         width: EDITOR_WIDTH,
         height: EDITOR_HEIGHT,
+        opacity,
         borderRadius: WINDOW_BORDER_RADIUS,
         border: `1px solid ${WINDOW_FRAME_COLOR}`,
         backgroundColor: WINDOW_FRAME_COLOR,
-        overflow: "hidden",
-        opacity,
         boxShadow: `0 0 12px rgba(74, 144, 217, 0.1)`,
+        overflow: 'hidden',
       }}
     >
-      {/* Title bar */}
+      {/* Title Bar */}
       <div
         style={{
           height: TITLE_BAR_HEIGHT,
           backgroundColor: TITLE_BAR_COLOR,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 14px",
-          gap: 12,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 14px',
         }}
       >
         {/* Traffic lights */}
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
           <div
             style={{
               width: 10,
               height: 10,
-              borderRadius: "50%",
-              backgroundColor: "#FF5F57",
+              borderRadius: '50%',
+              backgroundColor: '#FF5F57',
+              opacity: 0.7,
             }}
           />
           <div
             style={{
               width: 10,
               height: 10,
-              borderRadius: "50%",
-              backgroundColor: "#FEBC2E",
+              borderRadius: '50%',
+              backgroundColor: '#FEBC2E',
+              opacity: 0.7,
             }}
           />
           <div
             style={{
               width: 10,
               height: 10,
-              borderRadius: "50%",
-              backgroundColor: "#28C840",
+              borderRadius: '50%',
+              backgroundColor: '#28C840',
+              opacity: 0.7,
             }}
           />
         </div>
 
         {/* Filename */}
-        <span
+        <div
           style={{
-            fontFamily: "JetBrains Mono, monospace",
+            fontFamily: FONT_MONO,
             fontSize: 13,
-            fontWeight: 400,
             color: FILENAME_COLOR,
           }}
         >
-          {PROMPT_FILENAME}
-        </span>
+          parser_v2.prompt
+        </div>
 
-        {/* Line count badge */}
-        <span
+        {/* Badge */}
+        <div
           style={{
-            fontFamily: "Inter, sans-serif",
+            fontFamily: FONT_SANS,
             fontSize: 11,
             fontWeight: 600,
             color: BLUE_ACCENT,
-            backgroundColor: "rgba(74, 144, 217, 0.15)",
-            padding: "2px 8px",
+            backgroundColor: 'rgba(74, 144, 217, 0.15)',
+            padding: '2px 8px',
             borderRadius: 4,
-            marginLeft: "auto",
           }}
         >
-          {PROMPT_LINE_COUNT} lines
-        </span>
+          10 lines
+        </div>
       </div>
 
-      {/* Content area */}
+      {/* Prompt Content */}
       <div
         style={{
-          padding: "12px 16px",
-          overflow: "hidden",
+          padding: '10px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 2,
         }}
       >
-        {PROMPT_LINES.slice(0, visibleLines).map((line, i) => (
+        {PROMPT_LINES.map((line, i) => (
           <div
             key={i}
             style={{
-              display: "flex",
+              display: 'flex',
+              alignItems: 'center',
               gap: 12,
-              height: 20,
-              alignItems: "center",
             }}
           >
-            {/* Line number */}
             <span
               style={{
-                fontFamily: "JetBrains Mono, monospace",
+                fontFamily: FONT_MONO,
                 fontSize: 12,
-                color: "rgba(203, 213, 225, 0.3)",
+                color: '#475569',
                 width: 20,
-                textAlign: "right",
+                textAlign: 'right',
                 flexShrink: 0,
               }}
             >
               {i + 1}
             </span>
-            {/* Line content */}
             <span
               style={{
-                fontFamily: "JetBrains Mono, monospace",
+                fontFamily: FONT_MONO,
                 fontSize: 13,
-                fontWeight: 400,
-                color:
-                  line.startsWith("#")
-                    ? BLUE_ACCENT
-                    : PROMPT_TEXT_COLOR,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
+                color: PROMPT_TEXT_COLOR,
+                whiteSpace: 'nowrap',
               }}
             >
               {line}
@@ -199,216 +189,199 @@ const PromptEditor: React.FC<{ opacity: number }> = ({ opacity }) => {
   );
 };
 
-/** Terminal window showing test run */
-const TerminalWindow: React.FC<{ opacity: number }> = ({ opacity }) => {
+// ─── Terminal Window ─────────────────────────────────────────────
+const TerminalWindow: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Typewriter effect for command (relative to terminal appear at frame 60)
-  const termRelFrame = Math.max(0, frame - 60);
-  const commandChars = Math.min(
-    TERMINAL_COMMAND.length,
-    Math.floor(termRelFrame / TYPEWRITER_CHAR_FRAMES)
-  );
-  const commandText = TERMINAL_COMMAND.slice(0, commandChars);
-
-  // Test cascade starts at absolute frame 90
-  const cascadeRelFrame = Math.max(0, frame - 90);
-  const visibleTests = Math.min(
-    TEST_COUNT,
-    Math.floor(cascadeRelFrame * TEST_CASCADE_RATE)
-  );
-
-  // Summary appears at absolute frame 150
-  const summaryOpacity = interpolate(
+  // Terminal appears at TERMINAL_FADE_START
+  const terminalOpacity = interpolate(
     frame,
-    [150, 150 + SUMMARY_FADE_DURATION],
+    [TERMINAL_FADE_START, TERMINAL_FADE_START + TERMINAL_FADE_DURATION],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  // Terminal pulse effect when tests are cascading
-  const pulseIntensity =
-    visibleTests > 0 && visibleTests < TEST_COUNT
-      ? 0.03 * Math.sin(frame * 0.3)
-      : 0;
+  // Typewriter: "$ pdd test parser" types in from frame 60-90
+  const commandText = '$ pdd test parser';
+  const typedChars = interpolate(
+    frame,
+    [TERMINAL_FADE_START, TERMINAL_FADE_START + 25],
+    [0, commandText.length],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }
+  );
+  const displayedCommand = commandText.slice(0, Math.floor(typedChars));
 
-  // How many tests to display (max visible rows)
+  // Test cascade: starts at TEST_CASCADE_START
+  const visibleTests = Math.min(
+    TEST_COUNT,
+    Math.max(0, Math.floor((frame - TEST_CASCADE_START) * TESTS_PER_FRAME))
+  );
+
+  // Summary: appears at SUMMARY_START
+  const summaryOpacity = interpolate(
+    frame,
+    [SUMMARY_START, SUMMARY_START + 15],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Determine visible test window (scrolling effect)
   const maxVisibleRows = 18;
-  const displayStart = Math.max(0, visibleTests - maxVisibleRows);
-  const displayTests = TEST_NAMES.slice(displayStart, visibleTests);
+  const startIndex = Math.max(0, visibleTests - maxVisibleRows);
+  const visibleTestSlice = TEST_NAMES.slice(startIndex, visibleTests);
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         left: TERMINAL_X,
         top: TERMINAL_Y,
         width: TERMINAL_WIDTH,
         height: TERMINAL_HEIGHT,
+        opacity: terminalOpacity,
         borderRadius: WINDOW_BORDER_RADIUS,
         border: `1px solid ${WINDOW_FRAME_COLOR}`,
         backgroundColor: WINDOW_FRAME_COLOR,
-        overflow: "hidden",
-        opacity,
-        boxShadow: `0 0 ${8 + pulseIntensity * 100}px rgba(90, 170, 110, ${0.05 + pulseIntensity})`,
+        overflow: 'hidden',
       }}
     >
-      {/* Title bar */}
+      {/* Title Bar */}
       <div
         style={{
           height: TITLE_BAR_HEIGHT,
           backgroundColor: TITLE_BAR_COLOR,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 14px",
-          gap: 12,
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 14px',
+          gap: 8,
         }}
       >
-        {/* Traffic lights */}
-        <div style={{ display: "flex", gap: 6 }}>
-          <div
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              backgroundColor: "#FF5F57",
-            }}
-          />
-          <div
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              backgroundColor: "#FEBC2E",
-            }}
-          />
-          <div
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: "50%",
-              backgroundColor: "#28C840",
-            }}
-          />
-        </div>
-
         {/* Terminal icon */}
+        <span style={{ fontSize: 14, opacity: 0.6 }}>{'>'}_</span>
         <span
           style={{
-            fontFamily: "JetBrains Mono, monospace",
+            fontFamily: FONT_MONO,
             fontSize: 12,
-            color: "rgba(226, 232, 240, 0.5)",
+            color: '#94A3B8',
           }}
         >
-          ▸ Terminal
+          Terminal
         </span>
       </div>
 
-      {/* Terminal content */}
+      {/* Terminal Content */}
       <div
         style={{
-          padding: "10px 16px",
-          overflow: "hidden",
-          height: TERMINAL_HEIGHT - TITLE_BAR_HEIGHT - 20,
-          display: "flex",
-          flexDirection: "column",
+          padding: '10px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
         }}
       >
         {/* Command line */}
         <div
           style={{
-            fontFamily: "JetBrains Mono, monospace",
+            fontFamily: FONT_MONO,
             fontSize: 13,
-            fontWeight: 400,
             color: GREEN_ACCENT,
             marginBottom: 8,
-            minHeight: 20,
           }}
         >
-          {commandText}
-          {commandChars < TERMINAL_COMMAND.length && (
+          {displayedCommand}
+          {frame < TERMINAL_FADE_START + 25 && (
             <span
               style={{
-                opacity: Math.sin(frame * 0.2) > 0 ? 1 : 0,
-                color: GREEN_ACCENT,
+                opacity: Math.sin(frame * 0.3) > 0 ? 1 : 0,
+                color: '#94A3B8',
               }}
             >
-              ▌
+              |
             </span>
           )}
         </div>
 
         {/* Test results */}
-        <div style={{ flex: 1, overflow: "hidden" }}>
-          {displayTests.map((testName, i) => {
-            const actualIndex = displayStart + i;
-            return (
-              <div
-                key={actualIndex}
-                style={{
-                  fontFamily: "JetBrains Mono, monospace",
-                  fontSize: 12,
-                  fontWeight: 400,
-                  color: GREEN_ACCENT,
-                  opacity: 0.8,
-                  height: 22,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <span style={{ color: GREEN_ACCENT }}>✓</span>
-                <span>{testName}</span>
-              </div>
-            );
-          })}
-        </div>
+        {visibleTestSlice.map((testName, i) => (
+          <div
+            key={`${startIndex + i}`}
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 12,
+              color: GREEN_ACCENT,
+              opacity: 0.8,
+              lineHeight: '22px',
+            }}
+          >
+            <span style={{ color: GREEN_ACCENT, marginRight: 6 }}>✓</span>
+            {testName}
+          </div>
+        ))}
 
         {/* Summary */}
-        <div
-          style={{
-            fontFamily: "JetBrains Mono, monospace",
-            fontSize: 14,
-            fontWeight: 700,
-            color: GREEN_ACCENT,
-            opacity: summaryOpacity,
-            marginTop: 8,
-            paddingTop: 8,
-            borderTop: `1px solid rgba(90, 170, 110, 0.2)`,
-          }}
-        >
-          {TEST_COUNT} tests passing
-        </div>
+        {summaryOpacity > 0 && (
+          <div
+            style={{
+              fontFamily: FONT_MONO,
+              fontSize: 14,
+              fontWeight: 700,
+              color: GREEN_ACCENT,
+              opacity: summaryOpacity,
+              marginTop: 12,
+              paddingTop: 8,
+              borderTop: `2px solid rgba(90, 170, 110, 0.3)`,
+            }}
+          >
+            {TEST_COUNT} tests passing
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-/** Comparison label on the right side */
-const ComparisonLabel: React.FC<{ opacity: number }> = ({ opacity }) => {
+// ─── Comparison Label ────────────────────────────────────────────
+const ComparisonLabel: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  const opacity = interpolate(
+    frame,
+    [LABEL_FADE_START, LABEL_FADE_START + LABEL_FADE_DURATION],
+    [0, 0.78],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         left: 1020,
-        top: 400,
-        width: 360,
+        top: 380,
+        width: 400,
         opacity,
+        textAlign: 'center',
       }}
     >
       <div
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: FONT_SANS,
           fontSize: 15,
-          fontWeight: 400,
-          color: LABEL_COLOR,
-          opacity: 0.78,
-          lineHeight: 1.6,
-          textAlign: "center",
+          color: BLUE_ACCENT,
+          lineHeight: '24px',
         }}
       >
         With tests: prompt specifies only intent
@@ -417,55 +390,19 @@ const ComparisonLabel: React.FC<{ opacity: number }> = ({ opacity }) => {
   );
 };
 
-// ─── Main Component ──────────────────────────────────────────────────────────
-
+// ─── Main Component ──────────────────────────────────────────────
 export const Part4PrecisionTradeoff05MinimalPromptWithTests: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Editor fade-in: frames 0-30
-  const editorOpacity = interpolate(
-    frame,
-    [0, EDITOR_FADE_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  // Terminal fade-in: frames 60-90
-  const terminalOpacity = interpolate(
-    frame,
-    [60, 60 + TERMINAL_FADE_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  // Label fade-in: frames 165-185
-  const labelOpacity = interpolate(
-    frame,
-    [165, 165 + LABEL_FADE_DURATION],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  // Global fade-out: frames 210-240
+  // Global fade-out
   const fadeOut = interpolate(
     frame,
     [FADEOUT_START, FADEOUT_START + FADEOUT_DURATION],
     [1, 0],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
     }
   );
 
@@ -476,17 +413,19 @@ export const Part4PrecisionTradeoff05MinimalPromptWithTests: React.FC = () => {
         opacity: fadeOut,
       }}
     >
-      {/* Prompt Editor — always visible from frame 0 */}
-      <PromptEditor opacity={editorOpacity} />
+      {/* Prompt editor — visible from frame 0 */}
+      <EditorWindow />
 
-      {/* Terminal Window — appears at frame 60 */}
-      <TerminalWindow opacity={terminalOpacity} />
+      {/* Terminal window — appears at frame 60 */}
+      <TerminalWindow />
 
-      {/* Test Walls — draw from frame 120 */}
-      {frame >= 120 && <TestWalls />}
+      {/* Test wall lines — draw from frame 120 */}
+      <Sequence from={WALLS_START} layout="none">
+        <TestWalls />
+      </Sequence>
 
-      {/* Comparison Label */}
-      <ComparisonLabel opacity={labelOpacity} />
+      {/* Comparison label */}
+      <ComparisonLabel />
     </AbsoluteFill>
   );
 };

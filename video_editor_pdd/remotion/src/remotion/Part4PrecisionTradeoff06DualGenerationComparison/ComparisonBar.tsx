@@ -1,75 +1,75 @@
-import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import React from 'react';
+import { interpolate, useCurrentFrame, Easing } from 'remotion';
 
 interface ComparisonBarProps {
-  barY: number;
+  centerX: number;
+  y: number;
   totalWidth: number;
-  leftSegmentWidth: number;
-  rightSegmentWidth: number;
+  leftWidth: number;
+  rightWidth: number;
   leftColor: string;
   rightColor: string;
   label: string;
-  labelColor: string;
   callout: string;
   calloutColor: string;
-  animStart: number;
-  animDuration: number;
+  labelColor: string;
+  appearStart: number;
+  appearDuration: number;
 }
 
 const ComparisonBar: React.FC<ComparisonBarProps> = ({
-  barY,
+  centerX,
+  y,
   totalWidth,
-  leftSegmentWidth,
-  rightSegmentWidth,
+  leftWidth,
+  rightWidth,
   leftColor,
   rightColor,
   label,
-  labelColor,
   callout,
   calloutColor,
-  animStart,
-  animDuration,
+  labelColor,
+  appearStart,
+  appearDuration,
 }) => {
   const frame = useCurrentFrame();
 
   const progress = interpolate(
     frame,
-    [animStart, animStart + animDuration],
+    [appearStart, appearStart + appearDuration],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.cubic),
     }
   );
 
-  const barLeft = (1920 - totalWidth) / 2;
-  const segmentGap = 6;
+  const barLeft = centerX - totalWidth / 2;
+  const barHeight = 14;
+  const gap = 6;
 
-  const currentLeftW = leftSegmentWidth * progress;
-  const currentRightW = rightSegmentWidth * progress;
+  const animatedLeftWidth = leftWidth * progress;
+  const animatedRightWidth = rightWidth * progress;
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         left: barLeft,
-        top: barY,
+        top: y,
         width: totalWidth,
-        height: 60,
-        opacity: progress > 0 ? 1 : 0,
+        opacity: progress,
       }}
     >
       {/* Label above bar */}
       <div
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: 'Inter, sans-serif',
           fontSize: 14,
-          fontWeight: 400,
           color: labelColor,
-          textAlign: "center",
-          marginBottom: 8,
-          opacity: Math.min(1, progress * 2),
+          textAlign: 'center',
+          marginBottom: 10,
         }}
       >
         {label}
@@ -78,44 +78,43 @@ const ComparisonBar: React.FC<ComparisonBarProps> = ({
       {/* Bar segments */}
       <div
         style={{
-          display: "flex",
-          alignItems: "center",
-          height: 18,
-          gap: segmentGap,
+          display: 'flex',
+          alignItems: 'center',
+          gap,
+          justifyContent: 'center',
         }}
       >
-        {/* Left segment (50 lines — amber) */}
+        {/* Left segment (50 lines) */}
         <div
           style={{
-            width: currentLeftW,
-            height: "100%",
+            width: animatedLeftWidth,
+            height: barHeight,
             backgroundColor: leftColor,
             opacity: 0.3,
-            borderRadius: 3,
+            borderRadius: 4,
           }}
         />
 
-        {/* Right segment (10 lines — blue) */}
+        {/* Right segment (10 lines) */}
         <div
           style={{
-            width: currentRightW,
-            height: "100%",
+            width: animatedRightWidth,
+            height: barHeight,
             backgroundColor: rightColor,
             opacity: 0.3,
-            borderRadius: 3,
+            borderRadius: 4,
           }}
         />
 
         {/* Callout */}
         <div
           style={{
-            fontFamily: "Inter, sans-serif",
+            fontFamily: 'Inter, sans-serif',
             fontSize: 14,
             fontWeight: 700,
             color: calloutColor,
-            marginLeft: 10,
-            opacity: Math.min(1, Math.max(0, (progress - 0.5) * 2)),
-            whiteSpace: "nowrap",
+            marginLeft: 12,
+            whiteSpace: 'nowrap',
           }}
         >
           {callout}

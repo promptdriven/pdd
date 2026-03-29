@@ -1,120 +1,110 @@
-import React from 'react';
-import { interpolate, useCurrentFrame, Easing } from 'remotion';
-import {
-  PURPLE_ACCENT,
-  CONNECTOR_ORIGINS,
-  PROVEN_WALL_TARGETS,
-  CONNECTORS_START,
-  CONNECTORS_END,
-  PANEL_SLIDE_OUT_START,
-  PANEL_SLIDE_OUT_END,
-} from './constants';
+import React from "react";
+import { interpolate } from "remotion";
 
-/**
- * Animated dashed connector lines from the annotation panel to proven mold walls.
- * Lines draw progressively from origin to target, then fade out with the panel.
- */
-export const ConnectorLines: React.FC = () => {
-  const frame = useCurrentFrame();
+const PURPLE_ACCENT = "#A78BFA";
 
-  const drawProgress = interpolate(
-    frame,
-    [CONNECTORS_START, CONNECTORS_END],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
+interface ConnectorTarget {
+  /** X center of the proven wall */
+  wallX: number;
+  /** Y center of the proven wall */
+  wallY: number;
+}
 
-  const fadeOut = interpolate(
-    frame,
-    [PANEL_SLIDE_OUT_START, PANEL_SLIDE_OUT_END],
-    [1, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    }
-  );
+interface ConnectorLinesProps {
+  /** 0..1 progress for drawing connectors */
+  drawProgress: number;
+  /** Origin X (left edge of annotation panel) */
+  originX: number;
+  /** Origin Y (vertical center of panel) */
+  originY: number;
+  /** Target wall midpoints */
+  targets: ConnectorTarget[];
+}
 
-  if (frame < CONNECTORS_START) return null;
-
+const ConnectorLines: React.FC<ConnectorLinesProps> = ({
+  drawProgress,
+  originX,
+  originY,
+  targets,
+}) => {
   return (
     <svg
       width={1920}
       height={1080}
       viewBox="0 0 1920 1080"
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        pointerEvents: 'none',
-        opacity: fadeOut,
-      }}
+      style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
     >
       <defs>
-        <filter id="connectorGlow">
-          <feGaussianBlur stdDeviation="3" result="blur" />
+        <filter id="connectorGlow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feFlood floodColor={PURPLE_ACCENT} floodOpacity="0.3" result="color" />
+          <feComposite in="color" in2="blur" operator="in" result="glow" />
           <feMerge>
-            <feMergeNode in="blur" />
+            <feMergeNode in="glow" />
             <feMergeNode in="SourceGraphic" />
           </feMerge>
         </filter>
       </defs>
 
-      {PROVEN_WALL_TARGETS.map((target, i) => {
-        const ox = CONNECTOR_ORIGINS.x;
-        const oy = CONNECTOR_ORIGINS.y + i * 40 - 20;
-        const tx = target.x;
-        const ty = target.y;
+      {targets.map((target, i) => {
+        // Stagger each connector slightly
+        const staggerDelay = i * 0.15;
+        const localProgress = interpolate(
+          drawProgress,
+          [staggerDelay, Math.min(staggerDelay + 0.7, 1)],
+          [0, 1],
+          { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+        );
 
-        // Curved path via a control point
-        const midX = (ox + tx) / 2;
-        const midY = oy + (ty - oy) * 0.3;
-        const t = drawProgress;
+        // Calculate a curved path from origin to wall
+        const startX = originX;
+        const startY = originY + i * 60 - 30;
+        const endX = target.wallX;
+        const endY = target.wallY;
 
-        // Quadratic bezier point at parameter t
-        const bx =
-          (1 - t) * (1 - t) * ox + 2 * (1 - t) * t * midX + t * t * tx;
-        const by =
-          (1 - t) * (1 - t) * oy + 2 * (1 - t) * t * midY + t * t * ty;
+        // Control points for a nice curve
+        const cpX = (startX + endX) / 2;
+        const cpY1 = startY;
+        const cpY2 = endY;
 
-        // Build partial path
-        const pathSegments = 20;
-        let d = `M ${ox} ${oy}`;
-        for (let s = 1; s <= pathSegments; s++) {
-          const st = (s / pathSegments) * t;
-          const px =
-            (1 - st) * (1 - st) * ox +
-            2 * (1 - st) * st * midX +
-            st * st * tx;
-          const py =
-            (1 - st) * (1 - st) * oy +
-            2 * (1 - st) * st * midY +
-            st * st * ty;
-          d += ` L ${px} ${py}`;
-        }
+        // Build the path
+        const path = `M ${startX} ${startY} C ${cpX} ${cpY1}, ${cpX} ${cpY2}, ${endX} ${endY}`;
 
-        // Small target circle
-        const circleOpacity = drawProgress > 0.8 ? (drawProgress - 0.8) / 0.2 : 0;
+        // Approximate path length for dasharray animation
+        const dx = endX - startX;
+        const dy = endY - startY;
+        const approxLen = Math.sqrt(dx * dx + dy * dy) * 1.3;
+
+        const dashOffset = interpolate(localProgress, [0, 1], [approxLen, 0], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        });
+
+        // Small circle at endpoint
+        const circleOpacity = interpolate(localProgress, [0.6, 1], [0, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        });
 
         return (
-          <g key={i} filter="url(#connectorGlow)">
+          <g key={i}>
             <path
-              d={d}
+              d={path}
               fill="none"
               stroke={PURPLE_ACCENT}
               strokeWidth={2}
-              strokeDasharray="8 4"
-              opacity={0.3}
+              strokeDasharray={`6 4`}
+              strokeDashoffset={dashOffset}
+              opacity={0.4 * localProgress}
+              filter="url(#connectorGlow)"
             />
+            {/* Endpoint dot */}
             <circle
-              cx={bx}
-              cy={by}
-              r={6}
+              cx={endX}
+              cy={endY}
+              r={5}
               fill={PURPLE_ACCENT}
-              opacity={circleOpacity * 0.5}
+              opacity={circleOpacity * 0.6}
             />
           </g>
         );
@@ -122,3 +112,5 @@ export const ConnectorLines: React.FC = () => {
     </svg>
   );
 };
+
+export default ConnectorLines;
