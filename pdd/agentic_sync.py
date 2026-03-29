@@ -98,6 +98,55 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return []
 
 
+def _augment_architecture_from_pr_branch(
+    architecture: Optional[List[Dict[str, Any]]],
+    project_root: Path,
+    issue_number: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Merge new architecture.json entries from the PR branch for this issue.
+
+    When pdd sync runs from main, architecture.json only contains entries for
+    modules that exist on main. If pdd-change created new modules on a
+    change/issue-N branch, those entries are missing and _filter_invalid_basenames
+    will reject them as hallucinations. This function fetches architecture.json
+    from the PR branch and adds any entries whose filename is not already present.
+    """
+    if architecture is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "show", f"origin/change/issue-{issue_number}:architecture.json"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        pr_arch = json.loads(result.stdout)
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        return architecture
+
+    if not isinstance(pr_arch, list):
+        return architecture
+
+    existing_filenames = {
+        entry.get("filename")
+        for entry in architecture
+        if isinstance(entry, dict) and entry.get("filename")
+    }
+
+    for entry in pr_arch:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename")
+        if not filename or filename in existing_filenames:
+            continue
+        architecture.append(entry)
+        existing_filenames.add(filename)
+
+    return architecture
+
+
 def _filter_invalid_basenames(
     modules: List[str],
     architecture: Optional[List[Dict[str, Any]]],
@@ -864,6 +913,9 @@ def run_agentic_sync(
         stripped = extract_module_from_include(m + ".prompt")
         stripped_modules.append(stripped if stripped else m)
     modules_to_sync = list(dict.fromkeys(stripped_modules))
+
+    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
+    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
 
     # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
     modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)

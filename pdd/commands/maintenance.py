@@ -247,6 +247,24 @@ def _run_agentic_sync_dispatch(
     default=False,
     help="Force rescanning of all potential dependency files even if they exist in the CSV file.",
 )
+@click.option(
+    "--include-docs",
+    is_flag=True,
+    default=False,
+    help="Include documentation files (.md, .txt, .rst) in dependency discovery.",
+)
+@click.option(
+    "--no-dedup",
+    is_flag=True,
+    default=False,
+    help="Skip redundant inline content removal after inserting includes.",
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=1,
+    help="Maximum number of parallel LLM calls for dependency analysis (default: 1).",
+)
 @click.pass_context
 @track_cost
 def auto_deps(
@@ -256,6 +274,9 @@ def auto_deps(
     output: Optional[str],
     csv: Optional[str],
     force_scan: bool,
+    include_docs: bool,
+    no_dedup: bool,
+    concurrency: int,
 ) -> Optional[Tuple[str, float, str]]:
     """Analyze project dependencies and update the prompt file."""
     try:
@@ -263,14 +284,22 @@ def auto_deps(
         if directory_path:
             directory_path = directory_path.strip('"').strip("'")
 
-        # auto_deps_main signature: (ctx, prompt_file, directory_path, auto_deps_csv_path, output, force_scan)
+        # Pass additional options via ctx.obj for downstream consumption
+        ctx.ensure_object(dict)
+        ctx.obj["include_docs"] = include_docs
+        ctx.obj["no_dedup"] = no_dedup
+        ctx.obj["concurrency"] = concurrency
+
         result, total_cost, model_name = auto_deps_main(
             ctx=ctx,
             prompt_file=prompt_file,
             directory_path=directory_path,
             auto_deps_csv_path=csv,
             output=output,
-            force_scan=force_scan
+            force_scan=force_scan,
+            include_docs=include_docs,
+            no_dedup=no_dedup,
+            concurrency=concurrency,
         )
         return result, total_cost, model_name
     except click.Abort:
@@ -294,5 +323,3 @@ def setup(ctx: click.Context):
         _run_setup_utility()
     except Exception as e:
         handle_error(e, "setup", False)
-
-

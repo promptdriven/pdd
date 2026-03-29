@@ -221,7 +221,7 @@ A crucial aspect of this workflow is the longevity of tests. When prompts are up
 
 A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contrasting with the constant supervision model of interactive patching:
 
-1.  **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context.
+1.  **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context — both code examples and relevant documentation files.
 2.  **Generate**: Use `generate` to create the code module from the prompt.
 3.  **Example**: Use `example` to create a minimal usage example (the interface).
 4.  **Crash**: Use `crash` to fix any runtime errors that prevent the code/example from running.

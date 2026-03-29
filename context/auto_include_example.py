@@ -4,16 +4,20 @@ Example: auto_include
 Demonstrates all features of the auto_include module:
   1. Load the auto_include_LLM prompt template
   2. Run summarize_directory and format CSV rows for the LLM
-  3. Invoke auto_include_LLM via llm_invoke with Pydantic structured output (AutoIncludeResult)
-  4. Build include_directives with <new> and <update> tagged blocks
-  5. Filter duplicates, self-references, and circular dependencies
-  6. Strip selectors from small files (<100 lines)
-  7. Validate inputs; on LLM failure return empty include_directives
-  8. Return (include_directives, csv_output, total_cost, model_name)
-  9. Pass csv_file for cache reuse
- 10. Use prompt_filename to filter self-referential example files
- 11. Use progress_callback for TUI integration
- 12. Use the time parameter for LLM thinking effort
+  3. Two-stage retrieval: embed_and_retrieve pre-filter when candidates > 50
+  4. Invoke auto_include_LLM via llm_invoke with Pydantic structured output (AutoIncludeResult)
+  5. Build include_directives with <new> and <update> tagged blocks
+  6. Filter duplicates, self-references, and circular dependencies
+  7. Strip selectors from small files (<100 lines)
+  8. Validate inputs; on LLM failure return empty include_directives
+  9. Return (include_directives, csv_output, total_cost, model_name)
+ 10. Pass csv_file for cache reuse
+ 11. Use prompt_filename to filter self-referential example files
+ 12. Use progress_callback for TUI integration
+ 13. Use the time parameter for LLM thinking effort
+ 14. Pass include_docs to discover documentation files (.md, .txt, .rst)
+ 15. Pass max_workers for parallel LLM summarization
+ 16. Pass csv_path for incremental CSV persistence
 """
 
 import os
@@ -116,6 +120,9 @@ def main():
             temperature=0.0,
             time=DEFAULT_TIME,
             verbose=True,
+            include_docs=True,       # discover .md, .txt, .rst documentation files
+            max_workers=4,           # parallelize LLM summarization calls
+            csv_path="/tmp/deps.csv",  # incremental CSV persistence
         )
 
     print(f"\nInclude directives:\n{include_directives}")
@@ -247,6 +254,76 @@ def main():
         )
 
     print("[PASS] time parameter passed through to llm_invoke")
+
+    # ------------------------------------------------------------------
+    # 8. Two-stage retrieval: embed pre-filter when candidates > 50
+    # ------------------------------------------------------------------
+    print("\n--- 8. Two-stage retrieval (embed pre-filter) ---")
+
+    # Build CSV with > 50 rows to trigger embedding pre-filter
+    csv_rows = ["full_path,file_summary,key_exports,dependencies,content_hash"]
+    for i in range(55):
+        csv_rows.append(
+            f'context/mod_{i}_example.py,"Module {i} summary",'
+            f'"[""mod_{i}""]","[""pdd.mod_{i}""]",hash{i}'
+        )
+    large_csv = "\n".join(csv_rows)
+
+    def mock_summarize_large(*args, **kwargs):
+        return large_csv, 0.05, "mock-gpt-4o"
+
+    embed_called = []
+
+    def mock_embed_and_retrieve(query, candidates, top_n=50):
+        embed_called.append({"query_len": len(query), "candidates": len(candidates), "top_n": top_n})
+        # Return first top_n candidates with mock scores
+        return [(c, 1.0 - i * 0.01) for i, c in enumerate(candidates[:top_n])]
+
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_large), \
+         patch("pdd.auto_include.llm_invoke", side_effect=mock_llm_invoke), \
+         patch("pdd.auto_include.load_prompt_template", return_value="prompt"), \
+         patch("pdd.auto_include._get_file_line_count", return_value=200), \
+         patch("pdd.auto_include.embed_and_retrieve", side_effect=mock_embed_and_retrieve):
+
+        _, _, _, _ = auto_include(
+            input_prompt=input_prompt,
+            directory_path="context/c*.py",
+            verbose=True,
+        )
+
+    assert len(embed_called) == 1, f"Expected embed_and_retrieve called once, got {len(embed_called)}"
+    assert embed_called[0]["candidates"] == 55, \
+        f"Expected 55 candidates passed to embed, got {embed_called[0]['candidates']}"
+    assert embed_called[0]["top_n"] == 50, \
+        f"Expected top_n=50, got {embed_called[0]['top_n']}"
+    print(f"  embed_and_retrieve called with {embed_called[0]['candidates']} candidates, top_n={embed_called[0]['top_n']}")
+    print("[PASS] Two-stage retrieval triggers embed pre-filter when candidates > 50")
+
+    # ------------------------------------------------------------------
+    # 9. Skip embed pre-filter when candidates <= 50
+    # ------------------------------------------------------------------
+    print("\n--- 9. Skip embed pre-filter when candidates <= 50 ---")
+    embed_called_small = []
+
+    def mock_embed_small(query, candidates, top_n=50):
+        embed_called_small.append(True)
+        return [(c, 1.0) for c in candidates[:top_n]]
+
+    with patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize_directory), \
+         patch("pdd.auto_include.llm_invoke", side_effect=mock_llm_invoke), \
+         patch("pdd.auto_include.load_prompt_template", return_value="prompt"), \
+         patch("pdd.auto_include._get_file_line_count", return_value=200), \
+         patch("pdd.auto_include.embed_and_retrieve", side_effect=mock_embed_small):
+
+        auto_include(
+            input_prompt=input_prompt,
+            directory_path="context/c*.py",
+        )
+
+    assert len(embed_called_small) == 0, \
+        f"embed_and_retrieve should NOT be called for <= 50 candidates, but was called {len(embed_called_small)} times"
+    print("  embed_and_retrieve not called (3 candidates <= 50)")
+    print("[PASS] Embedding pre-filter skipped for small candidate sets")
 
     print("\n" + "=" * 60)
     print("All examples passed!")
