@@ -233,3 +233,53 @@ def test_fix_errors_receives_failure_classification_hint(mock_pytest, mock_fix, 
         "failure_classification"
     ].lower()
 
+
+@patch("pdd.fix_error_loop.fix_errors_from_unit_tests")
+@patch("pdd.fix_error_loop.run_pytest_on_file")
+def test_timeout_streak_uses_post_fix_kind_and_resets_on_kind_changes(
+    mock_pytest, mock_fix, setup_files
+):
+    """
+    Regression: timeout/flaky streak must be based on post-fix failure kind.
+
+    Sequence:
+    - initial/pre-fix kind timeout
+    - post-fix becomes assertion (streak should remain/reset to 0)
+    - next post-fix timeout (streak=1)
+    - next post-fix timeout (streak=2 => stop)
+    """
+    files = setup_files
+    mock_pytest.side_effect = [
+        (1, 0, 0, TIMEOUT_OUTPUT),  # initial run (pre iteration 1)
+        (1, 0, 0, ASSERT_OUTPUT),   # post iteration 1
+        (1, 0, 0, TIMEOUT_OUTPUT),  # post iteration 2
+        (1, 0, 0, TIMEOUT_OUTPUT),  # post iteration 3 -> stop
+    ]
+    mock_fix.return_value = (
+        True,
+        True,
+        files["test_file"].read_text(),
+        files["code_file"].read_text(),
+        "analysis",
+        0.01,
+        "mock-model",
+    )
+
+    _, _, _, attempts, _, _ = fix_error_loop(
+        unit_test_file=str(files["test_file"]),
+        code_file=str(files["code_file"]),
+        prompt_file="dummy_prompt.txt",
+        prompt="prompt",
+        verification_program=str(files["verify_file"]),
+        strength=0.5,
+        temperature=0.0,
+        max_attempts=5,
+        budget=10.0,
+        error_log_file=str(files["error_log"]),
+        agentic_fallback=False,
+        failure_aware_retries=True,
+    )
+
+    assert attempts == 3
+    assert mock_fix.call_count == 3
+
