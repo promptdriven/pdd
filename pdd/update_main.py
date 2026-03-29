@@ -1,4 +1,5 @@
 import fnmatch
+import logging
 import re
 import subprocess
 import sys
@@ -29,6 +30,18 @@ from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
 from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
 from . import DEFAULT_TIME
+
+logger = logging.getLogger(__name__)
+
+
+def _budget_allows_post_update_llm(
+    budget: Optional[float], total_repo_cost: float
+) -> bool:
+    """False when --budget is set and cumulative cost already meets or exceeds the cap."""
+    if budget is None:
+        return True
+    return total_repo_cost < budget
+
 
 # Config/data files that should not get prompts in repo-scan mode.
 # Users can still target these explicitly with single-file mode.
@@ -1206,92 +1219,185 @@ def update_main(
                                 cost=result.get("cost", 0.0),
                                 model=result.get("model", "unknown"),
                             )
-                        except Exception:
-                            pass  # Best-effort; don't fail the update
-
-                        # Regenerate example and upload dev unit for grounding (best-effort).
-                        try:
-                            dev_key = f"{basename}::{language}"
-                            if dev_key not in submitted_dev_units:
-                                from .sync_determine_operation import get_pdd_file_paths
-                                from .sync_main import _auto_submit_example
-                                from .context_generator_main import context_generator_main
-
-                                context_name, _context_cfg = detect_context_for_file(code_path, repo_root)
-                                pdd_files = get_pdd_file_paths(
-                                    basename=basename,
-                                    language=language,
-                                    prompts_dir=str(Path(repo_root) / "prompts"),
-                                    context_override=ctx.obj.get("context") or context_name,
+                        except Exception as e:
+                            logger.warning(
+                                "save_fingerprint failed after repo update: %s", e, exc_info=True
+                            )
+                            if not quiet:
+                                rprint(
+                                    f"[yellow]Warning: could not save fingerprint for "
+                                    f"{relative_path}: {e}[/yellow]"
                                 )
-                                # In repo mode, these source-of-truth paths are known from the
-                                # current pair and avoid context/path resolution mismatches.
-                                pdd_files["prompt"] = Path(prompt_path)
-                                pdd_files["code"] = Path(code_path)
 
-                                # Regenerate example (do NOT regenerate code or tests).
-                                # Use the existing example generator pipeline (writes to pdd_files["example"]).
-                                try:
-                                    _ex_content, ex_cost, _ex_model = context_generator_main(
-                                        ctx=ctx,
-                                        prompt_file=str(pdd_files["prompt"]),
-                                        code_file=str(pdd_files["code"]),
-                                        output=str(pdd_files["example"]),
-                                        format="code",
-                                    )
-                                    total_repo_cost += ex_cost
-                                    progress.update(task, total_cost=total_repo_cost)
-                                except Exception:
-                                    # Best-effort: still allow upload (example is optional in submit payload).
-                                    pass
-
-                                _auto_submit_example(basename, language, pdd_files, ctx)
-                                submitted_dev_units.add(dev_key)
-                        except Exception:
-                            # Best-effort: cloud submission should not abort repo update.
-                            pass
-
-                    # Update markdown docs referenced via <include> tags.
-                    # This heals stale context used by the next `pdd generate` / `pdd change`.
-                    try:
-                        from .context_generator_main import context_generator_main
-
-                        include_deps = extract_include_deps(Path(prompt_path))
-                        # extract_include_deps returns resolved paths relative to CWD when possible.
-                        for dep_str in include_deps.keys():
-                            dep_path = Path(dep_str)
-                            if not dep_path.is_absolute():
-                                dep_path = (Path.cwd() / dep_path).resolve()
-                            else:
-                                dep_path = dep_path.resolve()
-
-                            if dep_path.suffix.lower() != ".md":
-                                continue  # Only regenerate .md reliably (context generator forces .md extension).
-                            if not dep_path.exists():
-                                continue
-
-                            dep_key = str(dep_path)
-                            if dep_key in updated_doc_paths:
-                                continue
-
-                            # Regenerate the doc by running the existing markdown generator
-                            # with the updated prompt + code as the source of truth.
+                        # Regenerate example, upload dev unit, and refresh included .md docs (best-effort).
+                        # Post-update LLM steps honor --budget: skip when cap already reached.
+                        if not _budget_allows_post_update_llm(budget, total_repo_cost):
+                            if budget is not None and not quiet:
+                                rprint(
+                                    f"[yellow]Skipping example/doc regeneration and cloud submit for "
+                                    f"{relative_path}: budget cap reached "
+                                    f"(${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
+                                )
+                        else:
                             try:
-                                _md_content, md_cost, _md_model = context_generator_main(
-                                    ctx=ctx,
-                                    prompt_file=str(prompt_path),
-                                    code_file=str(code_path),
-                                    output=str(dep_path),
-                                    format="md",
+                                dev_key = f"{basename}::{language}"
+                                if dev_key not in submitted_dev_units:
+                                    from .sync_determine_operation import get_pdd_file_paths
+                                    from .sync_main import _auto_submit_example
+                                    from .context_generator_main import context_generator_main
+
+                                    context_name, _context_cfg = detect_context_for_file(code_path, repo_root)
+                                    pdd_files = get_pdd_file_paths(
+                                        basename=basename,
+                                        language=language,
+                                        prompts_dir=str(Path(repo_root) / "prompts"),
+                                        context_override=ctx.obj.get("context") or context_name,
+                                    )
+                                    pdd_files["prompt"] = Path(prompt_path)
+                                    pdd_files["code"] = Path(code_path)
+
+                                    # Example regeneration (LLM cost applies to --budget).
+                                    if _budget_allows_post_update_llm(budget, total_repo_cost):
+                                        try:
+                                            _ex_content, ex_cost, _ex_model = context_generator_main(
+                                                ctx=ctx,
+                                                prompt_file=str(pdd_files["prompt"]),
+                                                code_file=str(pdd_files["code"]),
+                                                output=str(pdd_files["example"]),
+                                                format="code",
+                                            )
+                                            total_repo_cost += ex_cost
+                                            progress.update(task, total_cost=total_repo_cost)
+                                        except Exception as e:
+                                            logger.warning(
+                                                "Example regeneration failed after repo update: %s",
+                                                e,
+                                                exc_info=True,
+                                            )
+                                            if not quiet:
+                                                rprint(
+                                                    f"[yellow]Warning: example regeneration failed "
+                                                    f"for {relative_path}: {e}[/yellow]"
+                                                )
+                                    elif budget is not None and not quiet:
+                                        rprint(
+                                            f"[yellow]Skipping example regeneration for {relative_path}: "
+                                            f"budget cap reached (${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
+                                        )
+
+                                    if _budget_allows_post_update_llm(budget, total_repo_cost):
+                                        try:
+                                            _auto_submit_example(basename, language, pdd_files, ctx)
+                                        except Exception as e:
+                                            logger.warning(
+                                                "Cloud dev-unit submit failed after repo update: %s",
+                                                e,
+                                                exc_info=True,
+                                            )
+                                            if not quiet:
+                                                rprint(
+                                                    f"[yellow]Warning: cloud submit failed for "
+                                                    f"{basename} ({language}): {e}[/yellow]"
+                                                )
+                                    elif budget is not None and not quiet:
+                                        rprint(
+                                            f"[yellow]Skipping cloud submit for {basename}: "
+                                            f"budget cap reached (${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
+                                        )
+
+                                    submitted_dev_units.add(dev_key)
+                            except Exception as e:
+                                logger.warning(
+                                    "Post-update example/submit pipeline failed: %s", e, exc_info=True
                                 )
-                                total_repo_cost += md_cost
-                                progress.update(task, total_cost=total_repo_cost)
-                                updated_doc_paths.add(dep_key)
-                            except Exception:
-                                pass
-                    except Exception:
-                        # Best-effort: doc regeneration should not abort the whole repo update.
-                        pass
+                                if not quiet:
+                                    rprint(
+                                        f"[yellow]Warning: post-update example/submit failed: {e}[/yellow]"
+                                    )
+
+                    # Markdown docs from <include> tags (each LLM call respects --budget).
+                    if basename and language and _budget_allows_post_update_llm(budget, total_repo_cost):
+                        try:
+                            from .context_generator_main import context_generator_main
+
+                            include_deps = extract_include_deps(Path(prompt_path))
+                            for dep_str in include_deps.keys():
+                                if not _budget_allows_post_update_llm(budget, total_repo_cost):
+                                    if budget is not None and not quiet:
+                                        rprint(
+                                            f"[yellow]Stopping included-doc regeneration for "
+                                            f"{relative_path}: budget cap reached "
+                                            f"(${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
+                                        )
+                                    break
+                                dep_path = Path(dep_str)
+                                if not dep_path.is_absolute():
+                                    dep_path = (Path.cwd() / dep_path).resolve()
+                                else:
+                                    dep_path = dep_path.resolve()
+
+                                if dep_path.suffix.lower() != ".md":
+                                    continue
+                                if not dep_path.exists():
+                                    continue
+
+                                dep_key = str(dep_path)
+                                if dep_key in updated_doc_paths:
+                                    continue
+
+                                try:
+                                    _md_content, md_cost, _md_model = context_generator_main(
+                                        ctx=ctx,
+                                        prompt_file=str(prompt_path),
+                                        code_file=str(code_path),
+                                        output=str(dep_path),
+                                        format="md",
+                                    )
+                                    total_repo_cost += md_cost
+                                    progress.update(task, total_cost=total_repo_cost)
+                                    updated_doc_paths.add(dep_key)
+                                except Exception as e:
+                                    logger.warning(
+                                        "Included markdown regeneration failed for %s: %s",
+                                        dep_path,
+                                        e,
+                                        exc_info=True,
+                                    )
+                                    if not quiet:
+                                        rprint(
+                                            f"[yellow]Warning: could not regenerate included doc "
+                                            f"{dep_path}: {e}[/yellow]"
+                                        )
+                        except Exception as e:
+                            logger.warning(
+                                "Included-doc regeneration loop failed: %s", e, exc_info=True
+                            )
+                            if not quiet:
+                                rprint(
+                                    f"[yellow]Warning: included-doc regeneration failed: {e}[/yellow]"
+                                )
+                    elif (
+                        basename
+                        and language
+                        and budget is not None
+                        and not _budget_allows_post_update_llm(budget, total_repo_cost)
+                        and not quiet
+                    ):
+                        rprint(
+                            f"[yellow]Skipping included-doc regeneration for {relative_path}: "
+                            f"budget cap reached (${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
+                        )
+
+                    if (
+                        budget is not None
+                        and total_repo_cost > budget
+                        and "Success" in result.get("status", "")
+                    ):
+                        if not quiet:
+                            rprint(
+                                f"[yellow]Warning: cumulative cost ${total_repo_cost:.2f} exceeds "
+                                f"--budget ${budget:.2f} (post-update LLM steps can exceed the cap).[/yellow]"
+                            )
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
