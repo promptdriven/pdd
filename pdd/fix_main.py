@@ -53,6 +53,7 @@ def fix_main(
     temperature: Optional[float] = None,
     protect_tests: bool = False,
     test_files: list[str] | None = None,
+    failure_aware_retries: bool = True,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -72,6 +73,7 @@ def fix_main(
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
         agentic_fallback: Whether the cli agent fallback is triggered
+        failure_aware_retries: Whether loop mode uses failure-aware early exits
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -330,6 +332,7 @@ def fix_main(
                 use_cloud=use_cloud_for_loop,
                 protect_tests=protect_tests,
                 test_files=test_files,
+                failure_aware_retries=failure_aware_retries,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)

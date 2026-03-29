@@ -823,9 +823,12 @@ def fix_error_loop(unit_test_file: str,
                     rprint(f"[red]Error restoring backup code file:[/red] {e}")
                     break
 
+        post_fix_pytest_output = None
+
         # Run pytest for the next iteration
         try:
             fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
+            post_fix_pytest_output = pytest_output
             
             # Update post-test output in structured log
             log_structure["iterations"][-1]["post_test_output"] = pytest_output
@@ -854,44 +857,45 @@ def fix_error_loop(unit_test_file: str,
             stats["final_errors"] = errors
             stats["final_warnings"] = warnings
 
-            # Failure-aware early exit (reduces wasted LLM retries).
-            # Use post-fix classification so a changed failure mode (e.g. timeout → assertion)
-            # does not keep timeout/syntax short-circuit logic that no longer applies.
-            if failure_aware_retries and not success:
-                improved = stats["iterations_info"][-1].get("improved", False)
-                sig_after_fix = extract_failure_signature(pytest_output)
-                kind_after_fix = classify_failure(pytest_output)
-                if kind_after_fix == FailureKind.TIMEOUT_FLAKY:
-                    if not improved:
-                        timeout_flaky_streak += 1
-                    else:
-                        timeout_flaky_streak = 0
-                    if timeout_flaky_streak >= 2:
-                        rprint(
-                            "[yellow]Stopping after "
-                            f"{fix_attempts} attempt(s): failures look like timeouts/flaky tests. "
-                            "Consider isolating this test or increasing timeout, rather than more code changes.[/yellow]"
-                        )
-                        break
-                else:
-                    timeout_flaky_streak = 0
-                if kind_after_fix == FailureKind.SYNTAX_IMPORT:
-                    if (
-                        fix_attempts >= 1
-                        and sig_before_fix
-                        and sig_after_fix == sig_before_fix
-                    ):
-                        loc = format_signature_hint(sig_after_fix)
-                        rprint(
-                            "[yellow]Stopping after "
-                            f"{fix_attempts} attempt(s): still seeing a syntax/import error at {loc}. "
-                            "This may require fixing imports/env or adding missing files.[/yellow]"
-                        )
-                        break
         except Exception as e:
             rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
             success = False
             break  # Exit loop but continue to agentic fallback (Issue #266)
+
+        # Failure-aware early exit (reduces wasted LLM retries).
+        # Keep this outside the pytest try/except so failures here are not mislabeled
+        # as pytest execution errors.
+        if failure_aware_retries and not success and post_fix_pytest_output is not None:
+            improved = stats["iterations_info"][-1].get("improved", False)
+            sig_after_fix = extract_failure_signature(post_fix_pytest_output)
+            kind_after_fix = classify_failure(post_fix_pytest_output)
+            if kind_after_fix == FailureKind.TIMEOUT_FLAKY:
+                if not improved:
+                    timeout_flaky_streak += 1
+                else:
+                    timeout_flaky_streak = 0
+                if timeout_flaky_streak >= 2:
+                    rprint(
+                        "[yellow]Stopping after "
+                        f"{fix_attempts} attempt(s): failures look like timeouts/flaky tests. "
+                        "Consider isolating this test or increasing timeout, rather than more code changes.[/yellow]"
+                    )
+                    break
+            else:
+                timeout_flaky_streak = 0
+            if kind_after_fix == FailureKind.SYNTAX_IMPORT:
+                if (
+                    fix_attempts >= 1
+                    and sig_before_fix
+                    and sig_after_fix == sig_before_fix
+                ):
+                    loc = format_signature_hint(sig_after_fix)
+                    rprint(
+                        "[yellow]Stopping after "
+                        f"{fix_attempts} attempt(s): still seeing a syntax/import error at {loc}. "
+                        "This may require fixing imports/env or adding missing files.[/yellow]"
+                    )
+                    break
 
     # Possibly restore best iteration if the final run is not as good:
     if best_iteration_info["attempt"] is not None and not success:
