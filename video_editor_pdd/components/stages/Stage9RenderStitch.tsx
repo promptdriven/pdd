@@ -456,7 +456,7 @@ export default function Stage9RenderStitch({ onAdvance }: Stage9RenderStitchProp
                 </td>
               </tr>
             ))}
-            {sections.length === 0 && (
+            {!loadingStatus && !error && sections.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-4 py-6 text-center text-slate-400">
                   No sections found.

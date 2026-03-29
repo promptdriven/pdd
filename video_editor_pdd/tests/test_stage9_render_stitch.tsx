@@ -523,6 +523,10 @@ describe("Empty state", () => {
     expect(sourceCode).toContain("No sections found.");
   });
 
+  it("only shows the empty state after loading completes and no error is present", () => {
+    expect(sourceCode).toMatch(/!\s*loadingStatus\s*&&\s*!\s*error\s*&&\s*sections\.length\s*===\s*0/);
+  });
+
   it("empty row spans all 7 columns", () => {
     expect(sourceCode).toMatch(/colSpan=\{7\}/);
   });
