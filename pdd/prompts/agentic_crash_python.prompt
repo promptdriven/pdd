@@ -26,6 +26,7 @@ Uses `agentic_crash_explore_LLM` (loaded via load_prompt_template).
 1. Single-pass: explore mode only
 2. Project root is `Path.cwd()` (not derived from prompt file path)
 3. Record file mtimes before agent runs, detect changes after; merge with agent-reported changed_files (set union)
+7. **Scope Guard**: After `run_agentic_task` returns (before the post-task mtime snapshot), call `_revert_out_of_scope_changes(project_root, {code_path.resolve(), program_path.resolve()})` from `agentic_common`. Import it alongside the other agentic_common imports.
 4. Verification after fix:
    - Python: run the program file locally to verify no crash
      - Use `subprocess.DEVNULL` for stdin to prevent hangs on `input()`

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Block "gh issue close" — only the orchestrator may close issues.
+case "$*" in
+  *"issue close"*|*"issue delete"*)
+    echo "blocked: CLI agents must not close/delete issues" >&2
+    exit 1
+    ;;
+esac
+exec /usr/bin/gh "$@"

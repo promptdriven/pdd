@@ -48,7 +48,8 @@ You are an expert Python developer responsible for implementing the `agentic_fix
 4. **Execution Flow**:
     - Detect available agents and log authentication methods (e.g., `ANTHROPIC_API_KEY`, `vertex-ai-auth`).
     - Perform the preflight check to ensure `error_content` is meaningful before calling the agent.
-    - Snapshot mtimes, run `run_agentic_task`, and snapshot again to identify `changed_files`.
+    - Snapshot mtimes, run `run_agentic_task`, call scope guard, and snapshot again to identify `changed_files`.
+    - **Scope Guard**: After `run_agentic_task` returns, call `_revert_out_of_scope_changes(working_dir, {code_path.resolve(), test_path.resolve()})` from `agentic_common`. Import it alongside the other agentic_common imports.
     - Perform local verification for Python files; for others, use the agent's success status.
 5. **Error Handling**: Catch `FileNotFoundError` (specifically for missing CLI tools) and general exceptions. Ensure the temporary `agentic_fix_instructions.txt` is unlinked in all exit paths.
 

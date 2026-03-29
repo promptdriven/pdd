@@ -1,16 +1,18 @@
 {
-  "pdd_version": "0.0.164",
-  "timestamp": "2026-03-03T17:59:06.088649+00:00",
-  "command": "update",
-  "prompt_hash": "58361c7bcd94eb839e4a364c33f57358aec7ea49c49fab9de1ea99d33042f0fd",
-  "code_hash": "44cdc5df1f004abd5fb889137689ee02d531a3c3f73be724833dd129993ca9bf",
-  "example_hash": null,
-  "test_hash": null,
-  "test_files": null,
+  "pdd_version": "0.0.179",
+  "timestamp": "2026-03-29T20:15:28.051850+00:00",
+  "command": "fix",
+  "prompt_hash": "039a9745ae3c3fcfd84f641ecb28be15d604874226ee940890bcca12bfe2cbd6",
+  "code_hash": "51def883ddc1b9ae6caea88c3c9148235d54a3f5faa8859f3f79a8bcab3fc35e",
+  "example_hash": "dafed5c5980cce43f16f6828ef45f76e3fdd4ee8a41d21e53cea846b2b6dca33",
+  "test_hash": "b3498460f90675e72100616666eee5782d615f868fbd69648ca42918d045cec7",
+  "test_files": {
+    "test_agentic_update.py": "b3498460f90675e72100616666eee5782d615f868fbd69648ca42918d045cec7"
+  },
   "include_deps": {
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/agentic_common_example.py": "5c2a5da7c0281a5277e775bda0e64e1de379f546b59eef359179052fafe7dea9",
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/prompts/agentic_update_LLM.prompt": "a547b787b58b6571a9b933687fc7477d986adef4ceeab999ab667fc8ba4f5c6e"
+    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "prompts/agentic_update_LLM.prompt": "0fe3ff3c55d39cd68d3f4d1105e156a608c8668a27c3d81efea5289b2430ba17"
   }
 }

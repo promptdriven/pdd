@@ -23,6 +23,7 @@ Uses `agentic_verify_explore_LLM` (loaded via load_prompt_template).
 % Requirements
 1. Single-pass: explore mode only
 2. Record file mtimes before agent runs, detect changes after
+7. **Scope Guard**: After `run_agentic_task` returns (before the post-task mtime snapshot), call `_revert_out_of_scope_changes(project_root, {code_file.resolve(), program_file.resolve()})` from `agentic_common`. Import it alongside the other agentic_common imports.
 3. Parse the json from the agentic CLI call to get the success, message, cost, model, and changed_files
 4. Return 5-tuple: `(success, message, cost, model, changed_files)`
 5. Accept optional `deadline` param; fall back to `get_job_deadline()` from agentic_common when not provided. Forward effective deadline to `run_agentic_task`.
