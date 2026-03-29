@@ -181,23 +181,22 @@ export async function GET(): Promise<NextResponse> {
       const frameChainDeps: string[] = clipChain?.previousClipId
         ? [clipChain.previousClipId]
         : [];
-      const depFilePaths: string[] = clipChain?.previousClipId
-        ? [path.join("outputs", "veo", `${clipChain.previousClipId}_last_frame.png`)]
-        : [];
 
       const clipExists = fs.existsSync(clipPath);
       const status: VeoClipStatus = clipExists ? "done" : "missing";
 
       let stale = false;
-      if (clipExists && depFilePaths.length > 0) {
+      if (clipExists && clipChain?.previousFramePath) {
         const clipTime = mtimeMs(clipPath) ?? 0;
-        for (const dep of depFilePaths) {
-          const depAbs = path.join(getProjectDir(), dep);
-          const depTime = mtimeMs(depAbs);
-          if (depTime && depTime > clipTime) {
-            stale = true;
-            break;
-          }
+        const depTime = mtimeMs(clipChain.previousFramePath);
+        if (depTime === null || depTime > clipTime) {
+          stale = true;
+        }
+      } else if (clipExists && clipChain?.referenceImagePath) {
+        const clipTime = mtimeMs(clipPath) ?? 0;
+        const referenceTime = mtimeMs(clipChain.referenceImagePath);
+        if (referenceTime && referenceTime > clipTime) {
+          stale = true;
         }
       }
 

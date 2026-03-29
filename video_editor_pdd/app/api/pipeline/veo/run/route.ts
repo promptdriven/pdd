@@ -372,15 +372,17 @@ registerExecutor('veo', (params, send: SseSend) => {
         : true
     );
 
-    const ordered = dedupeClipJobsById(
+    const resolvedClipJobs = dedupeClipJobsById(
       orderedSections.flatMap((section) =>
         resolveSectionClipJobs(section, mainScriptContent)
-      ).filter(
-        (clip) =>
-          !requestedClips ||
-          requestedClips.has(clip.id) ||
-          requestedClips.has(clip.sectionId)
       )
+    );
+
+    const ordered = resolvedClipJobs.filter(
+      (clip) =>
+        !requestedClips ||
+        requestedClips.has(clip.id) ||
+        requestedClips.has(clip.sectionId)
     );
 
     const total = ordered.length;
@@ -395,7 +397,7 @@ registerExecutor('veo', (params, send: SseSend) => {
     );
     const chainPlan = resolveVeoFrameChainPlan(
       getProjectDir(),
-      ordered.map((clip) => clip.id),
+      resolvedClipJobs.map((clip) => clip.id),
       config.veo
     );
     const lastFrameByClip = new Map<string, string>();
@@ -406,12 +408,19 @@ registerExecutor('veo', (params, send: SseSend) => {
       const aspectRatio = config.veo.defaultAspectRatio;
       const clipChain = chainPlan.get(clipId) ?? {
         previousClipId: null,
+        previousFramePath: null,
         referenceImagePath: null,
         needsLastFrame: false,
       };
+      const persistedPreviousFramePath =
+        clipChain.previousFramePath && fs.existsSync(clipChain.previousFramePath)
+          ? clipChain.previousFramePath
+          : null;
       const referenceImagePath =
         clipChain.previousClipId
-          ? lastFrameByClip.get(clipChain.previousClipId) ?? null
+          ? lastFrameByClip.get(clipChain.previousClipId) ??
+            persistedPreviousFramePath ??
+            clipChain.referenceImagePath
           : clipChain.referenceImagePath;
 
       const outputPath = path.join(

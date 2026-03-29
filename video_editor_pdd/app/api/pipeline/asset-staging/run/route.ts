@@ -6,7 +6,7 @@ import { getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
 /**
  * POST /api/pipeline/asset-staging/run
  *
- * Copies VEO output files into the Remotion public directory so they can
+ * Copies VEO output files into the Remotion public/veo directory so they can
  * be referenced by compositions at render time.
  */
 
@@ -17,7 +17,7 @@ interface AssetStagingBody {
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
-    const remotionPublicDir = getAppRemotionPublicDir();
+    const remotionPublicDir = path.join(getAppRemotionPublicDir(), "veo");
     const body = (await request.json().catch(() => ({}))) as AssetStagingBody;
     const files = body.files ?? [];
 

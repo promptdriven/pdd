@@ -8,7 +8,7 @@
  *
  * Spec requirements verified:
  *   1. POST /api/pipeline/compositions/run — accepts { components?, wrappers? }, returns SSE stream with { jobId }
- *   2. POST /api/pipeline/asset-staging/run — accepts { files? }, copies files from outputs/veo/ to remotion/public/, returns { staged }
+ *   2. POST /api/pipeline/asset-staging/run — accepts { files? }, copies files from outputs/veo/ to remotion/public/veo/, returns { staged }
  *   3. GET /api/pipeline/compositions/list — returns { sections: CompositionSection[] }
  *   4. No authentication required
  *   5. registerExecutor('compositions', ...) called at module load time
@@ -17,7 +17,7 @@
  *   8. Per-component events: { type: 'component', name, status: 'generating' | 'done' | 'error' }
  *   9. Component status: check if remotion/src/remotion/{componentName}.tsx exists
  *  10. CompositionEntry.lastError from last error job for that component (from DB)
- *  11. Asset staging: fs.copyFileSync for missing files in remotion/public/
+ *  11. Asset staging: fs.copyFileSync for missing files in remotion/public/veo/
  *  12. Claude runs in isolated temp workspaces and only copies validated artifacts back into remotion/src/remotion/
  */
 
@@ -1488,7 +1488,7 @@ describe("POST_AssetStaging — response shape", () => {
 // ---------------------------------------------------------------------------
 
 describe("POST_AssetStaging — file copying", () => {
-  it("copies files from outputs/veo/ to remotion/public/", async () => {
+  it("copies files from outputs/veo/ to remotion/public/veo/", async () => {
     const pathMod = require("path");
 
     // Source exists, dest does not
@@ -1513,6 +1513,7 @@ describe("POST_AssetStaging — file copying", () => {
     expect(srcArg).toContain("clip1.mp4");
     expect(destArg).toContain("remotion");
     expect(destArg).toContain("public");
+    expect(destArg).toContain("veo");
     expect(destArg).toContain("clip1.mp4");
   });
 
@@ -2386,8 +2387,9 @@ describe("app/api/pipeline/compositions/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/outputs.*veo/);
   });
 
-  it("references remotion/public/ directory", () => {
+  it("references remotion/public/veo/ directory", () => {
     expect(sourceCode).toMatch(/remotion\/public/);
+    expect(sourceCode).toMatch(/public",\s*"veo"/);
   });
 
   it("imports saveProject from @/lib/project", () => {

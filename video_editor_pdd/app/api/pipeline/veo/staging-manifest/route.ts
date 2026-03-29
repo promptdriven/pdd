@@ -8,7 +8,7 @@ import { getAppRemotionPublicDir, getProjectDir } from "@/lib/projects";
  *
  * Returns the asset staging manifest: a list of files that are expected
  * by the Remotion compositions and whether they are present in the
- * Remotion public directory.
+ * Remotion public/veo directory.
  */
 
 interface StagingManifestEntry {
@@ -54,7 +54,7 @@ function loadManifest(veoOutputDir: string): string[] {
 export async function GET(): Promise<NextResponse> {
   try {
     const veoOutputDir = path.join(getProjectDir(), "outputs", "veo");
-    const remotionPublicDir = getAppRemotionPublicDir();
+    const remotionPublicDir = path.join(getAppRemotionPublicDir(), "veo");
     const filenames = loadManifest(veoOutputDir);
 
     const entries: StagingManifestEntry[] = filenames.map((filename) => {

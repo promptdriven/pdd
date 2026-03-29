@@ -5,6 +5,7 @@ import type { VeoConfig, VeoReference } from "@/lib/types";
 
 export type VeoChainPlan = {
   previousClipId: string | null;
+  previousFramePath: string | null;
   referenceImagePath: string | null;
   needsLastFrame: boolean;
 };
@@ -40,6 +41,7 @@ export const resolveReferenceImagePath = (
 
 const defaultPlan = (): VeoChainPlan => ({
   previousClipId: null,
+  previousFramePath: null,
   referenceImagePath: null,
   needsLastFrame: false,
 });
@@ -60,8 +62,10 @@ export const resolveVeoFrameChainPlan = (
   }
 
   for (const chain of frameChains) {
-    const chainClips = (chain?.clips ?? []).filter((clipId) => clipIdSet.has(clipId));
-    if (chainClips.length === 0) {
+    const fullChainClips = (chain?.clips ?? []).filter(
+      (clipId): clipId is string => typeof clipId === "string" && clipIdSet.has(clipId)
+    );
+    if (fullChainClips.length === 0) {
       continue;
     }
 
@@ -70,20 +74,24 @@ export const resolveVeoFrameChainPlan = (
       ? resolveReferenceImagePath(projectDir, references, chain.referenceId)
       : null;
 
-    for (let index = 0; index < chainClips.length; index += 1) {
-      const clipId = chainClips[index];
+    for (let index = 0; index < fullChainClips.length; index += 1) {
+      const clipId = fullChainClips[index];
       if (!clipId || assignedClipIds.has(clipId)) {
         continue;
       }
 
       const previousClipId =
-        usePreviousFrames && index > 0 ? chainClips[index - 1] ?? null : null;
+        usePreviousFrames && index > 0 ? fullChainClips[index - 1] ?? null : null;
+      const previousFramePath = previousClipId
+        ? path.join(projectDir, "outputs", "veo", `${previousClipId}_last_frame.png`)
+        : null;
       const needsLastFrame =
-        usePreviousFrames && index < chainClips.length - 1;
+        usePreviousFrames && index < fullChainClips.length - 1;
 
       plan.set(clipId, {
         previousClipId,
-        referenceImagePath: previousClipId ? null : initialReferencePath,
+        previousFramePath,
+        referenceImagePath: initialReferencePath,
         needsLastFrame,
       });
       assignedClipIds.add(clipId);

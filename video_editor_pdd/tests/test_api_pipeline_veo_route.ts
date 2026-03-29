@@ -1101,6 +1101,23 @@ describe("veo executor factory — frame chaining", () => {
     expect(extractCall[1]).toContain("intro_last_frame.png");
   });
 
+  it("still extracts a last frame when regenerating only the anchor clip in a longer chain", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({ clips: ["intro"] }, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(1);
+    expect(mockExtractLastFrame).toHaveBeenCalledTimes(1);
+    expect(mockExtractLastFrame.mock.calls[0][1]).toContain("intro_last_frame.png");
+  });
+
   it("passes extracted frame path as referenceImagePath only within an explicit chain", async () => {
     const config = mockProjectConfig();
     config.sections = config.sections.slice(0, 2); // intro, main
@@ -1116,6 +1133,41 @@ describe("veo executor factory — frame chaining", () => {
     expect(mockGenerateVeoClip.mock.calls[0][1]).toBeNull();
     const secondRef = mockGenerateVeoClip.mock.calls[1][1];
     expect(secondRef).toContain("intro_last_frame.png");
+  });
+
+  it("uses the persisted previous clip last frame when regenerating a downstream clip by itself", async () => {
+    const config = mockProjectConfig();
+    config.sections = config.sections.slice(0, 2); // intro, main
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return (
+        typeof candidate === "string" &&
+        (candidate.endsWith("intro_last_frame.png") ||
+          candidate.includes("narrative/main_script.md"))
+      );
+    });
+    mockReadFileSync.mockImplementation((candidate: string) => {
+      if (typeof candidate === "string" && candidate.includes("narrative/main_script.md")) {
+        return `
+## Introduction
+[veo: Establishing shot of intro]
+
+## Main Content
+[veo: Follow-up shot of main]
+        `.trim();
+      }
+      return "";
+    });
+
+    const mockSend = jest.fn();
+    const executor = registerCallArgs.factory({ clips: ["main"] }, mockSend);
+    await executor(jest.fn());
+
+    expect(mockGenerateVeoClip).toHaveBeenCalledTimes(1);
+    expect(mockGenerateVeoClip.mock.calls[0][1]).toContain("intro_last_frame.png");
   });
 
   it("auto-generates a missing active reference portrait before Veo generation starts", async () => {
@@ -2150,6 +2202,31 @@ describe("GET_clips — stale detection", () => {
     expect(data.clips[1].stale).toBe(false);
   });
 
+  it("clip is stale when its chained dependency frame is missing", async () => {
+    const config = mockProjectConfig();
+    config.veo.frameChains = [
+      { clips: ["intro", "main"], referenceId: "alex" },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockExistsSync.mockImplementation(
+      (candidate: string) =>
+        typeof candidate === "string" &&
+        candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockReturnValue([]);
+    mockStatSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p.includes("_last_frame")) {
+        throw new Error("missing chained dependency frame");
+      }
+      return { mtimeMs: 1000 };
+    });
+
+    const response = await GET_clips();
+    const data = await response.json();
+
+    expect(data.clips[1].stale).toBe(true);
+  });
+
   it("first clip (no deps) is never stale", async () => {
     mockExistsSync.mockImplementation(
       (candidate: string) =>
@@ -2347,7 +2424,7 @@ describe("GET_staging — staging manifest", () => {
     expect(data[2].filename).toBe("outro.mp4");
   });
 
-  it("marks files as present: false when not in remotion/public/", async () => {
+  it("marks files as present: false when not in remotion/public/veo/", async () => {
     const pathMod = require("path");
     const veoDir = pathMod.join(process.cwd(), "outputs", "veo");
 
@@ -2363,6 +2440,35 @@ describe("GET_staging — staging manifest", () => {
     for (const entry of data) {
       expect(entry.present).toBe(false);
     }
+  });
+
+  it("marks files as present when they exist in remotion/public/veo/", async () => {
+    const pathMod = require("path");
+    const veoDir = pathMod.join(process.cwd(), "outputs", "veo");
+    const stagedClip = pathMod.join(
+      process.cwd(),
+      "remotion",
+      "public",
+      "veo",
+      "clip.mp4"
+    );
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p === "string" && p === veoDir) return true;
+      if (typeof p === "string" && p === stagedClip) return true;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue(["clip.mp4"]);
+
+    const response = await GET_staging();
+    const data = await response.json();
+
+    expect(data).toHaveLength(1);
+    expect(data[0]).toMatchObject({
+      filename: "clip.mp4",
+      expected: true,
+      present: true,
+    });
   });
 
   it("each entry has StagingManifestEntry shape: { filename, expected, present }", async () => {
