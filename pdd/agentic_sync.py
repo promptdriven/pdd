@@ -954,10 +954,10 @@ def run_agentic_sync(
         verbose=verbose,
         issue_url=issue_url,
         module_cwds=module_cwds,
+        initial_cost=llm_cost,
     )
 
-    runner_success, runner_msg, runner_cost = runner.run()
-    total_cost = llm_cost + runner_cost
+    runner_success, runner_msg, total_cost = runner.run()
 
     if runner_success:
         return True, runner_msg, total_cost, provider
