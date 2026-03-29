@@ -134,5 +134,10 @@ If `skip_ci` is True: skip step 10 entirely, log "[yellow]Skipping CI validation
 % Deliverables
 - Code: `pdd/agentic_e2e_fix_orchestrator.py`
 
+% Convergence (Issue #903)
+Empty dev-units short-circuit: when Step 5 yields no dev-units, the orchestrator must short-circuit the cycle (skip dependent work) instead of continuing as if work remained.
+
+Per-cycle file-hash comparison: compare file hashes each cycle so unchanged files are not mistaken for fresh changes; use per-cycle file-hash snapshots to decide whether dev-units or code actually moved.
+
 This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory`
 so tests can assert the orchestrator prompt documents these behaviors.
