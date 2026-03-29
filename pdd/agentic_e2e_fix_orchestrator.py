@@ -701,7 +701,11 @@ def _push_with_retry(
     repo_name: str,
 ) -> Tuple[bool, str]:
     """
-    Pushes to remote, retrying with PDD_GH_TOKEN_FILE on auth failure.
+    Pushes to remote, retrying on non-fast-forward or auth failure.
+
+    On non-fast-forward error (branch diverged after rebase):
+    - Retry with --force-with-lease, which safely overwrites the remote only
+      if it hasn't changed since the last fetch.
 
     On push auth failure (Authentication failed, HTTP 401, could not read Username,
     or HTTP Basic: Access denied):
@@ -727,6 +731,24 @@ def _push_with_retry(
         return True, ""
 
     stderr = push_result.stderr
+
+    # Non-fast-forward: branch diverged (e.g. after rebase onto main).
+    # Retry with --force-with-lease which is safe — it only overwrites
+    # the remote if it matches what we last fetched.
+    non_ff_markers = ["non-fast-forward", "[rejected]", "tip of your current branch is behind"]
+    is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
+
+    if is_non_fast_forward:
+        retry_result = subprocess.run(
+            ["git", "push", "--force-with-lease", "-u", "origin", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if retry_result.returncode == 0:
+            return True, ""
+        return False, retry_result.stderr
+
     auth_errors = ["Authentication failed", "HTTP 401", "could not read Username", "HTTP Basic: Access denied"]
     is_auth_failure = any(err in stderr for err in auth_errors)
 

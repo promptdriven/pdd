@@ -1416,6 +1416,139 @@ class TestPushWithRetryTokenFile:
         mock_push.assert_called_once_with(tmp_path, "myowner", "myrepo")
 
 
+class TestPushWithRetryNonFastForward:
+    """Tests for _push_with_retry handling non-fast-forward push errors.
+
+    When checkout_existing_issue_branch() rebases an issue branch onto
+    origin/main, commit SHAs diverge from the remote branch. A plain
+    `git push` fails with non-fast-forward. The fix should detect this
+    and retry with --force-with-lease (safe force push).
+
+    Regression test for issue #608 pdd fix failure.
+    """
+
+    def test_non_fast_forward_retries_with_force_with_lease(self, tmp_path):
+        """Non-fast-forward push error should trigger --force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    "To https://github.com/owner/repo.git\n"
+                    " ! [rejected]        HEAD -> fix/issue-608 (non-fast-forward)\n"
+                    "error: failed to push some refs to 'https://github.com/owner/repo.git'\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind\n"
+                    "hint: its remote counterpart."
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True, f"Expected success after --force-with-lease retry, got error: {err}"
+        # Should have retried with --force-with-lease
+        force_push_calls = [c for c in calls if "--force-with-lease" in c]
+        assert len(force_push_calls) == 1, (
+            f"Expected exactly one --force-with-lease retry, got {len(force_push_calls)}. "
+            f"All calls: {calls}"
+        )
+
+    def test_non_fast_forward_rejected_keyword_detected(self, tmp_path):
+        """The '[rejected]' keyword in push stderr should trigger force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> main (fetch first)\n"
+                    "error: failed to push some refs\n"
+                    "hint: Updates were rejected because the remote contains work that you do not\n"
+                    "hint: have locally."
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+
+    def test_non_fast_forward_force_with_lease_also_fails(self, tmp_path):
+        """If --force-with-lease also fails, return the error."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if "push" in cmd:
+                result.returncode = 1
+                if "--force-with-lease" in cmd:
+                    result.stderr = (
+                        "! [rejected]        HEAD -> fix/issue-1 (stale info)\n"
+                        "error: failed to push some refs (--force-with-lease)"
+                    )
+                else:
+                    result.stderr = (
+                        " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                        "hint: Updates were rejected because the tip of your current branch is behind"
+                    )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "force-with-lease" in err
+
+    def test_non_fast_forward_takes_precedence_over_auth_retry(self, tmp_path, monkeypatch):
+        """Non-fast-forward should be detected before auth failure check.
+
+        An error containing both 'rejected' and auth-like text should
+        be handled as non-fast-forward, not as an auth failure.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        # Set up a token file that should NOT be used for non-ff errors
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("ghp_should_not_be_used")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip is behind"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+        # Should NOT have called git remote set-url (auth retry path)
+        set_url_calls = [c for c in calls if "set-url" in c]
+        assert len(set_url_calls) == 0, (
+            f"Non-fast-forward should not trigger auth retry. set-url calls: {set_url_calls}"
+        )
+
+
 class TestProviderFailureAbort:
     """Tests for abort on consecutive provider failures."""
 
