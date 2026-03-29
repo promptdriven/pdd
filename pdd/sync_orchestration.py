@@ -1268,6 +1268,15 @@ def _execute_tests_and_create_run_report(
             if not cov_target:
                 cov_target = basename or module_name
 
+            # Workaround: litellm>=1.80.11 added pydantic RootModel generics
+            # (interactions/generated.py) that crash under coverage's import
+            # hook when --cov targets a dotted submodule (e.g. pdd.my_module).
+            # Use the top-level package instead; coverage still reports per-file.
+            # Keep the original target to extract per-module coverage from output.
+            original_cov_target = cov_target
+            if "." in cov_target:
+                cov_target = cov_target.split(".")[0]
+
             # Find project root for proper pytest configuration (Bug fix: infinite fix loop)
             # This matches the logic in pytest_output.py to ensure consistent behavior
             project_root = _find_project_root(test_file)
@@ -1342,6 +1351,18 @@ def _execute_tests_and_create_run_report(
             exit_code = result.returncode
             stdout = result.stdout + (result.stderr or '')
             tests_passed, tests_failed, coverage = _parse_test_output(stdout, language)
+
+            # When --cov was collapsed from a dotted module to the package,
+            # extract per-module coverage instead of using the TOTAL line.
+            if original_cov_target != cov_target and "." in original_cov_target:
+                # Convert pdd.agentic_bug_orchestrator → pdd/agentic_bug_orchestrator.py
+                module_path = original_cov_target.replace(".", "/") + ".py"
+                module_cov_match = re.search(
+                    rf'^{re.escape(module_path)}\s+\d+\s+\d+\s+(\d+)%',
+                    stdout, re.MULTILINE
+                )
+                if module_cov_match:
+                    coverage = float(module_cov_match.group(1))
 
         else:
             # Non-Python: use language-appropriate test command
@@ -2056,19 +2077,29 @@ def sync_orchestration(
                                         if "SyntaxError" in ex_res.stderr:
                                              crash_log_content = "SYNTAX ERROR DETECTED:\n" + crash_log_content
                                     else:
-                                        # No crash - save run report with exit_code=0 so sync_determine_operation
-                                        # knows the example was tested and passed (prevents infinite loop)
-                                        # Include test_hash for staleness detection
-                                        test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
-                                        report = RunReport(
-                                            datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                            exit_code=0,
-                                            tests_passed=1,
-                                            tests_failed=0,
-                                            coverage=0.0,
-                                            test_hash=test_hash
-                                        )
-                                        _save_run_report_atomic(asdict(report), basename, language)
+                                        # No crash - for Python, run real tests to get actual coverage.
+                                        # For non-Python, save synthetic report (no coverage tools).
+                                        if language.lower() == 'python' and pdd_files['test'].exists():
+                                            _execute_tests_and_create_run_report(
+                                                pdd_files['test'],
+                                                basename,
+                                                language,
+                                                target_coverage,
+                                                code_file=pdd_files.get("code"),
+                                                atomic_state=atomic_state,
+                                                test_files=pdd_files.get('test_files'),
+                                            )
+                                        else:
+                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                            report = RunReport(
+                                                datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                                exit_code=0,
+                                                tests_passed=1,
+                                                tests_failed=0,
+                                                coverage=0.0,
+                                                test_hash=test_hash
+                                            )
+                                            _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
                                         skipped_operations.append('crash')
                                         continue
                                     
@@ -2096,16 +2127,20 @@ def sync_orchestration(
                                         if retry_returncode == 0:
                                             # Auto-fix worked! Save run report and continue
                                             log_event(basename, language, "auto_fix_success", {"message": auto_fix_msg}, invocation_mode="sync")
-                                            test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
-                                            report = RunReport(
-                                                datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                                                exit_code=0,
-                                                tests_passed=1,
-                                                tests_failed=0,
-                                                coverage=0.0,
-                                                test_hash=test_hash
-                                            )
-                                            _save_run_report_atomic(asdict(report), basename, language)
+                                            if language.lower() == 'python' and pdd_files['test'].exists():
+                                                _execute_tests_and_create_run_report(
+                                                    pdd_files['test'], basename, language, target_coverage,
+                                                    code_file=pdd_files.get("code"), atomic_state=atomic_state,
+                                                    test_files=pdd_files.get('test_files'),
+                                                )
+                                            else:
+                                                test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
+                                                report = RunReport(
+                                                    datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                                    exit_code=0, tests_passed=1, tests_failed=0, coverage=0.0,
+                                                    test_hash=test_hash
+                                                )
+                                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
                                             result = (True, 0.0, 'auto-fix')
                                             success = True
                                             actual_cost = 0.0
@@ -2377,10 +2412,9 @@ def sync_orchestration(
 
                         # Post-operation checks (simplified)
                         if success and operation == 'crash':
-                            if _use_agentic_path(language, agentic_mode):
-                                # Bug #364 fix: For non-Python languages (or agentic mode), trust the agentic result.
-                                # The agentic crash handler already verified using the correct
-                                # language-specific run command.
+                            if _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
+                                # Bug #364 fix: For non-Python languages, trust the agentic result.
+                                # Python needs real coverage measurement (commit 86fe07dc1 missed this).
                                 # Save a successful RunReport so sync_determine_operation advances.
                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                 report = RunReport(
@@ -2391,7 +2425,7 @@ def sync_orchestration(
                                     coverage=0.0,
                                     test_hash=test_hash
                                 )
-                                _save_run_report_atomic(asdict(report), basename, language)
+                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
                             else:
                                 # Re-run example to verify crash fix worked (Python only)
                                 try:
@@ -2416,7 +2450,7 @@ def sync_orchestration(
                                      # Include test_hash for staleness detection
                                      test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                      report = RunReport(datetime.datetime.now(datetime.timezone.utc).isoformat(), returncode, 1 if returncode==0 else 0, 0 if returncode==0 else 1, 100.0 if returncode==0 else 0.0, test_hash=test_hash)
-                                     _save_run_report_atomic(asdict(report), basename, language)
+                                     _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
                                 except Exception as e:
                                      # Bug #8 fix: Don't silently swallow exceptions - log them and mark as error
                                      error_msg = f"Post-crash verification failed: {e}"
@@ -2424,7 +2458,7 @@ def sync_orchestration(
                                      log_event(basename, language, "post_crash_verification_failed", {"error": str(e)}, invocation_mode="sync")
                     
                         if success and operation == 'verify':
-                            if _use_agentic_path(language, agentic_mode):
+                            if _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -2434,15 +2468,15 @@ def sync_orchestration(
                                     coverage=0.0,
                                     test_hash=test_hash
                                 )
-                                _save_run_report_atomic(asdict(report), basename, language)
+                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
 
                         if success and operation == 'fix':
                             # Re-run tests to update run_report after successful fix
                             # This prevents infinite loop by updating the state machine
-                            if _use_agentic_path(language, agentic_mode):
-                                # Bug #364 fix: For non-Python languages (or agentic mode), trust the agentic result.
+                            if _use_agentic_path(language, agentic_mode) and language.lower() != 'python':
+                                # Bug #364 fix: For non-Python languages, trust the agentic result.
                                 # The agentic fix handler already verified tests pass.
-                                # Save a successful RunReport so sync_determine_operation advances.
+                                # Python needs real coverage measurement (commit 86fe07dc1 missed this).
                                 test_hash = calculate_sha256(pdd_files['test']) if pdd_files['test'].exists() else None
                                 report = RunReport(
                                     datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -2452,7 +2486,7 @@ def sync_orchestration(
                                     coverage=0.0,
                                     test_hash=test_hash
                                 )
-                                _save_run_report_atomic(asdict(report), basename, language)
+                                _save_run_report_atomic(asdict(report), basename, language, atomic_state=atomic_state)
                             elif pdd_files['test'].exists():
                                 _execute_tests_and_create_run_report(
                                     pdd_files['test'],

@@ -16,13 +16,18 @@ from .get_language import get_language
 
 
 def _detect_ts_test_runner(test_path: Path) -> Optional[str]:
-    """Detect Jest or Vitest config by walking up from the test file.
+    """Detect Playwright, Jest, or Vitest config by walking up from the test file.
 
-    Returns 'npx jest --no-coverage' or 'npx vitest run' if a config is found,
-    otherwise None (fall through to CSV default).
+    For .spec.ts/.spec.tsx files, checks for playwright.config first.
+    Returns 'npx playwright test', 'npx jest --no-coverage --', or 'npx vitest run'
+    if a config is found, otherwise None (fall through to CSV default).
     """
+    is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
     for _ in range(5):  # Walk up at most 5 levels
+        # For .spec.ts/.spec.tsx files, check Playwright first
+        if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
+            return "npx playwright test"
         if any((search_dir / cfg).exists() for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')):
             return "npx jest --no-coverage --"
         if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):

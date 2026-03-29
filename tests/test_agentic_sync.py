@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -12,6 +13,7 @@ import pytest
 
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
+    _augment_architecture_from_pr_branch,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
     _find_project_root,
@@ -430,6 +432,7 @@ class TestRunAgenticSync:
             [{"filename": "foo_python.prompt", "dependencies": []}],
             Path("/tmp/architecture.json"),
         )
+        # LLM module identification costs 0.07
         mock_agentic_task.return_value = (
             True,
             'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
@@ -439,11 +442,13 @@ class TestRunAgenticSync:
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
+        # Full total: initial_cost (0.07) + per-module (0.10) = 0.17
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.17)
         mock_runner_cls.return_value = mock_runner
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
 
+        # Verify initial_cost was passed to AsyncSyncRunner constructor
         runner_kwargs = mock_runner_cls.call_args[1]
         assert "initial_cost" in runner_kwargs
         assert runner_kwargs["initial_cost"] == pytest.approx(0.07)
@@ -1191,6 +1196,84 @@ class TestFilterInvalidBasenames:
 
         assert valid == ["mod_b", "mod_a", "mod_c"]
 
+    def test_accepts_path_qualified_basenames_from_branch_diff(self):
+        """Bug #571: _detect_modules_from_branch_diff returns basenames with
+        directory prefixes like 'frontend/app/settings/github/page', but
+        architecture.json only has 'page' (from 'page_TypescriptReact.prompt').
+        The filter must accept path-qualified basenames when their tail matches."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+            {"filename": "BoardConfigPanel_TypescriptReact.prompt"},
+        ]
+        modules = [
+            "frontend/app/settings/github/page",
+            "frontend/components/github/BoardConfigPanel",
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "frontend/app/settings/github/page" in valid, (
+            "Bug #571: path-qualified 'page' rejected despite 'page' being a known basename"
+        )
+        assert "frontend/components/github/BoardConfigPanel" in valid
+        assert invalid == []
+
+    def test_rejects_path_qualified_basenames_that_dont_match(self):
+        """Path-qualified basenames where the tail doesn't match should still be rejected."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+        ]
+        modules = ["frontend/app/settings/github/nonexistent"]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert valid == []
+        assert "frontend/app/settings/github/nonexistent" in invalid
+
+    def test_mixed_exact_and_path_qualified_basenames(self):
+        """Both exact basenames and path-qualified basenames should be accepted."""
+        architecture = [
+            {"filename": "page_TypescriptReact.prompt"},
+            {"filename": "agentic_bug_orchestrator_python.prompt"},
+        ]
+        modules = [
+            "agentic_bug_orchestrator",                    # exact match
+            "frontend/app/settings/github/page",           # path-qualified
+            "hallucinated_module",                          # invalid
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "agentic_bug_orchestrator" in valid
+        assert "frontend/app/settings/github/page" in valid
+        assert "hallucinated_module" in invalid
+        assert len(valid) == 2
+        assert len(invalid) == 1
+
+    def test_rejects_ambiguous_tail_match(self):
+        """When multiple architecture entries share the same basename (e.g.
+        commands/auth and server/routes/auth both extract to 'auth'),
+        a path-qualified name like 'commands/auth' must NOT tail-match
+        because it's ambiguous which module it refers to."""
+        architecture = [
+            {"filename": "auth_python.prompt"},   # could be commands/auth
+            {"filename": "auth_python.prompt"},   # could be server/routes/auth
+            {"filename": "cli_python.prompt"},    # unique basename
+        ]
+        modules = [
+            "commands/auth",        # ambiguous — 'auth' appears twice
+            "core/cli",             # unambiguous — 'cli' appears once
+        ]
+
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+
+        assert "commands/auth" in invalid, (
+            "Ambiguous tail-match should be rejected when basename appears multiple times"
+        )
+        assert "core/cli" in valid, (
+            "Unambiguous tail-match should still be accepted"
+        )
+
 
 # ---------------------------------------------------------------------------
 # BUG: The identify-modules prompt references "the current issue number" but
@@ -1273,3 +1356,74 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
             "The rendered prompt must contain the issue number (746) so the LLM "
             f"can match origin fields. Got prompt starting with: {prompt_arg[:200]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _augment_architecture_from_pr_branch (Issue #733: new modules from PR branch)
+# ---------------------------------------------------------------------------
+
+class TestAugmentArchitectureFromPrBranch:
+    """When running pdd sync from main for an issue with a PR, architecture.json
+    should be augmented with entries from the PR branch so that newly created
+    modules (like embed_retrieve) are not filtered out by _filter_invalid_basenames."""
+
+    def test_adds_new_entries_from_pr_branch(self, tmp_path):
+        """New entries in the PR branch's architecture.json should be merged."""
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+        ]
+        pr_branch_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+            {"filename": "embed_retrieve_python.prompt", "filepath": "pdd/embed_retrieve.py"},
+        ]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = json.dumps(pr_branch_arch)
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
+
+        filenames = [e["filename"] for e in result]
+        assert "foo_python.prompt" in filenames
+        assert "embed_retrieve_python.prompt" in filenames
+
+    def test_does_not_duplicate_existing_entries(self, tmp_path):
+        """Entries already in local architecture should not be duplicated."""
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "local version"},
+        ]
+        pr_branch_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "pr version"},
+        ]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = json.dumps(pr_branch_arch)
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
+
+        assert len(result) == 1
+        # Local version should be preserved, not overwritten
+        assert result[0]["reason"] == "local version"
+
+    def test_returns_original_when_no_pr_branch(self, tmp_path):
+        """When the PR branch doesn't exist, return architecture unchanged."""
+        local_arch = [
+            {"filename": "foo_python.prompt"},
+        ]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.side_effect = subprocess.CalledProcessError(128, "git show")
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 999)
+
+        assert result == local_arch
+
+    def test_returns_original_when_architecture_is_none(self, tmp_path):
+        """When local architecture is None, return None unchanged."""
+        result = _augment_architecture_from_pr_branch(None, tmp_path, 733)
+        assert result is None
+
+    def test_handles_malformed_pr_branch_json(self, tmp_path):
+        """Gracefully handles invalid JSON from the PR branch."""
+        local_arch = [{"filename": "foo_python.prompt"}]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = "not valid json"
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
+
+        assert result == local_arch

@@ -102,6 +102,55 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return []
 
 
+def _augment_architecture_from_pr_branch(
+    architecture: Optional[List[Dict[str, Any]]],
+    project_root: Path,
+    issue_number: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Merge new architecture.json entries from the PR branch for this issue.
+
+    When pdd sync runs from main, architecture.json only contains entries for
+    modules that exist on main. If pdd-change created new modules on a
+    change/issue-N branch, those entries are missing and _filter_invalid_basenames
+    will reject them as hallucinations. This function fetches architecture.json
+    from the PR branch and adds any entries whose filename is not already present.
+    """
+    if architecture is None:
+        return None
+
+    try:
+        result = subprocess.run(
+            ["git", "show", f"origin/change/issue-{issue_number}:architecture.json"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        pr_arch = json.loads(result.stdout)
+    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+        return architecture
+
+    if not isinstance(pr_arch, list):
+        return architecture
+
+    existing_filenames = {
+        entry.get("filename")
+        for entry in architecture
+        if isinstance(entry, dict) and entry.get("filename")
+    }
+
+    for entry in pr_arch:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("filename")
+        if not filename or filename in existing_filenames:
+            continue
+        architecture.append(entry)
+        existing_filenames.add(filename)
+
+    return architecture
+
+
 def _filter_invalid_basenames(
     modules: List[str],
     architecture: Optional[List[Dict[str, Any]]],
@@ -119,8 +168,11 @@ def _filter_invalid_basenames(
     if architecture is None:
         return modules, []
 
-    # Build set of known basenames from architecture.json filenames
-    known_basenames: set[str] = set()
+    # Build basename counts from architecture.json filenames.
+    # A count > 1 means the basename is ambiguous (e.g. "auth" from both
+    # commands/auth_python.prompt and server/routes/auth_python.prompt).
+    from collections import Counter
+    basename_counts: Counter = Counter()
     for entry in architecture:
         if not isinstance(entry, dict):
             continue
@@ -130,7 +182,7 @@ def _filter_invalid_basenames(
         # Try standard extraction (handles _python.prompt, _typescript.prompt, etc.)
         basename = extract_module_from_include(filename)
         if basename:
-            known_basenames.add(basename)
+            basename_counts[basename] += 1
         else:
             # Fallback for LLM prompts (_LLM.prompt) and other non-standard suffixes:
             # strip .prompt extension, then remove trailing _LLM if present
@@ -140,10 +192,29 @@ def _filter_invalid_basenames(
                     stem = stem[: -len(suffix)]
                     break
             if stem:
-                known_basenames.add(stem)
+                basename_counts[stem] += 1
 
-    valid = [m for m in modules if m in known_basenames]
-    invalid = [m for m in modules if m not in known_basenames]
+    known_basenames = set(basename_counts.keys())
+
+    valid = []
+    invalid = []
+    for m in modules:
+        if m in known_basenames:
+            # Exact match (e.g. "agentic_bug_orchestrator")
+            valid.append(m)
+        elif "/" in m:
+            tail = m.rsplit("/", 1)[-1]
+            if tail in known_basenames and basename_counts[tail] == 1:
+                # Unambiguous tail match: path-qualified basename from branch
+                # diff (e.g. "frontend/app/settings/github/page" where "page"
+                # appears exactly once in architecture.json).
+                valid.append(m)
+            else:
+                # Either tail not found, or ambiguous (multiple entries share
+                # the same basename — can't determine which module is meant).
+                invalid.append(m)
+        else:
+            invalid.append(m)
     return valid, invalid
 
 
@@ -846,6 +917,9 @@ def run_agentic_sync(
         stripped = extract_module_from_include(m + ".prompt")
         stripped_modules.append(stripped if stripped else m)
     modules_to_sync = list(dict.fromkeys(stripped_modules))
+
+    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
+    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
 
     # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
     modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)

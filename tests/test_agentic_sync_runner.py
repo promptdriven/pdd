@@ -1297,3 +1297,76 @@ class TestModuleCwds:
         runner._sync_one_module("foo")
         popen_kwargs = mock_popen.call_args[1]
         assert popen_kwargs["cwd"] == str(runner.project_root)
+
+
+# ---------------------------------------------------------------------------
+# Issue #745: initial_cost (LLM module analysis cost) tracking
+# ---------------------------------------------------------------------------
+
+class TestInitialCostTracking:
+    """Tests for issue #745: AsyncSyncRunner must include initial_cost
+    (the LLM module analysis cost) in both _build_comment_body and run() return."""
+
+    def test_build_comment_body_includes_initial_cost(self):
+        """_build_comment_body total cost should include initial_cost."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            initial_cost=0.25,
+        )
+        runner.module_states["a"].status = "success"
+        runner.module_states["a"].start_time = 0.0
+        runner.module_states["a"].end_time = 10.0
+        runner.module_states["a"].cost = 0.10
+
+        body = runner._build_comment_body(1)
+        # Total should be 0.25 (initial) + 0.10 (module) = 0.35
+        assert "$0.35" in body
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_run_return_cost_includes_initial_cost(self, mock_comment, mock_sync):
+        """run() return cost should include initial_cost."""
+        mock_sync.return_value = (True, 0.10, "")
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            initial_cost=0.25,
+        )
+
+        success, msg, cost = runner.run()
+        assert success
+        # Cost should be 0.25 (initial) + 0.10 (module) = 0.35
+        assert cost == pytest.approx(0.35)
+
+    def test_default_initial_cost_is_zero(self):
+        """When initial_cost is not provided, it defaults to 0.0 (backward compat)."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        assert runner.initial_cost == 0.0
+
+    def test_initial_cost_visible_with_zero_module_costs(self):
+        """When no modules have cost yet, initial_cost alone should appear in total."""
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            initial_cost=0.50,
+        )
+        # All modules pending (cost=0.0)
+        body = runner._build_comment_body(1)
+        assert "$0.50" in body
