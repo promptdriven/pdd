@@ -835,50 +835,89 @@ def test_parse_tags_empty_dependency_tag():
 
 # --- Test dependency clearing behavior ---
 
-def test_dependency_clearing_when_tags_removed():
-    """Test that removing all dependency tags clears dependencies in architecture."""
+def test_dependencies_preserved_when_no_pdd_dependency_tags():
+    """architecture.json dependencies are not cleared when prompt has no <pdd-dependency> tags.
+
+    Reason/interface-only updates must not wipe dependencies (include-based deps may exist).
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
         prompts_dir = tmppath / "prompts"
         prompts_dir.mkdir()
 
-        # Create prompt with reason but NO dependency tags
-        # (simulating user removed all dependency tags)
         prompt_file = prompts_dir / "test.prompt"
         prompt_file.write_text("""
-<pdd-reason>Module with dependencies removed</pdd-reason>
+<pdd-reason>Updated reason only</pdd-reason>
 <pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
-% No dependency tags - they were removed by user
+% No pdd-dependency tags
 """)
 
-        # Architecture has existing dependencies
         arch_file = tmppath / "architecture.json"
         arch_data = [{
             "filename": "test.prompt",
             "filepath": "pdd/test.py",
             "reason": "Old reason",
             "description": "Test",
-            "dependencies": ["old_dep1.prompt", "old_dep2.prompt"],  # Should be cleared
+            "dependencies": ["old_dep1.prompt", "old_dep2.prompt"],
             "priority": 1,
             "tags": []
         }]
         arch_file.write_text(json.dumps(arch_data, indent=2))
 
-        # Sync
         result = update_architecture_from_prompt(
             "test.prompt",
             prompts_dir=prompts_dir,
             architecture_path=arch_file
         )
 
-        # Verify dependencies were cleared
+        assert result['success'] is True
+        assert result['updated'] is True
+        assert 'dependencies' not in result.get('changes', {})
+
+        updated = json.loads(arch_file.read_text())
+        assert updated[0]['dependencies'] == ["old_dep1.prompt", "old_dep2.prompt"]
+        assert updated[0]['reason'] == "Updated reason only"
+
+
+def test_dependencies_cleared_when_empty_pdd_dependency_tags_present():
+    """Explicit empty <pdd-dependency> tags clear dependencies in architecture."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        prompt_file = prompts_dir / "test.prompt"
+        prompt_file.write_text("""
+<pdd-reason>Module with dependencies removed</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
+<pdd-dependency></pdd-dependency>
+% Empty dependency tag = user cleared deps
+""")
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [{
+            "filename": "test.prompt",
+            "filepath": "pdd/test.py",
+            "reason": "Old reason",
+            "description": "Test",
+            "dependencies": ["old_dep1.prompt", "old_dep2.prompt"],
+            "priority": 1,
+            "tags": []
+        }]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        result = update_architecture_from_prompt(
+            "test.prompt",
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file
+        )
+
         assert result['success'] is True
         assert result['updated'] is True
         assert 'dependencies' in result['changes']
         assert result['changes']['dependencies']['old'] == ['old_dep1.prompt', 'old_dep2.prompt']
         assert result['changes']['dependencies']['new'] == []
 
-        # Verify architecture.json updated
         updated = json.loads(arch_file.read_text())
         assert updated[0]['dependencies'] == []
 
@@ -976,10 +1015,11 @@ def test_dependency_add_and_remove():
         updated = json.loads(arch_file.read_text())
         assert updated[0]['dependencies'] == ['dep1.prompt']
 
-        # Step 3: Remove ALL dependencies (keep reason tag)
+        # Step 3: Remove ALL dependencies — explicit empty <pdd-dependency> tags
         prompt_file.write_text("""
 <pdd-reason>Test</pdd-reason>
-% All dependencies removed
+<pdd-dependency></pdd-dependency>
+% Cleared via empty dependency tags
 """)
 
         result = update_architecture_from_prompt(
@@ -1348,9 +1388,9 @@ def test_sync_all_with_mixed_prompts():
         assert full['dependencies'] == ['dep.prompt']
         assert full['interface'] is not None
 
-        # Partial should have reason updated and deps cleared (has other PDD tags)
+        # Partial: reason updated; dependencies unchanged (no <pdd-dependency> in prompt)
         assert partial['reason'] == 'Partial'
-        assert partial['dependencies'] == []  # Cleared because has <pdd-reason> but no deps
+        assert partial['dependencies'] == ['old_dep.prompt']
 
         # Legacy should be unchanged (no PDD tags)
         assert legacy['reason'] == 'Legacy'
