@@ -1,12 +1,17 @@
 import pytest
 import sys
 import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 import click
 from click.testing import CliRunner
+import git
 
-# Import the function under test from the pdd package (module named the same as the function).
-from pdd.update_main import update_main
+from pdd.update_main import (
+    _included_docs_for_drift_report,
+    find_and_resolve_all_pairs,
+    update_main,
+)
 
 @pytest.fixture
 def mock_ctx():
@@ -318,10 +323,68 @@ def test_update_main_handles_unexpected_exception_gracefully(
 
 # --- Tests for --repo functionality ---
 
-import os
-from pathlib import Path
-import git
-from pdd.update_main import find_and_resolve_all_pairs
+
+def test_included_docs_for_drift_report_counts_all_prompts_referencing_doc(tmp_path, monkeypatch):
+    """Doc rows show how many scan-wide prompts include each doc, not only drifted count."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "README.md").write_text("# hi\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "api.md").write_text("api", encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    p = tmp_path / "prompts" / "m_python.prompt"
+    p.write_text(
+        "<include>../README.md</include>\n<include>../docs/api.md</include>\n",
+        encoding="utf-8",
+    )
+    p2 = tmp_path / "prompts" / "n_python.prompt"
+    p2.write_text("<include>../README.md</include>\n", encoding="utf-8")
+    all_prompts = [str(p), str(p2)]
+    # Only m_python is drifted; README is still included by 2 prompts in the scan.
+    agg = _included_docs_for_drift_report(str(tmp_path), all_prompts, [str(p)])
+    by_name = {rel: c for rel, c in agg}
+    assert by_name.get("README.md") == 2
+    assert by_name.get("docs/api.md") == 1
+
+
+def test_included_docs_for_drift_report_excludes_mdx_not_regenerated_post_update(
+    tmp_path, monkeypatch,
+):
+    """.mdx includes are not auto-regenerated after update; drift report lists .md only."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "page.mdx").write_text("mdx", encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    p = tmp_path / "prompts" / "m_python.prompt"
+    p.write_text("<include>../docs/page.mdx</include>\n", encoding="utf-8")
+    agg = _included_docs_for_drift_report(str(tmp_path), [str(p)], [str(p)])
+    assert agg == []
+
+
+def test_estimate_dry_run_cost_range_is_flat_per_pair(tmp_path, monkeypatch):
+    """Dry-run estimate is a flat $0.50–$1.00 per drifted pair."""
+    from pdd.update_main import _estimate_dry_run_cost_range
+
+    repo = git.Repo.init(tmp_path)
+    (tmp_path / "small.py").write_text("a")
+    (tmp_path / "prompts").mkdir()
+    sp = tmp_path / "prompts" / "small_python.prompt"
+    sp.write_text("prompt")
+    repo.index.add([str(tmp_path / "small.py"), str(sp)])
+    repo.index.commit("init")
+    monkeypatch.chdir(tmp_path)
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {}
+    small_items = [(str(sp), str(tmp_path / "small.py"), "r")]
+
+    lo_s, hi_s = _estimate_dry_run_cost_range(ctx, repo, True, small_items)
+    assert lo_s == 0.5
+    assert hi_s == 1.0
+
+    lo_0, hi_0 = _estimate_dry_run_cost_range(ctx, repo, True, [])
+    assert lo_0 == 0.0
+    assert hi_0 == 0.0
+
 
 @pytest.fixture
 def mock_get_language_for_repo(monkeypatch):
@@ -396,6 +459,24 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     ]
     assert len(pairs) == len(expected_pairs)
     assert sorted(p[1] for p in pairs) == sorted(ep[1] for ep in expected_pairs)
+
+
+def test_find_pairs_dry_run_mode_does_not_create_missing_prompts(temp_git_repo):
+    """When create_missing_prompts=False, scan should not create missing prompt files."""
+    repo_path_str = str(temp_git_repo)
+    module1_prompt_path = temp_git_repo / "prompts" / "src" / "module1_python.prompt"
+    module2_prompt_path = temp_git_repo / "prompts" / "src" / "module2_javascript.prompt"
+
+    if module1_prompt_path.exists():
+        module1_prompt_path.unlink()
+    if module2_prompt_path.exists():
+        module2_prompt_path.unlink()
+
+    pairs = find_and_resolve_all_pairs(repo_path_str, quiet=True, create_missing_prompts=False)
+    assert pairs, "Expected at least one resolved code/prompt pair"
+    assert not module1_prompt_path.exists()
+    assert not module2_prompt_path.exists()
+
 
 def test_find_and_resolve_pairs_scans_only_scan_dir(tmp_path, mock_get_language_for_repo):
     """
@@ -522,11 +603,13 @@ def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_lan
         os.chdir(original_cwd)
 
 
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
 @patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
-def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
+def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, _mock_example_gen, _mock_auto_submit, temp_git_repo, capsys):
     """
     Test the main orchestration logic of update_main in --repo mode.
     """
@@ -561,6 +644,457 @@ def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_cha
 
     assert result is not None
     assert result[0] == "Repository update complete."
+
+
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
+@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
+@patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.update_main.update_file_pair')
+def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, _mock_example_gen, _mock_auto_submit, temp_git_repo, capsys):
+    """Repo mode should stop processing new files once budget cap is reached."""
+    costs = iter([0.60, 0.60, 0.60])  # 3 changed pairs in fixture
+
+    def mock_update_logic(prompt_file, code_file, ctx, repo, simple=False):
+        return {
+            "prompt_file": prompt_file,
+            "status": "✅ Success",
+            "cost": next(costs),
+            "model": "mock_model",
+            "error": "",
+        }
+
+    mock_update_file_pair.side_effect = mock_update_logic
+
+    ctx = click.Context(click.Command('update'))
+    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+    result = update_main(
+        ctx=ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        use_git=False,
+        repo=True,
+        budget=1.0,
+    )
+
+    # First two updates run (0.6 + 0.6), then cap is reached and third is skipped.
+    assert mock_update_file_pair.call_count == 2
+    captured = capsys.readouterr()
+    assert "budget cap reached" in captured.out.lower()
+    assert result is not None
+    # Per-pair update costs plus example regeneration (mocked at $0.10 each).
+    assert result[1] == pytest.approx(1.4)
+
+
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+@patch("pdd.update_main.find_and_resolve_all_pairs")
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
+def test_update_main_repo_mode_dependency_ordering_for_budget(
+    _mock_example_gen,
+    _mock_auto_submit,
+    mock_update_file_pair,
+    mock_is_changed,
+    mock_git_changed,
+    mock_find_pairs,
+    mock_ensure_pddrc,
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """When budget stops early, dependencies should have higher priority."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    git.Repo.init(repo_path)
+
+    monkeypatch.chdir(repo_path)
+
+    prompts_dir = repo_path / "prompts"
+    prompts_dir.mkdir()
+    src_dir = repo_path / "src"
+    src_dir.mkdir()
+
+    # main depends on dep via <include> -> main should run after dep.
+    dep_prompt = prompts_dir / "dep_python.prompt"
+    dep_prompt.write_text("dep", encoding="utf-8")
+    main_prompt = prompts_dir / "main_python.prompt"
+    main_prompt.write_text("<include>dep_python.prompt</include>", encoding="utf-8")
+
+    dep_code = src_dir / "dep.py"
+    dep_code.write_text("def dep(): pass", encoding="utf-8")
+    main_code = src_dir / "main.py"
+    main_code.write_text("def main(): pass", encoding="utf-8")
+
+    # Intentionally return in the wrong order: main first.
+    mock_find_pairs.return_value = [
+        (str(main_prompt), str(main_code)),
+        (str(dep_prompt), str(dep_code)),
+    ]
+
+    processed: list[str] = []
+
+    def mock_update_logic(prompt_file, code_file, ctx, repo, simple=False):
+        processed.append(Path(prompt_file).name)
+        return {
+            "prompt_file": prompt_file,
+            "status": "✅ Success",
+            "cost": 0.6,
+            "model": "mock_model",
+            "error": "",
+        }
+
+    mock_update_file_pair.side_effect = mock_update_logic
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+    result = update_main(
+        ctx=ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        use_git=False,
+        repo=True,
+        budget=0.1,
+    )
+
+    # Only one file should be processed (budget reached after first update).
+    assert mock_update_file_pair.call_count == 1
+    assert processed == ["dep_python.prompt"], f"Expected dep first, got {processed}"
+
+    captured = capsys.readouterr()
+    assert "budget cap reached" in captured.out.lower()
+    assert result is not None
+    # Update cost plus mocked example regeneration ($0.10).
+    assert result[1] == pytest.approx(0.7)
+
+
+@patch("pdd.context_generator_main.context_generator_main")
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "no fingerprint, file in git changed set"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_update_main_repo_mode_dry_run_skips_work(
+    mock_ensure_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    mock_doc_gen,
+    temp_git_repo,
+    capsys,
+):
+    """Repository-wide dry run must not call update_file_pair or ensure_pddrc_for_scan."""
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+    result = update_main(
+        ctx=ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        use_git=False,
+        repo=True,
+        dry_run=True,
+    )
+
+    mock_update_file_pair.assert_not_called()
+    mock_ensure_pddrc.assert_not_called()
+    captured = capsys.readouterr()
+    assert "Repository drift report" in captured.out
+    assert "Changed files:" in captured.out
+    assert "Estimated cost:" in captured.out
+    assert "Drifted modules:" in captured.out
+    assert "Included docs that may need updating:" in captured.out
+    assert "Repository Update Summary" not in captured.out
+    assert result is not None
+    assert result[1] == 0.0
+    assert "would be updated" in result[0].lower()
+    assert result[2] == "N/A"
+    mock_doc_gen.assert_not_called()
+
+
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("doc", 0.1, "mock"))
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.update_main.find_and_resolve_all_pairs")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_update_main_repo_mode_updates_included_markdown_docs(
+    mock_ensure_pddrc,
+    mock_find_pairs,
+    mock_update_file_pair,
+    _mock_get_git_changed_files,
+    _mock_is_changed,
+    _mock_arch,
+    mock_doc_gen,
+    _mock_auto_submit,
+    tmp_path,
+):
+    """After updating a prompt successfully, regenerate markdown docs referenced via <include> tags."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    git.Repo.init(repo_path)
+
+    src_dir = repo_path / "src"
+    src_dir.mkdir()
+    prompts_dir = repo_path / "prompts"
+    prompts_dir.mkdir()
+
+    code_path = src_dir / "m.py"
+    code_path.write_text("def m(): pass\n", encoding="utf-8")
+
+    doc_path = repo_path / "README.md"
+    doc_path.write_text("old readme\n", encoding="utf-8")
+
+    prompt_path = prompts_dir / "m_python.prompt"
+    prompt_path.write_text(
+        "<include>README.md</include>\n",
+        encoding="utf-8",
+    )
+
+    # Ensure include resolver can resolve README.md relative to prompt's include and CWD.
+    original_cwd = os.getcwd()
+    os.chdir(repo_path)
+    try:
+        mock_find_pairs.return_value = [(str(prompt_path), str(code_path))]
+        mock_update_file_pair.return_value = {
+            "prompt_file": str(prompt_path),
+            "status": "✅ Success",
+            "cost": 0.6,
+            "model": "mock_model",
+            "error": "",
+        }
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "time": 0.25,
+            "quiet": True,
+        }
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            extensions=None,
+            directory=None,
+            simple=True,
+            base_branch="main",
+            dry_run=False,
+        )
+
+        assert result is not None
+        # context_generator_main is used for both example regeneration (code) and doc regeneration (md).
+        # We assert that the md regeneration call for README.md occurred.
+        md_calls = [
+            c for c in mock_doc_gen.call_args_list
+            if c.kwargs.get("output") == str(doc_path) and c.kwargs.get("format") == "md"
+        ]
+        assert len(md_calls) == 1, f"Expected exactly one md regen call for README.md, got {mock_doc_gen.call_args_list}"
+        kwargs = md_calls[0].kwargs
+        assert kwargs["prompt_file"] == str(prompt_path)
+        assert kwargs["code_file"] == str(code_path)
+    finally:
+        os.chdir(original_cwd)
+
+
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.sync_determine_operation.get_pdd_file_paths")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.update_main.find_and_resolve_all_pairs")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_update_main_repo_mode_regenerates_example_and_autosubmits(
+    mock_ensure_pddrc,
+    mock_find_pairs,
+    mock_update_file_pair,
+    _mock_get_git_changed_files,
+    _mock_is_changed,
+    _mock_arch,
+    mock_example_gen,
+    mock_get_paths,
+    mock_auto_submit,
+    tmp_path,
+):
+    """After a successful repo-wide update, regenerate example and auto-submit dev unit."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    git.Repo.init(repo_path)
+
+    prompts_dir = repo_path / "prompts"
+    prompts_dir.mkdir()
+    src_dir = repo_path / "src"
+    src_dir.mkdir()
+    examples_dir = repo_path / "examples"
+    examples_dir.mkdir()
+
+    prompt_path = prompts_dir / "m_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    code_path = src_dir / "m.py"
+    code_path.write_text("def m(): pass\n", encoding="utf-8")
+    example_path = examples_dir / "m_example.py"
+    test_path = repo_path / "tests" / "test_m.py"
+
+    pdd_files = {
+        "prompt": prompt_path,
+        "code": code_path,
+        "example": example_path,
+        "test": test_path,
+        "test_files": [test_path],
+    }
+    mock_get_paths.return_value = pdd_files
+
+    mock_find_pairs.return_value = [(str(prompt_path), str(code_path))]
+    mock_update_file_pair.return_value = {
+        "prompt_file": str(prompt_path),
+        "status": "✅ Success",
+        "cost": 0.6,
+        "model": "mock_model",
+        "error": "",
+    }
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "time": 0.25, "quiet": True}
+
+    original_cwd = os.getcwd()
+    os.chdir(repo_path)
+    try:
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            simple=True,
+            dry_run=False,
+        )
+        assert result is not None
+    finally:
+        os.chdir(original_cwd)
+
+    # Example regeneration should be called targeting the configured example path.
+    assert mock_example_gen.call_count == 1
+    ex_kwargs = mock_example_gen.call_args.kwargs
+    assert ex_kwargs["prompt_file"] == str(prompt_path)
+    assert ex_kwargs["code_file"] == str(code_path)
+    assert ex_kwargs["output"] == str(example_path)
+    assert ex_kwargs["format"] == "code"
+
+    # Auto-submit should be called with resolved basename/language and pdd_files.
+    assert mock_auto_submit.call_count == 1
+    args = mock_auto_submit.call_args.args
+    assert args[0] == "m"
+    assert args[1] == "python"
+    assert args[2] == pdd_files
+
+
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.sync_determine_operation.get_pdd_file_paths")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.update_main.find_and_resolve_all_pairs")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_update_main_repo_mode_example_submit_uses_current_pair_paths(
+    _mock_ensure_pddrc,
+    mock_find_pairs,
+    mock_update_file_pair,
+    _mock_get_git_changed_files,
+    _mock_is_changed,
+    _mock_arch,
+    mock_example_gen,
+    mock_get_paths,
+    _mock_auto_submit,
+    tmp_path,
+):
+    """Example regeneration should use prompt/code from the current processed pair."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    git.Repo.init(repo_path)
+
+    prompts_dir = repo_path / "prompts"
+    prompts_dir.mkdir()
+    src_dir = repo_path / "src"
+    src_dir.mkdir()
+    examples_dir = repo_path / "examples"
+    examples_dir.mkdir()
+
+    prompt_path = prompts_dir / "m_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    code_path = src_dir / "m.py"
+    code_path.write_text("def m(): pass\n", encoding="utf-8")
+
+    wrong_prompt = repo_path / "prompts" / "wrong_python.prompt"
+    wrong_code = repo_path / "wrong.py"
+    example_path = examples_dir / "m_example.py"
+    test_path = repo_path / "tests" / "test_m.py"
+    mock_get_paths.return_value = {
+        "prompt": wrong_prompt,
+        "code": wrong_code,
+        "example": example_path,
+        "test": test_path,
+        "test_files": [test_path],
+    }
+
+    mock_find_pairs.return_value = [(str(prompt_path), str(code_path))]
+    mock_update_file_pair.return_value = {
+        "prompt_file": str(prompt_path),
+        "status": "✅ Success",
+        "cost": 0.6,
+        "model": "mock_model",
+        "error": "",
+    }
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "time": 0.25, "quiet": True}
+
+    original_cwd = os.getcwd()
+    os.chdir(repo_path)
+    try:
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            simple=True,
+            dry_run=False,
+        )
+        assert result is not None
+    finally:
+        os.chdir(original_cwd)
+
+    ex_kwargs = mock_example_gen.call_args.kwargs
+    assert ex_kwargs["prompt_file"] == str(prompt_path)
+    assert ex_kwargs["code_file"] == str(code_path)
 
 
 # --- Tests for .pddrc prompts_dir configuration (GitHub Issue #86) ---
