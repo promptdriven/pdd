@@ -3,7 +3,7 @@ import re
 import subprocess
 import sys
 import heapq
-from collections import Counter, defaultdict
+from collections import defaultdict
 from typing import Tuple, Optional, List, Dict, Any, Set
 import click
 from rich import print as rprint
@@ -786,22 +786,18 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
             "error": str(e),
         }
 
-def _read_text_byte_len(path: str) -> int:
-    """Best-effort size of file text for dry-run cost sizing (chars)."""
-    try:
-        return len(Path(path).read_text(encoding="utf-8", errors="ignore"))
-    except (OSError, IOError):
-        return 0
-
-
 def _repo_relative_md_dep(dep_str: str, repo_root_p: Path) -> Optional[str]:
-    """Return repo-relative path for a resolved include target, or None if outside repo / not doc."""
+    """Return repo-relative path for a resolved include target, or None if outside repo / not a healable doc.
+
+    Only ``.md`` is listed: repo update post-processing regenerates included markdown via
+    ``context_generator_main(..., format='md')``, which does not target ``.mdx`` paths.
+    """
     dep_p = Path(dep_str)
     if not dep_p.is_absolute():
         dep_p = (Path.cwd() / dep_p).resolve()
     else:
         dep_p = dep_p.resolve()
-    if dep_p.suffix.lower() not in (".md", ".mdx"):
+    if dep_p.suffix.lower() != ".md":
         return None
     try:
         rel = dep_p.relative_to(repo_root_p)
@@ -813,7 +809,7 @@ def _repo_relative_md_dep(dep_str: str, repo_root_p: Path) -> Optional[str]:
 def _md_doc_prompt_reference_counts(
     repo_root: str, prompt_paths: List[str]
 ) -> Dict[str, Set[str]]:
-    """Map repo-relative .md/.mdx → set of prompt paths that <include> it (scan-wide)."""
+    """Map repo-relative .md → set of prompt paths that <include> it (scan-wide)."""
     repo_root_p = Path(repo_root).resolve()
     doc_to_prompts: Dict[str, Set[str]] = defaultdict(set)
     for prompt_path_str in prompt_paths:
@@ -1236,13 +1232,15 @@ def update_main(
                                 # Regenerate example (do NOT regenerate code or tests).
                                 # Use the existing example generator pipeline (writes to pdd_files["example"]).
                                 try:
-                                    context_generator_main(
+                                    _ex_content, ex_cost, _ex_model = context_generator_main(
                                         ctx=ctx,
                                         prompt_file=str(pdd_files["prompt"]),
                                         code_file=str(pdd_files["code"]),
                                         output=str(pdd_files["example"]),
                                         format="code",
                                     )
+                                    total_repo_cost += ex_cost
+                                    progress.update(task, total_cost=total_repo_cost)
                                 except Exception:
                                     # Best-effort: still allow upload (example is optional in submit payload).
                                     pass
@@ -1278,14 +1276,19 @@ def update_main(
 
                             # Regenerate the doc by running the existing markdown generator
                             # with the updated prompt + code as the source of truth.
-                            context_generator_main(
-                                ctx=ctx,
-                                prompt_file=str(prompt_path),
-                                code_file=str(code_path),
-                                output=str(dep_path),
-                                format="md",
-                            )
-                            updated_doc_paths.add(dep_key)
+                            try:
+                                _md_content, md_cost, _md_model = context_generator_main(
+                                    ctx=ctx,
+                                    prompt_file=str(prompt_path),
+                                    code_file=str(code_path),
+                                    output=str(dep_path),
+                                    format="md",
+                                )
+                                total_repo_cost += md_cost
+                                progress.update(task, total_cost=total_repo_cost)
+                                updated_doc_paths.add(dep_key)
+                            except Exception:
+                                pass
                     except Exception:
                         # Best-effort: doc regeneration should not abort the whole repo update.
                         pass
