@@ -854,11 +854,14 @@ def fix_error_loop(unit_test_file: str,
             stats["final_errors"] = errors
             stats["final_warnings"] = warnings
 
-            # Failure-aware early exit (reduces wasted LLM retries)
+            # Failure-aware early exit (reduces wasted LLM retries).
+            # Use post-fix classification so a changed failure mode (e.g. timeout → assertion)
+            # does not keep timeout/syntax short-circuit logic that no longer applies.
             if failure_aware_retries and not success:
                 improved = stats["iterations_info"][-1].get("improved", False)
                 sig_after_fix = extract_failure_signature(pytest_output)
-                if kind_this_iteration == FailureKind.TIMEOUT_FLAKY:
+                kind_after_fix = classify_failure(pytest_output)
+                if kind_after_fix == FailureKind.TIMEOUT_FLAKY:
                     if not improved:
                         timeout_flaky_streak += 1
                     else:
@@ -872,7 +875,7 @@ def fix_error_loop(unit_test_file: str,
                         break
                 else:
                     timeout_flaky_streak = 0
-                if kind_this_iteration == FailureKind.SYNTAX_IMPORT:
+                if kind_after_fix == FailureKind.SYNTAX_IMPORT:
                     if (
                         fix_attempts >= 1
                         and sig_before_fix

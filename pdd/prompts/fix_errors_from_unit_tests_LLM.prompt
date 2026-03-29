@@ -8,6 +8,8 @@
 
 % This prompt is run iteratively. Here are the current errors and past potential fix attempts, if any, from the unit test and verification program run(s): <errors>{errors}</errors>
 
+% Heuristic failure classification for this iteration (from pytest/verification output; guides prioritization): <failure_classification>{failure_classification}</failure_classification>
+
 % If the verfication program fails to run, the code_under_test and unit_test are unchanged from the previous iteration.
 
 % TEST PROTECTION MODE: {protect_tests}
@@ -72,6 +74,7 @@
 
 <instructions>
 % Follow these steps to solve these errors:
+    Step 0. Note the failure_classification block above: use it to prioritize (e.g. fix imports/syntax before rewriting assertions when it indicates syntax/import; avoid large logic churn when it indicates timeout/flaky).
     Step 1. Compare the prompt to the code_under_test and explain differences, if any.
     Step 2. Compare the prompt to the unit_test and explain differences, if any.
     Step 3. For each prior attempted fix for the code_under_test and unit_test (if any), explain in a few paragraphs for each attempt why it might not have worked.
