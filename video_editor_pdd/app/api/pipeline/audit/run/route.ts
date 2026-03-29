@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { registerExecutor, runPipelineStage } from "@/lib/jobs";
-import { extractFrameAtTime, getSectionDuration, renderStill } from "@/lib/render";
+import {
+  extractFrameAtTime,
+  getCompositionDurationInFrames,
+  getSectionDuration,
+  renderStill,
+} from "@/lib/render";
 import { runClaudeAudit, runClaudeAuditWithTrace } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { createSseStream } from "@/lib/sse";
@@ -654,6 +659,31 @@ async function auditSection(
     configuredCompositionIds.length > 0 && Boolean(section.compositionId);
   const renderedVideoPath = resolveSectionRenderedVideoPath(section);
   clearSectionAuditArtifacts(section.id);
+  const previewFrameCountCache = new Map<string, Promise<number>>();
+
+  const getPreviewFrameCount = async (
+    compositionId: string,
+    fallbackFrameCount: number
+  ): Promise<number> => {
+    if (!previewFrameCountCache.has(compositionId)) {
+      previewFrameCountCache.set(
+        compositionId,
+        getCompositionDurationInFrames(compositionId)
+      );
+    }
+
+    try {
+      return Math.max(1, await previewFrameCountCache.get(compositionId)!);
+    } catch (error) {
+      previewFrameCountCache.delete(compositionId);
+      const message =
+        error instanceof Error ? error.message : "Unknown preview duration error";
+      onLog(
+        `[audit] Falling back to intrinsic preview duration for ${compositionId}: ${message}`
+      );
+      return Math.max(1, fallbackFrameCount);
+    }
+  };
 
   let passCount = 0;
   let warnCount = 0;
@@ -747,14 +777,13 @@ async function auditSection(
         clearStaleAuditStill(outputStill);
 
         if (renderSource.kind === "preview-composition") {
+          const previewFrameCount = await getPreviewFrameCount(
+            renderSource.compositionId,
+            sampleWindow.intrinsicDurationFrames
+          );
           const previewDurationFrames = Math.max(
             1,
-            Math.round(
-              Math.max(
-                FRAME_SAMPLE_EPSILON_SECONDS,
-                sampleWindow.endSeconds - sampleWindow.startSeconds
-              ) * fps
-            )
+            previewFrameCount
           );
           const sampleFrame = Math.max(
             0,

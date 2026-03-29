@@ -9,8 +9,9 @@
  *   1. Export renderSection(compositionId, outputPath, onProgress) → Promise<void>
  *   2. Export stitchFullVideo(sectionPaths, outputPath, onProgress) → Promise<void>
  *   3. Export getSectionDuration(mp4Path) → Promise<number>
- *   4. Export renderStill(compositionId, frame, outputPath) → Promise<void>
- *   5. Export extractFrameAtTime(videoPath, timeSeconds, outputPath) → Promise<void>
+ *   4. Export getCompositionDurationInFrames(compositionId) → Promise<number>
+ *   5. Export renderStill(compositionId, frame, outputPath) → Promise<void>
+ *   6. Export extractFrameAtTime(videoPath, timeSeconds, outputPath) → Promise<void>
  *   6. renderMedia uses codec 'h264', outputLocation, onProgress mapping 0–1 → 0–100
  *   7. Bundle path defaults to path.join(process.cwd(), 'remotion')
  *   8. import 'server-only' guard
@@ -119,6 +120,7 @@ import {
   renderSection,
   stitchFullVideo,
   getSectionDuration,
+  getCompositionDurationInFrames,
   extractFrameAtTime,
   renderStill,
 } from "../lib/render";
@@ -184,6 +186,10 @@ describe("module exports", () => {
     expect(typeof getSectionDuration).toBe("function");
   });
 
+  it("exports getCompositionDurationInFrames as a function", () => {
+    expect(typeof getCompositionDurationInFrames).toBe("function");
+  });
+
   it("exports renderStill as a function", () => {
     expect(typeof renderStill).toBe("function");
   });
@@ -204,6 +210,10 @@ describe("module exports", () => {
     expect(getSectionDuration.length).toBe(1);
   });
 
+  it("getCompositionDurationInFrames accepts 1 parameter", () => {
+    expect(getCompositionDurationInFrames.length).toBe(1);
+  });
+
   it("renderStill accepts 3 parameters", () => {
     expect(renderStill.length).toBe(3);
   });
@@ -216,6 +226,7 @@ describe("module exports", () => {
     expect(renderSection.constructor.name).toBe("AsyncFunction");
     expect(stitchFullVideo.constructor.name).toBe("AsyncFunction");
     expect(getSectionDuration.constructor.name).toBe("AsyncFunction");
+    expect(getCompositionDurationInFrames.constructor.name).toBe("AsyncFunction");
     expect(extractFrameAtTime.constructor.name).toBe("AsyncFunction");
     expect(renderStill.constructor.name).toBe("AsyncFunction");
   });
@@ -730,7 +741,48 @@ describe("extractFrameAtTime — ffmpeg still extraction", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. renderStill — Remotion renderStill integration
+// 7. getCompositionDurationInFrames — Remotion composition metadata
+// ---------------------------------------------------------------------------
+
+describe("getCompositionDurationInFrames — subprocess", () => {
+  beforeEach(() => {
+    setupFsMocks();
+  });
+
+  it("spawns a child process that resolves the selected composition duration", async () => {
+    setupSpawn(["332"], 0);
+
+    await expect(
+      getCompositionDurationInFrames("PreviewComp")
+    ).resolves.toBe(332);
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      "node",
+      expect.any(Array),
+      expect.objectContaining({ stdio: ["ignore", "pipe", "pipe"] })
+    );
+  });
+
+  it("writes a temporary script that queries selectComposition durationInFrames", async () => {
+    setupSpawn(["223"], 0);
+
+    await getCompositionDurationInFrames("PreviewComp");
+
+    const writeCall = (fs.promises.writeFile as jest.Mock).mock.calls.find(
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        (c[0] as string).includes("remotion-composition-duration")
+    );
+    expect(writeCall).toBeDefined();
+    const scriptContent = writeCall?.[1] as string;
+    expect(scriptContent).toContain("PreviewComp");
+    expect(scriptContent).toContain("selectComposition");
+    expect(scriptContent).toContain("durationInFrames");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. renderStill — Remotion renderStill integration
 // ---------------------------------------------------------------------------
 
 describe("renderStill — subprocess", () => {
@@ -831,7 +883,7 @@ describe("renderStill — subprocess", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. Source file structure checks
+// 9. Source file structure checks
 // ---------------------------------------------------------------------------
 
 describe("lib/render.ts source structure", () => {
@@ -938,6 +990,12 @@ describe("lib/render.ts source structure", () => {
 
   it("exports getSectionDuration", () => {
     expect(sourceCode).toMatch(/export\s+(const|async\s+function)\s+getSectionDuration/);
+  });
+
+  it("exports getCompositionDurationInFrames", () => {
+    expect(sourceCode).toMatch(
+      /export\s+(const|async\s+function)\s+getCompositionDurationInFrames/
+    );
   });
 
   it("exports renderStill", () => {

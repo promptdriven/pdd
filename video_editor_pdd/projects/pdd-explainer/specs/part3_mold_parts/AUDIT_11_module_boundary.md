@@ -1,4 +1,4 @@
 ## Verdict
-fail
+pass
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 11_module_boundary. Claude CLI returned error: API Error: Rate limit reached
+OCR confirmed visible text tokens in the rendered frame (operates, module, level, auth, service), so the frame does not support a hard missing-text failure.

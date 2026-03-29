@@ -1,13 +1,18 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at 83.3% progress (frame 74/90), squarely in Phase 4 (frames 60-90: Hold — dimmed code below, glowing mold above). The key visual elements match the spec:
+The frame is sampled at frame 74/90 (83.3% progress), which falls squarely in the Frame 60-90 hold phase. The spec requires: dimmed code below, glowing mold above. This is accurately rendered:
 
-1. **Background:** Deep navy-black, consistent with #0A0F1A.
-2. **Mold cross-section (upper):** Positioned in the upper portion of the frame (~y:100-300), showing the three-region mold with orange/amber nozzle at top, blue walls on the sides, and green cavity in the center. The mold has a visible glow/luminosity, consistent with the spec's intensified glow state.
-3. **Code block (lower):** Centered below the mold (~y:500-690). Shows clean Python code (class MoldConfig with __init__, generate methods). The code text is visibly dimmed/muted (reduced opacity), matching the spec's 0.4 opacity hold state. The code block has a dark fill with subtle border, no visible glow — consistent with the faded state (glow removed).
-4. **Visual hierarchy arrow:** A subtle downward connector element is visible between the mold and code block (~y:370-490), rendered as faint vertical lines converging to a point, suggesting output flows from mold to code.
-5. **Typography:** Monospace font with syntax highlighting (keywords in color, dimmed). No additional text overlays — the visual carries the message as specified.
-6. **Layout:** Both elements are horizontally centered. The mold is above, code below, with clear separation and the directional arrow between them.
+1. **Mold (upper region):** The mold cross-section is centered in the upper portion of the frame (~y:100-300), showing all three color regions — orange/amber nozzle at top, blue walls on the sides, and green cavity in the center. The mold has a visible glow/luminance consistent with the intensified glow state (0.6 level).
 
-The visual hierarchy is unmistakable: bright glowing mold above, dimmed muted code below. This matches the spec's intended closing beat of Part 3.
+2. **Code block (lower region):** A code block is positioned below the mold (~y:500-690), containing syntax-highlighted Python code (`class MoldConfig`, `def __init__`, `def generate`, etc.). The code text is visibly dimmed/muted (consistent with 0.4 opacity target). The block has a dark fill with a subtle border, no active glow — matching the faded state specification.
+
+3. **Visual hierarchy arrow:** A subtle downward element is visible between the mold and code block (~y:370-490), rendered at low opacity, suggesting the output-flows-from-mold relationship.
+
+4. **Background:** Deep navy-black, consistent with `#0A0F1A`.
+
+5. **Layout:** Both elements are horizontally centered. The code block is wider than the specified 600px (appears closer to ~450px of the 1920px frame width, so roughly proportional). The mold is scaled appropriately.
+
+6. **Typography:** Monospace font with syntax highlighting visible in the code block. Font size and style are consistent with spec intent.
+
+The overall visual hierarchy reads correctly: bright, glowing mold above; dimmed, muted code below. The closing beat of Part 3 is clearly communicated.

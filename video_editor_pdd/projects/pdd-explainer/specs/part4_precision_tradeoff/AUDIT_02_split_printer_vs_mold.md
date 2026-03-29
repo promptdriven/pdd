@@ -1,4 +1,4 @@
 ## Verdict
-pass
+warn
 ## Summary
-The split-screen composition is correctly established with left (3D printer) and right (injection mold) panels. Both panels convey the correct metaphor: point-by-point deposition on the left, liquid-constrained-by-walls on the right. The amber mold walls and blue deposit dots use approximately correct colors. However, the spec-required panel headers ('3D Printer' and 'Injection Mold' at top-center of each panel) are absent; instead, descriptive subtitles appear at the bottom of each panel. The center divider is not rendered as a distinct 2px white line at 40% opacity — it reads as panel spacing. The left panel's grid fill appears incomplete for this late animation phase (93.7%), though the overall visual intent of the hold phase still reads. The nozzle shape is oversized but recognizable.
+OCR confirmed visible text tokens in the rendered frame (nozzle, deposits, material, point, coordinate), so the frame does not support a hard missing-text failure.

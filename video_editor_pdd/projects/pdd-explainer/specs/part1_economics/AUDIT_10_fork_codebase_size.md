@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (codebase, large, metr, 2025, experienced), so the frame does not support a hard missing-text failure.
+Frame at 88% progress (phase 7: 'Hold. The trap is fully visible.') shows all required elements correctly rendered. The chart displays the fork at ~2020 with the green lower fork ('Small codebase') plunging downward and the red upper fork ('Large codebase') staying flat. Both fork labels are visible in their respective colors at the right edge. The METR annotation ('experienced devs 19% slower on mature repos') and the devastating follow-up ('Developers believed AI saved 20%. It cost 19%.') are both visible in red. The dashed amber curved arrow sweeps from the lower fork upward toward the upper fork with the 'Every patch adds code.' label in amber/gold. The 'Same tools. Different codebase sizes.' label appears near the fork point in muted slate. Background is deep navy-black. All annotations, colors, and layout match the spec.

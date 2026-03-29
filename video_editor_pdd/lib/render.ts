@@ -313,6 +313,86 @@ export const getSectionDuration = async (mp4Path: string): Promise<number> => {
   return parseFloat(stdout.trim());
 };
 
+export const getCompositionDurationInFrames = async (
+  compositionId: string
+): Promise<number> => {
+  const serveUrl = await getServeUrl();
+
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `remotion-composition-duration-${compositionId}-${Date.now()}.cjs`
+  );
+
+  const script = `
+const { selectComposition } = require('@remotion/renderer');
+
+async function run() {
+  const serveUrl = ${JSON.stringify(serveUrl)};
+  const compositionId = ${JSON.stringify(compositionId)};
+
+  const composition = await selectComposition({ serveUrl, id: compositionId });
+  process.stdout.write(String(composition.durationInFrames));
+}
+
+run().catch((err) => {
+  process.stderr.write(err?.stack || err?.message || String(err));
+  process.exit(1);
+});
+`.trim();
+
+  await fs.promises.writeFile(scriptPath, script, "utf-8");
+
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      const child = spawn("node", [scriptPath], {
+        stdio: ["ignore", "pipe", "pipe"],
+        cwd: getAppDir(),
+        env: {
+          ...process.env,
+          NODE_PATH: getRendererNodePath(),
+        },
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code !== 0) {
+          reject(
+            new Error(
+              `Composition duration lookup for "${compositionId}" exited with code ${code}: ${stderr || "(no stderr)"}`
+            )
+          );
+          return;
+        }
+
+        const durationInFrames = Number.parseInt(stdout.trim(), 10);
+        if (!Number.isFinite(durationInFrames) || durationInFrames < 1) {
+          reject(
+            new Error(
+              `Composition duration lookup for "${compositionId}" returned invalid output: ${stdout || "(empty stdout)"}`
+            )
+          );
+          return;
+        }
+
+        resolve(durationInFrames);
+      });
+    });
+  } finally {
+    await fs.promises.unlink(scriptPath).catch(() => undefined);
+  }
+};
+
 /**
  * Extract a single frame from a rendered video at a specific timestamp.
  */

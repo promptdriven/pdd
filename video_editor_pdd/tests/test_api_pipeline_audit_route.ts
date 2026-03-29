@@ -40,11 +40,14 @@ jest.mock("@/lib/jobs", () => ({
 const mockRenderStill = jest.fn();
 const mockExtractFrameAtTime = jest.fn();
 const mockGetSectionDuration = jest.fn();
+const mockGetCompositionDurationInFrames = jest.fn();
 
 jest.mock("@/lib/render", () => ({
   renderStill: (...args: unknown[]) => mockRenderStill(...args),
   extractFrameAtTime: (...args: unknown[]) => mockExtractFrameAtTime(...args),
   getSectionDuration: (...args: unknown[]) => mockGetSectionDuration(...args),
+  getCompositionDurationInFrames: (...args: unknown[]) =>
+    mockGetCompositionDurationInFrames(...args),
 }));
 
 const mockRunClaudeAudit = jest.fn();
@@ -281,6 +284,7 @@ beforeEach(() => {
   mockRenderStill.mockReset();
   mockExtractFrameAtTime.mockReset();
   mockGetSectionDuration.mockReset();
+  mockGetCompositionDurationInFrames.mockReset();
   mockRunClaudeAudit.mockReset();
   mockRunClaudeAuditWithTrace.mockReset();
   mockEvaluateDeterministicGeometryAudit.mockReset();
@@ -297,6 +301,9 @@ beforeEach(() => {
   mockRenderStill.mockResolvedValue(undefined);
   mockExtractFrameAtTime.mockResolvedValue(undefined);
   mockGetSectionDuration.mockResolvedValue(60);
+  mockGetCompositionDurationInFrames.mockRejectedValue(
+    new Error("preview duration not mocked")
+  );
   mockRunClaudeAudit.mockResolvedValue({
     severity: "pass",
     fixType: "none",
@@ -1027,6 +1034,7 @@ describe("audit executor factory", () => {
     ];
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["04_square_slide_right.md"]);
+    mockGetCompositionDurationInFrames.mockResolvedValue(100);
 
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "animation_section");
@@ -1060,7 +1068,7 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledWith(
       "animation-section04-square-slide-right",
-      91,
+      90,
       pathMod.join("/project-root", "outputs", "audit", "animation_section", "04_square_slide_right_frame.png")
     );
   });
@@ -1208,6 +1216,69 @@ describe("audit executor factory", () => {
     );
   });
 
+  it("maps preview audit sampling onto the preview composition duration when available", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "animation_section",
+        label: "Animation Section",
+        specDir: "animation_section",
+        compositionId: "AnimationSection",
+        videoFile: "outputs/sections/animation_section.mp4",
+        durationSeconds: 8,
+        offsetSeconds: 0,
+        compositions: ["07_long_timeline_visual"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["07_long_timeline_visual.md"]);
+    mockGetCompositionDurationInFrames.mockResolvedValue(120);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "animation_section");
+    const specPath = pathMod.join(specDir, "07_long_timeline_visual.md");
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [specPath]: [
+          "[Remotion]",
+          "",
+          "**Duration:** ~8s (240 frames @ 30fps)",
+          "",
+          "## Animation Sequence",
+          "1. Frame 0-40: Fade in.",
+          "2. Frame 40-120: Build the main layout.",
+          "3. Frame 120-210: Transition to the payoff state.",
+          "4. Frame 210-240: Hold on the final payoff frame.",
+        ].join("\n"),
+      })
+    );
+    mockExistsSync.mockImplementation((candidate: string) => {
+      return candidate === specDir || candidate === specPath;
+    });
+
+    const executor = registerCallArgs.factory(
+      { sections: ["animation_section"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockGetCompositionDurationInFrames).toHaveBeenCalledWith(
+      "animation-section07-long-timeline-visual"
+    );
+    expect(mockRenderStill).toHaveBeenCalledWith(
+      "animation-section07-long-timeline-visual",
+      112,
+      pathMod.join(
+        "/project-root",
+        "outputs",
+        "audit",
+        "animation_section",
+        "07_long_timeline_visual_frame.png"
+      )
+    );
+  });
+
   it("uses the rendered preview slot window when a preview composition spec timestamp is global to the full section timeline", async () => {
     const config = mockProjectConfig();
     config.sections = [
@@ -1225,6 +1296,7 @@ describe("audit executor factory", () => {
     ];
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["08_section_end_card.md"]);
+    mockGetCompositionDurationInFrames.mockResolvedValue(6);
 
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "veo_section");
@@ -1257,7 +1329,7 @@ describe("audit executor factory", () => {
 
     expect(mockRenderStill).toHaveBeenCalledWith(
       "veo-section08-section-end-card",
-      5,
+      3,
       pathMod.join(
         "/project-root",
         "outputs",
@@ -2562,6 +2634,7 @@ Technical assessment: Previous review claimed it was at y≈410.
       "01_title_card.md",
       "02_blue_circle_pulse.md",
     ]);
+    mockGetCompositionDurationInFrames.mockResolvedValue(68);
 
     const pathMod = require("path");
     const specDir = pathMod.join("/project-root", "specs", "animation_section");
@@ -3502,10 +3575,11 @@ describe("app/api/pipeline/audit/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/runClaudeAudit/);
   });
 
-  it("samples preview compositions from the rendered slot window instead of raw intrinsic frame ids", () => {
-    expect(sourceCode).toMatch(/previewDurationFrames/);
+  it("samples preview compositions from the preview composition duration using normalized progress", () => {
+    expect(sourceCode).toMatch(/getCompositionDurationInFrames/);
+    expect(sourceCode).toMatch(/getPreviewFrameCount/);
     expect(sourceCode).toMatch(/sampleWindow\.normalizedSample/);
-    expect(sourceCode).not.toMatch(/const sampleFrame = Math\.max\(0, sampleWindow\.intrinsicSampleFrame\);/);
+    expect(sourceCode).not.toMatch(/sampleWindow\.endSeconds - sampleWindow\.startSeconds/);
   });
 });
 
