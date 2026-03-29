@@ -346,6 +346,20 @@ def test_included_docs_for_drift_report_counts_all_prompts_referencing_doc(tmp_p
     assert by_name.get("docs/api.md") == 1
 
 
+def test_included_docs_for_drift_report_excludes_mdx_not_regenerated_post_update(
+    tmp_path, monkeypatch,
+):
+    """.mdx includes are not auto-regenerated after update; drift report lists .md only."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "page.mdx").write_text("mdx", encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    p = tmp_path / "prompts" / "m_python.prompt"
+    p.write_text("<include>../docs/page.mdx</include>\n", encoding="utf-8")
+    agg = _included_docs_for_drift_report(str(tmp_path), [str(p)], [str(p)])
+    assert agg == []
+
+
 def test_estimate_dry_run_cost_range_is_flat_per_pair(tmp_path, monkeypatch):
     """Dry-run estimate is a flat $0.50–$1.00 per drifted pair."""
     from pdd.update_main import _estimate_dry_run_cost_range
@@ -672,7 +686,8 @@ def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git
     captured = capsys.readouterr()
     assert "budget cap reached" in captured.out.lower()
     assert result is not None
-    assert result[1] == pytest.approx(1.2)
+    # Per-pair update costs plus example regeneration (mocked at $0.10 each).
+    assert result[1] == pytest.approx(1.4)
 
 
 @patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
@@ -758,7 +773,8 @@ def test_update_main_repo_mode_dependency_ordering_for_budget(
     captured = capsys.readouterr()
     assert "budget cap reached" in captured.out.lower()
     assert result is not None
-    assert result[1] == pytest.approx(0.6)
+    # Update cost plus mocked example regeneration ($0.10).
+    assert result[1] == pytest.approx(0.7)
 
 
 @patch("pdd.context_generator_main.context_generator_main")
