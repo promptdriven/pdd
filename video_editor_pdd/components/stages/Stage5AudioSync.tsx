@@ -44,6 +44,10 @@ interface SegmentValidation {
   status: 'pass' | 'warn' | 'fail' | 'skip';
   expectedWordCount?: number;
   actualWordCount?: number;
+  locked?: boolean;
+  manuallyAccepted?: boolean;
+  statusBeforeOverride?: 'pass' | 'warn' | 'fail' | 'skip';
+  matchRatioBeforeOverride?: number | null;
 }
 
 interface SegmentValidationSummary {
@@ -126,6 +130,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [search, setSearch] = useState('');
   const [validationJobIds, setValidationJobIds] = useState<Record<string, string | null>>({});
   const [validationSyncJobIds, setValidationSyncJobIds] = useState<Record<string, string | null>>({});
+  const [segmentLockPendingIds, setSegmentLockPendingIds] = useState<Record<string, boolean>>({});
   const [dataReloadVersion, setDataReloadVersion] = useState(0);
   const [playingSegmentId, setPlayingSegmentId] = useState<string | null>(null);
 
@@ -376,7 +381,17 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     return timestamps.filter((w) => w.word.toLowerCase().includes(term));
   }, [timestamps, search]);
   const mismatchValidationRows = useMemo(
-    () => validationRows.filter((row) => row.status !== 'pass' && row.status !== 'skip'),
+    () =>
+      validationRows.filter(
+        (row) =>
+          row.manuallyAccepted !== true &&
+          row.status !== 'pass' &&
+          row.status !== 'skip'
+      ),
+    [validationRows]
+  );
+  const lockedValidationRows = useMemo(
+    () => validationRows.filter((row) => row.locked === true || row.manuallyAccepted === true),
     [validationRows]
   );
   const flaggedValidationSegmentIds = useMemo(
@@ -583,6 +598,54 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     setValidationJobIds((prev) => ({ ...prev, [segmentId]: null }));
     setValidationSyncJobIds((prev) => ({ ...prev, [segmentId]: null }));
     setDataReloadVersion((prev) => prev + 1);
+  };
+
+  const handleSegmentLock = async (
+    segmentId: string,
+    method: 'POST' | 'DELETE'
+  ) => {
+    if (!selectedSectionId) {
+      return;
+    }
+
+    setSegmentLockPendingIds((prev) => ({ ...prev, [segmentId]: true }));
+    setDetectError(null);
+    try {
+      const res = await fetch('/api/pipeline/audio-sync/locks', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: selectedSectionId, segmentId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          data?.error ??
+            (method === 'POST'
+              ? 'Failed to accept current audio.'
+              : 'Failed to unlock segment.')
+        );
+      }
+
+      await reloadSectionArtifacts(selectedSectionId);
+      setDataReloadVersion((prev) => prev + 1);
+    } catch (err: any) {
+      setDetectError(
+        err?.message ??
+          (method === 'POST'
+            ? 'Failed to accept current audio'
+            : 'Failed to unlock segment')
+      );
+    } finally {
+      setSegmentLockPendingIds((prev) => ({ ...prev, [segmentId]: false }));
+    }
+  };
+
+  const handleAcceptCurrentAudio = async (segmentId: string) => {
+    await handleSegmentLock(segmentId, 'POST');
+  };
+
+  const handleUnlockSegment = async (segmentId: string) => {
+    await handleSegmentLock(segmentId, 'DELETE');
   };
 
   const handleRetryFlaggedSegments = async () => {
@@ -1290,6 +1353,47 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           <SseLogPanel jobId={batchValidationRerenderJobId} />
           <SseLogPanel jobId={batchValidationSyncJobId} />
 
+          <div className="mb-3 rounded-md border border-slate-800 bg-slate-900/70 p-3">
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Accepted Current Audio Locks
+            </div>
+            {lockedValidationRows.length === 0 ? (
+              <div className="text-xs text-slate-500">
+                No segments are currently locked to the accepted audio.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {lockedValidationRows.map((row) => (
+                  <div
+                    key={`lock-${row.segmentId}`}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
+                  >
+                    <div className="text-sm text-slate-200">
+                      <span className="font-medium text-slate-100">{row.segmentId}</span>
+                      <span className="ml-2 text-xs uppercase tracking-wide text-emerald-300">
+                        locked
+                      </span>
+                      {typeof row.matchRatioBeforeOverride === 'number' && (
+                        <span className="ml-2 text-xs text-slate-400">
+                          original match {(row.matchRatioBeforeOverride * 100).toFixed(0)}%
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleUnlockSegment(row.segmentId)}
+                      disabled={segmentLockPendingIds[row.segmentId] === true}
+                      className="rounded-md border border-slate-500/60 bg-slate-700 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {segmentLockPendingIds[row.segmentId] === true
+                        ? 'Unlocking…'
+                        : 'Unlock Segment'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {flaggedValidationRows.length === 0 ? (
             <div className="text-sm text-slate-400">No flagged transcript mismatches for this section.</div>
           ) : (
@@ -1323,6 +1427,18 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                             className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white"
                           >
                             Re-render Segment
+                          </button>
+                          <button
+                            onClick={() => handleAcceptCurrentAudio(row.segmentId)}
+                            disabled={
+                              artifactState.stale ||
+                              segmentLockPendingIds[row.segmentId] === true
+                            }
+                            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {segmentLockPendingIds[row.segmentId] === true
+                              ? 'Accepting…'
+                              : 'Accept Current Audio'}
                           </button>
                         </div>
                       </div>

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
+import {
+  applyAudioSyncValidationLocks,
+  computeSegmentAudioFingerprintMap,
+  loadAudioSyncValidationLocks,
+} from "../_lib/validation-locks";
 import { getProjectDir } from "@/lib/projects";
 
 interface WordTimestamp {
@@ -199,6 +204,16 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       if ((validationErr as NodeJS.ErrnoException).code !== "ENOENT") {
         console.error("Failed to read segment validation:", validationErr);
       }
+    }
+
+    const locks = await loadAudioSyncValidationLocks(getProjectDir(), sectionId);
+    const lockedSegmentIds = Object.keys(locks.segments);
+    if (lockedSegmentIds.length > 0) {
+      const audioFingerprints = await computeSegmentAudioFingerprintMap(
+        getProjectDir(),
+        lockedSegmentIds
+      );
+      validation = applyAudioSyncValidationLocks(validation, locks, audioFingerprints);
     }
 
     const artifactState = await getAudioSyncArtifactState(

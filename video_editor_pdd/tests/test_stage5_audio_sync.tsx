@@ -220,6 +220,10 @@ describe("state management", () => {
     expect(sourceCode).toMatch(/\[\s*validationJobIds\s*,\s*setValidationJobIds\s*\]/);
   });
 
+  it("tracks per-segment manual acceptance actions", () => {
+    expect(sourceCode).toMatch(/\[\s*segmentLockPendingIds\s*,\s*setSegmentLockPendingIds\s*\]/);
+  });
+
   it("tracks per-segment audio-sync job IDs", () => {
     expect(sourceCode).toMatch(/\[\s*validationSyncJobIds\s*,\s*setValidationSyncJobIds\s*\]/);
   });
@@ -363,7 +367,10 @@ describe("transcript validation panel", () => {
   });
 
   it("filters validation rows to warn/fail mismatches", () => {
-    expect(sourceCode).toMatch(/validationRows\.filter\s*\(\s*\(row\)\s*=>\s*row\.status\s*!==\s*['"]pass['"]/);
+    expect(sourceCode).toMatch(/validationRows\.filter\s*\(/);
+    expect(sourceCode).toMatch(/row\.manuallyAccepted\s*!==\s*true/);
+    expect(sourceCode).toMatch(/row\.status\s*!==\s*['"]pass['"]/);
+    expect(sourceCode).toMatch(/row\.status\s*!==\s*['"]skip['"]/);
     expect(sourceCode).toMatch(/flagMatchThresholdPercent/);
   });
 
@@ -376,8 +383,18 @@ describe("transcript validation panel", () => {
     expect(sourceCode).toMatch(/Re-render Segment/);
   });
 
+  it("renders Accept Current Audio and Unlock Segment actions", () => {
+    expect(sourceCode).toMatch(/Accept Current Audio/);
+    expect(sourceCode).toMatch(/Unlock Segment/);
+  });
+
   it("renders a Play Audio action", () => {
     expect(sourceCode).toMatch(/Play Audio/);
+  });
+
+  it("renders a locked accepted-audio section", () => {
+    expect(sourceCode).toMatch(/Accepted Current Audio Locks/);
+    expect(sourceCode).toMatch(/lockedValidationRows/);
   });
 
   it("renders controls for batch retry threshold and retry count", () => {
@@ -433,6 +450,14 @@ describe("transcript rerender action", () => {
   it("posts flagged segment IDs to /api/pipeline/tts-render/run", () => {
     expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/tts-render\/run['"]/);
     expect(sourceCode).toMatch(/body\s*:\s*JSON\.stringify\(\s*\{[\s\S]*segments\s*:\s*\[\s*segmentId\s*\][\s\S]*skipDependencies\s*:\s*true[\s\S]*\}\s*\)/);
+  });
+
+  it("posts manual audio acceptance locks to /api/pipeline/audio-sync/locks", () => {
+    expect(sourceCode).toMatch(/fetch\s*\(\s*['"]\/api\/pipeline\/audio-sync\/locks['"]/);
+    expect(sourceCode).toMatch(/const\s+handleSegmentLock\s*=\s*async/);
+    expect(sourceCode).toMatch(/method:\s*['"]POST['"]\s*\|\s*['"]DELETE['"]/);
+    expect(sourceCode).toMatch(/handleSegmentLock\s*\(\s*segmentId\s*,\s*['"]POST['"]\s*\)/);
+    expect(sourceCode).toMatch(/handleSegmentLock\s*\(\s*segmentId\s*,\s*['"]DELETE['"]\s*\)/);
   });
 
   it("extracts a rerender job ID from the SSE response", () => {

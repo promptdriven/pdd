@@ -45,6 +45,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from sync_audio_pipeline import (
     build_segment_validation_report,
+    apply_manual_accept_overrides,
     confirm_segment_validation_report,
     compute_transcript_match_ratio,
     evaluate_validation_gate,
@@ -1651,6 +1652,55 @@ class TestSegmentValidation:
         assert row["preservedPreviousValidation"] is True
         assert preserved["summary"]["passCount"] == 1
         assert preserved["summary"]["failCount"] == 0
+
+    def test_apply_manual_accept_overrides_marks_matching_audio_as_pass(self, tmp_path):
+        section_output_dir = tmp_path / "outputs" / "tts" / "part2_paradigm_shift"
+        section_output_dir.mkdir(parents=True)
+        (section_output_dir / "segment_validation_overrides.json").write_text(
+            json.dumps(
+                {
+                    "segments": {
+                        "part2_paradigm_shift_016": {
+                            "segmentId": "part2_paradigm_shift_016",
+                            "audioFingerprint": "same-audio",
+                            "acceptedAt": "2026-03-29T00:00:00.000Z",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        overridden = apply_manual_accept_overrides(
+            {
+                "segments": [
+                    {
+                        "segmentId": "part2_paradigm_shift_016",
+                        "expectedText": "Today, a modern chip has billions of gates.",
+                        "actualText": "today modern chip has billions",
+                        "matchRatio": 0.4,
+                        "status": "fail",
+                        "audioFingerprint": "same-audio",
+                    }
+                ],
+                "summary": {
+                    "passCount": 0,
+                    "warnCount": 0,
+                    "failCount": 1,
+                    "skipCount": 0,
+                },
+            },
+            section_output_dir,
+        )
+
+        row = overridden["segments"][0]
+        assert row["status"] == "pass"
+        assert row["locked"] is True
+        assert row["manuallyAccepted"] is True
+        assert row["statusBeforeOverride"] == "fail"
+        assert row["matchRatioBeforeOverride"] == 0.4
+        assert overridden["summary"]["passCount"] == 1
+        assert overridden["summary"]["failCount"] == 0
 
     def test_build_segment_validation_report_uses_token_level_similarity(self, tmp_path):
         output_dir = tmp_path / "outputs" / "tts"

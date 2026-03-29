@@ -907,6 +907,72 @@ def _load_previous_validation_rows(section_output_dir: Path) -> Dict[str, Dict[s
     return rows_by_segment
 
 
+def _load_manual_accept_overrides(section_output_dir: Path) -> Dict[str, Dict[str, Any]]:
+    overrides_path = section_output_dir / "segment_validation_overrides.json"
+    if not overrides_path.exists():
+        return {}
+
+    try:
+        with open(overrides_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    segments = payload.get("segments")
+    if not isinstance(segments, dict):
+        return {}
+
+    return {
+        segment_id: override
+        for segment_id, override in segments.items()
+        if isinstance(segment_id, str) and isinstance(override, dict)
+    }
+
+
+def apply_manual_accept_overrides(
+    validation_report: Dict[str, Any],
+    section_output_dir: Path,
+) -> Dict[str, Any]:
+    """Treat manually accepted locked segments as pass when audio fingerprint still matches."""
+    overrides = _load_manual_accept_overrides(section_output_dir)
+    if not overrides:
+        return validation_report
+
+    overridden_rows: List[Dict[str, Any]] = []
+    for row in validation_report.get("segments") or []:
+        if not isinstance(row, dict):
+            continue
+        segment_id = row.get("segmentId")
+        if not isinstance(segment_id, str):
+            overridden_rows.append(row)
+            continue
+
+        override = overrides.get(segment_id)
+        audio_fingerprint = row.get("audioFingerprint")
+        override_fingerprint = override.get("audioFingerprint") if isinstance(override, dict) else None
+        if (
+            not isinstance(override, dict)
+            or not isinstance(audio_fingerprint, str)
+            or not isinstance(override_fingerprint, str)
+            or audio_fingerprint != override_fingerprint
+        ):
+            overridden_rows.append(row)
+            continue
+
+        next_row = dict(row)
+        next_row["locked"] = True
+        next_row["manuallyAccepted"] = True
+        next_row["statusBeforeOverride"] = row.get("status")
+        next_row["matchRatioBeforeOverride"] = row.get("matchRatio")
+        next_row["status"] = "pass"
+        overridden_rows.append(next_row)
+
+    return {
+        "segments": overridden_rows,
+        "summary": _summarize_validation_rows(overridden_rows),
+    }
+
+
 def preserve_best_validation_rows_for_unchanged_audio(
     validation_report: Dict[str, Any],
     section_output_dir: Path,
@@ -1353,6 +1419,10 @@ def process_section(
         primary_backend_config=primary_backend_config,
     )
     validation_report = preserve_best_validation_rows_for_unchanged_audio(
+        validation_report,
+        section_output_dir,
+    )
+    validation_report = apply_manual_accept_overrides(
         validation_report,
         section_output_dir,
     )

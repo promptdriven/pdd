@@ -20,6 +20,7 @@
  */
 
 import path from "path";
+import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before importing the module under test
@@ -76,6 +77,8 @@ jest.mock("@/lib/projects", () => ({
 const mockReadFile = jest.fn();
 const mockReaddir = jest.fn();
 const mockStat = jest.fn();
+const mockWriteFile = jest.fn();
+const mockUnlink = jest.fn();
 
 jest.mock("fs/promises", () => ({
   __esModule: true,
@@ -83,15 +86,23 @@ jest.mock("fs/promises", () => ({
     readFile: (...args: unknown[]) => mockReadFile(...args),
     readdir: (...args: unknown[]) => mockReaddir(...args),
     stat: (...args: unknown[]) => mockStat(...args),
+    writeFile: (...args: unknown[]) => mockWriteFile(...args),
+    unlink: (...args: unknown[]) => mockUnlink(...args),
   },
   readFile: (...args: unknown[]) => mockReadFile(...args),
   readdir: (...args: unknown[]) => mockReaddir(...args),
   stat: (...args: unknown[]) => mockStat(...args),
+  writeFile: (...args: unknown[]) => mockWriteFile(...args),
+  unlink: (...args: unknown[]) => mockUnlink(...args),
 }));
 
 // Import after mocking
 import { POST } from "../app/api/pipeline/audio-sync/run/route";
 import { GET } from "../app/api/pipeline/audio-sync/timestamps/route";
+import {
+  POST as lockPOST,
+  DELETE as lockDELETE,
+} from "../app/api/pipeline/audio-sync/locks/route";
 
 // Capture executor factory registered at module load
 const registerCallArgs = {
@@ -119,6 +130,17 @@ function makeGetRequest(section?: string): Request {
     ? `http://localhost/api/pipeline/audio-sync/timestamps?section=${section}`
     : "http://localhost/api/pipeline/audio-sync/timestamps";
   return new Request(url, { method: "GET" });
+}
+
+function makeLockRequest(
+  body?: Record<string, unknown>,
+  method: "POST" | "DELETE" = "POST"
+): Request {
+  return new Request("http://localhost/api/pipeline/audio-sync/locks", {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
 }
 
 /** Flush microtask queue so fire-and-forget IIFE completes. */
@@ -173,6 +195,8 @@ beforeEach(() => {
   mockReadFile.mockReset();
   mockReaddir.mockReset();
   mockStat.mockReset();
+  mockWriteFile.mockReset();
+  mockUnlink.mockReset();
   mockResolvePythonRunSpec.mockClear();
   mockResolvePythonRunSpec.mockReturnValue({
     command: "python3",
@@ -194,6 +218,8 @@ beforeEach(() => {
   mockRunPipelineStageDirect.mockResolvedValue("test-job-id-1234");
   mockReaddir.mockResolvedValue([]);
   mockStat.mockResolvedValue({ mtimeMs: 1000 });
+  mockWriteFile.mockResolvedValue(undefined);
+  mockUnlink.mockResolvedValue(undefined);
 
   // Default: spawn completes successfully
   mockSpawn.mockImplementation(() => {
@@ -1102,6 +1128,65 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
     expect(body.validation.summary.warnCount).toBe(1);
   });
 
+  it("applies manual audio acceptance overrides when the audio fingerprint matches", async () => {
+    const wavBytes = Buffer.from("current-audio");
+    const audioFingerprint = crypto.createHash("sha256").update(wavBytes).digest("hex");
+
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("word_timestamps.json")) {
+        return '{"words":[{"word":"hello","start":0,"end":0.5,"segmentId":"intro_001"}]}';
+      }
+      if (filePath.includes("segment_validation.json")) {
+        return JSON.stringify({
+          segments: [
+            {
+              segmentId: "intro_001",
+              expectedText: "hello world",
+              actualText: "hello there",
+              status: "warn",
+              matchRatio: 0.82,
+              audioFingerprint,
+            },
+          ],
+          summary: { passCount: 0, warnCount: 1, failCount: 0, skipCount: 0 },
+        });
+      }
+      if (filePath.includes("segment_validation_overrides.json")) {
+        return JSON.stringify({
+          segments: {
+            intro_001: {
+              segmentId: "intro_001",
+              audioFingerprint,
+              acceptedAt: "2026-03-29T00:00:00.000Z",
+            },
+          },
+        });
+      }
+      if (filePath.endsWith("intro_001.wav")) {
+        return wavBytes;
+      }
+
+      throw new Error(`unexpected path ${filePath}`);
+    });
+
+    const response = await GET(makeGetRequest("intro") as any);
+    expect(response.status).toBe(200);
+
+    const body = await response.json();
+    expect(body.validation.segments[0]).toMatchObject({
+      segmentId: "intro_001",
+      status: "pass",
+      locked: true,
+      manuallyAccepted: true,
+      statusBeforeOverride: "warn",
+      matchRatioBeforeOverride: 0.82,
+    });
+    expect(body.validation.summary).toMatchObject({
+      passCount: 1,
+      warnCount: 0,
+    });
+  });
+
   it("returns stale artifact metadata when section audio is newer than sync outputs", async () => {
     mockReadFile.mockImplementation(async (filePath: string) => {
       if (filePath.includes("word_timestamps.json")) {
@@ -1196,6 +1281,65 @@ describe("GET /api/pipeline/audio-sync/timestamps", () => {
       segments: [],
       summary: { passCount: 0, warnCount: 0, failCount: 0, skipCount: 0 },
     });
+  });
+});
+
+describe("audio-sync manual acceptance lock route", () => {
+  it("persists a lock entry for the current segment audio fingerprint", async () => {
+    const wavBytes = Buffer.from("lock-me");
+    const expectedFingerprint = crypto
+      .createHash("sha256")
+      .update(wavBytes)
+      .digest("hex");
+
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.endsWith("intro_001.wav")) {
+        return wavBytes;
+      }
+      const enoentError = new Error("ENOENT") as NodeJS.ErrnoException;
+      enoentError.code = "ENOENT";
+      throw enoentError;
+    });
+
+    const response = await lockPOST(
+      makeLockRequest({ sectionId: "intro", segmentId: "intro_001" }) as any
+    );
+    expect(response.status).toBe(200);
+
+    expect(mockWriteFile).toHaveBeenCalled();
+    const [writtenPath, writtenContents] = mockWriteFile.mock.calls[0];
+    expect(String(writtenPath)).toMatch(/segment_validation_overrides\.json$/);
+    expect(JSON.parse(String(writtenContents))).toMatchObject({
+      segments: {
+        intro_001: {
+          segmentId: "intro_001",
+          audioFingerprint: expectedFingerprint,
+        },
+      },
+    });
+  });
+
+  it("removes the lock entry when deleting the last accepted segment", async () => {
+    mockReadFile.mockImplementation(async (filePath: string) => {
+      if (filePath.includes("segment_validation_overrides.json")) {
+        return JSON.stringify({
+          segments: {
+            intro_001: {
+              segmentId: "intro_001",
+              audioFingerprint: "fingerprint-1",
+              acceptedAt: "2026-03-29T00:00:00.000Z",
+            },
+          },
+        });
+      }
+      throw new Error(`unexpected path ${filePath}`);
+    });
+
+    const response = await lockDELETE(
+      makeLockRequest({ sectionId: "intro", segmentId: "intro_001" }, "DELETE") as any
+    );
+    expect(response.status).toBe(200);
+    expect(mockUnlink).toHaveBeenCalled();
   });
 });
 
