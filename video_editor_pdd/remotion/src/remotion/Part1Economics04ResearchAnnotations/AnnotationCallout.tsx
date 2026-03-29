@@ -1,117 +1,173 @@
-import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  CHART_BG,
-  MUTED,
-  FADE_DURATION,
-  SLIDE_DISTANCE,
-  CONNECTION_LINE_DURATION,
-} from './constants';
+  CALLOUT_FILL,
+  CALLOUT_RADIUS,
+  CALLOUT_BORDER_WIDTH,
+  FONT_FAMILY,
+  MAIN_TEXT_SIZE,
+  SOURCE_TEXT_SIZE,
+  FINE_PRINT_SIZE,
+  SOURCE_COLOR,
+  FINE_PRINT_COLOR,
+  FINE_PRINT_OPACITY,
+} from "./constants";
 
-interface AnnotationCalloutProps {
+export interface AnnotationCalloutProps {
+  /** Frame at which this annotation starts animating in (relative to parent Sequence) */
   startFrame: number;
-  title: string | string[];
-  titleColor: string;
-  subtitle: string;
-  borderColor: string;
-  x: number;
-  y: number;
-  /** Connection line target point {x, y} in absolute coords */
+  /** Accent / border color */
+  accentColor: string;
+  /** Primary stat text */
+  mainText: string;
+  /** Source label e.g. "(GitHub, 2022)" */
+  source: string;
+  /** Fine-print description */
+  finePrint: string;
+  /** Position of the callout box */
+  boxX: number;
+  boxY: number;
+  /** Target point on the chart line where the connector ends */
   targetX: number;
   targetY: number;
-  extra?: string;
-  extraColor?: string;
 }
+
+const CONNECTOR_DRAW_FRAMES = 30;
+const BOX_SCALE_FRAMES = 20;
+const TYPE_FRAMES_PER_CHAR = 2;
 
 const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
   startFrame,
-  title,
-  titleColor,
-  subtitle,
-  borderColor,
-  x,
-  y,
+  accentColor,
+  mainText,
+  source,
+  finePrint,
+  boxX,
+  boxY,
   targetX,
   targetY,
-  extra,
-  extraColor,
 }) => {
   const frame = useCurrentFrame();
   const localFrame = frame - startFrame;
 
   if (localFrame < 0) return null;
 
-  // Fade + slide in
-  const fadeProgress = interpolate(localFrame, [0, FADE_DURATION], [0, 1], {
-    easing: Easing.out(Easing.cubic),
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-
-  const slideOffset = interpolate(
+  // Phase 1: Connector line draws from callout toward target
+  const connectorProgress = interpolate(
     localFrame,
-    [0, FADE_DURATION],
-    [SLIDE_DISTANCE, 0],
-    {
-      easing: Easing.out(Easing.cubic),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
-
-  // Connection line draw progress (starts after fade begins)
-  const lineProgress = interpolate(
-    localFrame,
-    [5, 5 + CONNECTION_LINE_DURATION],
+    [0, CONNECTOR_DRAW_FRAMES],
     [0, 1],
     {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
       easing: Easing.out(Easing.quad),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
+    }
   );
 
-  const titles = Array.isArray(title) ? title : [title];
+  // Phase 2: Callout box scales in (with overshoot via back easing)
+  const boxScaleStart = CONNECTOR_DRAW_FRAMES;
+  const boxScale = interpolate(
+    localFrame,
+    [boxScaleStart, boxScaleStart + BOX_SCALE_FRAMES],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.back(1.4)),
+    }
+  );
 
-  // Calculate connection line start point (left edge of callout box)
-  const boxLeft = x;
-  const boxCenterY = y + 20;
+  const boxOpacity = interpolate(
+    localFrame,
+    [boxScaleStart, boxScaleStart + 10],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
 
-  // Interpolated line endpoint
-  const lineEndX = boxLeft + (targetX - boxLeft) * lineProgress;
-  const lineEndY = boxCenterY + (targetY - boxCenterY) * lineProgress;
+  // Phase 3: Text types in character by character
+  const textStart = boxScaleStart + BOX_SCALE_FRAMES;
+  const totalMainChars = mainText.length;
+  const mainTextVisible = Math.floor(
+    interpolate(
+      localFrame,
+      [textStart, textStart + totalMainChars * TYPE_FRAMES_PER_CHAR],
+      [0, totalMainChars],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.quad),
+      }
+    )
+  );
+
+  const sourceStart = textStart + totalMainChars * TYPE_FRAMES_PER_CHAR;
+  const totalSourceChars = source.length;
+  const sourceVisible = Math.floor(
+    interpolate(
+      localFrame,
+      [sourceStart, sourceStart + totalSourceChars * TYPE_FRAMES_PER_CHAR],
+      [0, totalSourceChars],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.quad),
+      }
+    )
+  );
+
+  const finePrintStart = sourceStart + totalSourceChars * TYPE_FRAMES_PER_CHAR;
+  const totalFinePrintChars = finePrint.length;
+  const finePrintVisible = Math.floor(
+    interpolate(
+      localFrame,
+      [finePrintStart, finePrintStart + totalFinePrintChars * TYPE_FRAMES_PER_CHAR],
+      [0, totalFinePrintChars],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.quad),
+      }
+    )
+  );
+
+  // Connector line: from left edge of callout box to target on chart
+  const connectorFromX = boxX;
+  const connectorFromY = boxY + 30; // mid-height of box roughly
+  const currentEndX = connectorFromX + (targetX - connectorFromX) * connectorProgress;
+  const currentEndY = connectorFromY + (targetY - connectorFromY) * connectorProgress;
+
+  const calloutWidth = 320;
+  const calloutHeight = 90;
 
   return (
     <>
-      {/* Connection line */}
+      {/* Connector line */}
       <svg
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: '100%',
-          height: '100%',
-          pointerEvents: 'none',
-          opacity: fadeProgress,
-        }}
+        width={1920}
+        height={1080}
+        viewBox="0 0 1920 1080"
+        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
       >
         <line
-          x1={boxLeft}
-          y1={boxCenterY}
-          x2={lineEndX}
-          y2={lineEndY}
-          stroke={borderColor}
+          x1={connectorFromX}
+          y1={connectorFromY}
+          x2={currentEndX}
+          y2={currentEndY}
+          stroke={accentColor}
           strokeWidth={1}
-          opacity={0.25}
+          opacity={0.5}
         />
-        {/* Small dot at target end */}
-        {lineProgress > 0.9 && (
+        {/* Small circle at the target end */}
+        {connectorProgress > 0.9 && (
           <circle
-            cx={targetX}
-            cy={targetY}
-            r={3}
-            fill={borderColor}
-            opacity={0.4 * fadeProgress}
+            cx={currentEndX}
+            cy={currentEndY}
+            r={4}
+            fill={accentColor}
+            opacity={0.6 * connectorProgress}
           />
         )}
       </svg>
@@ -119,62 +175,75 @@ const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
       {/* Callout box */}
       <div
         style={{
-          position: 'absolute',
-          left: x + slideOffset,
-          top: y,
-          width: 420,
-          opacity: fadeProgress,
-          backgroundColor: CHART_BG,
-          border: `1px solid ${borderColor}`,
-          borderRadius: 6,
-          padding: '12px 16px',
-          boxSizing: 'border-box',
+          position: "absolute",
+          left: boxX,
+          top: boxY,
+          width: calloutWidth,
+          height: calloutHeight,
+          backgroundColor: CALLOUT_FILL,
+          border: `${CALLOUT_BORDER_WIDTH}px solid ${accentColor}`,
+          borderRadius: CALLOUT_RADIUS,
+          padding: "12px 16px",
+          transform: `scale(${boxScale})`,
+          transformOrigin: "left center",
+          opacity: boxOpacity,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          gap: 4,
         }}
       >
-        {titles.map((t, i) => (
-          <div
-            key={i}
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: titles.length > 1 ? 13 : 14,
-              fontWeight: 700,
-              color: titleColor,
-              opacity: 0.8,
-              lineHeight: 1.4,
-              marginBottom: i < titles.length - 1 ? 2 : 0,
-            }}
-          >
-            {t}
-          </div>
-        ))}
-
+        {/* Main text */}
         <div
           style={{
-            fontFamily: 'Inter, sans-serif',
-            fontSize: 9,
-            color: MUTED,
-            opacity: 0.35,
-            marginTop: 6,
+            fontFamily: FONT_FAMILY,
+            fontSize: MAIN_TEXT_SIZE,
+            fontWeight: 700,
+            color: accentColor,
             lineHeight: 1.3,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            opacity: 0.95,
           }}
         >
-          {subtitle}
+          {mainText.slice(0, mainTextVisible)}
+          {mainTextVisible < totalMainChars && (
+            <span style={{ opacity: frame % 6 < 3 ? 1 : 0 }}>|</span>
+          )}
         </div>
 
-        {extra && (
-          <div
-            style={{
-              fontFamily: 'Inter, sans-serif',
-              fontSize: 10,
-              color: extraColor || '#E74C3C',
-              opacity: 0.6,
-              marginTop: 4,
-              lineHeight: 1.3,
-            }}
-          >
-            {extra}
-          </div>
-        )}
+        {/* Source */}
+        <div
+          style={{
+            fontFamily: FONT_FAMILY,
+            fontSize: SOURCE_TEXT_SIZE,
+            fontWeight: 400,
+            color: SOURCE_COLOR,
+            lineHeight: 1.3,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            opacity: 0.85,
+          }}
+        >
+          {source.slice(0, sourceVisible)}
+        </div>
+
+        {/* Fine print */}
+        <div
+          style={{
+            fontFamily: FONT_FAMILY,
+            fontSize: FINE_PRINT_SIZE,
+            fontWeight: 400,
+            fontStyle: "italic",
+            color: FINE_PRINT_COLOR,
+            lineHeight: 1.3,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            opacity: FINE_PRINT_OPACITY,
+          }}
+        >
+          {finePrint.slice(0, finePrintVisible)}
+        </div>
       </div>
     </>
   );

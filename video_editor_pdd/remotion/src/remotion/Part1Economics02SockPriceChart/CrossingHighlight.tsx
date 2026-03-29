@@ -1,34 +1,54 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
   CROSSING_YEAR,
-  LABOR_COST_DATA,
-  GARMENT_COST_DATA,
-  CROSSING_GLOW_COLOR,
-  THRESHOLD_LABEL_COLOR,
-  DARNING_SENSE_COLOR,
-  DARNING_IRRATIONAL_COLOR,
-  THRESHOLD_LABEL_START,
-  THRESHOLD_LABEL_END,
-  ZONE_LABEL_START,
-  ZONE_LABEL_DURATION,
+  CROSSING_Y,
   xToPixel,
   yToPixel,
-  interpolateData,
+  THRESHOLD_LABEL_COLOR,
+  THRESHOLD_GLOW_COLOR,
+  THRESHOLD_GLOW_OPACITY,
+  GLOW_RADIUS,
+  FONT_FAMILY,
+  THRESHOLD_FONT_SIZE,
+  THRESHOLD_LABEL_START,
+  THRESHOLD_LABEL_DURATION,
+  DARNING_SENSE_COLOR,
+  DARNING_IRRATIONAL_COLOR,
+  ZONE_LABEL_OPACITY,
+  ZONE_FONT_SIZE,
+  IRRATIONAL_LABEL_START,
+  IRRATIONAL_LABEL_DURATION,
+  MORPH_START,
+  MORPH_END,
 } from "./constants";
 
+/**
+ * Renders the crossing-point glow, "The Threshold" label,
+ * and the two zone labels ("Darning makes sense" / "Darning is irrational").
+ */
 export const CrossingHighlight: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Compute the crossing point pixel position
-  const crossingY = interpolateData(LABOR_COST_DATA, CROSSING_YEAR);
-  const crossingPx = xToPixel(CROSSING_YEAR);
-  const crossingPy = yToPixel(crossingY);
+  const cx = xToPixel(CROSSING_YEAR);
+  const cy = yToPixel(CROSSING_Y);
 
-  // Threshold label animation (frames 150–180): scale from 1.05 → 1.0
-  const thresholdProgress = interpolate(
+  // ── Crossing flash + glow ──
+  // Flash: bright at frame 150, fades to steady glow
+  const flashOpacity = interpolate(
     frame,
-    [THRESHOLD_LABEL_START, THRESHOLD_LABEL_END],
+    [THRESHOLD_LABEL_START, THRESHOLD_LABEL_START + 10, THRESHOLD_LABEL_START + 30],
+    [0, 0.6, THRESHOLD_GLOW_OPACITY],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
+
+  // ── "The Threshold" label animation ──
+  const labelProgress = interpolate(
+    frame,
+    [THRESHOLD_LABEL_START + 5, THRESHOLD_LABEL_START + THRESHOLD_LABEL_DURATION],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -37,46 +57,22 @@ export const CrossingHighlight: React.FC = () => {
     }
   );
 
-  const thresholdOpacity = interpolate(
+  const labelScale = interpolate(labelProgress, [0, 1], [1.05, 1.0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  const labelOpacity = interpolate(labelProgress, [0, 0.3], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  // ── "Darning makes sense" label (left of crossing) ──
+  // Appears slightly before crossing (when lines are being drawn toward it)
+  const senseProgress = interpolate(
     frame,
-    [THRESHOLD_LABEL_START, THRESHOLD_LABEL_START + 15],
+    [90, 110],
     [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
-  const thresholdScale = interpolate(
-    frame,
-    [THRESHOLD_LABEL_START, THRESHOLD_LABEL_END],
-    [1.05, 1.0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
-
-  // Glow pulse
-  const glowPulse =
-    thresholdOpacity > 0
-      ? interpolate(
-          frame,
-          [THRESHOLD_LABEL_START, THRESHOLD_LABEL_START + 20, THRESHOLD_LABEL_START + 40],
-          [0, 0.25, 0.15],
-          {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-          }
-        )
-      : 0;
-
-  // Zone labels (frame 180+)
-  const zoneOpacity = interpolate(
-    frame,
-    [ZONE_LABEL_START, ZONE_LABEL_START + ZONE_LABEL_DURATION],
-    [0, 0.6],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -84,123 +80,116 @@ export const CrossingHighlight: React.FC = () => {
     }
   );
 
-  if (frame < THRESHOLD_LABEL_START) return null;
+  // ── "Darning is irrational" label (right of crossing) ──
+  const irrationalProgress = interpolate(
+    frame,
+    [IRRATIONAL_LABEL_START, IRRATIONAL_LABEL_START + IRRATIONAL_LABEL_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // ── Morph fade-out ──
+  const morphOpacity = interpolate(
+    frame,
+    [MORPH_START, MORPH_END],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
+  );
 
   return (
-    <>
+    <svg
+      width={1920}
+      height={1080}
+      style={{ position: "absolute", top: 0, left: 0 }}
+    >
+      <defs>
+        <radialGradient id="crossing-glow">
+          <stop offset="0%" stopColor={THRESHOLD_GLOW_COLOR} stopOpacity={1} />
+          <stop offset="100%" stopColor={THRESHOLD_GLOW_COLOR} stopOpacity={0} />
+        </radialGradient>
+      </defs>
+
       {/* Radial glow at crossing point */}
-      <div
-        style={{
-          position: "absolute",
-          left: crossingPx - 40,
-          top: crossingPy - 40,
-          width: 80,
-          height: 80,
-          borderRadius: "50%",
-          background: `radial-gradient(circle, ${CROSSING_GLOW_COLOR} 0%, transparent 70%)`,
-          opacity: glowPulse,
-          pointerEvents: "none",
-        }}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={GLOW_RADIUS * 2.5}
+        fill="url(#crossing-glow)"
+        opacity={flashOpacity * morphOpacity}
       />
 
-      {/* Crossing dot */}
-      <div
-        style={{
-          position: "absolute",
-          left: crossingPx - 5,
-          top: crossingPy - 5,
-          width: 10,
-          height: 10,
-          borderRadius: "50%",
-          backgroundColor: CROSSING_GLOW_COLOR,
-          opacity: thresholdOpacity * 0.9,
-          boxShadow: `0 0 12px 4px ${CROSSING_GLOW_COLOR}40`,
-        }}
+      {/* Small bright dot at crossing */}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={5}
+        fill={THRESHOLD_GLOW_COLOR}
+        opacity={flashOpacity * morphOpacity * 2}
       />
 
       {/* "The Threshold" label */}
-      <div
-        style={{
-          position: "absolute",
-          left: crossingPx - 80,
-          top: crossingPy - 55,
-          opacity: thresholdOpacity,
-          transform: `scale(${thresholdScale})`,
-          transformOrigin: "center bottom",
-          pointerEvents: "none",
-        }}
+      <g
+        opacity={labelOpacity * morphOpacity}
+        transform={`translate(${cx}, ${cy - 45}) scale(${labelScale})`}
       >
-        {/* Connecting line from label to dot */}
-        <div
-          style={{
-            position: "absolute",
-            left: 80,
-            top: 28,
-            width: 2,
-            height: 16,
-            backgroundColor: THRESHOLD_LABEL_COLOR,
-            opacity: 0.4,
-          }}
+        {/* Connecting line from label to point */}
+        <line
+          x1={0}
+          y1={20}
+          x2={0}
+          y2={35}
+          stroke={THRESHOLD_LABEL_COLOR}
+          strokeWidth={1}
+          opacity={0.5}
         />
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 18,
-            fontWeight: 700,
-            color: THRESHOLD_LABEL_COLOR,
-            whiteSpace: "nowrap",
-          }}
+        <text
+          x={0}
+          y={0}
+          textAnchor="middle"
+          fill={THRESHOLD_LABEL_COLOR}
+          fontFamily={FONT_FAMILY}
+          fontSize={THRESHOLD_FONT_SIZE}
+          fontWeight={700}
         >
           The Threshold
-        </span>
-      </div>
+        </text>
+      </g>
 
-      {/* "Darning makes sense" label — left of crossing */}
-      <div
-        style={{
-          position: "absolute",
-          left: crossingPx - 210,
-          top: crossingPy + 20,
-          opacity: zoneOpacity,
-          pointerEvents: "none",
-        }}
+      {/* "Darning makes sense" — left of crossing */}
+      <text
+        x={cx - 120}
+        y={cy + 60}
+        textAnchor="middle"
+        fill={DARNING_SENSE_COLOR}
+        opacity={senseProgress * ZONE_LABEL_OPACITY * morphOpacity}
+        fontFamily={FONT_FAMILY}
+        fontSize={ZONE_FONT_SIZE}
+        fontWeight={400}
       >
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 13,
-            fontWeight: 400,
-            color: DARNING_SENSE_COLOR,
-            whiteSpace: "nowrap",
-          }}
-        >
-          Darning makes sense
-        </span>
-      </div>
+        Darning makes sense
+      </text>
 
-      {/* "Darning is irrational" label — right of crossing */}
-      <div
-        style={{
-          position: "absolute",
-          left: crossingPx + 50,
-          top: crossingPy + 20,
-          opacity: zoneOpacity,
-          pointerEvents: "none",
-        }}
+      {/* "Darning is irrational" — right of crossing */}
+      <text
+        x={cx + 200}
+        y={cy + 60}
+        textAnchor="middle"
+        fill={DARNING_IRRATIONAL_COLOR}
+        opacity={irrationalProgress * ZONE_LABEL_OPACITY * morphOpacity}
+        fontFamily={FONT_FAMILY}
+        fontSize={ZONE_FONT_SIZE}
+        fontWeight={400}
       >
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 13,
-            fontWeight: 400,
-            color: DARNING_IRRATIONAL_COLOR,
-            whiteSpace: "nowrap",
-          }}
-        >
-          Darning is irrational
-        </span>
-      </div>
-    </>
+        Darning is irrational
+      </text>
+    </svg>
   );
 };
 

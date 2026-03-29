@@ -1,82 +1,61 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing, spring } from 'remotion';
 import {
   TERMINAL_BG,
   TERMINAL_TEXT,
-  TERMINAL_BORDER_RADIUS,
   TERMINAL_WIDTH,
   TERMINAL_HEIGHT,
+  TERMINAL_RADIUS,
   TERMINAL_FONT_SIZE,
-  TERMINAL_MARGIN,
-  PHASE_TERMINAL_START,
-  PHASE_TERMINAL_END,
+  TERMINAL_COMMAND,
+  CODE_FONT_FAMILY,
 } from './constants';
 
-const FPS = 30;
+interface TerminalOverlayProps {
+  opacity: number;
+  checkmarkGlow: number;
+}
 
-/**
- * Bottom-right terminal overlay showing `$ pdd generate process_order ✓`.
- */
-export const TerminalOverlay: React.FC = () => {
-  const frame = useCurrentFrame();
+const TerminalOverlay: React.FC<TerminalOverlayProps> = ({
+  opacity,
+  checkmarkGlow,
+}) => {
+  if (opacity <= 0) return null;
 
-  // Fade in over 10 frames (38-48)
-  const opacity = interpolate(
-    frame,
-    [PHASE_TERMINAL_START, PHASE_TERMINAL_END],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  // Checkmark spring animation
-  const checkScale = spring({
-    frame: frame - PHASE_TERMINAL_START - 5,
-    fps: FPS,
-    config: {
-      stiffness: 200,
-      damping: 15,
-    },
-  });
-
-  if (frame < PHASE_TERMINAL_START) return null;
+  // Split into command part and checkmark
+  const commandPart = '$ pdd generate process_order ';
+  const checkmark = '✓';
 
   return (
     <div
       style={{
         position: 'absolute',
-        bottom: TERMINAL_MARGIN,
-        right: TERMINAL_MARGIN,
+        bottom: 40,
+        right: 40,
         width: TERMINAL_WIDTH,
         height: TERMINAL_HEIGHT,
         backgroundColor: TERMINAL_BG,
-        opacity: opacity * 0.9,
-        borderRadius: TERMINAL_BORDER_RADIUS,
+        opacity: Math.max(opacity, 0) * 0.9,
+        borderRadius: TERMINAL_RADIUS,
         display: 'flex',
         alignItems: 'center',
         paddingLeft: 16,
         paddingRight: 16,
-        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        fontFamily: CODE_FONT_FAMILY,
         fontSize: TERMINAL_FONT_SIZE,
         color: TERMINAL_TEXT,
-        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+        boxShadow: `0 4px 20px rgba(0, 0, 0, 0.4)`,
       }}
     >
-      <span style={{ opacity: 0.6, marginRight: 8, color: '#585B70' }}>$</span>
-      <span>pdd generate process_order</span>
+      <span>{commandPart}</span>
       <span
         style={{
-          marginLeft: 10,
-          transform: `scale(${checkScale})`,
-          display: 'inline-block',
-          color: '#A6E3A1',
-          fontWeight: 'bold',
+          textShadow:
+            checkmarkGlow > 0
+              ? `0 0 ${8 * checkmarkGlow}px ${TERMINAL_TEXT}, 0 0 ${16 * checkmarkGlow}px ${TERMINAL_TEXT}`
+              : 'none',
         }}
       >
-        ✓
+        {checkmark}
       </span>
     </div>
   );

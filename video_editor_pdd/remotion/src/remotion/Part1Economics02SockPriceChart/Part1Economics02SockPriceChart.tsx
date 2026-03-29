@@ -1,20 +1,26 @@
 import React from "react";
-import { AbsoluteFill, useCurrentFrame, interpolate } from "remotion";
-import "../_shared/load-inter-font";
-import { ChartAxes } from "./ChartAxes";
-import { AnimatedLine } from "./AnimatedLine";
-import { CrossingHighlight } from "./CrossingHighlight";
+import { AbsoluteFill, Sequence, interpolate, useCurrentFrame, Easing } from "remotion";
 import {
   BG_COLOR,
   LABOR_COST_DATA,
   GARMENT_COST_DATA,
   LABOR_LINE_COLOR,
   GARMENT_LINE_COLOR,
-  CHART_TOP,
-  CHART_RIGHT,
+  LINE_STROKE_WIDTH,
+  TOTAL_FRAMES,
+  FONT_FAMILY,
+  THRESHOLD_LABEL_COLOR,
   MORPH_START,
   MORPH_END,
+  CHART_LEFT,
+  CHART_RIGHT,
+  CHART_TOP,
+  CHART_BOTTOM,
 } from "./constants";
+import { ChartAxes } from "./ChartAxes";
+import { AnimatedLine } from "./AnimatedLine";
+import { CrossingHighlight } from "./CrossingHighlight";
+import { LineLegend } from "./LineLegend";
 
 export const defaultPart1Economics02SockPriceChartProps = {};
 
@@ -22,77 +28,103 @@ export const defaultPart1Economics02SockPriceChartProps = {};
  * Section 1.2: Sock Price vs. Labor Cost Chart
  *
  * An animated line chart showing the economic threshold that killed darning.
- * Two lines cross around 1962 — "The Threshold" where darning became irrational.
+ * Two lines (labor cost in amber, garment cost in blue) cross around 1962,
+ * marking "The Threshold" where darning became irrational.
+ *
+ * Duration: 720 frames (24s @ 30fps)
  */
 export const Part1Economics02SockPriceChart: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Legend opacity — visible after axes draw in (frame 20+)
-  const legendOpacity = interpolate(frame, [20, 35], [0, 0.85], {
+  // ── Title that appears at the very start ──
+  const titleOpacity = interpolate(frame, [0, 15], [0.8, 0.8], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const titleFadeOut = interpolate(frame, [50, 80], [1, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // Overall chart opacity during morph (subtle)
-  const morphOverlayOpacity = interpolate(
-    frame,
-    [MORPH_START + 60, MORPH_END],
-    [0, 0.3],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
+  // ── Morph-phase overlay ──
+  const morphProgress = interpolate(frame, [MORPH_START, MORPH_END], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.inOut(Easing.cubic),
+  });
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        fontFamily: "Inter, sans-serif",
+        overflow: "hidden",
       }}
     >
-      {/* Chart axes and grid */}
-      <ChartAxes />
+      {/* ── Chart axes and grid (always present from frame 0) ── */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <ChartAxes />
+      </Sequence>
 
-      {/* Animated lines — both start drawing from frame 30 */}
-      <AnimatedLine
-        data={LABOR_COST_DATA}
-        color={LABOR_LINE_COLOR}
-        strokeWidth={3}
-        fadeOutStart={MORPH_START}
-        fadeOutEnd={MORPH_END}
-      />
-      <AnimatedLine
-        data={GARMENT_COST_DATA}
-        color={GARMENT_LINE_COLOR}
-        strokeWidth={3}
-      />
+      {/* ── Animated data lines ── */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        {/* Labor cost line (amber) — fades out in morph phase */}
+        <AnimatedLine
+          data={LABOR_COST_DATA}
+          color={LABOR_LINE_COLOR}
+          strokeWidth={LINE_STROKE_WIDTH}
+          fadeOutOnMorph
+        />
+        {/* Garment cost line (blue) — persists through morph */}
+        <AnimatedLine
+          data={GARMENT_COST_DATA}
+          color={GARMENT_LINE_COLOR}
+          strokeWidth={LINE_STROKE_WIDTH}
+          fadeOutOnMorph={false}
+        />
+      </Sequence>
 
-      {/* Crossing point highlight + zone labels */}
-      <CrossingHighlight />
+      {/* ── Crossing highlight + zone labels ── */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <CrossingHighlight />
+      </Sequence>
 
-      {/* Legend — top right */}
+      {/* ── Legend ── */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <LineLegend />
+      </Sequence>
+
+      {/* ── Opening title overlay ── */}
       <div
         style={{
           position: "absolute",
-          top: CHART_TOP + 10,
-          right: 1920 - CHART_RIGHT + 20,
-          opacity: legendOpacity,
+          top: CHART_TOP - 60,
+          left: CHART_LEFT,
+          right: 1920 - CHART_RIGHT,
           display: "flex",
-          flexDirection: "column",
-          gap: 10,
+          justifyContent: "center",
+          opacity: titleOpacity * titleFadeOut,
+          pointerEvents: "none",
         }}
       >
-        <LegendItem color={LABOR_LINE_COLOR} label="Labor cost" />
-        <LegendItem color={GARMENT_LINE_COLOR} label="Garment cost (relative)" />
+        <span
+          style={{
+            fontFamily: FONT_FAMILY,
+            fontSize: 24,
+            fontWeight: 600,
+            color: THRESHOLD_LABEL_COLOR,
+            letterSpacing: "0.05em",
+          }}
+        >
+          Sock Price vs. Labor Cost
+        </span>
       </div>
 
-      {/* Morph overlay — gentle fade at end */}
-      {frame >= MORPH_START && (
+      {/* ── Morph-phase vignette/darken ── */}
+      {morphProgress > 0 && (
         <AbsoluteFill
           style={{
             backgroundColor: BG_COLOR,
-            opacity: morphOverlayOpacity,
+            opacity: morphProgress * 0.4,
             pointerEvents: "none",
           }}
         />
@@ -100,32 +132,5 @@ export const Part1Economics02SockPriceChart: React.FC = () => {
     </AbsoluteFill>
   );
 };
-
-const LegendItem: React.FC<{ color: string; label: string }> = ({
-  color,
-  label,
-}) => (
-  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-    <div
-      style={{
-        width: 24,
-        height: 3,
-        backgroundColor: color,
-        borderRadius: 2,
-      }}
-    />
-    <span
-      style={{
-        fontFamily: "Inter, sans-serif",
-        fontSize: 14,
-        fontWeight: 400,
-        color: "#94A3B8",
-        opacity: 0.8,
-      }}
-    >
-      {label}
-    </span>
-  </div>
-);
 
 export default Part1Economics02SockPriceChart;

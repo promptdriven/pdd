@@ -1,115 +1,228 @@
 import React from 'react';
-import { AbsoluteFill } from 'remotion';
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+  spring,
+  useVideoConfig,
+} from 'remotion';
+import CodeLine from './CodeLine';
+import SelectionHighlight from './SelectionHighlight';
+import TerminalOverlay from './TerminalOverlay';
 import {
   BG_COLOR,
-  EDITOR_GUTTER_BG,
-  GUTTER_WIDTH,
-  CODE_PADDING_TOP,
-  CANVAS_HEIGHT,
-  LINE_NUMBER_COLOR,
+  EDITOR_PADDING_TOP,
+  CODE_LINE_HEIGHT,
+  PATCHED_CODE,
+  REGENERATED_CODE,
+  FUNCTION_SIGNATURE,
+  PHASE_SELECT_START,
+  PHASE_SELECT_END,
+  PHASE_DELETE_START,
+  PHASE_DELETE_END,
+  PHASE_VOID_END,
+  PHASE_REGEN_START,
+  PHASE_REGEN_END,
+  PHASE_TERMINAL_START,
+  PHASE_TERMINAL_END,
 } from './constants';
-import { SelectionHighlight } from './SelectionHighlight';
-import { CodeLines } from './CodeLines';
-import { TerminalOverlay } from './TerminalOverlay';
 
 export const defaultColdOpen08CodeRegenerationProps = {};
 
 /**
- * Section 0.8 — Code Regeneration: Delete and Rebuild
+ * Code Regeneration — Delete and Rebuild
  *
- * The patched function selects, deletes, and is regenerated clean —
- * line by line — with a terminal confirmation overlay.
- *
- * Duration: 60 frames @ 30fps (2s)
+ * Shows patched code being selected, deleted, then clean code flowing in.
+ * 60 frames @ 30fps = 2 seconds.
  */
 export const ColdOpen08CodeRegeneration: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  // ============================
+  // Phase 1: Selection sweep (frames 0-8)
+  // 5 lines per frame, linear sweep across 40 lines
+  // ============================
+  const selectionProgress = interpolate(
+    frame,
+    [PHASE_SELECT_START, PHASE_SELECT_END],
+    [0, 1],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+  );
+  const selectedLineCount = Math.round(selectionProgress * PATCHED_CODE.length);
+
+  // ============================
+  // Phase 2: Delete (frames 8-12)
+  // Code opacity fades quickly with easeIn(quad)
+  // ============================
+  const deleteProgress = interpolate(
+    frame,
+    [PHASE_DELETE_START, PHASE_DELETE_END],
+    [1, 0],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.quad),
+    },
+  );
+
+  // Selection highlight fades out with deletion
+  const selectionFade = frame < PHASE_DELETE_START ? 1 : deleteProgress;
+
+  // ============================
+  // Phase 3: Void (frames 12-14)
+  // Just the function signature visible
+  // ============================
+  const isInVoid =
+    frame >= PHASE_DELETE_END && frame < PHASE_VOID_END;
+
+  // ============================
+  // Phase 4: Regeneration (frames 14-44)
+  // One line per frame, each line with easeOut(cubic) settle
+  // ============================
+  const regenLineCount =
+    frame < PHASE_REGEN_START
+      ? 0
+      : Math.min(
+          frame - PHASE_REGEN_START + 1,
+          REGENERATED_CODE.length,
+        );
+
+  // ============================
+  // Phase 5: Terminal overlay (frames 38-48)
+  // ============================
+  const terminalOpacity = interpolate(
+    frame,
+    [PHASE_TERMINAL_START, PHASE_TERMINAL_END],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  // Checkmark glow using spring
+  const checkmarkGlow =
+    frame >= PHASE_TERMINAL_END
+      ? spring({
+          frame: frame - PHASE_TERMINAL_END,
+          fps,
+          config: { stiffness: 200, damping: 15 },
+        })
+      : 0;
+
+  // ============================
+  // Determine which phase we're in for rendering
+  // ============================
+  const showPatched = frame < PHASE_DELETE_END;
+  const showVoid = isInVoid;
+  const showRegenerated = frame >= PHASE_REGEN_START;
+
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
         overflow: 'hidden',
       }}
     >
-      {/* Editor gutter background */}
+      {/* Code editor area */}
       <div
         style={{
           position: 'absolute',
-          top: 0,
+          top: EDITOR_PADDING_TOP,
           left: 0,
-          width: GUTTER_WIDTH,
-          height: CANVAS_HEIGHT,
-          backgroundColor: EDITOR_GUTTER_BG,
-          borderRight: `1px solid ${LINE_NUMBER_COLOR}33`,
-        }}
-      />
-
-      {/* Editor top bar (VS Code style) */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: CODE_PADDING_TOP - 4,
-          backgroundColor: EDITOR_GUTTER_BG,
-          borderBottom: `1px solid ${LINE_NUMBER_COLOR}33`,
-          display: 'flex',
-          alignItems: 'center',
-          paddingLeft: 16,
+          right: 0,
+          bottom: 0,
         }}
       >
-        {/* Window controls */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div
-            style={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              backgroundColor: '#F38BA8',
-              opacity: 0.8,
-            }}
-          />
-          <div
-            style={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              backgroundColor: '#F9E2AF',
-              opacity: 0.8,
-            }}
-          />
-          <div
-            style={{
-              width: 12,
-              height: 12,
-              borderRadius: '50%',
-              backgroundColor: '#A6E3A1',
-              opacity: 0.8,
-            }}
-          />
-        </div>
-        {/* File tab */}
-        <div
-          style={{
-            marginLeft: 24,
-            color: LINE_NUMBER_COLOR,
-            fontSize: 13,
-            opacity: 0.85,
-          }}
-        >
-          order_service.py
-        </div>
+        {/* === PATCHED CODE (visible during select + delete phases) === */}
+        {showPatched && (
+          <div style={{ position: 'relative', opacity: frame >= PHASE_DELETE_START ? deleteProgress : 1 }}>
+            {/* Selection highlight overlay */}
+            {frame < PHASE_DELETE_END && (
+              <div style={{ opacity: selectionFade }}>
+                <SelectionHighlight
+                  selectedLineCount={selectedLineCount}
+                  totalLines={PATCHED_CODE.length}
+                />
+              </div>
+            )}
+
+            {/* Patched code lines */}
+            {PATCHED_CODE.map((tokens, i) => (
+              <CodeLine
+                key={`patched-${i}`}
+                tokens={tokens}
+                lineNumber={i + 1}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* === VOID PHASE (just function signature) === */}
+        {showVoid && !showPatched && (
+          <div style={{ position: 'relative' }}>
+            {FUNCTION_SIGNATURE.map((tokens, i) => (
+              <CodeLine
+                key={`sig-${i}`}
+                tokens={tokens}
+                lineNumber={i + 1}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* === REGENERATED CODE (flows in line by line) === */}
+        {showRegenerated && (
+          <div style={{ position: 'relative' }}>
+            {REGENERATED_CODE.map((tokens, i) => {
+              const lineIndex = i;
+              const lineFrame = PHASE_REGEN_START + lineIndex;
+              const isVisible = lineIndex < regenLineCount;
+
+              if (!isVisible) return null;
+
+              // Each line has an easeOut(cubic) settle animation
+              const lineLocalFrame = frame - lineFrame;
+              const lineOpacity = interpolate(
+                lineLocalFrame,
+                [0, 4],
+                [0, 1],
+                {
+                  extrapolateLeft: 'clamp',
+                  extrapolateRight: 'clamp',
+                  easing: Easing.out(Easing.cubic),
+                },
+              );
+              const lineYOffset = interpolate(
+                lineLocalFrame,
+                [0, 4],
+                [8, 0],
+                {
+                  extrapolateLeft: 'clamp',
+                  extrapolateRight: 'clamp',
+                  easing: Easing.out(Easing.cubic),
+                },
+              );
+
+              return (
+                <CodeLine
+                  key={`regen-${i}`}
+                  tokens={tokens}
+                  lineNumber={i + 1}
+                  opacity={lineOpacity}
+                  yOffset={lineYOffset}
+                />
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {/* Selection highlight overlay */}
-      <SelectionHighlight />
-
-      {/* Code lines (patched → delete → void → regenerated) */}
-      <CodeLines />
-
-      {/* Terminal overlay (bottom-right) */}
-      <TerminalOverlay />
+      {/* === TERMINAL OVERLAY === */}
+      <TerminalOverlay opacity={terminalOpacity} checkmarkGlow={checkmarkGlow} />
     </AbsoluteFill>
   );
 };

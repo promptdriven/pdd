@@ -1,50 +1,41 @@
-import React from "react";
-import { useCurrentFrame } from "remotion";
-import {
-  CODE_FONT,
-  CODE_FONT_SIZE,
-  CODE_LEFT_PADDING,
-  CURSOR_BLINK_FRAMES,
-  CURSOR_COLOR,
-  GUTTER_WIDTH,
-  LINE_HEIGHT,
-  TOP_PADDING,
-} from "./constants";
+import React from 'react';
+import { useCurrentFrame } from 'remotion';
 
-interface BlinkingCursorProps {
-  line: number; // 1-based
-  column: number;
-  startFrame?: number; // frame when cursor starts blinking (after fade-in)
-}
+// ============================================================
+// BlinkingCursor — a block cursor that blinks on/off every 15 frames
+// Positioned at line 23, column 4 of the code editor
+// ============================================================
 
-export const BlinkingCursor: React.FC<BlinkingCursorProps> = ({
-  line,
-  column,
-  startFrame = 0,
-}) => {
+const GUTTER_WIDTH = 60;
+const CODE_PADDING_LEFT = 16;
+const CODE_PADDING_TOP = 40;
+const LINE_HEIGHT = 22;
+const CURSOR_COLOR = '#CDD6F4';
+const CURSOR_BLINK_FRAMES = 15;
+const CURSOR_LINE = 23;
+const CURSOR_COLUMN = 4;
+const CURSOR_WIDTH = 8.4;  // approx char width at 14px monospace
+const CURSOR_HEIGHT = 18;
+
+export const BlinkingCursor: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Step function blink: 15 frames on, 15 frames off (500ms each at 30fps)
-  const blinkFrame = frame - startFrame;
-  const isVisible = blinkFrame < 0 ? true : Math.floor(blinkFrame / CURSOR_BLINK_FRAMES) % 2 === 0;
+  // Step function: on for 15 frames, off for 15 frames
+  const blinkCycle = Math.floor(frame / CURSOR_BLINK_FRAMES);
+  const isVisible = blinkCycle % 2 === 0;
 
-  // Approximate character width for monospace font at 14px
-  const charWidth = CODE_FONT_SIZE * 0.6;
-
-  // Position the cursor
-  const top = TOP_PADDING + (line - 1) * LINE_HEIGHT;
-  // 3px for border-left + gutter + padding + column offset
-  const left = 3 + GUTTER_WIDTH + CODE_LEFT_PADDING + (column - 1) * charWidth;
+  // Position: line 23 (0-indexed = 22), column 4
+  const top = CODE_PADDING_TOP + (CURSOR_LINE - 1) * LINE_HEIGHT + (LINE_HEIGHT - CURSOR_HEIGHT) / 2;
+  const left = GUTTER_WIDTH + CODE_PADDING_LEFT + (CURSOR_COLUMN - 1) * CURSOR_WIDTH;
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         top,
         left,
-        width: charWidth,
-        height: LINE_HEIGHT - 4,
-        marginTop: 2,
+        width: CURSOR_WIDTH,
+        height: CURSOR_HEIGHT,
         backgroundColor: CURSOR_COLOR,
         opacity: isVisible ? 0.85 : 0,
         borderRadius: 1,

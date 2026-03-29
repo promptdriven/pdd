@@ -1,92 +1,211 @@
 import React from 'react';
 import {
   AbsoluteFill,
-  interpolate,
   useCurrentFrame,
+  interpolate,
   Easing,
   staticFile,
 } from 'remotion';
-import { CANVAS_WIDTH, CANVAS_HEIGHT, BG_COLOR, FADE_IN_END } from './constants';
-import SplitPanel from './SplitPanel';
-import CenterDivider from './CenterDivider';
+import { SplitPanel } from './SplitPanel';
+import {
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
+  BACKGROUND_COLOR,
+  DIVIDER_COLOR,
+  DIVIDER_OPACITY,
+  DIVIDER_GAP,
+  DIVIDER_THICKNESS,
+  PANEL_WIDTH,
+  FADE_IN_START,
+  FADE_IN_END,
+  LEFT_LABEL,
+  RIGHT_LABEL,
+  LABEL_FONT_SIZE,
+  LABEL_COLOR,
+  LABEL_OPACITY_PRIMARY,
+  LABEL_BG_COLOR,
+} from './constants';
 
 // ---------------------------------------------------------------------------
-// Media resolution — import the shared hook for visual-media alias lookup.
-// The wrapper layer provides per-visual aliases (leftSrc, rightSrc, etc.)
-// that this hook resolves at runtime.
+// Helper: resolve video source.
+// If the wrapper provides a media-asset hook we use it; otherwise fall back to
+// staticFile() referencing known Veo assets.
 // ---------------------------------------------------------------------------
-import { useVisualMediaAssetSrc } from '../_shared/visual-runtime';
 
-// ---------------------------------------------------------------------------
-// Fallback map: alias → known Veo filename for standalone preview
-// ---------------------------------------------------------------------------
-const FALLBACK_FILES: Record<string, string> = {
-  leftSrc: 'developer_cursor_edit.mp4',
-  leftRevealSrc: 'developer_codebase_zoomout.mp4',
-  rightSrc: 'grandmother_darning.mp4',
-  rightRevealSrc: 'grandmother_drawer_zoomout.mp4',
-};
+let _useVisualMediaAssetSrc: ((alias: string) => string | null) | undefined;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const shared = require('../_shared/visual-runtime');
+  _useVisualMediaAssetSrc = shared.useVisualMediaAssetSrc;
+} catch {
+  // _shared module not available – will fall back to staticFile() below
+}
 
-function useMediaSrc(alias: string): string {
-  const resolved = useVisualMediaAssetSrc(alias);
+/** No-op hook placeholder so the call count is always stable. */
+const _noopHook = (_alias: string): string | null => null;
+
+/** Resolved hook – always safe to call unconditionally. */
+const useVisualMedia = _useVisualMediaAssetSrc ?? _noopHook;
+
+/**
+ * Hook that resolves a visual-media alias to a video src path.
+ * Calls the runtime hook unconditionally, then falls back to staticFile.
+ */
+function useMediaSrc(alias: string, fallbackPath: string): string {
+  const resolved = useVisualMedia(alias);
   if (resolved) return resolved;
-  const fallback = FALLBACK_FILES[alias];
-  if (fallback) return staticFile(`veo/${fallback}`);
-  return staticFile('veo/darning_split_screen.mp4');
+  return staticFile(fallbackPath);
 }
 
 // ---------------------------------------------------------------------------
-// Default props (empty — this component is self-contained)
+// Default props (empty – component is self-contained)
 // ---------------------------------------------------------------------------
 export const defaultColdOpen01SplitScreenDarningProps = {};
 
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
-/**
- * ColdOpen01SplitScreenDarning
- *
- * Split-screen composition: developer editing code (left) vs. grandmother
- * darning socks (right). Both sides progress through an initial task then
- * zoom out to reveal accumulated repair work.
- *
- * Duration: 270 frames (9 s @ 30 fps)
- */
 export const ColdOpen01SplitScreenDarning: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // ── Resolve video sources ──────────────────────────────────────────
-  const leftClip1 = useMediaSrc('leftSrc');
-  const leftClip2 = useMediaSrc('leftRevealSrc');
-  const rightClip1 = useMediaSrc('rightSrc');
-  const rightClip2 = useMediaSrc('rightRevealSrc');
+  // --- Resolve video sources ---
+  const leftClipA = useMediaSrc('leftSrc', 'veo/developer_cursor_edit.mp4');
+  const leftClipB = useMediaSrc(
+    'leftZoomSrc',
+    'veo/developer_codebase_zoomout.mp4',
+  );
+  const rightClipA = useMediaSrc('rightSrc', 'veo/grandmother_darning.mp4');
+  const rightClipB = useMediaSrc(
+    'rightZoomSrc',
+    'veo/grandmother_drawer_zoomout.mp4',
+  );
 
-  // ── Global fade-in from black ──────────────────────────────────────
-  const globalOpacity = interpolate(frame, [0, FADE_IN_END], [0, 1], {
+  // --- Global fade-in (from black) over the first 15 frames ---
+  const globalOpacity = interpolate(
+    frame,
+    [FADE_IN_START, FADE_IN_END],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  // --- Divider fade-in ---
+  const dividerOpacity = interpolate(
+    frame,
+    [FADE_IN_START, FADE_IN_END],
+    [0, DIVIDER_OPACITY],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  // --- Label fade-in (slightly after panels) ---
+  const labelOpacity = interpolate(frame, [10, 30], [0, LABEL_OPACITY_PRIMARY], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
     easing: Easing.out(Easing.quad),
   });
 
+  // Panel offsets
+  const leftPanelLeft = 0;
+  const rightPanelLeft = PANEL_WIDTH + DIVIDER_GAP;
+
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
+        backgroundColor: BACKGROUND_COLOR,
         width: CANVAS_WIDTH,
         height: CANVAS_HEIGHT,
+        opacity: globalOpacity,
       }}
     >
-      {/* Content fades in from black over the first 15 frames */}
-      <AbsoluteFill style={{ opacity: globalOpacity }}>
-        {/* Left panel — developer */}
-        <SplitPanel clip1Src={leftClip1} clip2Src={leftClip2} side="left" />
+      {/* Left panel – Developer */}
+      <SplitPanel
+        clipASrc={leftClipA}
+        clipBSrc={leftClipB}
+        leftOffset={leftPanelLeft}
+      />
 
-        {/* Center divider */}
-        <CenterDivider />
+      {/* Right panel – Grandmother */}
+      <SplitPanel
+        clipASrc={rightClipA}
+        clipBSrc={rightClipB}
+        leftOffset={rightPanelLeft}
+      />
 
-        {/* Right panel — grandmother */}
-        <SplitPanel clip1Src={rightClip1} clip2Src={rightClip2} side="right" />
-      </AbsoluteFill>
+      {/* Centre divider */}
+      <div
+        style={{
+          position: 'absolute',
+          left: PANEL_WIDTH + (DIVIDER_GAP - DIVIDER_THICKNESS) / 2,
+          top: 0,
+          width: DIVIDER_THICKNESS,
+          height: CANVAS_HEIGHT,
+          backgroundColor: DIVIDER_COLOR,
+          opacity: dividerOpacity,
+        }}
+      />
+
+      {/* Left label */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 40,
+          left: 0,
+          width: PANEL_WIDTH,
+          display: 'flex',
+          justifyContent: 'center',
+          opacity: labelOpacity,
+          pointerEvents: 'none',
+        }}
+      >
+        <span
+          style={{
+            fontFamily: 'Inter, system-ui, sans-serif',
+            fontSize: LABEL_FONT_SIZE,
+            color: LABEL_COLOR,
+            backgroundColor: LABEL_BG_COLOR,
+            padding: '6px 18px',
+            borderRadius: 6,
+            letterSpacing: '0.02em',
+          }}
+        >
+          {LEFT_LABEL}
+        </span>
+      </div>
+
+      {/* Right label */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 40,
+          left: rightPanelLeft,
+          width: PANEL_WIDTH,
+          display: 'flex',
+          justifyContent: 'center',
+          opacity: labelOpacity,
+          pointerEvents: 'none',
+        }}
+      >
+        <span
+          style={{
+            fontFamily: 'Inter, system-ui, sans-serif',
+            fontSize: LABEL_FONT_SIZE,
+            color: LABEL_COLOR,
+            backgroundColor: LABEL_BG_COLOR,
+            padding: '6px 18px',
+            borderRadius: 6,
+            letterSpacing: '0.02em',
+          }}
+        >
+          {RIGHT_LABEL}
+        </span>
+      </div>
     </AbsoluteFill>
   );
 };

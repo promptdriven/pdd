@@ -1,43 +1,50 @@
-// === Colors (Catppuccin Mocha theme) ===
+// === Layout & Canvas ===
+export const CANVAS_WIDTH = 1920;
+export const CANVAS_HEIGHT = 1080;
+export const TOTAL_FRAMES = 60;
+export const FPS = 30;
+
+// === Background & Editor Chrome ===
 export const BG_COLOR = '#1E1E2E';
 export const EDITOR_GUTTER_BG = '#181825';
 export const LINE_NUMBER_COLOR = '#585B70';
 export const SELECTION_COLOR = '#89B4FA';
 export const SELECTION_OPACITY = 0.2;
 
-// Syntax highlighting colors (Catppuccin Mocha)
-export const SYN_KEYWORD = '#CBA6F7';    // purple - def, return, if, else, for, in, not, None, True, False
-export const SYN_FUNCTION = '#89B4FA';   // blue - function names
-export const SYN_STRING = '#A6E3A1';     // green - strings
-export const SYN_COMMENT = '#6C7086';    // overlay1 - comments
-export const SYN_PARAMETER = '#F38BA8';  // red - parameters
-export const SYN_OPERATOR = '#89DCEB';   // sky - operators
-export const SYN_NUMBER = '#FAB387';     // peach - numbers
-export const SYN_BUILTIN = '#F9E2AF';    // yellow - builtins like len, dict, list
-export const SYN_SELF = '#F38BA8';       // red - self
-export const SYN_PLAIN = '#CDD6F4';      // text - plain identifiers
-export const SYN_DECORATOR = '#F9E2AF';  // yellow - decorators
-export const SYN_PATCH = '#F38BA8';      // red - patch markers
+// === Catppuccin Mocha Syntax Colors ===
+export const SYN_KEYWORD = '#CBA6F7';   // purple — def, return, if, else, for, in, not, None, True, False, and, or
+export const SYN_FUNCTION = '#89B4FA';   // blue — function names
+export const SYN_STRING = '#A6E3A1';     // green — strings
+export const SYN_COMMENT = '#6C7086';    // overlay1 — comments
+export const SYN_NUMBER = '#FAB387';     // peach — numbers
+export const SYN_PARAM = '#F5C2E7';      // pink — parameters
+export const SYN_OPERATOR = '#89DCEB';   // sky — operators
+export const SYN_VARIABLE = '#CDD6F4';   // text — variables
+export const SYN_BUILTIN = '#F9E2AF';    // yellow — builtins like len, range, dict
+export const SYN_DECORATOR = '#F9E2AF';  // yellow — decorators
+export const SYN_PUNCTUATION = '#BAC2DE'; // subtext1 — brackets, parens, colons
+export const SYN_SELF = '#F38BA8';        // red — self
 
-// Terminal
+// === Terminal ===
 export const TERMINAL_BG = '#11111B';
 export const TERMINAL_TEXT = '#A6E3A1';
-export const TERMINAL_BORDER_RADIUS = 8;
-
-// === Dimensions ===
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
-export const GUTTER_WIDTH = 60;
-export const LINE_HEIGHT = 22;
-export const CODE_FONT_SIZE = 14;
-export const CODE_PADDING_LEFT = 16;
-export const CODE_PADDING_TOP = 40;
-export const TERMINAL_WIDTH = 420;
+export const TERMINAL_WIDTH = 400;
 export const TERMINAL_HEIGHT = 60;
+export const TERMINAL_RADIUS = 8;
 export const TERMINAL_FONT_SIZE = 12;
-export const TERMINAL_MARGIN = 24;
+export const TERMINAL_COMMAND = '$ pdd generate process_order ✓';
 
-// === Animation Phases (frame ranges) ===
+// === Code Font ===
+export const CODE_FONT_FAMILY = 'JetBrains Mono, Fira Code, Consolas, monospace';
+export const CODE_FONT_SIZE = 14;
+export const CODE_LINE_HEIGHT = 22;
+
+// === Editor Dimensions ===
+export const EDITOR_PADDING_LEFT = 80;
+export const EDITOR_PADDING_TOP = 40;
+export const GUTTER_WIDTH = 60;
+
+// === Animation Phase Boundaries (frames) ===
 export const PHASE_SELECT_START = 0;
 export const PHASE_SELECT_END = 8;
 export const PHASE_DELETE_START = 8;
@@ -51,104 +58,197 @@ export const PHASE_TERMINAL_END = 48;
 export const PHASE_HOLD_START = 48;
 export const PHASE_HOLD_END = 60;
 
-export const TOTAL_FRAMES = 60;
-export const ORIGINAL_LINE_COUNT = 40;
-export const REGEN_LINE_COUNT = 30;
-export const LINES_PER_SELECTION_FRAME = 5;
+// Token types for syntax highlighting
+export type TokenType =
+  | 'keyword'
+  | 'function'
+  | 'string'
+  | 'comment'
+  | 'number'
+  | 'param'
+  | 'operator'
+  | 'variable'
+  | 'builtin'
+  | 'decorator'
+  | 'punctuation'
+  | 'self'
+  | 'plain';
 
-// === Patched (old) code — simulated 40-line function with patch comments ===
-export interface CodeToken {
+export interface Token {
   text: string;
-  color: string;
+  type: TokenType;
 }
 
-export type CodeLine = CodeToken[];
+export const TOKEN_COLORS: Record<TokenType, string> = {
+  keyword: SYN_KEYWORD,
+  function: SYN_FUNCTION,
+  string: SYN_STRING,
+  comment: SYN_COMMENT,
+  number: SYN_NUMBER,
+  param: SYN_PARAM,
+  operator: SYN_OPERATOR,
+  variable: SYN_VARIABLE,
+  builtin: SYN_BUILTIN,
+  decorator: SYN_DECORATOR,
+  punctuation: SYN_PUNCTUATION,
+  self: SYN_SELF,
+  plain: SYN_VARIABLE,
+};
 
-function kw(text: string): CodeToken { return { text, color: SYN_KEYWORD }; }
-function fn(text: string): CodeToken { return { text, color: SYN_FUNCTION }; }
-function str(text: string): CodeToken { return { text, color: SYN_STRING }; }
-function cmt(text: string): CodeToken { return { text, color: SYN_COMMENT }; }
-function param(text: string): CodeToken { return { text, color: SYN_PARAMETER }; }
-function op(text: string): CodeToken { return { text, color: SYN_OPERATOR }; }
-function num(text: string): CodeToken { return { text, color: SYN_NUMBER }; }
-function blt(text: string): CodeToken { return { text, color: SYN_BUILTIN }; }
-function slf(text: string): CodeToken { return { text, color: SYN_SELF }; }
-function pl(text: string): CodeToken { return { text, color: SYN_PLAIN }; }
-function patch(text: string): CodeToken { return { text, color: SYN_PATCH }; }
-
-export const PATCHED_CODE: CodeLine[] = [
-  [kw('def'), pl(' '), fn('process_order'), pl('('), param('order'), pl(', '), param('ctx'), pl('):')],
-  [pl('    '), cmt('# PATCH: validate order before processing')],
-  [pl('    '), kw('if'), pl(' '), kw('not'), pl(' '), pl('order'), pl('.'), pl('items'), pl(':')],
-  [pl('        '), kw('raise'), pl(' '), blt('ValueError'), pl('('), str('"Empty order"'), pl(')')],
-  [pl('    '), cmt('# TODO: remove this workaround after v2.3')],
-  [pl('    '), pl('total'), pl(' '), op('='), pl(' '), num('0')],
-  [pl('    '), pl('discounts'), pl(' '), op('='), pl(' '), blt('dict'), pl('()')],
-  [pl('    '), cmt('# PATCH: handle legacy discount format')],
-  [pl('    '), kw('for'), pl(' '), pl('item'), pl(' '), kw('in'), pl(' '), pl('order'), pl('.'), pl('items'), pl(':')],
-  [pl('        '), kw('if'), pl(' '), pl('item'), pl('.'), pl('discount_type'), pl(' '), op('=='), pl(' '), str('"legacy"'), pl(':')],
-  [pl('            '), pl('disc'), pl(' '), op('='), pl(' '), pl('item'), pl('.'), pl('price'), pl(' '), op('*'), pl(' '), num('0.1')],
-  [pl('        '), kw('elif'), pl(' '), pl('item'), pl('.'), pl('discount_type'), pl(' '), op('=='), pl(' '), str('"promo"'), pl(':')],
-  [pl('            '), pl('disc'), pl(' '), op('='), pl(' '), pl('item'), pl('.'), pl('price'), pl(' '), op('*'), pl(' '), num('0.15')],
-  [pl('        '), kw('else'), pl(':')],
-  [pl('            '), pl('disc'), pl(' '), op('='), pl(' '), num('0')],
-  [pl('        '), cmt('# PATCH: accumulate discount per category')],
-  [pl('        '), pl('cat'), pl(' '), op('='), pl(' '), pl('item'), pl('.'), pl('category')],
-  [pl('        '), kw('if'), pl(' '), pl('cat'), pl(' '), kw('not'), pl(' '), kw('in'), pl(' '), pl('discounts'), pl(':')],
-  [pl('            '), pl('discounts'), pl('['), pl('cat'), pl(']'), pl(' '), op('='), pl(' '), num('0')],
-  [pl('        '), pl('discounts'), pl('['), pl('cat'), pl(']'), pl(' '), op('+='), pl(' '), pl('disc')],
-  [pl('        '), pl('total'), pl(' '), op('+='), pl(' '), pl('item'), pl('.'), pl('price'), pl(' '), op('-'), pl(' '), pl('disc')],
-  [pl('    '), cmt('# TODO: refactor tax calculation')],
-  [pl('    '), pl('tax_rate'), pl(' '), op('='), pl(' '), pl('ctx'), pl('.'), fn('get_tax_rate'), pl('('), pl('order'), pl('.'), pl('region'), pl(')')],
-  [pl('    '), kw('if'), pl(' '), pl('tax_rate'), pl(' '), kw('is'), pl(' '), kw('None'), pl(':')],
-  [pl('        '), pl('tax_rate'), pl(' '), op('='), pl(' '), num('0.08')],
-  [pl('    '), pl('tax'), pl(' '), op('='), pl(' '), pl('total'), pl(' '), op('*'), pl(' '), pl('tax_rate')],
-  [pl('    '), cmt('# PATCH: apply loyalty credit')],
-  [pl('    '), pl('credit'), pl(' '), op('='), pl(' '), blt('min'), pl('(')],
-  [pl('        '), pl('ctx'), pl('.'), fn('get_loyalty_credit'), pl('('), pl('order'), pl('.'), pl('customer_id'), pl('),')],
-  [pl('        '), pl('total'), pl(' '), op('*'), pl(' '), num('0.2')],
-  [pl('    '), pl(')')],
-  [pl('    '), pl('final'), pl(' '), op('='), pl(' '), pl('total'), pl(' '), op('+'), pl(' '), pl('tax'), pl(' '), op('-'), pl(' '), pl('credit')],
-  [pl('    '), cmt('# TODO: add audit logging')],
-  [pl('    '), pl('result'), pl(' '), op('='), pl(' '), blt('dict'), pl('(')],
-  [pl('        '), pl('subtotal'), op('='), pl('total'), pl(',')],
-  [pl('        '), pl('tax'), op('='), pl('tax'), pl(',')],
-  [pl('        '), pl('credit'), op('='), pl('credit'), pl(',')],
-  [pl('        '), pl('total'), op('='), pl('final'), pl(',')],
-  [pl('    '), pl(')')],
-  [pl('    '), kw('return'), pl(' '), pl('result')],
+// ============================================
+// PATCHED CODE (40 lines — messy, with patch comments)
+// ============================================
+export const PATCHED_CODE: Token[][] = [
+  // Line 1
+  [{ text: 'def', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'process_order', type: 'function' }, { text: '(', type: 'punctuation' }, { text: 'order', type: 'param' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'ctx', type: 'param' }, { text: '):', type: 'punctuation' }],
+  // Line 2
+  [{ text: '    ', type: 'plain' }, { text: '# PATCH: validate order before processing', type: 'comment' }],
+  // Line 3
+  [{ text: '    ', type: 'plain' }, { text: 'if', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'not', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'order', type: 'variable' }, { text: ':', type: 'punctuation' }],
+  // Line 4
+  [{ text: '        ', type: 'plain' }, { text: 'return', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'None', type: 'keyword' }],
+  // Line 5
+  [{ text: '    ', type: 'plain' }, { text: '# TODO: remove this temp fix for issue #4521', type: 'comment' }],
+  // Line 6
+  [{ text: '    ', type: 'plain' }, { text: 'items', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'order', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'get', type: 'function' }, { text: '(', type: 'punctuation' }, { text: '"items"', type: 'string' }, { text: ',', type: 'punctuation' }, { text: ' []', type: 'punctuation' }, { text: ')', type: 'punctuation' }],
+  // Line 7
+  [{ text: '    ', type: 'plain' }, { text: 'if', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'len', type: 'builtin' }, { text: '(', type: 'punctuation' }, { text: 'items', type: 'variable' }, { text: ')', type: 'punctuation' }, { text: ' == ', type: 'operator' }, { text: '0', type: 'number' }, { text: ':', type: 'punctuation' }],
+  // Line 8
+  [{ text: '        ', type: 'plain' }, { text: 'return', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'None', type: 'keyword' }],
+  // Line 9
+  [{ text: '    ', type: 'plain' }, { text: '# PATCH: hotfix for negative quantities', type: 'comment' }],
+  // Line 10
+  [{ text: '    ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: '0', type: 'number' }],
+  // Line 11
+  [{ text: '    ', type: 'plain' }, { text: 'for', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'item', type: 'variable' }, { text: ' ', type: 'plain' }, { text: 'in', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'items', type: 'variable' }, { text: ':', type: 'punctuation' }],
+  // Line 12
+  [{ text: '        ', type: 'plain' }, { text: 'qty', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'item', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'get', type: 'function' }, { text: '(', type: 'punctuation' }, { text: '"qty"', type: 'string' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: '0', type: 'number' }, { text: ')', type: 'punctuation' }],
+  // Line 13
+  [{ text: '        ', type: 'plain' }, { text: '# HACK: clamp negative to zero', type: 'comment' }],
+  // Line 14
+  [{ text: '        ', type: 'plain' }, { text: 'if', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'qty', type: 'variable' }, { text: ' < ', type: 'operator' }, { text: '0', type: 'number' }, { text: ':', type: 'punctuation' }],
+  // Line 15
+  [{ text: '            ', type: 'plain' }, { text: 'qty', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: '0', type: 'number' }],
+  // Line 16
+  [{ text: '        ', type: 'plain' }, { text: 'price', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'item', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'get', type: 'function' }, { text: '(', type: 'punctuation' }, { text: '"price"', type: 'string' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: '0', type: 'number' }, { text: ')', type: 'punctuation' }],
+  // Line 17
+  [{ text: '        ', type: 'plain' }, { text: '# TODO: handle currency conversion', type: 'comment' }],
+  // Line 18
+  [{ text: '        ', type: 'plain' }, { text: 'subtotal', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'qty', type: 'variable' }, { text: ' * ', type: 'operator' }, { text: 'price', type: 'variable' }],
+  // Line 19
+  [{ text: '        ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: ' += ', type: 'operator' }, { text: 'subtotal', type: 'variable' }],
+  // Line 20
+  [{ text: '    ', type: 'plain' }, { text: '# PATCH: apply discount if exists', type: 'comment' }],
+  // Line 21
+  [{ text: '    ', type: 'plain' }, { text: 'discount', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'ctx', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'get', type: 'function' }, { text: '(', type: 'punctuation' }, { text: '"discount"', type: 'string' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: '0', type: 'number' }, { text: ')', type: 'punctuation' }],
+  // Line 22
+  [{ text: '    ', type: 'plain' }, { text: 'if', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'discount', type: 'variable' }, { text: ':', type: 'punctuation' }],
+  // Line 23
+  [{ text: '        ', type: 'plain' }, { text: '# FIXME: discount calc is wrong for %', type: 'comment' }],
+  // Line 24
+  [{ text: '        ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'total', type: 'variable' }, { text: ' - ', type: 'operator' }, { text: 'discount', type: 'variable' }],
+  // Line 25
+  [{ text: '    ', type: 'plain' }, { text: 'if', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: ' < ', type: 'operator' }, { text: '0', type: 'number' }, { text: ':', type: 'punctuation' }],
+  // Line 26
+  [{ text: '        ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: '0', type: 'number' }],
+  // Line 27
+  [{ text: '    ', type: 'plain' }, { text: 'tax_rate', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: '0.08', type: 'number' }],
+  // Line 28
+  [{ text: '    ', type: 'plain' }, { text: '# TODO: tax rate should come from ctx', type: 'comment' }],
+  // Line 29
+  [{ text: '    ', type: 'plain' }, { text: 'tax', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'total', type: 'variable' }, { text: ' * ', type: 'operator' }, { text: 'tax_rate', type: 'variable' }],
+  // Line 30
+  [{ text: '    ', type: 'plain' }, { text: 'grand_total', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'total', type: 'variable' }, { text: ' + ', type: 'operator' }, { text: 'tax', type: 'variable' }],
+  // Line 31
+  [{ text: '    ', type: 'plain' }, { text: 'result', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: '{', type: 'punctuation' }],
+  // Line 32
+  [{ text: '        ', type: 'plain' }, { text: '"subtotal"', type: 'string' }, { text: ':', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 33
+  [{ text: '        ', type: 'plain' }, { text: '"tax"', type: 'string' }, { text: ':', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'tax', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 34
+  [{ text: '        ', type: 'plain' }, { text: '"total"', type: 'string' }, { text: ':', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'grand_total', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 35
+  [{ text: '        ', type: 'plain' }, { text: '"items"', type: 'string' }, { text: ':', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'len', type: 'builtin' }, { text: '(', type: 'punctuation' }, { text: 'items', type: 'variable' }, { text: ')', type: 'punctuation' }, { text: ',', type: 'punctuation' }],
+  // Line 36
+  [{ text: '    ', type: 'plain' }, { text: '}', type: 'punctuation' }],
+  // Line 37
+  [{ text: '    ', type: 'plain' }, { text: '# PATCH: log for debugging, remove later', type: 'comment' }],
+  // Line 38
+  [{ text: '    ', type: 'plain' }, { text: 'print', type: 'builtin' }, { text: '(', type: 'punctuation' }, { text: 'f"Order processed: {grand_total}"', type: 'string' }, { text: ')', type: 'punctuation' }],
+  // Line 39
+  [{ text: '    ', type: 'plain' }, { text: 'return', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'result', type: 'variable' }],
+  // Line 40 (empty trailing line)
+  [],
 ];
 
-// === Regenerated (clean) code — 30 lines, no patches or TODOs ===
-export const CLEAN_CODE: CodeLine[] = [
-  [kw('def'), pl(' '), fn('process_order'), pl('('), param('order'), pl(', '), param('ctx'), pl('):')],
-  [pl('    '), pl('order'), pl('.'), fn('validate'), pl('()')],
-  [pl('')],
-  [pl('    '), pl('pricing'), pl(' '), op('='), pl(' '), fn('calculate_pricing'), pl('('), pl('order'), pl('.'), pl('items'), pl(')')],
-  [pl('    '), pl('tax'), pl(' '), op('='), pl(' '), fn('compute_tax'), pl('('), pl('pricing'), pl('.'), pl('subtotal'), pl(', '), pl('order'), pl('.'), pl('region'), pl(', '), pl('ctx'), pl(')')],
-  [pl('    '), pl('credit'), pl(' '), op('='), pl(' '), fn('apply_loyalty'), pl('('), pl('order'), pl('.'), pl('customer_id'), pl(', '), pl('pricing'), pl('.'), pl('subtotal'), pl(', '), pl('ctx'), pl(')')],
-  [pl('')],
-  [pl('    '), kw('return'), pl(' '), fn('OrderResult'), pl('(')],
-  [pl('        '), pl('subtotal'), op('='), pl('pricing'), pl('.'), pl('subtotal'), pl(',')],
-  [pl('        '), pl('discounts'), op('='), pl('pricing'), pl('.'), pl('discounts'), pl(',')],
-  [pl('        '), pl('tax'), op('='), pl('tax'), pl(',')],
-  [pl('        '), pl('credit'), op('='), pl('credit'), pl(',')],
-  [pl('        '), pl('total'), op('='), pl('pricing'), pl('.'), pl('subtotal'), pl(' '), op('+'), pl(' '), pl('tax'), pl(' '), op('-'), pl(' '), pl('credit'), pl(',')],
-  [pl('    '), pl(')')],
-  [pl('')],
-  [pl('')],
-  [kw('def'), pl(' '), fn('calculate_pricing'), pl('('), param('items'), pl('):')],
-  [pl('    '), pl('subtotal'), pl(' '), op('='), pl(' '), num('0')],
-  [pl('    '), pl('discounts'), pl(' '), op('='), pl(' '), blt('defaultdict'), pl('('), blt('float'), pl(')')],
-  [pl('')],
-  [pl('    '), kw('for'), pl(' '), pl('item'), pl(' '), kw('in'), pl(' '), pl('items'), pl(':')],
-  [pl('        '), pl('disc'), pl(' '), op('='), pl(' '), pl('DISCOUNT_RATES'), pl('.'), fn('get'), pl('('), pl('item'), pl('.'), pl('discount_type'), pl(', '), num('0'), pl(')'), pl(' '), op('*'), pl(' '), pl('item'), pl('.'), pl('price')],
-  [pl('        '), pl('discounts'), pl('['), pl('item'), pl('.'), pl('category'), pl(']'), pl(' '), op('+='), pl(' '), pl('disc')],
-  [pl('        '), pl('subtotal'), pl(' '), op('+='), pl(' '), pl('item'), pl('.'), pl('price'), pl(' '), op('-'), pl(' '), pl('disc')],
-  [pl('')],
-  [pl('    '), kw('return'), pl(' '), fn('PricingResult'), pl('('), pl('subtotal'), op('='), pl('subtotal'), pl(', '), pl('discounts'), op('='), blt('dict'), pl('('), pl('discounts'), pl(')'), pl(')')],
-  [pl('')],
-  [pl('')],
-  [kw('def'), pl(' '), fn('compute_tax'), pl('('), param('subtotal'), pl(', '), param('region'), pl(', '), param('ctx'), pl('):')],
-  [pl('    '), kw('return'), pl(' '), pl('subtotal'), pl(' '), op('*'), pl(' '), pl('('), pl('ctx'), pl('.'), fn('get_tax_rate'), pl('('), pl('region'), pl(')'), pl(' '), kw('or'), pl(' '), num('0.08'), pl(')')],
+// ============================================
+// REGENERATED CODE (30 lines — clean, no patch comments)
+// ============================================
+export const REGENERATED_CODE: Token[][] = [
+  // Line 1
+  [{ text: 'def', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'process_order', type: 'function' }, { text: '(', type: 'punctuation' }, { text: 'order', type: 'param' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'ctx', type: 'param' }, { text: '):', type: 'punctuation' }],
+  // Line 2
+  [{ text: '    ', type: 'plain' }, { text: 'items', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'validate_order_items', type: 'function' }, { text: '(', type: 'punctuation' }, { text: 'order', type: 'variable' }, { text: ')', type: 'punctuation' }],
+  // Line 3
+  [{ text: '    ', type: 'plain' }, { text: 'if', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'not', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'items', type: 'variable' }, { text: ':', type: 'punctuation' }],
+  // Line 4
+  [{ text: '        ', type: 'plain' }, { text: 'return', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'None', type: 'keyword' }],
+  // Line 5
+  [],
+  // Line 6
+  [{ text: '    ', type: 'plain' }, { text: 'subtotal', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'sum', type: 'builtin' }, { text: '(', type: 'punctuation' }],
+  // Line 7
+  [{ text: '        ', type: 'plain' }, { text: 'max', type: 'builtin' }, { text: '(', type: 'punctuation' }, { text: 'item', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'quantity', type: 'variable' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: '0', type: 'number' }, { text: ')', type: 'punctuation' }, { text: ' * ', type: 'operator' }, { text: 'item', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'unit_price', type: 'variable' }],
+  // Line 8
+  [{ text: '        ', type: 'plain' }, { text: 'for', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'item', type: 'variable' }, { text: ' ', type: 'plain' }, { text: 'in', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'items', type: 'variable' }],
+  // Line 9
+  [{ text: '    ', type: 'plain' }, { text: ')', type: 'punctuation' }],
+  // Line 10
+  [],
+  // Line 11
+  [{ text: '    ', type: 'plain' }, { text: 'discount', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'apply_discount', type: 'function' }, { text: '(', type: 'punctuation' }],
+  // Line 12
+  [{ text: '        ', type: 'plain' }, { text: 'subtotal', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 13
+  [{ text: '        ', type: 'plain' }, { text: 'ctx', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'discount_policy', type: 'variable' }],
+  // Line 14
+  [{ text: '    ', type: 'plain' }, { text: ')', type: 'punctuation' }],
+  // Line 15
+  [],
+  // Line 16
+  [{ text: '    ', type: 'plain' }, { text: 'tax', type: 'variable' }, { text: ' = ', type: 'operator' }, { text: 'compute_tax', type: 'function' }, { text: '(', type: 'punctuation' }],
+  // Line 17
+  [{ text: '        ', type: 'plain' }, { text: 'subtotal', type: 'variable' }, { text: ' - ', type: 'operator' }, { text: 'discount', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 18
+  [{ text: '        ', type: 'plain' }, { text: 'ctx', type: 'variable' }, { text: '.', type: 'punctuation' }, { text: 'tax_region', type: 'variable' }],
+  // Line 19
+  [{ text: '    ', type: 'plain' }, { text: ')', type: 'punctuation' }],
+  // Line 20
+  [],
+  // Line 21
+  [{ text: '    ', type: 'plain' }, { text: 'return', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'OrderResult', type: 'function' }, { text: '(', type: 'punctuation' }],
+  // Line 22
+  [{ text: '        ', type: 'plain' }, { text: 'subtotal', type: 'variable' }, { text: '=', type: 'operator' }, { text: 'subtotal', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 23
+  [{ text: '        ', type: 'plain' }, { text: 'discount', type: 'variable' }, { text: '=', type: 'operator' }, { text: 'discount', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 24
+  [{ text: '        ', type: 'plain' }, { text: 'tax', type: 'variable' }, { text: '=', type: 'operator' }, { text: 'tax', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 25
+  [{ text: '        ', type: 'plain' }, { text: 'total', type: 'variable' }, { text: '=', type: 'operator' }, { text: 'subtotal', type: 'variable' }, { text: ' - ', type: 'operator' }, { text: 'discount', type: 'variable' }, { text: ' + ', type: 'operator' }, { text: 'tax', type: 'variable' }, { text: ',', type: 'punctuation' }],
+  // Line 26
+  [{ text: '        ', type: 'plain' }, { text: 'item_count', type: 'variable' }, { text: '=', type: 'operator' }, { text: 'len', type: 'builtin' }, { text: '(', type: 'punctuation' }, { text: 'items', type: 'variable' }, { text: ')', type: 'punctuation' }, { text: ',', type: 'punctuation' }],
+  // Line 27
+  [{ text: '    ', type: 'plain' }, { text: ')', type: 'punctuation' }],
+  // Line 28
+  [],
+  // Line 29
+  [],
+  // Line 30
+  [],
+];
+
+// Function signature shown during the "void" phase
+export const FUNCTION_SIGNATURE: Token[][] = [
+  [{ text: 'def', type: 'keyword' }, { text: ' ', type: 'plain' }, { text: 'process_order', type: 'function' }, { text: '(', type: 'punctuation' }, { text: 'order', type: 'param' }, { text: ',', type: 'punctuation' }, { text: ' ', type: 'plain' }, { text: 'ctx', type: 'param' }, { text: '):', type: 'punctuation' }],
+  [{ text: '    ', type: 'plain' }, { text: 'pass', type: 'keyword' }],
 ];

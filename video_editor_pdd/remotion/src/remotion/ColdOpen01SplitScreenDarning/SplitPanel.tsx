@@ -1,6 +1,5 @@
 import React from 'react';
 import {
-  AbsoluteFill,
   OffthreadVideo,
   interpolate,
   useCurrentFrame,
@@ -9,109 +8,100 @@ import {
 import {
   CANVAS_HEIGHT,
   PANEL_WIDTH,
-  DIVIDER_GAP,
   CROSSFADE_START,
-  CROSSFADE_FRAMES,
+  CROSSFADE_DURATION,
+  CLIP_A_END,
+  CLIP_B_END,
 } from './constants';
 
-/**
- * Props accepted by SplitPanel.
- * `clip1Src` and `clip2Src` are video paths ready for <OffthreadVideo>.
- * `side` controls whether this panel sits on the left or right of the split.
- */
 export interface SplitPanelProps {
-  clip1Src: string | null;
-  clip2Src: string | null;
-  side: 'left' | 'right';
+  /** Video src for the first clip (frames 0–160) */
+  clipASrc: string;
+  /** Video src for the second clip (frames 150–270) */
+  clipBSrc: string;
+  /** CSS `left` offset for panel positioning */
+  leftOffset: number;
 }
 
-const SplitPanel: React.FC<SplitPanelProps> = ({
-  clip1Src,
-  clip2Src,
-  side,
+/**
+ * Renders one half of the split screen with two video clips
+ * that crossfade at the segment boundary.
+ */
+export const SplitPanel: React.FC<SplitPanelProps> = ({
+  clipASrc,
+  clipBSrc,
+  leftOffset,
 }) => {
   const frame = useCurrentFrame();
 
-  // Clip 2 fades in over CROSSFADE_FRAMES starting at CROSSFADE_START.
-  const clip2Opacity = interpolate(
+  // Opacity of clip B during the crossfade region
+  const clipBOpacity = interpolate(
     frame,
-    [CROSSFADE_START, CROSSFADE_START + CROSSFADE_FRAMES],
+    [CROSSFADE_START, CROSSFADE_START + CROSSFADE_DURATION],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
-      easing: Easing.inOut(Easing.cubic),
+      easing: Easing.bezier(0.42, 0, 0.58, 1), // easeInOut(cubic)
     },
   );
 
-  const leftOffset = side === 'left' ? 0 : PANEL_WIDTH + DIVIDER_GAP;
+  // Clip A fades out as clip B fades in
+  const clipAOpacity = 1 - clipBOpacity;
+
+  // Whether clips should still be rendered (avoid rendering beyond their range)
+  const showClipA = frame < CLIP_A_END + CROSSFADE_DURATION;
+  const showClipB = frame >= CROSSFADE_START && frame < CLIP_B_END;
+
+  const panelStyle: React.CSSProperties = {
+    position: 'absolute',
+    left: leftOffset,
+    top: 0,
+    width: PANEL_WIDTH,
+    height: CANVAS_HEIGHT,
+    overflow: 'hidden',
+  };
+
+  const videoStyle: React.CSSProperties = {
+    width: PANEL_WIDTH,
+    height: CANVAS_HEIGHT,
+    objectFit: 'cover',
+  };
 
   return (
-    <div
-      style={{
-        position: 'absolute',
-        left: leftOffset,
-        top: 0,
-        width: PANEL_WIDTH,
-        height: CANVAS_HEIGHT,
-        overflow: 'hidden',
-      }}
-    >
-      {/* Clip 1 — plays from start, hidden once clip2 fully covers */}
-      {clip1Src && (
-        <AbsoluteFill>
-          <OffthreadVideo
-            src={clip1Src}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-          />
-        </AbsoluteFill>
-      )}
-
-      {/* Clip 2 — fades in via crossfade starting at CROSSFADE_START */}
-      {clip2Src && frame >= CROSSFADE_START && (
-        <AbsoluteFill style={{ opacity: clip2Opacity }}>
-          <OffthreadVideo
-            src={clip2Src}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-            startFrom={Math.max(0, frame - CROSSFADE_START)}
-          />
-        </AbsoluteFill>
-      )}
-
-      {/* Fallback when no video sources are provided */}
-      {!clip1Src && !clip2Src && (
-        <AbsoluteFill
+    <div style={panelStyle}>
+      {/* Clip A */}
+      {showClipA && (
+        <div
           style={{
-            backgroundColor: side === 'left' ? '#0F172A' : '#1A0F0A',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            position: 'absolute',
+            inset: 0,
+            opacity: clipAOpacity,
           }}
         >
-          <div
-            style={{
-              color: '#FFFFFF',
-              fontSize: 28,
-              fontFamily: 'sans-serif',
-              fontWeight: 600,
-              opacity: 0.85,
-              textAlign: 'center',
-              padding: 40,
-            }}
-          >
-            {side === 'left'
-              ? 'Developer patching code'
-              : 'Grandmother darning socks'}
-          </div>
-        </AbsoluteFill>
+          <OffthreadVideo
+            src={clipASrc}
+            style={videoStyle}
+            muted
+          />
+        </div>
+      )}
+
+      {/* Clip B – crossfades in */}
+      {showClipB && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            opacity: clipBOpacity,
+          }}
+        >
+          <OffthreadVideo
+            src={clipBSrc}
+            style={videoStyle}
+            muted
+          />
+        </div>
       )}
     </div>
   );

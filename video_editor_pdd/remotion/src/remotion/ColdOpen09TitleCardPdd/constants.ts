@@ -1,91 +1,96 @@
-// === Colors ===
+// ColdOpen09TitleCardPdd — constants
+
+export const CANVAS_WIDTH = 1920;
+export const CANVAS_HEIGHT = 1080;
+
+// Duration
+export const TOTAL_FRAMES = 60;
+
+// Colors
 export const BG_COLOR = "#1E1E2E";
 export const TITLE_COLOR = "#CDD6F4";
 export const RULE_COLOR = "#6C7086";
 export const ACCENT_COLOR = "#89B4FA";
 
-// === Layout (1920x1080) ===
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
+// Opacities
+export const CODE_BG_OPACITY = 0.15;
+export const OVERLAY_OPACITY = 0.7;
+export const RULE_OPACITY = 0.5;
+export const ACCENT_GLOW_OPACITY = 0.2;
 
-// Title positions
-export const TITLE_Y_TOP = 470;
-export const TITLE_Y_BOTTOM = 545;
-export const TITLE_BOTTOM_OFFSET_X = 10; // offset-right for "DEVELOPMENT"
+// Typography
 export const TITLE_FONT_SIZE = 64;
 export const TITLE_FONT_WEIGHT = 700;
 export const TITLE_FONT_FAMILY = "Inter, sans-serif";
+
+// Title positions (centered at x: 960)
+export const TITLE_LINE1_Y = 470;
+export const TITLE_LINE2_Y = 545;
+export const TITLE_LINE2_OFFSET_X = 10; // offset-right 10px
 
 // Horizontal rule
 export const RULE_Y = 510;
 export const RULE_WIDTH = 300;
 export const RULE_HEIGHT = 2;
-export const RULE_OPACITY = 0.7;
+export const RULE_CENTER_X = 960;
 
-// Accent glow line
-export const ACCENT_GLOW_WIDTH = 200;
-export const ACCENT_GLOW_HEIGHT = 1;
-export const ACCENT_GLOW_Y = 512;
-export const ACCENT_GLOW_OPACITY = 0.2;
+// Accent glow
+export const GLOW_WIDTH = 200;
+export const GLOW_HEIGHT = 1;
+export const GLOW_Y = 512;
 
-// Overlay
-export const OVERLAY_OPACITY = 0.7;
-export const CODE_BG_OPACITY = 0.15;
-
-// === Animation Frames ===
+// Animation keyframes
 export const OVERLAY_FADE_START = 0;
 export const OVERLAY_FADE_END = 10;
 
-export const TITLE_TOP_START = 10;
-export const TITLE_TOP_END = 25;
+export const LINE1_FADE_START = 10;
+export const LINE1_FADE_END = 25;
 
 export const RULE_DRAW_START = 25;
 export const RULE_DRAW_END = 30;
 
-export const TITLE_BOTTOM_START = 30;
-export const TITLE_BOTTOM_END = 45;
+export const LINE2_FADE_START = 30;
+export const LINE2_FADE_END = 45;
 
-export const ACCENT_PULSE_START = 45;
-export const ACCENT_PULSE_END = 48;
-
-export const TOTAL_FRAMES = 60;
+export const GLOW_PULSE_START = 45;
+export const GLOW_PULSE_END = 48;
 
 // Slide distance in px
 export const SLIDE_DISTANCE = 5;
 
-// === Background code snippet (regenerated clean function from prior shot) ===
-export const CLEAN_FUNCTION_CODE = `def calculate_shipping_cost(order: Order) -> Decimal:
-    """Calculate shipping cost based on order weight and destination."""
-    base_rate = get_base_rate(order.destination.zone)
-    weight_charge = order.total_weight * RATE_PER_KG
+// Background code snippet (regenerated clean function from previous shot)
+export const CLEAN_FUNCTION_CODE = `def process_user_input(raw_input: str) -> ProcessedData:
+    """Validate, sanitize, and transform user input."""
+    sanitized = sanitize_html(raw_input.strip())
+    tokens = tokenize(sanitized)
 
-    if order.is_expedited:
-        surcharge = base_rate * Decimal("0.35")
-    else:
-        surcharge = Decimal("0")
+    if not tokens:
+        return ProcessedData.empty()
 
-    subtotal = base_rate + weight_charge + surcharge
+    validated = [
+        token for token in tokens
+        if validate_token(token)
+    ]
 
-    if order.total_weight > FREE_SHIPPING_THRESHOLD:
-        discount = subtotal * Decimal("0.10")
-    else:
-        discount = Decimal("0")
+    return ProcessedData(
+        tokens=validated,
+        metadata=extract_metadata(validated),
+        timestamp=utc_now(),
+    )
 
-    return max(subtotal - discount, MIN_SHIPPING_COST)`;
 
-// Code display styling
-export const CODE_FONT_SIZE = 14;
-export const CODE_LINE_HEIGHT = 1.6;
-export const CODE_FONT_FAMILY = "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace";
-export const CODE_PADDING_TOP = 200;
-export const CODE_PADDING_LEFT = 520;
+def sanitize_html(text: str) -> str:
+    """Remove dangerous HTML tags, keep safe formatting."""
+    return bleach.clean(
+        text,
+        tags=ALLOWED_TAGS,
+        attributes=ALLOWED_ATTRS,
+        strip=True,
+    )
 
-// Syntax highlight colors (Catppuccin Mocha-inspired)
-export const SYN_KEYWORD = "#CBA6F7";  // purple - def, if, else, return
-export const SYN_STRING = "#A6E3A1";   // green - strings
-export const SYN_FUNCTION = "#89B4FA"; // blue - function names
-export const SYN_TYPE = "#F9E2AF";     // yellow - type hints
-export const SYN_COMMENT = "#6C7086";  // gray - comments
-export const SYN_NUMBER = "#FAB387";   // peach - numbers
-export const SYN_OPERATOR = "#89DCEB"; // teal - operators
-export const SYN_DEFAULT = "#CDD6F4";  // text - default
+
+def validate_token(token: Token) -> bool:
+    """Check token against schema and length limits."""
+    if len(token.value) > MAX_TOKEN_LENGTH:
+        return False
+    return token.matches_schema(SCHEMA)`;

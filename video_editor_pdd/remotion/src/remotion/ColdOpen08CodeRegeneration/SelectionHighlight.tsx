@@ -1,67 +1,40 @@
 import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
+  CODE_LINE_HEIGHT,
+  GUTTER_WIDTH,
   SELECTION_COLOR,
   SELECTION_OPACITY,
-  GUTTER_WIDTH,
-  LINE_HEIGHT,
-  CODE_PADDING_TOP,
-  CANVAS_WIDTH,
-  ORIGINAL_LINE_COUNT,
-  PHASE_SELECT_START,
-  PHASE_SELECT_END,
-  PHASE_DELETE_START,
-  PHASE_DELETE_END,
 } from './constants';
 
-/**
- * Renders the blue selection highlight that sweeps across the patched code,
- * then contracts/vanishes on delete.
- */
-export const SelectionHighlight: React.FC = () => {
-  const frame = useCurrentFrame();
+interface SelectionHighlightProps {
+  /** How many lines (from line 1) are currently selected */
+  selectedLineCount: number;
+  /** Total lines in the editor code */
+  totalLines: number;
+}
 
-  // How many lines are selected at this frame
-  const selectedLines = Math.min(
-    Math.floor(
-      interpolate(
-        frame,
-        [PHASE_SELECT_START, PHASE_SELECT_END],
-        [0, ORIGINAL_LINE_COUNT],
-        { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-      )
-    ),
-    ORIGINAL_LINE_COUNT
-  );
+const SelectionHighlight: React.FC<SelectionHighlightProps> = ({
+  selectedLineCount,
+  totalLines,
+}) => {
+  if (selectedLineCount <= 0) return null;
 
-  // During delete phase, fade out the selection
-  const deleteOpacity = interpolate(
-    frame,
-    [PHASE_DELETE_START, PHASE_DELETE_END],
-    [1, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.quad),
-    }
-  );
-
-  // Don't render after delete
-  if (frame >= PHASE_DELETE_END) return null;
+  const count = Math.min(selectedLineCount, totalLines);
 
   return (
     <>
-      {Array.from({ length: selectedLines }, (_, i) => (
+      {Array.from({ length: count }, (_, i) => (
         <div
           key={i}
           style={{
             position: 'absolute',
-            top: CODE_PADDING_TOP + i * LINE_HEIGHT,
+            top: i * CODE_LINE_HEIGHT,
             left: GUTTER_WIDTH,
-            width: CANVAS_WIDTH - GUTTER_WIDTH,
-            height: LINE_HEIGHT,
+            right: 0,
+            height: CODE_LINE_HEIGHT,
             backgroundColor: SELECTION_COLOR,
-            opacity: SELECTION_OPACITY * deleteOpacity,
+            opacity: SELECTION_OPACITY,
+            pointerEvents: 'none',
           }}
         />
       ))}
