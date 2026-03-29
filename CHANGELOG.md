@@ -1,3 +1,25 @@
+## v0.0.191 (2026-03-28)
+
+### Feat
+
+- add manual audio sync acceptance locks
+- agentic auto deps (#733) (#751)
+
+### Fix
+
+- harden stage 5 transcript validation
+- handle non-fast-forward push errors in _push_with_retry (#999)
+- flag transcript boundary hallucinations
+- harden veo chain staging and stale detection
+
+### Refactor
+
+- update and clean up Remotion animation components across multiple economics and paradigm shift modules
+- consolidate code editor components, update chart styles, and refresh narration assets across Remotion scenes
+- update CI validation prompt instructions and refine cold open audit specifications
+- update PDD explainer specifications and optimize Remotion cold open components and layouts
+- update PDD explainer specifications and reorganize Remotion video components
+
 ## v0.0.190 (2026-03-27)
 
 ### Feat
