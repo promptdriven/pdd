@@ -45,11 +45,13 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from sync_audio_pipeline import (
     build_segment_validation_report,
+    confirm_segment_validation_report,
     compute_transcript_match_ratio,
     evaluate_validation_gate,
     normalize_transcript_text,
     load_project,
     load_section_groups,
+    preserve_best_validation_rows_for_unchanged_audio,
     get_segment_wav_path,
     get_wav_duration,
     concatenate_wavs_ffmpeg,
@@ -58,7 +60,9 @@ from sync_audio_pipeline import (
     generate_word_timestamps,
     is_apple_silicon_mac,
     resolve_stt_backend,
+    resolve_confirmation_stt_backend,
     process_section,
+    trim_repeated_hallucinated_suffix,
     main,
 )
 
@@ -1403,6 +1407,250 @@ class TestSegmentValidation:
 
         assert report["segments"][0]["status"] == "warn"
         assert report["segments"][0]["matchRatio"] < 0.94
+
+    def test_trim_repeated_hallucinated_suffix_removes_looped_tail(self):
+        text = (
+            "a modern chip has billions of gates nobody reviews the netlist "
+            "its impossible the abstraction isnt just convenient its physically necessary "
+            "nobody said nobody said nobody said nobody said nobody said nobody said"
+        )
+
+        trimmed, changed = trim_repeated_hallucinated_suffix(text)
+
+        assert changed is True
+        assert trimmed.endswith("its physically necessary")
+        assert "nobody said nobody said nobody said" not in trimmed
+
+    def test_trim_repeated_hallucinated_suffix_removes_looped_near_tail_with_short_trailer(self):
+        text = (
+            "a modern chip has billions of gates nobody reviews the netlist "
+            "its impossible the abstraction isnt just convenient its physically necessary "
+            "every time every time every time every time every time every time "
+            "well see you next time"
+        )
+
+        trimmed, changed = trim_repeated_hallucinated_suffix(text)
+
+        assert changed is True
+        assert trimmed.endswith("its physically necessary")
+        assert "every time every time every time" not in trimmed
+
+    def test_build_segment_validation_report_trims_repeated_hallucinated_suffix(self, tmp_path):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        manifest = {
+            "segments": [
+                {
+                    "id": "part2_paradigm_shift_016",
+                    "cleanText": (
+                        "Today, a modern chip has billions of gates. Nobody reviews the netlist. "
+                        "It's impossible. The abstraction isn't just convenient — it's physically necessary."
+                    ),
+                },
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["part2_paradigm_shift_016"],
+            str(output_dir),
+            [
+                {"word": "Today", "start": 0.0, "end": 0.1, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "a", "start": 0.1, "end": 0.2, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "modern", "start": 0.2, "end": 0.3, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "chip", "start": 0.3, "end": 0.4, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "has", "start": 0.4, "end": 0.5, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "billions", "start": 0.5, "end": 0.6, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "of", "start": 0.6, "end": 0.7, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "gates", "start": 0.7, "end": 0.8, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "Nobody", "start": 0.8, "end": 0.9, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "reviews", "start": 0.9, "end": 1.0, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "the", "start": 1.0, "end": 1.1, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "netlist", "start": 1.1, "end": 1.2, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "It's", "start": 1.2, "end": 1.3, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "impossible", "start": 1.3, "end": 1.4, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "The", "start": 1.4, "end": 1.5, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "abstraction", "start": 1.5, "end": 1.6, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "isn't", "start": 1.6, "end": 1.7, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "just", "start": 1.7, "end": 1.8, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "convenient", "start": 1.8, "end": 1.9, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "it's", "start": 1.9, "end": 2.0, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "physically", "start": 2.0, "end": 2.1, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "necessary", "start": 2.1, "end": 2.2, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "nobody", "start": 2.2, "end": 2.3, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "said", "start": 2.3, "end": 2.4, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "nobody", "start": 2.4, "end": 2.5, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "said", "start": 2.5, "end": 2.6, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "nobody", "start": 2.6, "end": 2.7, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "said", "start": 2.7, "end": 2.8, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "nobody", "start": 2.8, "end": 2.9, "segmentId": "part2_paradigm_shift_016"},
+                {"word": "said", "start": 2.9, "end": 3.0, "segmentId": "part2_paradigm_shift_016"},
+            ],
+        )
+
+        row = report["segments"][0]
+        assert row["status"] == "pass"
+        assert row["matchRatio"] >= 0.94
+        assert row["trimmedRepeatedSuffix"] is True
+
+    def test_resolve_confirmation_stt_backend_uses_stronger_model_defaults(self, monkeypatch):
+        monkeypatch.setenv("SYNC_AUDIO_STT_BACKEND", "faster-whisper")
+        backend = resolve_confirmation_stt_backend(
+            {
+                "backend": "faster-whisper",
+                "model_id": "base",
+                "device": "cpu",
+                "compute_type": "int8",
+            }
+        )
+
+        assert backend["backend"] == "faster-whisper"
+        assert backend["model_id"] != "base"
+
+    def test_confirm_segment_validation_report_uses_segment_only_stronger_second_pass(
+        self, tmp_path
+    ):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        manifest = {
+            "segments": [
+                {
+                    "id": "part2_paradigm_shift_016",
+                    "cleanText": (
+                        "Today, a modern chip has billions of gates. Nobody reviews the netlist. "
+                        "It's impossible. The abstraction isn't just convenient — it's physically necessary."
+                    ),
+                },
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+        segment_path = output_dir / "part2_paradigm_shift_016.wav"
+        _create_dummy_wav(str(segment_path))
+
+        initial_report = {
+            "segments": [
+                {
+                    "segmentId": "part2_paradigm_shift_016",
+                    "expectedText": manifest["segments"][0]["cleanText"],
+                    "actualText": (
+                        "a modern chip has billions of gates nobody reviews the netlist "
+                        "its impossible the abstraction isnt just convenient its physically necessary "
+                        "nobody said nobody said nobody said nobody said nobody said nobody said"
+                    ),
+                    "normalizedExpectedText": normalize_transcript_text(
+                        manifest["segments"][0]["cleanText"]
+                    ),
+                    "normalizedActualText": normalize_transcript_text(
+                        "a modern chip has billions of gates nobody reviews the netlist "
+                        "its impossible the abstraction isnt just convenient its physically necessary "
+                        "nobody said nobody said nobody said nobody said nobody said nobody said"
+                    ),
+                    "matchRatio": 0.026,
+                    "status": "fail",
+                    "expectedWordCount": 22,
+                    "actualWordCount": 34,
+                }
+            ],
+            "summary": {"passCount": 0, "warnCount": 0, "failCount": 1, "skipCount": 0},
+        }
+
+        with mock.patch(
+            "sync_audio_pipeline.transcribe_words_with_backend",
+            return_value=[
+                {"word": "Today", "start": 0.0, "end": 0.1},
+                {"word": "a", "start": 0.1, "end": 0.2},
+                {"word": "modern", "start": 0.2, "end": 0.3},
+                {"word": "chip", "start": 0.3, "end": 0.4},
+                {"word": "has", "start": 0.4, "end": 0.5},
+                {"word": "billions", "start": 0.5, "end": 0.6},
+                {"word": "of", "start": 0.6, "end": 0.7},
+                {"word": "gates", "start": 0.7, "end": 0.8},
+                {"word": "Nobody", "start": 0.8, "end": 0.9},
+                {"word": "reviews", "start": 0.9, "end": 1.0},
+                {"word": "the", "start": 1.0, "end": 1.1},
+                {"word": "netlist", "start": 1.1, "end": 1.2},
+                {"word": "It's", "start": 1.2, "end": 1.3},
+                {"word": "impossible", "start": 1.3, "end": 1.4},
+                {"word": "The", "start": 1.4, "end": 1.5},
+                {"word": "abstraction", "start": 1.5, "end": 1.6},
+                {"word": "isn't", "start": 1.6, "end": 1.7},
+                {"word": "just", "start": 1.7, "end": 1.8},
+                {"word": "convenient", "start": 1.8, "end": 1.9},
+                {"word": "it's", "start": 1.9, "end": 2.0},
+                {"word": "physically", "start": 2.0, "end": 2.1},
+                {"word": "necessary", "start": 2.1, "end": 2.2},
+            ],
+        ):
+            confirmed_report = confirm_segment_validation_report(
+                initial_report,
+                str(output_dir),
+                {"part2_paradigm_shift_016": segment_path},
+            )
+
+        row = confirmed_report["segments"][0]
+        assert row["status"] == "pass"
+        assert row["matchRatio"] >= 0.94
+        assert row["confirmedBySegmentStt"] is True
+        assert row["firstPassMatchRatio"] == 0.026
+        assert confirmed_report["summary"]["passCount"] == 1
+        assert confirmed_report["summary"]["failCount"] == 0
+
+    def test_preserve_best_validation_rows_for_unchanged_audio(self, tmp_path):
+        section_output_dir = tmp_path / "outputs" / "tts" / "part2_paradigm_shift"
+        section_output_dir.mkdir(parents=True)
+
+        (section_output_dir / "segment_validation.json").write_text(
+            json.dumps(
+                {
+                    "segments": [
+                        {
+                            "segmentId": "part2_paradigm_shift_016",
+                            "expectedText": "Today, a modern chip has billions of gates.",
+                            "actualText": "Today, a modern chip has billions of gates.",
+                            "matchRatio": 1.0,
+                            "status": "pass",
+                            "audioFingerprint": "same-audio",
+                        }
+                    ],
+                    "summary": {
+                        "passCount": 1,
+                        "warnCount": 0,
+                        "failCount": 0,
+                        "skipCount": 0,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        preserved = preserve_best_validation_rows_for_unchanged_audio(
+            {
+                "segments": [
+                    {
+                        "segmentId": "part2_paradigm_shift_016",
+                        "expectedText": "Today, a modern chip has billions of gates.",
+                        "actualText": "today modern chip has billions",
+                        "matchRatio": 0.4,
+                        "status": "fail",
+                        "audioFingerprint": "same-audio",
+                    }
+                ],
+                "summary": {
+                    "passCount": 0,
+                    "warnCount": 0,
+                    "failCount": 1,
+                    "skipCount": 0,
+                },
+            },
+            section_output_dir,
+        )
+
+        row = preserved["segments"][0]
+        assert row["status"] == "pass"
+        assert row["matchRatio"] == 1.0
+        assert row["preservedPreviousValidation"] is True
+        assert preserved["summary"]["passCount"] == 1
+        assert preserved["summary"]["failCount"] == 0
 
     def test_build_segment_validation_report_uses_token_level_similarity(self, tmp_path):
         output_dir = tmp_path / "outputs" / "tts"

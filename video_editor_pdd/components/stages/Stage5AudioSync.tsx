@@ -104,6 +104,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
   const [validationSummary, setValidationSummary] = useState<SegmentValidationSummary>(
     EMPTY_VALIDATION_SUMMARY
   );
+  const [flagMatchThresholdPercent, setFlagMatchThresholdPercent] = useState(94);
   const [retryMatchThresholdPercent, setRetryMatchThresholdPercent] = useState(94);
   const [retryMaxAttempts, setRetryMaxAttempts] = useState(2);
   const [batchValidationRerenderJobId, setBatchValidationRerenderJobId] = useState<string | null>(null);
@@ -374,29 +375,41 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
     const term = search.toLowerCase();
     return timestamps.filter((w) => w.word.toLowerCase().includes(term));
   }, [timestamps, search]);
-  const flaggedValidationRows = useMemo(
+  const mismatchValidationRows = useMemo(
     () => validationRows.filter((row) => row.status !== 'pass' && row.status !== 'skip'),
     [validationRows]
   );
+  const flaggedValidationSegmentIds = useMemo(
+    () =>
+      collectFlaggedSegmentsBelowThreshold(
+        mismatchValidationRows,
+        flagMatchThresholdPercent
+      ),
+    [mismatchValidationRows, flagMatchThresholdPercent]
+  );
+  const flaggedValidationRows = useMemo(() => {
+    const flaggedSet = new Set(flaggedValidationSegmentIds);
+    return mismatchValidationRows.filter((row) => flaggedSet.has(row.segmentId));
+  }, [mismatchValidationRows, flaggedValidationSegmentIds]);
   const retryableValidationSegmentIds = useMemo(
     () =>
       collectFlaggedSegmentsBelowThreshold(
-        flaggedValidationRows,
+        mismatchValidationRows,
         retryMatchThresholdPercent
       ),
-    [flaggedValidationRows, retryMatchThresholdPercent]
+    [mismatchValidationRows, retryMatchThresholdPercent]
   );
   const belowThresholdValidationRows = useMemo(() => {
-    const retryableSet = new Set(retryableValidationSegmentIds);
-    return flaggedValidationRows.filter((row) => retryableSet.has(row.segmentId));
-  }, [flaggedValidationRows, retryableValidationSegmentIds]);
+    const flaggedSet = new Set(flaggedValidationSegmentIds);
+    return mismatchValidationRows.filter((row) => flaggedSet.has(row.segmentId));
+  }, [mismatchValidationRows, flaggedValidationSegmentIds]);
   const projectWideRetryableSegmentIdsBySection = useMemo(
     () =>
       collectFlaggedSegmentsBelowThresholdBySection(
         allValidationRowsBySection,
-        retryMatchThresholdPercent
+        flagMatchThresholdPercent
       ),
-    [allValidationRowsBySection, retryMatchThresholdPercent]
+    [allValidationRowsBySection, flagMatchThresholdPercent]
   );
   const projectWideRetryableSectionIds = useMemo(
     () => Object.keys(projectWideRetryableSegmentIdsBySection),
@@ -598,7 +611,7 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
 
     try {
       const result = await runFlaggedTranscriptRerenderRetries({
-        initialRows: flaggedValidationRows,
+        initialRows: mismatchValidationRows,
         thresholdPercent: retryMatchThresholdPercent,
         maxRetries: retryMaxAttempts,
         sectionId: selectedSectionId,
@@ -1078,11 +1091,26 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
             </div>
           </div>
 
-          <div className="mb-3 flex flex-wrap items-end gap-3">
-            <label className="text-xs text-slate-300">
-              <div className="mb-1">Retry Below Match %</div>
-              <input
-                type="number"
+              <div className="mb-3 flex flex-wrap items-end gap-3">
+                <label className="text-xs text-slate-300">
+                  <div className="mb-1">Flag Below Match %</div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={flagMatchThresholdPercent}
+                    onChange={(e) =>
+                      setFlagMatchThresholdPercent(
+                        Math.max(0, Math.min(100, Number(e.target.value) || 0))
+                      )
+                    }
+                    className="w-28 rounded border border-slate-600 bg-slate-800 px-2 py-1 text-sm text-slate-200"
+                  />
+                </label>
+                <label className="text-xs text-slate-300">
+                  <div className="mb-1">Retry Below Match %</div>
+                  <input
+                    type="number"
                 min={0}
                 max={100}
                 value={retryMatchThresholdPercent}
@@ -1130,20 +1158,20 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
           </div>
 
           <div className="mb-3 grid gap-3 lg:grid-cols-2">
-            <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
-              <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Below Threshold in This Section
-              </div>
-              <div className="text-sm text-slate-200">
-                {retryableValidationSegmentIds.length} segment
-                {retryableValidationSegmentIds.length === 1 ? '' : 's'} currently fall below the
-                retry threshold for {selectedSectionId || 'this section'}.
-              </div>
-              {belowThresholdValidationRows.length === 0 ? (
-                <div className="mt-2 text-xs text-slate-500">
-                  No current-section segments are below the retry threshold.
-                </div>
-              ) : (
+                <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Below Threshold in This Section
+                  </div>
+                  <div className="text-sm text-slate-200">
+                    {flaggedValidationSegmentIds.length} segment
+                    {flaggedValidationSegmentIds.length === 1 ? '' : 's'} currently fall below the
+                    flag threshold for {selectedSectionId || 'this section'}.
+                  </div>
+                  {belowThresholdValidationRows.length === 0 ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      No current-section segments are below the current flag threshold.
+                    </div>
+                  ) : (
                 <div className="mt-2 flex flex-wrap gap-2">
                   {belowThresholdValidationRows.map((row) => (
                     <div
@@ -1167,15 +1195,15 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
                   Below Threshold Across Project
                 </div>
-                <div className="text-sm text-slate-200">
-                  {loadingAllValidationRows
-                    ? 'Loading project-wide retry candidates…'
-                    : `${totalProjectWideRetryableSegments} segment${
-                        totalProjectWideRetryableSegments === 1 ? '' : 's'
-                      } across ${projectWideRetryableSectionIds.length} section${
-                        projectWideRetryableSectionIds.length === 1 ? '' : 's'
-                      } are below the retry threshold.`}
-                </div>
+                    <div className="text-sm text-slate-200">
+                      {loadingAllValidationRows
+                        ? 'Loading project-wide retry candidates…'
+                        : `${totalProjectWideRetryableSegments} segment${
+                            totalProjectWideRetryableSegments === 1 ? '' : 's'
+                          } across ${projectWideRetryableSectionIds.length} section${
+                            projectWideRetryableSectionIds.length === 1 ? '' : 's'
+                          } are below the flag threshold.`}
+                    </div>
                 {!loadingAllValidationRows && projectWideStaleSectionIds.length > 0 && (
                   <div className="mt-1 text-xs text-amber-300/90">
                     Includes last available validation results for{' '}
@@ -1186,11 +1214,11 @@ export default function Stage5AudioSync({ onAdvance }: Stage5AudioSyncProps) {
               </summary>
 
               <div className="mt-3 space-y-2">
-                {projectWideRetryableSectionIds.length === 0 ? (
-                  <div className="text-xs text-slate-500">
-                    No project-wide segments are below the current retry threshold.
-                  </div>
-                ) : (
+                    {projectWideRetryableSectionIds.length === 0 ? (
+                      <div className="text-xs text-slate-500">
+                        No project-wide segments are below the current flag threshold.
+                      </div>
+                    ) : (
                   projectWideRetryableSectionIds.map((sectionId) => (
                     <div
                       key={sectionId}

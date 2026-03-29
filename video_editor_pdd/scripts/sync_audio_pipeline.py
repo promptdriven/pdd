@@ -10,6 +10,7 @@ Standalone Python script invoked by the Next.js audio sync API route to:
 """
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
@@ -27,6 +28,10 @@ DEFAULT_FASTER_WHISPER_MODEL = "base"
 DEFAULT_FASTER_WHISPER_DEVICE = "cpu"
 DEFAULT_FASTER_WHISPER_COMPUTE_TYPE = "int8"
 DEFAULT_MLX_WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+DEFAULT_VALIDATION_FASTER_WHISPER_MODEL = "large-v3"
+DEFAULT_VALIDATION_MLX_WHISPER_MODEL = "mlx-community/whisper-large-v3"
+DEFAULT_VALIDATION_BEAM_SIZE = 5
+DEFAULT_VALIDATION_TEMPERATURE = 0.0
 DEFAULT_VALIDATION_MAX_FAIL_COUNT = 2
 DEFAULT_VALIDATION_MAX_FAIL_RATIO = 0.15
 DEFAULT_VALIDATION_MAX_WARN_COUNT = 6
@@ -41,6 +46,7 @@ NUMBER_NORMALIZATION_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_FASTER_WHISPER_MODEL_CACHE: Dict[Tuple[str, str, str, int], Any] = {}
 
 
 def _expand_segment_range(
@@ -467,22 +473,107 @@ def resolve_stt_backend() -> Dict[str, str]:
     }
 
 
+def resolve_confirmation_stt_backend(
+    primary_backend_config: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Resolve a stronger STT backend for segment-only confirmation passes."""
+    primary = primary_backend_config or resolve_stt_backend()
+    requested_backend = os.environ.get("SYNC_AUDIO_CONFIRM_STT_BACKEND", "").strip().lower()
+    backend_name = (
+        requested_backend
+        if requested_backend in {"faster-whisper", "mlx-whisper"}
+        else str(primary.get("backend", "faster-whisper"))
+    )
+
+    if backend_name == "mlx-whisper":
+        if not is_apple_silicon_mac():
+            if requested_backend == "mlx-whisper":
+                raise RuntimeError("mlx-whisper confirmation requires Apple Silicon macOS")
+            backend_name = "faster-whisper"
+        else:
+            try:
+                importlib.import_module("mlx_whisper")
+            except ImportError as exc:
+                if requested_backend == "mlx-whisper":
+                    raise RuntimeError("mlx-whisper confirmation requested but unavailable") from exc
+                backend_name = "faster-whisper"
+            else:
+                return {
+                    "backend": "mlx-whisper",
+                    "model_id": os.environ.get(
+                        "SYNC_AUDIO_VALIDATION_MLX_MODEL",
+                        DEFAULT_VALIDATION_MLX_WHISPER_MODEL,
+                    ),
+                    "device": "apple-gpu",
+                }
+
+    return {
+        "backend": "faster-whisper",
+        "model_id": os.environ.get(
+            "SYNC_AUDIO_VALIDATION_FASTER_WHISPER_MODEL",
+            DEFAULT_VALIDATION_FASTER_WHISPER_MODEL,
+        ),
+        "device": os.environ.get(
+            "SYNC_AUDIO_VALIDATION_FASTER_WHISPER_DEVICE",
+            str(primary.get("device", DEFAULT_FASTER_WHISPER_DEVICE)),
+        ),
+        "compute_type": os.environ.get(
+            "SYNC_AUDIO_VALIDATION_FASTER_WHISPER_COMPUTE_TYPE",
+            str(primary.get("compute_type", DEFAULT_FASTER_WHISPER_COMPUTE_TYPE)),
+        ),
+        "beam_size": max(
+            1,
+            _coerce_int(
+                os.environ.get(
+                    "SYNC_AUDIO_VALIDATION_BEAM_SIZE",
+                    DEFAULT_VALIDATION_BEAM_SIZE,
+                ),
+                DEFAULT_VALIDATION_BEAM_SIZE,
+            ),
+        ),
+        "temperature": max(
+            0.0,
+            _coerce_float(
+                os.environ.get(
+                    "SYNC_AUDIO_VALIDATION_TEMPERATURE",
+                    DEFAULT_VALIDATION_TEMPERATURE,
+                ),
+                DEFAULT_VALIDATION_TEMPERATURE,
+            ),
+        ),
+    }
+
+
 def _transcribe_words_faster_whisper(
     wav_path: Path, backend_config: Dict[str, str]
 ) -> List[Dict[str, float | str]]:
     from faster_whisper import WhisperModel
 
-    model = WhisperModel(
+    cache_key = (
         backend_config["model_id"],
-        device=backend_config["device"],
-        compute_type=backend_config["compute_type"],
+        backend_config["device"],
+        backend_config["compute_type"],
+        id(WhisperModel),
     )
+    model = _FASTER_WHISPER_MODEL_CACHE.get(cache_key)
+    if model is None:
+        model = WhisperModel(
+            backend_config["model_id"],
+            device=backend_config["device"],
+            compute_type=backend_config["compute_type"],
+        )
+        _FASTER_WHISPER_MODEL_CACHE[cache_key] = model
 
-    segments_iter, _info = model.transcribe(
-        str(wav_path),
-        word_timestamps=True,
-        language="en",
-    )
+    transcribe_kwargs: Dict[str, Any] = {
+        "word_timestamps": True,
+        "language": "en",
+    }
+    if "beam_size" in backend_config:
+        transcribe_kwargs["beam_size"] = int(backend_config["beam_size"])
+    if "temperature" in backend_config:
+        transcribe_kwargs["temperature"] = float(backend_config["temperature"])
+
+    segments_iter, _info = model.transcribe(str(wav_path), **transcribe_kwargs)
 
     words: List[Dict[str, float | str]] = []
     for segment in segments_iter:
@@ -536,10 +627,21 @@ def _transcribe_words_mlx_whisper(
     return words
 
 
+def transcribe_words_with_backend(
+    wav_path: Path,
+    backend_config: Dict[str, Any],
+) -> List[Dict[str, float | str]]:
+    """Transcribe a WAV path with the provided backend configuration."""
+    if backend_config["backend"] == "mlx-whisper":
+        return _transcribe_words_mlx_whisper(wav_path, backend_config)
+    return _transcribe_words_faster_whisper(wav_path, backend_config)
+
+
 def generate_word_timestamps(
     wav_path: Path,
     segment_ids: List[str],
     segment_durations: List[float],
+    backend_config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Generate word-level timestamps using the selected STT backend.
 
@@ -555,11 +657,8 @@ def generate_word_timestamps(
         List of word timestamp dictionaries with keys:
         word, start, end, segmentId.
     """
-    backend_config = resolve_stt_backend()
-    if backend_config["backend"] == "mlx-whisper":
-        transcribed_words = _transcribe_words_mlx_whisper(wav_path, backend_config)
-    else:
-        transcribed_words = _transcribe_words_faster_whisper(wav_path, backend_config)
+    resolved_backend = backend_config or resolve_stt_backend()
+    transcribed_words = transcribe_words_with_backend(wav_path, resolved_backend)
 
     # Build cumulative duration boundaries for segment mapping
     cumulative_boundaries: List[Tuple[float, float, str]] = []
@@ -602,6 +701,57 @@ def normalize_transcript_text(text: str) -> str:
     collapsed = re.sub(r"[^a-z0-9\s]", " ", collapsed)
     collapsed = re.sub(r"\bnum(?:\s+(?:and\s+)?num)+\b", " num ", collapsed)
     return re.sub(r"\s+", " ", collapsed).strip()
+
+
+def trim_repeated_hallucinated_suffix(text: str) -> Tuple[str, bool]:
+    """Trim low-diversity repeated suffix loops from STT output before scoring."""
+    raw_tokens = text.split()
+    if len(raw_tokens) < 8:
+        return text.strip(), False
+
+    normalized_tokens = [
+        re.sub(r"[^a-z0-9]+", "", token.lower())
+        for token in raw_tokens
+    ]
+    best_trim_start: Optional[int] = None
+    best_trimmed_count = 0
+    max_trailing_len = min(5, max(0, len(normalized_tokens) - 8))
+
+    for trailing_len in range(0, max_trailing_len + 1):
+        repeated_region_end = len(normalized_tokens) - trailing_len
+        if repeated_region_end < 4:
+            continue
+
+        max_phrase_len = min(4, repeated_region_end // 4)
+        for phrase_len in range(1, max_phrase_len + 1):
+            suffix = normalized_tokens[
+                repeated_region_end - phrase_len : repeated_region_end
+            ]
+            if not suffix or any(token == "" for token in suffix):
+                continue
+
+            repeat_count = 1
+            cursor = repeated_region_end - phrase_len
+            while cursor - phrase_len >= 0:
+                previous = normalized_tokens[cursor - phrase_len : cursor]
+                if previous != suffix:
+                    break
+                repeat_count += 1
+                cursor -= phrase_len
+
+            trimmed_count = len(normalized_tokens) - cursor
+            if (
+                repeat_count >= 4
+                and trimmed_count >= 8
+                and trimmed_count > best_trimmed_count
+            ):
+                best_trim_start = cursor
+                best_trimmed_count = trimmed_count
+
+    if best_trim_start is None:
+        return text.strip(), False
+
+    return " ".join(raw_tokens[:best_trim_start]).strip(), True
 
 
 def compute_transcript_match_ratio(expected_text: str, actual_text: str) -> float:
@@ -652,6 +802,150 @@ def compute_transcript_match_ratio(expected_text: str, actual_text: str) -> floa
     return round(raw_ratio, 3)
 
 
+def _status_rank(status: str) -> int:
+    return {"skip": 0, "fail": 1, "warn": 2, "pass": 3}.get(status, -1)
+
+
+def _summarize_validation_rows(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    summary = {
+        "passCount": 0,
+        "warnCount": 0,
+        "failCount": 0,
+        "skipCount": 0,
+    }
+    for row in rows:
+        status = str(row.get("status", "skip"))
+        summary[f"{status}Count"] = summary.get(f"{status}Count", 0) + 1
+    return summary
+
+
+def _build_validation_row(
+    segment_id: str,
+    expected_text: str,
+    actual_text: str,
+    audio_fingerprint: Optional[str] = None,
+    extra_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    scored_actual_text, trimmed_repeated_suffix = trim_repeated_hallucinated_suffix(actual_text)
+    normalized_expected = normalize_transcript_text(expected_text)
+    normalized_actual = normalize_transcript_text(scored_actual_text)
+    expected_word_count = len(normalized_expected.split()) if normalized_expected else 0
+    actual_word_count = len(normalized_actual.split()) if normalized_actual else 0
+
+    if not normalized_expected:
+        status = "skip"
+        match_ratio: Optional[float] = None
+    else:
+        match_ratio = compute_transcript_match_ratio(expected_text, scored_actual_text)
+        if match_ratio >= 0.94:
+            status = "pass"
+        elif match_ratio >= 0.8:
+            status = "warn"
+        else:
+            status = "fail"
+
+    row: Dict[str, Any] = {
+        "segmentId": segment_id,
+        "expectedText": expected_text,
+        "actualText": scored_actual_text,
+        "normalizedExpectedText": normalized_expected,
+        "normalizedActualText": normalized_actual,
+        "matchRatio": match_ratio,
+        "status": status,
+        "expectedWordCount": expected_word_count,
+        "actualWordCount": actual_word_count,
+        "trimmedRepeatedSuffix": trimmed_repeated_suffix,
+    }
+    if scored_actual_text != actual_text:
+        row["rawActualText"] = actual_text
+    if audio_fingerprint:
+        row["audioFingerprint"] = audio_fingerprint
+    if extra_fields:
+        row.update(extra_fields)
+    return row
+
+
+def _should_prefer_validation_row(candidate: Dict[str, Any], current: Dict[str, Any]) -> bool:
+    candidate_ratio = candidate.get("matchRatio")
+    current_ratio = current.get("matchRatio")
+    numeric_candidate = float(candidate_ratio) if isinstance(candidate_ratio, (int, float)) else -1.0
+    numeric_current = float(current_ratio) if isinstance(current_ratio, (int, float)) else -1.0
+    if numeric_candidate > numeric_current + 1e-6:
+        return True
+    if numeric_candidate + 1e-6 < numeric_current:
+        return False
+    return _status_rank(str(candidate.get("status", ""))) > _status_rank(
+        str(current.get("status", ""))
+    )
+
+
+def _load_previous_validation_rows(section_output_dir: Path) -> Dict[str, Dict[str, Any]]:
+    rows_by_segment: Dict[str, Dict[str, Any]] = {}
+    for path in (
+        section_output_dir / "segment_validation.json",
+        section_output_dir / "segment_validation.failed.json",
+    ):
+        if not path.exists():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        rows = payload.get("segments")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            segment_id = row.get("segmentId")
+            if not isinstance(segment_id, str):
+                continue
+            existing = rows_by_segment.get(segment_id)
+            if existing is None or _should_prefer_validation_row(row, existing):
+                rows_by_segment[segment_id] = row
+    return rows_by_segment
+
+
+def preserve_best_validation_rows_for_unchanged_audio(
+    validation_report: Dict[str, Any],
+    section_output_dir: Path,
+) -> Dict[str, Any]:
+    """Keep the best known validation row when the segment audio fingerprint is unchanged."""
+    previous_rows = _load_previous_validation_rows(section_output_dir)
+    merged_rows: List[Dict[str, Any]] = []
+
+    for row in validation_report.get("segments") or []:
+        if not isinstance(row, dict):
+            continue
+        segment_id = row.get("segmentId")
+        if not isinstance(segment_id, str):
+            merged_rows.append(row)
+            continue
+
+        previous = previous_rows.get(segment_id)
+        current_fingerprint = row.get("audioFingerprint")
+        previous_fingerprint = previous.get("audioFingerprint") if isinstance(previous, dict) else None
+        if (
+            isinstance(previous, dict)
+            and current_fingerprint
+            and current_fingerprint == previous_fingerprint
+            and _should_prefer_validation_row(previous, row)
+        ):
+            preserved_row = dict(previous)
+            preserved_row["preservedPreviousValidation"] = True
+            preserved_row["currentRunMatchRatio"] = row.get("matchRatio")
+            merged_rows.append(preserved_row)
+            continue
+
+        merged_rows.append(row)
+
+    return {
+        "segments": merged_rows,
+        "summary": _summarize_validation_rows(merged_rows),
+    }
+
+
 def load_segment_script_manifest(output_dir: str) -> Dict[str, str]:
     """Load expected cleanText values from outputs/tts/segments.json."""
     manifest_path = Path(output_dir) / "segments.json"
@@ -683,6 +977,7 @@ def build_segment_validation_report(
     segment_ids: List[str],
     output_dir: str,
     word_timestamps: List[Dict[str, Any]],
+    segment_audio_fingerprints: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Compare STT output against expected segment text from the TTS manifest."""
     expected_map = load_segment_script_manifest(output_dir)
@@ -702,49 +997,104 @@ def build_segment_validation_report(
             )
 
     rows: List[Dict[str, Any]] = []
-    summary = {
-        "passCount": 0,
-        "warnCount": 0,
-        "failCount": 0,
-        "skipCount": 0,
-    }
 
     for segment_id in segment_ids:
         expected_text = expected_map.get(segment_id, "")
         actual_text = actual_by_segment.get(segment_id, "")
-        normalized_expected = normalize_transcript_text(expected_text)
-        normalized_actual = normalize_transcript_text(actual_text)
-        expected_word_count = len(normalized_expected.split()) if normalized_expected else 0
-        actual_word_count = len(normalized_actual.split()) if normalized_actual else 0
-
-        if not normalized_expected:
-            status = "skip"
-            match_ratio: Optional[float] = None
-        else:
-            match_ratio = compute_transcript_match_ratio(expected_text, actual_text)
-            if match_ratio >= 0.94:
-                status = "pass"
-            elif match_ratio >= 0.8:
-                status = "warn"
-            else:
-                status = "fail"
-
-        summary[f"{status}Count"] += 1
         rows.append(
-            {
-                "segmentId": segment_id,
-                "expectedText": expected_text,
-                "actualText": actual_text,
-                "normalizedExpectedText": normalized_expected,
-                "normalizedActualText": normalized_actual,
-                "matchRatio": match_ratio,
-                "status": status,
-                "expectedWordCount": expected_word_count,
-                "actualWordCount": actual_word_count,
-            }
+            _build_validation_row(
+                segment_id,
+                expected_text,
+                actual_text,
+                audio_fingerprint=(segment_audio_fingerprints or {}).get(segment_id),
+            )
         )
 
-    return {"segments": rows, "summary": summary}
+    return {"segments": rows, "summary": _summarize_validation_rows(rows)}
+
+
+def confirm_segment_validation_report(
+    validation_report: Dict[str, Any],
+    output_dir: str,
+    segment_paths_by_id: Dict[str, Path],
+    primary_backend_config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Recheck warn/fail rows using segment-only STT with a stronger model."""
+    confirmation_backend = resolve_confirmation_stt_backend(primary_backend_config)
+    confirmed_rows: List[Dict[str, Any]] = []
+
+    for row in validation_report.get("segments") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("status") not in {"warn", "fail"}:
+            confirmed_rows.append(row)
+            continue
+
+        segment_id = row.get("segmentId")
+        expected_text = row.get("expectedText")
+        if not isinstance(segment_id, str) or not isinstance(expected_text, str):
+            confirmed_rows.append(row)
+            continue
+
+        segment_path = segment_paths_by_id.get(segment_id)
+        if segment_path is None or not segment_path.exists():
+            confirmed_rows.append(row)
+            continue
+
+        try:
+            confirmed_words = transcribe_words_with_backend(segment_path, confirmation_backend)
+        except Exception:
+            confirmed_rows.append(row)
+            continue
+
+        confirmed_actual_text = " ".join(
+            str(word_info.get("word", "")).strip()
+            for word_info in confirmed_words
+            if str(word_info.get("word", "")).strip()
+        ).strip()
+
+        confirmed_row = _build_validation_row(
+            segment_id,
+            expected_text,
+            confirmed_actual_text,
+            audio_fingerprint=row.get("audioFingerprint")
+            if isinstance(row.get("audioFingerprint"), str)
+            else None,
+            extra_fields={
+                "confirmedBySegmentStt": True,
+                "confirmationBackend": confirmation_backend.get("model_id"),
+                "firstPassActualText": row.get("actualText", ""),
+                "firstPassMatchRatio": row.get("matchRatio"),
+            },
+        )
+
+        if _should_prefer_validation_row(confirmed_row, row):
+            confirmed_rows.append(confirmed_row)
+        else:
+            retained_row = dict(row)
+            retained_row["segmentConfirmationAttempted"] = True
+            retained_row["segmentConfirmationMatchRatio"] = confirmed_row.get("matchRatio")
+            confirmed_rows.append(retained_row)
+
+    return {
+        "segments": confirmed_rows,
+        "summary": _summarize_validation_rows(confirmed_rows),
+    }
+
+
+def compute_segment_audio_fingerprints(segment_paths_by_id: Dict[str, Path]) -> Dict[str, str]:
+    """Compute SHA-256 fingerprints for per-segment WAV files."""
+    fingerprints: Dict[str, str] = {}
+    for segment_id, segment_path in segment_paths_by_id.items():
+        try:
+            digest = hashlib.sha256()
+            with open(segment_path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    digest.update(chunk)
+            fingerprints[segment_id] = digest.hexdigest()
+        except OSError:
+            continue
+    return fingerprints
 
 
 def _coerce_int(value: Any, default: int) -> int:
@@ -955,22 +1305,27 @@ def process_section(
     # Get individual segment durations for word-to-segment mapping
     segment_durations: List[float] = []
     actual_segment_ids: List[str] = []
+    segment_paths_by_id: Dict[str, Path] = {}
     for seg_path in segment_paths:
         try:
             duration = get_wav_duration(seg_path)
             segment_durations.append(duration)
             # Extract segment ID from filename
             actual_segment_ids.append(seg_path.stem)
+            segment_paths_by_id[seg_path.stem] = seg_path
         except Exception:
             segment_durations.append(0.0)
             actual_segment_ids.append(seg_path.stem)
+            segment_paths_by_id[seg_path.stem] = seg_path
 
     # Generate word-level timestamps
+    primary_backend_config = resolve_stt_backend()
     try:
         word_timestamps = generate_word_timestamps(
             concatenated_path,
             actual_segment_ids,
             segment_durations,
+            backend_config=primary_backend_config,
         )
     except Exception as e:
         return {
@@ -984,10 +1339,22 @@ def process_section(
     failed_timestamps_path = section_output_dir / "word_timestamps.failed.json"
     failed_validation_path = section_output_dir / "segment_validation.failed.json"
 
+    segment_audio_fingerprints = compute_segment_audio_fingerprints(segment_paths_by_id)
     validation_report = build_segment_validation_report(
         actual_segment_ids,
         output_dir,
         word_timestamps,
+        segment_audio_fingerprints=segment_audio_fingerprints,
+    )
+    validation_report = confirm_segment_validation_report(
+        validation_report,
+        output_dir,
+        segment_paths_by_id,
+        primary_backend_config=primary_backend_config,
+    )
+    validation_report = preserve_best_validation_rows_for_unchanged_audio(
+        validation_report,
+        section_output_dir,
     )
     validation_error = evaluate_validation_gate(validation_report, validation_policy)
 

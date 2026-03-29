@@ -225,6 +225,7 @@ describe("state management", () => {
   });
 
   it("tracks threshold percent and max-retry state for batch transcript retries", () => {
+    expect(sourceCode).toMatch(/\[\s*flagMatchThresholdPercent\s*,\s*setFlagMatchThresholdPercent\s*\]/);
     expect(sourceCode).toMatch(/\[\s*retryMatchThresholdPercent\s*,\s*setRetryMatchThresholdPercent\s*\]/);
     expect(sourceCode).toMatch(/\[\s*retryMaxAttempts\s*,\s*setRetryMaxAttempts\s*\]/);
   });
@@ -363,6 +364,7 @@ describe("transcript validation panel", () => {
 
   it("filters validation rows to warn/fail mismatches", () => {
     expect(sourceCode).toMatch(/validationRows\.filter\s*\(\s*\(row\)\s*=>\s*row\.status\s*!==\s*['"]pass['"]/);
+    expect(sourceCode).toMatch(/flagMatchThresholdPercent/);
   });
 
   it("shows expected and actual transcript columns", () => {
@@ -379,6 +381,7 @@ describe("transcript validation panel", () => {
   });
 
   it("renders controls for batch retry threshold and retry count", () => {
+    expect(sourceCode).toMatch(/Flag Below Match %/);
     expect(sourceCode).toMatch(/Retry Below Match %/);
     expect(sourceCode).toMatch(/Max Retries/);
     expect(sourceCode).toMatch(/Retry Flagged Segments/);
