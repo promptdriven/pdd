@@ -1,30 +1,51 @@
+## v0.0.191 (2026-03-28)
+
+### Feat
+
+- add manual audio sync acceptance locks
+- agentic auto deps (#733) (#751)
+
+### Fix
+
+- harden stage 5 transcript validation
+- handle non-fast-forward push errors in _push_with_retry (#999)
+- flag transcript boundary hallucinations
+- harden veo chain staging and stale detection
+
+### Refactor
+
+- update and clean up Remotion animation components across multiple economics and paradigm shift modules
+- consolidate code editor components, update chart styles, and refresh narration assets across Remotion scenes
+- update CI validation prompt instructions and refine cold open audit specifications
+- update PDD explainer specifications and optimize Remotion cold open components and layouts
+- update PDD explainer specifications and reorganize Remotion video components
+
 ## v0.0.190 (2026-03-27)
 
 ### Feat
 
-- Implement serial retry for failed parallel renders, refactor Remotion components for hook-safe memoization and correct easing, and update video section timings.
-- Add new Remotion scenes and components for "Where to Start", "Mold Parts", "Precision Tradeoff", "Compound Returns", and "Closing" segments.
-- Add numerous new Remotion scenes and components across various parts of the video project.
+- **auth-aware E2E test generation in `pdd bug` Step 11**: prompt now instructs the LLM to analyze whether a bug's code path is inside an auth guard, `onAuthStateChanged` callback, or protected route, and to use authenticated browser contexts when auth fixtures exist — previously all generated E2E tests used unauthenticated contexts even for auth-gated bugs
 
 ### Fix
 
-- narrow exception handling, handle bare filename edge case
-- pass prompts_dir to get_pdd_file_paths, widen except, use logger
-- narrow exception handling in fingerprint decorator to specific types
-- lazy-import get_pdd_file_paths and make tests hermetic
-- log warning instead of silently swallowing fingerprint errors
-- wrap fingerprint saving in try-except in @log_operation decorator
-- pass paths to save_fingerprint in @log_operation decorator (#437)
-- harden contract timeline rendering and audit outputs
-- use ADC-compatible credentials in .pdd/llm_model.csv
-- harden audit section completion and results
+- **`save_fingerprint` resolves paths internally**: when called without `paths`, it now imports and calls `get_pdd_file_paths` with a try/except, fixing null hash fields when the `@log_operation` decorator didn't forward paths
+- **narrowed exception handling in fingerprint decorator**: catches specific `ImportError`/`OSError`/`ValueError` instead of bare `except`, and logs warnings instead of silently swallowing errors
+- **Vertex AI credentials use ADC-compatible env vars**: `.pdd/llm_model.csv` switches all `vertex_ai/` entries from `VERTEX_CREDENTIALS` to `GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION`, matching Application Default Credentials conventions
+- handle bare filename edge case in path resolution
+- lazy-import `get_pdd_file_paths` and make operation_log tests hermetic
 
 ### Refactor
 
-- update audit summary descriptions across all specification files to improve clarity and precision of visual requirement failures and passes.
-- update audit specifications and timing logic to support automated pipeline generation
-- move path resolution into save_fingerprint, not the decorator
-- move get_pdd_file_paths import to module level, reuse module-level console
+- move path resolution into `save_fingerprint`, not the decorator
+- move `get_pdd_file_paths` import to module level, reuse module-level console
+
+### Build
+
+- remove redundant test files, keep 2 focused regression tests for operation_log
+
+### Test
+
+- add failing tests and prompt fix for auth-aware E2E test generation (issue #884)
 
 ## v0.0.189 (2026-03-26)
 

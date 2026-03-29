@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
@@ -12,6 +13,7 @@ import pytest
 
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
+    _augment_architecture_from_pr_branch,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
     _find_project_root,
@@ -1341,3 +1343,74 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
             "The rendered prompt must contain the issue number (746) so the LLM "
             f"can match origin fields. Got prompt starting with: {prompt_arg[:200]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _augment_architecture_from_pr_branch (Issue #733: new modules from PR branch)
+# ---------------------------------------------------------------------------
+
+class TestAugmentArchitectureFromPrBranch:
+    """When running pdd sync from main for an issue with a PR, architecture.json
+    should be augmented with entries from the PR branch so that newly created
+    modules (like embed_retrieve) are not filtered out by _filter_invalid_basenames."""
+
+    def test_adds_new_entries_from_pr_branch(self, tmp_path):
+        """New entries in the PR branch's architecture.json should be merged."""
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+        ]
+        pr_branch_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+            {"filename": "embed_retrieve_python.prompt", "filepath": "pdd/embed_retrieve.py"},
+        ]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = json.dumps(pr_branch_arch)
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
+
+        filenames = [e["filename"] for e in result]
+        assert "foo_python.prompt" in filenames
+        assert "embed_retrieve_python.prompt" in filenames
+
+    def test_does_not_duplicate_existing_entries(self, tmp_path):
+        """Entries already in local architecture should not be duplicated."""
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "local version"},
+        ]
+        pr_branch_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "pr version"},
+        ]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = json.dumps(pr_branch_arch)
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
+
+        assert len(result) == 1
+        # Local version should be preserved, not overwritten
+        assert result[0]["reason"] == "local version"
+
+    def test_returns_original_when_no_pr_branch(self, tmp_path):
+        """When the PR branch doesn't exist, return architecture unchanged."""
+        local_arch = [
+            {"filename": "foo_python.prompt"},
+        ]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.side_effect = subprocess.CalledProcessError(128, "git show")
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 999)
+
+        assert result == local_arch
+
+    def test_returns_original_when_architecture_is_none(self, tmp_path):
+        """When local architecture is None, return None unchanged."""
+        result = _augment_architecture_from_pr_branch(None, tmp_path, 733)
+        assert result is None
+
+    def test_handles_malformed_pr_branch_json(self, tmp_path):
+        """Gracefully handles invalid JSON from the PR branch."""
+        local_arch = [{"filename": "foo_python.prompt"}]
+        with patch("pdd.agentic_sync.subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = "not valid json"
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
+
+        assert result == local_arch
