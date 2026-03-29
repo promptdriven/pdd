@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame is in the correct animation phase (hold phase, frame 48-60) with the regenerated code fully visible and terminal overlay present with checkmark. Two minor discrepancies: (1) The regenerated code is only ~21 lines total (including imports), whereas the spec calls for ~30 lines of regenerated code. The function body is approximately 15 lines rather than 30. (2) The terminal overlay text appears somewhat muted rather than distinctly green (#A6E3A1). All major visual elements are present and correctly positioned: dark VS Code background, clean regenerated Python code with proper syntax highlighting, no patch comments or TODOs, function signature matches spec (def process_order(order, ctx):), terminal overlay in bottom-right with correct text '$ pdd generate process_order ✓', and rounded corners on the terminal element. The diff indicator '−6 / +30' in the top-right is an additional element not in the spec but is appropriate editor chrome.
+Infrastructure error: Failed to analyze audit frame for 08_code_regeneration. Claude CLI returned error: API Error: Rate limit reached

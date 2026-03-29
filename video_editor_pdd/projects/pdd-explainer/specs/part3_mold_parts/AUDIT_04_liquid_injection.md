@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-Frame 779/870 (89.7% progress) falls in Animation Phase 8 (frame 690-870: hold with both annotations visible, walls at peak glow, liquid fully constrained). All critical elements are present and correctly rendered: (1) Mold structure with labeled walls (Type Hints, null → None, auth_required, max_length=50) is clearly visible with blue glow. (2) Liquid fill shows cyan-to-teal gradient fully constrained within the cavity walls. (3) Annotation 1 'AI code: 1.7× more issues' in red with '(CodeRabbit, 2025)' source is visible to the right of the mold. (4) Annotation 2 'AI + strong tests = amplified delivery' in green with '(DORA, 2025)' source is visible below annotation 1. (5) Dashed connector lines link annotations to the mold wall region. (6) Background is deep navy-black with faint blueprint grid. (7) Nozzle visible at top in dimmed state. The composition, typography colors, layout positioning, and animation phase all match the spec requirements for this frame.
+Infrastructure error: Failed to analyze audit frame for 04_liquid_injection. Claude CLI returned error: API Error: Rate limit reached

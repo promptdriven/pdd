@@ -1717,8 +1717,11 @@ def build_visual_contract_manifest(
                 if isinstance(raw_end_offset, (int, float)):
                     end_offset_ms = int(raw_end_offset)
 
-            # Infer laneHint from overlayConfig when not explicitly set
-            if lane_hint is None and overlay_manifest.get(visual_id):
+            # Infer laneHint from overlayConfig only for true overlay visuals.
+            if lane_hint is None and _should_infer_overlay_lane_from_overlay_config(
+                data_points if isinstance(data_points, dict) else None,
+                overlay_manifest.get(visual_id),
+            ):
                 lane_hint = 'overlay'
 
             render_mode = _resolve_visual_render_mode(
@@ -2182,6 +2185,31 @@ def _resolve_visual_render_mode(
     if media_aliases:
         return 'raw-media'
     return 'component'
+
+
+def _should_infer_overlay_lane_from_overlay_config(
+    data_points: Optional[Dict[str, Any]],
+    overlay_config: Optional[Dict[str, Any]],
+) -> bool:
+    """Only true overlay visuals should inherit the overlay lane from config."""
+    if not isinstance(overlay_config, dict) or not overlay_config:
+        return False
+
+    substantive_keys = {
+        key for key in overlay_config.keys() if key not in {'fadeInFrames', 'fadeOutFrames'}
+    }
+    if substantive_keys:
+        return True
+
+    if not isinstance(data_points, dict):
+        return False
+
+    visual_type = data_points.get('type')
+    if not isinstance(visual_type, str):
+        return False
+
+    normalized_type = visual_type.strip().lower()
+    return normalized_type in {'annotation_overlay', 'text_overlay_with_morph'}
 
 
 def build_visual_overlay_manifest(

@@ -809,6 +809,32 @@ describe("audit executor factory", () => {
     expect(maxConcurrent).toBeGreaterThan(1);
   });
 
+  it("limits concurrent Claude audit analyses to reduce rate-limit pressure", async () => {
+    let concurrentCount = 0;
+    let maxConcurrent = 0;
+
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockRunClaudeAudit.mockImplementation(async () => {
+      concurrentCount++;
+      maxConcurrent = Math.max(maxConcurrent, concurrentCount);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      concurrentCount--;
+      return {
+        severity: "pass",
+        fixType: "none",
+        technicalAssessment: "Frame matches spec",
+        suggestedFixes: [],
+        confidence: 0.95,
+      };
+    });
+
+    const sendFn = jest.fn();
+    const executor = registerCallArgs.factory({}, sendFn);
+    await executor(jest.fn());
+
+    expect(maxConcurrent).toBeLessThanOrEqual(2);
+  });
+
   it("extracts audit frames from the rendered section video when available", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]]; // just intro
@@ -1506,13 +1532,100 @@ describe("audit executor factory", () => {
     expect(String(mockWriteFileSync.mock.calls[1][0])).toContain("AUDIT_overlay.md");
   });
 
-  it("writes a fail report and continues when Claude analysis fails after frame extraction", async () => {
+  it("retries recoverable Claude rate-limit failures before succeeding", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md"]);
+    mockRunClaudeAudit
+      .mockRejectedValueOnce(
+        new Error("Claude CLI returned error: API Error: Rate limit reached")
+      )
+      .mockRejectedValueOnce(
+        new Error("Claude CLI returned error: You've hit your limit. Limit resets at 5pm")
+      )
+      .mockResolvedValueOnce({
+        severity: "pass",
+        fixType: "none",
+        technicalAssessment: "Frame matches spec",
+        suggestedFixes: [],
+        confidence: 0.95,
+      });
+
+    const sendFn = jest.fn();
+    const executor = registerCallArgs.factory({ sections: ["intro"] }, sendFn);
+    await executor(jest.fn());
+
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(3);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    expect(String(mockWriteFileSync.mock.calls[0][0])).toContain("AUDIT_visual.md");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain("## Verdict\npass");
+
+    const doneEvent = sendFn.mock.calls.find(
+      (call: any[]) =>
+        call[0]?.type === "audit-section" &&
+        call[0]?.status === "done" &&
+        call[0]?.sectionId === "intro"
+    );
+    expect(doneEvent).toBeDefined();
+    expect(doneEvent![0].passCount).toBe(1);
+    expect(doneEvent![0].failCount).toBe(0);
+  });
+
+  it("writes a skip report and continues when Claude analysis exhausts recoverable retries", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[0]];
     mockLoadProject.mockReturnValue(config);
     mockReaddirSync.mockReturnValue(["visual.md", "overlay.md"]);
     mockRunClaudeAudit
-      .mockRejectedValueOnce(new Error("Claude audit timeout"))
+      .mockRejectedValueOnce(
+        new Error("Claude CLI returned error: API Error: Rate limit reached")
+      )
+      .mockRejectedValueOnce(
+        new Error("Claude CLI returned error: API Error: Rate limit reached")
+      )
+      .mockRejectedValueOnce(
+        new Error("Claude CLI returned error: API Error: Rate limit reached")
+      )
+      .mockResolvedValueOnce({
+        severity: "pass",
+        fixType: "none",
+        technicalAssessment: "Frame matches spec",
+        suggestedFixes: [],
+        confidence: 0.95,
+      });
+
+    const sendFn = jest.fn();
+    const executor = registerCallArgs.factory({ sections: ["intro"] }, sendFn);
+    await executor(jest.fn());
+
+    expect(mockRunClaudeAudit).toHaveBeenCalledTimes(4);
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+    expect(String(mockWriteFileSync.mock.calls[0][0])).toContain("AUDIT_visual.md");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain("## Verdict\nskip");
+    expect(String(mockWriteFileSync.mock.calls[0][1])).toContain(
+      "Infrastructure error: Failed to analyze audit frame for visual."
+    );
+    expect(String(mockWriteFileSync.mock.calls[1][0])).toContain("AUDIT_overlay.md");
+
+    const doneEvent = sendFn.mock.calls.find(
+      (call: any[]) =>
+        call[0]?.type === "audit-section" &&
+        call[0]?.status === "done" &&
+        call[0]?.sectionId === "intro"
+    );
+    expect(doneEvent).toBeDefined();
+    expect(doneEvent![0].passCount).toBe(1);
+    expect(doneEvent![0].failCount).toBe(0);
+  });
+
+  it("writes a fail report for non-recoverable Claude analysis failures after frame extraction", async () => {
+    const config = mockProjectConfig();
+    config.sections = [config.sections[0]];
+    mockLoadProject.mockReturnValue(config);
+    mockReaddirSync.mockReturnValue(["visual.md", "overlay.md"]);
+    mockRunClaudeAudit
+      .mockRejectedValueOnce(new Error("Claude analysis returned malformed JSON"))
       .mockResolvedValueOnce({
         severity: "pass",
         fixType: "none",
@@ -1532,7 +1645,6 @@ describe("audit executor factory", () => {
     expect(String(mockWriteFileSync.mock.calls[0][1])).toContain(
       "Infrastructure error: Failed to analyze audit frame for visual."
     );
-    expect(String(mockWriteFileSync.mock.calls[1][0])).toContain("AUDIT_overlay.md");
 
     const doneEvent = sendFn.mock.calls.find(
       (call: any[]) =>

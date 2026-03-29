@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-Frame is sampled at 90% progress (frame 134/150), correctly within the 'Final code holds' phase (frames 120-150). The code block is centered with a regenerated code variant visible, the background triangle is present at reduced opacity, and the terminal strip shows '$ pdd test ✓ All tests passed' — all matching the expected animation state. The primary discrepancy is the terminal strip position: the spec states it should be at the 'bottom of code block' (appearing attached/adjacent), but it is rendered with a large vertical gap below the code block, positioned in the lower third of the frame. The check mark color does not appear distinctly brighter green (#22C55E) compared to the surrounding terminal text — it reads as the same teal/green tone. These are noticeable but non-critical layout and styling deviations.
+Infrastructure error: Failed to analyze audit frame for 04_dissolve_regenerate_loop. Claude CLI returned error: API Error: Rate limit reached

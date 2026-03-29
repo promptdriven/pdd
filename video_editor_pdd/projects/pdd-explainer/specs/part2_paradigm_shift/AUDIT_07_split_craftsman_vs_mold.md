@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (value, object, mold, specification), so the frame does not support a hard missing-text failure.
+Infrastructure error: Failed to analyze audit frame for 07_split_craftsman_vs_mold. Claude CLI returned error: API Error: Rate limit reached

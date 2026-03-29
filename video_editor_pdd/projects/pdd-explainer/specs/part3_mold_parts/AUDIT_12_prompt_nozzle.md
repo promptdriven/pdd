@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-Frame 659/720 (91.7%) correctly renders the hold phase of the Prompt Nozzle visual. All critical elements are present: (1) Amber nozzle/funnel at top with glow, (2) Three nozzle labels — 'constraints' above, 'intent' top-left, 'requirements' top-right — all in amber, (3) Prompt text visible in amber across the cavity top, (4) Dual code generation split vertically with dashed divider — left side shows 'parse_user_id' version, right shows 'extract_uid' version with different variable names but same behavioral shape, (5) Terminal in bottom-right showing two runs of 'pdd generate user_parser.prompt' with different output hashes in green text, (6) Walls glowing (cyan/blue) to emphasize they are the constant. The file label has correctly faded by this point. All elements match the spec's animation phase 9 (frames 600-720) intent.
+OCR confirmed visible text tokens in the rendered frame (user, parser, prompt), so the frame does not support a hard missing-text failure.

@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame faithfully matches the spec. A polished steel injection mold dominates the left-center of the frame, glowing with warm amber light emanating from its internal channels and cavities. The mold is clearly the hero — gleaming, intricate, and luminous with dramatic amber/orange internal illumination (~2800K warmth). To the right, a plain white plastic part sits on the surface, unremarkable and catching no special light, reading as an afterthought exactly as specified. The framing is a medium shot with a slight low angle looking up at the mold. Depth of field is shallow with the mold in sharp focus and the background falling off into darkness. The industrial surface and dark background create strong dramatic lighting contrast between the glowing mold and the mundane plastic output. At frame 99/120 (83.3% progress), the composition correctly shows the 'hold on composition' phase with the very slow imperceptible push-in. The visual metaphor — mold as art, part as commodity — reads clearly.
+Infrastructure error: Failed to analyze audit frame for 05_veo_mold_glow_finale. Claude CLI returned error: API Error: Rate limit reached

@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-Frame at 89.1% progress (hold phase, frame 614/690) matches all spec requirements. Deep navy-black background present. X-axis ('Number of Tests') and Y-axis ('Required Prompt Precision') correctly labeled with 'High'/'Low' markers and tick values at 0, 10, 20, 30, 40, 50+. White inverse/hyperbolic curve drawn from upper-left to lower-right with characteristic steep drop then flattening. Zone shading beneath curve transitions from amber (left, high prompt effort) to blue (right, test-driven). Glowing white dot positioned at the right extreme (~x=43-45). Both callouts visible: left callout in amber ('High prompt effort / 50-line prompt / Every edge case specified') with connecting line, right callout in blue ('Test-driven precision / 10-line prompt / Tests handle constraints') with connecting line. Grid lines visible at regular intervals. All critical elements from hints are present: 'Number of Tests', 'Required Prompt Precision', '50-line prompt', 'Every edge case specified', '10-line prompt', 'Tests handle constraints', 'High prompt effort', 'Test-driven precision'. Animation phase (hold with both callouts) is correct for the sample time.
+Infrastructure error: Failed to analyze audit frame for 03_precision_tradeoff_curve. Claude CLI returned error: API Error: Rate limit reached

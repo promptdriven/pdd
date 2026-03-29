@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-All required elements are present and visually correct: spectrum bar with blue-to-gray gradient, endpoint labels ('Pure natural language' / 'Pure code'), slider thumb at ~20% position with glow, 4 notch marks with faint labels ('algorithm', 'hash fn', 'bit ops', 'perf loop'), zone indicator fill left of slider, and both bottom text lines with correct styling. The vertical positioning of the entire composition is shifted upward by roughly 80-100px compared to spec (spectrum bar at ~y:360 vs spec y:460, bottom text at ~y:465 vs spec y:600). The spectrum bar width also appears somewhat narrower than the spec's 1600px, with the right end terminating around x:1340 instead of x:1760, compressing the layout horizontally. These are layout positioning differences; the visual reads correctly and all elements are present with proper relationships.
+Infrastructure error: Failed to analyze audit frame for 09_prompt_code_spectrum. Claude CLI returned error: API Error: Rate limit reached

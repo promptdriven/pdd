@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-All critical elements are present and correctly rendered at frame 434/480 (hold phase). The amber exponential curve draws from low-left to upper-right with correct color (~#D9944A) and shaded area below. The green flat line (#5AAA6E) is level and low with downward reset arrows at cycle ticks. The formula label 'Debt × (1 + Rate)^Time' appears in amber monospace text above the curve. The flat line label 'Regeneration cost (debt resets each cycle)' appears in green near the line. The CISQ callout '$1.52 trillion/year' with '— CISQ' attribution is visible in the upper portion of the chart. Axes are labeled correctly: X-axis 'Time (maintenance cycles)' with 0-20 range, Y-axis 'Cumulative Cost'. Grid lines are present. Background is deep navy-black. The exponential gap between the two curves is visually stark and impactful as intended.
+Infrastructure error: Failed to analyze audit frame for 03_compound_debt_curve. Claude CLI returned error: API Error: Rate limit reached

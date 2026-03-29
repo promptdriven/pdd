@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The rendered frame fully satisfies the spec at frame 659/810 (81.5% progress, hold phase). Both panels are visible side-by-side with correct visual treatment: the left 'Agentic Patching' panel shows a cluttered context window with dashed border, predominantly red token blocks with scattered green, and the red label '15,000 tokens — mostly wrong' below. The right 'PDD Regeneration' panel shows a clean context window with solid blue border containing three organized blocks (Prompt in blue, Tests in amber, Grounding in green) with ample empty space labeled 'Room to think' and the green label '2,300 tokens — all curated' below. Headers match expected colors (gray for left, blue for right). An additional top-level title 'Context Window Comparison' is present but does not contradict the spec. The stark visual contrast between cluttered guesswork and surgical precision is clearly conveyed.
+OCR confirmed visible text tokens in the rendered frame (agentic, patching, regeneration), so the frame does not support a hard missing-text failure.

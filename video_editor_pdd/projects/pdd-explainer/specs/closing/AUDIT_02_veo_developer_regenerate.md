@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame satisfies the spec requirements. A developer is visible at a modern workstation with a dark-themed code editor on screen showing syntax-highlighted code. The framing is a side/over-the-shoulder medium shot showing both the developer and the monitor. Cool blue-white monitor glow illuminates the developer's face and workspace. The developer's hands are on a mechanical keyboard, consistent with the animation phase at 83.3% progress (Frame 80-120: terminal interaction phase). The workspace is modern and minimalist with a single monitor setup. A desk lamp is visible on the left. The color temperature is cool with dominant blue tones matching the 5500K specification. The depth of field shows both the developer and screen as readable, consistent with the f/4 spec. Black letterbox bars on left and right sides are present but do not affect the composition intent.
+Infrastructure error: Failed to analyze audit frame for 02_veo_developer_regenerate. Claude CLI returned error: API Error: Rate limit reached

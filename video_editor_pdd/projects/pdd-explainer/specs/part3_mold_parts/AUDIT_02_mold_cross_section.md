@@ -1,18 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame at 92.9% progress (frame 389/420, animation phase 360-420: 'Hold on complete diagram with subtle pulse') matches the spec requirements well. All three regions are visible and glowing simultaneously as expected for this late animation phase:
-
-1. **Walls (TESTS):** Left and right walls show blue glow (#4A90D9 range). The 'TESTS' label is visible in blue on the left side with a connector line leading to the wall region. Correct.
-
-2. **Nozzle (PROMPT):** Top entry point shows an amber/gold funnel shape. The 'PROMPT' label appears above in amber (#D9944A range) with a connector line. Correct.
-
-3. **Cavity (GROUNDING):** Interior space is filled with teal (#4AD9A0 range) glow. The 'GROUNDING' label appears below the cavity in teal with a connector line. Correct.
-
-4. **Layout:** Mold is centered on canvas with generous padding. Labels are positioned outside the mold structure (TESTS to the left, PROMPT above, GROUNDING below). Background is deep navy-black consistent with #0A0F1A. Blueprint grid is subtle but present.
-
-5. **Mold outline:** Outer shell is visible with a lighter stroke. Inner cavity and overall proportions are reasonable (~600×400 outer, inner offset downward).
-
-6. **Animation state:** At frame 389, all three regions are glowing simultaneously with the subtle pulse phase active, which is correct for the 360-420 frame range.
-
-All critical elements (TESTS, PROMPT, GROUNDING labels; three-region illumination; centered layout) are present and correctly rendered. Colors match their specified hues. The composition reads clearly as a three-part mold cross-section diagram.
+The frame is sampled at 92.9% progress (frame 389/420), which falls in animation phase 9 (frame 360-420): 'Hold on complete diagram with subtle pulse on all three regions.' The three critical labels are all present and correctly positioned: 'TESTS' (blue, left side with connector line), 'PROMPT' (amber, above nozzle), and 'GROUNDING' (teal, below cavity). The mold cross-section is centered on canvas with the nozzle funnel shape at top. Background is dark navy-black as specified. However, there are two minor discrepancies: (1) The blueprint grid (60px spacing, #1E293B at 0.08) is not visibly present in the frame — the background appears as a flat dark color without grid lines. The spec states 'Blueprint grid already visible' from frame 0 onward. (2) The cavity interior appears as a dark green/teal fill rather than a more pronounced teal glow — the teal glow on the cavity region is quite subdued compared to the blue wall glow which dominates visually. The wall glow (blue) is prominent and covers the entire mold body area rather than being confined to just the left and right wall edges. The overall composition and three-part framework communication is intact and reads correctly.

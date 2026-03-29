@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame correctly shows the 4x3 module grid with 6 of 12 modules migrated (auth_handler, user_service, payment_proc, email_templates, api_routes, config_mgr). The migration counter reads '6 / 12 modules migrated' in the bottom-right, matching the expected animation phase (frame 299, hold phase). Background color and layout are correct. However, the spec calls for a tiny prompt file icon (12x16px, green) at the top-right corner of each migrated module — only one small icon is visible near the top-right of the entire grid area rather than per-module icons. The migrated modules show a green-tinted fill rather than grayed-out content with a green border glow, which is a stylistic variance that still communicates the migration concept but doesn't precisely match the spec's description of 'internal content grays' with a green border.
+Infrastructure error: Failed to analyze audit frame for 05_module_glow_spread. Claude CLI returned error: API Error: Rate limit reached

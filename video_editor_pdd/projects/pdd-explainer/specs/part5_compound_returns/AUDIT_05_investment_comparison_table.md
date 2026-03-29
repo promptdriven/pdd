@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The rendered frame matches the spec in all material aspects. The table is centered with the correct three-column layout (Investment, Patching, PDD). All three data rows are fully visible with correct text content: 'Fix a bug' / 'One place, once' / 'Impossible forever', 'Improve code' / 'One version' / 'All future versions', 'Document intent' / 'One snapshot' / 'Living specification'. Color coding is correct — amber for Patching column values, green for PDD column values, light text for Investment labels, muted colors for headers. Headers are uppercase with proper color coding. Horizontal separators are present with no vertical lines. Background is deep navy-black. The frame is sampled at 85.2% progress (frame 229/270), correctly in the hold phase with all elements fully visible. Small decorative icons appear next to Investment labels and subtle rounded-rectangle backgrounds appear behind PDD cells — these are minor embellishments that do not conflict with the spec's intent.
+Infrastructure error: Failed to analyze audit frame for 05_investment_comparison_table. Claude CLI returned error: API Error: Rate limit reached

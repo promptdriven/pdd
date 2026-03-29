@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (input, format, handling, error, rules), so the frame does not support a hard missing-text failure.
+Infrastructure error: Failed to analyze audit frame for 04_detailed_prompt_file. Claude CLI returned error: API Error: Rate limit reached

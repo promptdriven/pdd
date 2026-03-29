@@ -5454,7 +5454,7 @@ class TestVisualContractManifestNewFields:
         assert "laneHint" not in visual
 
     def test_build_visual_contract_manifest_laneHint_overlay_from_overlayConfig(self, tmp_path):
-        """Visuals with overlayConfig infer laneHint='overlay'."""
+        """Overlay-like configs infer laneHint='overlay'."""
         project_dir = tmp_path
         remotion_public = tmp_path / "remotion" / "public"
         specs_dir = project_dir / "specs" / "demo"
@@ -5496,6 +5496,53 @@ class TestVisualContractManifestNewFields:
         # If overlayConfig is present, laneHint should be 'overlay'
         if visual.get("overlayConfig"):
             assert visual["laneHint"] == "overlay"
+
+    def test_build_visual_contract_manifest_does_not_infer_overlay_lane_for_fade_only_stillness(self, tmp_path):
+        """Fade-only full-screen beats should stay on the main lane."""
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "demo"
+        specs_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True, exist_ok=True)
+
+        (specs_dir / "01_stillness.md").write_text(
+            "\n".join([
+                "[Remotion]",
+                "",
+                "Frame 300-360 fade out",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "stillness_beat",
+                        "style": "3b1b_key_insight",
+                        "backgroundColor": "#050810",
+                        "text": "So let me put together what I just showed you.",
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "demo",
+            "compositionId": "Demo",
+            "durationSeconds": 5,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "demo",
+            "compositions": ["01_stillness"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section], str(project_dir), str(remotion_public)
+        )
+        visual = manifest["sections"][0]["visuals"][0]
+
+        assert visual.get("overlayConfig") == {"fadeOutFrames": 60}
+        assert "laneHint" not in visual
 
     def test_build_visual_contract_manifest_laneHint_from_dataPoints(self, tmp_path):
         """Explicit laneHint in data points takes precedence."""

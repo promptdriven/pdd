@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame at 85% progress (frame 254/300) falls within the final hold phase (frames 210-300), where all four wall segments should be glowing and all labels visible. This matches the render: all four wall segments are illuminated in blue (#4A90D9 glow), and all four labels are fully visible — 'null → None' (left), 'empty string → ''' (right), 'handles unicode' (left), 'latency < 100ms' (right). Labels alternate left-right as specified. Each label appears in monospace font on a subtle background pill with dashed connector lines to their respective wall segments. The mold outer shell is visible with dimmed regions (nozzle at top, cavity interior dark). The background is the specified deep navy-black. The mold appears slightly zoomed in consistent with the 1.0→1.15 scale specification. Wall segments glow distinctly along the interior walls. The blueprint grid is subtly present. All critical textual elements match the spec exactly.
+Infrastructure error: Failed to analyze audit frame for 03_mold_walls_illuminate. Claude CLI returned error: API Error: Rate limit reached

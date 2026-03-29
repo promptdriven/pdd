@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame is in the correct animation phase (hold, frames 360-480) and all major elements are present: mold with walls including the new 'rejects negative IDs' wall, filled liquid conforming to all walls, terminal showing all four expected lines, nozzle visible, no BUG text or red pulse. Two minor style discrepancies: (1) The wall colors appear very dark/black rather than the specified #4A90D9 blue — only the new wall has a faint bluish tint. The walls should be visually distinguishable as blue structures per spec. (2) The 'rejects negative IDs' label appears bolder and larger than the 14px regular-weight JetBrains Mono specified, and lacks the pill background with #4A90D9 at 0.15 opacity called for in the spec. The terminal is not visibly fading as specified for this late phase, though this is a very subtle detail.
+Infrastructure error: Failed to analyze audit frame for 05_bug_adds_wall. Claude CLI returned error: API Error: Rate limit reached

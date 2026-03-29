@@ -46,22 +46,22 @@ export const BEATS = {
 };
 
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 1 },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_sock_price_chart", desc: "02 sock price chart", lane: 1 },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 0 },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_sock_price_chart", desc: "02 sock price chart", lane: 0 },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_code_cost_chart", desc: "03 code cost chart", lane: 0 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_research_annotations", desc: "04 research annotations", lane: 0 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_code_churn_annotations", desc: "05 code churn annotations", lane: 0 },
   { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_debt_layers_zoom", desc: "06 debt layers zoom", lane: 0 },
   { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_context_window_shrink", desc: "07 context window shrink", lane: 0 },
   { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_performance_vs_context", desc: "08 performance vs context", lane: 0 },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_two_by_two_grid", desc: "09 two by two grid", lane: 1 },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_two_by_two_grid", desc: "09 two by two grid", lane: 0 },
   { start: BEATS.VISUAL_09_START, end: BEATS.VISUAL_09_END, id: "10_fork_codebase_size", desc: "10 fork codebase size", lane: 0 },
   { start: BEATS.VISUAL_10_START, end: BEATS.VISUAL_10_END, id: "11_patching_vs_regeneration", desc: "11 patching vs regeneration", lane: 0 },
   { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "12_context_compression", desc: "12 context compression", lane: 0 },
   { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "13_crossing_lines_moment", desc: "13 crossing lines moment", lane: 0 },
   { start: BEATS.VISUAL_13_START, end: BEATS.VISUAL_13_END, id: "14_split_developer_grandma", desc: "14 split developer grandma", lane: 0 },
-  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "19_double_meter_insight", desc: "19 double meter insight", lane: 0 },
-  { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "18_key_insight_stillness", desc: "18 key insight stillness", lane: 1 },
+  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "18_key_insight_stillness", desc: "18 key insight stillness", lane: 0 },
+  { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "19_double_meter_insight", desc: "19 double meter insight", lane: 0 },
   { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "20_try_it_yourself", desc: "20 try it yourself", lane: 0 },
   { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "17_developer_codebase_zoomout", desc: "17 developer codebase zoomout", lane: 0 },
 ];

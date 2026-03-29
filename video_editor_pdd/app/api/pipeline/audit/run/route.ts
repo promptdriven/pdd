@@ -75,6 +75,127 @@ const GEOMETRY_DISCREPANCY_RE =
 const MAX_RENDERABLE_FRAME_RE =
   /highest frame that can be rendered is (\d+)/i;
 const MEDIA_SAMPLE_EPSILON_SECONDS = 0.001;
+const AUDIT_CLAUDE_MAX_CONCURRENT = Math.max(
+  1,
+  Number.parseInt(process.env.AUDIT_CLAUDE_MAX_CONCURRENT ?? "2", 10) || 2
+);
+const AUDIT_CLAUDE_MAX_RETRIES = Math.max(
+  0,
+  Number.parseInt(process.env.AUDIT_CLAUDE_MAX_RETRIES ?? "2", 10) || 2
+);
+const AUDIT_CLAUDE_RETRY_BASE_DELAY_MS =
+  process.env.NODE_ENV === "test"
+    ? 0
+    : Math.max(
+        0,
+        Number.parseInt(process.env.AUDIT_CLAUDE_RETRY_BASE_DELAY_MS ?? "1500", 10) ||
+          1500
+      );
+
+function createAsyncLimiter(maxConcurrent: number) {
+  let activeCount = 0;
+  const queue: Array<() => void> = [];
+
+  const runNext = () => {
+    if (activeCount >= maxConcurrent) {
+      return;
+    }
+    const next = queue.shift();
+    if (!next) {
+      return;
+    }
+    activeCount++;
+    next();
+  };
+
+  return async <T>(work: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      queue.push(() => {
+        void work()
+          .then(resolve, reject)
+          .finally(() => {
+            activeCount = Math.max(0, activeCount - 1);
+            runNext();
+          });
+      });
+      runNext();
+    });
+}
+
+const runAuditClaudeLimited = createAsyncLimiter(AUDIT_CLAUDE_MAX_CONCURRENT);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRecoverableClaudeAuditFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  const normalized = message.toLowerCase();
+
+  return (
+    normalized.includes("failed to authenticate") ||
+    normalized.includes("authentication_error") ||
+    normalized.includes("invalid authentication credentials") ||
+    normalized.includes("api error: 401") ||
+    normalized.includes("api error: 429") ||
+    normalized.includes("hit your limit") ||
+    normalized.includes("rate limit") ||
+    (normalized.includes("limit") && normalized.includes("reset")) ||
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("econnreset") ||
+    normalized.includes("socket hang up")
+  );
+}
+
+async function runClaudeAuditWithRetry(
+  prompt: string,
+  cwd: string,
+  onLog: (line: string) => void,
+  traceEnabled: boolean,
+  specName: string
+): Promise<{
+  analysis: AnnotationAnalysis;
+  trace: Awaited<ReturnType<typeof runClaudeAuditWithTrace>>["trace"] | null;
+}> {
+  return runAuditClaudeLimited(async () => {
+    let attempt = 0;
+
+    while (true) {
+      try {
+        if (traceEnabled) {
+          const traced = await runClaudeAuditWithTrace(prompt, cwd, onLog);
+          return { analysis: traced.analysis, trace: traced.trace };
+        }
+
+        const analysis = (await runClaudeAudit(
+          prompt,
+          cwd,
+          onLog
+        )) as AnnotationAnalysis;
+        return { analysis, trace: null };
+      } catch (error) {
+        if (
+          !isRecoverableClaudeAuditFailure(error) ||
+          attempt >= AUDIT_CLAUDE_MAX_RETRIES
+        ) {
+          throw error;
+        }
+
+        const delayMs = AUDIT_CLAUDE_RETRY_BASE_DELAY_MS * (attempt + 1);
+        const message =
+          error instanceof Error ? error.message : String(error ?? "Unknown Claude failure");
+        onLog(
+          `[audit] Claude analysis unavailable for ${specName} (${message}). Retrying (${attempt + 1}/${AUDIT_CLAUDE_MAX_RETRIES})${delayMs > 0 ? ` in ${delayMs}ms` : ""}.`
+        );
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+        attempt++;
+      }
+    }
+  });
+}
 
 function resolveSectionRenderedVideoPath(section: Section): string | null {
   const candidates = new Set<string>();
@@ -756,16 +877,13 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
 `;
 
       const traceEnabled = shouldSaveAuditTraces();
-      const traceResult = traceEnabled
-        ? await runClaudeAuditWithTrace(prompt, path.dirname(outputStill), onLog)
-        : null;
-      const analysis = traceEnabled
-        ? traceResult!.analysis
-        : ((await runClaudeAudit(
-            prompt,
-            path.dirname(outputStill),
-            onLog
-          )) as AnnotationAnalysis);
+      const { analysis, trace: trace } = await runClaudeAuditWithRetry(
+        prompt,
+        path.dirname(outputStill),
+        onLog,
+        traceEnabled,
+        specName
+      );
       let verdict = classifyAuditVerdict(analysis, { auditHints });
       let summary =
         analysis.technicalAssessment ??
@@ -811,7 +929,7 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
       else if (verdict === "warn") warnCount++;
       else if (verdict === "fail") failCount++;
       writeAuditReport(auditPath, verdict, summary);
-      if (traceEnabled && traceResult) {
+      if (traceEnabled && trace) {
         writeAuditTrace(tracePath, {
           sectionId: section.id,
           specName,
@@ -828,7 +946,7 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
           summary,
           deterministicGeometry,
           deterministicText,
-          trace: traceResult.trace,
+          trace,
           prompt,
         });
       }
@@ -837,6 +955,10 @@ Reserve severity="major" or "critical" for clearly missing, wrong, or materially
         err instanceof Error ? err.message : "Unknown audit analysis failure";
       const summary = `Infrastructure error: Failed to analyze audit frame for ${specName}. ${message}`;
       onLog(`[audit] ${summary}`);
+      if (isRecoverableClaudeAuditFailure(err)) {
+        writeAuditReport(auditPath, "skip", summary);
+        continue;
+      }
       failCount++;
       writeAuditReport(auditPath, "fail", summary);
       continue;

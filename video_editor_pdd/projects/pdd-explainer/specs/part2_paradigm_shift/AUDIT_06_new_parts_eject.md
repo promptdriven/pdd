@@ -1,4 +1,4 @@
 ## Verdict
-pass
+fail
 ## Summary
-The frame shows a close-up of an injection molding machine with white plastic parts on a conveyor belt. The mold mechanism is visible in the upper portion of the frame. Multiple uniform, identical white plastic parts are visible in the lower frame on the conveyor, matching the spec's requirement for 'flawless parts dropping onto a conveyor.' The factory lighting is bright, clean, and industrial with a blue/white color temperature. Depth of field is shallow with the ejection point sharp and the background softly blurred. At 75% progress (5.25s into a 7s clip), we are in the '5-7s' animation phase where the spec calls for the camera lingering on uniformity — the frame shows exactly this with multiple identical parts visible. A wire mesh bin/cage structure is visible in the soft background on the right side, consistent with the discard bin requirement. No typography is present, matching the 'cinematic B-roll' spec. The framing, color grading, and industrial precision aesthetic all align with the Veo prompt specifications.
+Infrastructure error: Failed to analyze audit frame for 06_new_parts_eject. Claude CLI returned error: API Error: Rate limit reached

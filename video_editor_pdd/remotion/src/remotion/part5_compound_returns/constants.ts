@@ -28,8 +28,8 @@ export const BEATS = {
 };
 
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 1 },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_maintenance_pie_chart", desc: "02 maintenance pie chart", lane: 1 },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 0 },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_maintenance_pie_chart", desc: "02 maintenance pie chart", lane: 0 },
   { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_compound_debt_curve", desc: "03 compound debt curve", lane: 0 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_diverging_cost_curves", desc: "04 diverging cost curves", lane: 1 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_investment_comparison_table", desc: "05 investment comparison table", lane: 1 },

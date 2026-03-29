@@ -28,15 +28,15 @@ export const BEATS = {
 };
 
 export const VISUAL_SEQUENCE = [
-  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 1 },
-  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_split_printer_vs_mold", desc: "02 split printer vs mold", lane: 1 },
-  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_precision_tradeoff_curve", desc: "03 precision tradeoff curve", lane: 1 },
+  { start: BEATS.VISUAL_00_START, end: BEATS.VISUAL_00_END, id: "01_section_title_card", desc: "01 section title card", lane: 0 },
+  { start: BEATS.VISUAL_01_START, end: BEATS.VISUAL_01_END, id: "02_split_printer_vs_mold", desc: "02 split printer vs mold", lane: 0 },
+  { start: BEATS.VISUAL_02_START, end: BEATS.VISUAL_02_END, id: "03_precision_tradeoff_curve", desc: "03 precision tradeoff curve", lane: 0 },
   { start: BEATS.VISUAL_03_START, end: BEATS.VISUAL_03_END, id: "04_detailed_prompt_file", desc: "04 detailed prompt file", lane: 0 },
   { start: BEATS.VISUAL_04_START, end: BEATS.VISUAL_04_END, id: "05_minimal_prompt_with_tests", desc: "05 minimal prompt with tests", lane: 0 },
-  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_dual_generation_comparison", desc: "06 dual generation comparison", lane: 1 },
-  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_key_insight_walls", desc: "07 key insight walls", lane: 1 },
-  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_embedded_code_document", desc: "08 embedded code document", lane: 1 },
-  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_prompt_code_spectrum", desc: "09 prompt code spectrum", lane: 1 },
+  { start: BEATS.VISUAL_05_START, end: BEATS.VISUAL_05_END, id: "06_dual_generation_comparison", desc: "06 dual generation comparison", lane: 0 },
+  { start: BEATS.VISUAL_06_START, end: BEATS.VISUAL_06_END, id: "07_key_insight_walls", desc: "07 key insight walls", lane: 0 },
+  { start: BEATS.VISUAL_07_START, end: BEATS.VISUAL_07_END, id: "08_embedded_code_document", desc: "08 embedded code document", lane: 0 },
+  { start: BEATS.VISUAL_08_START, end: BEATS.VISUAL_08_END, id: "09_prompt_code_spectrum", desc: "09 prompt code spectrum", lane: 0 },
 ];
 
 export const Part4PrecisionTradeoffSectionProps = z.object({
