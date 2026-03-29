@@ -686,8 +686,9 @@ def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git
     captured = capsys.readouterr()
     assert "budget cap reached" in captured.out.lower()
     assert result is not None
-    # Per-pair update costs plus example regeneration (mocked at $0.10 each).
-    assert result[1] == pytest.approx(1.4)
+    # First pair: updates + mocked example ($0.10). Second pair: updates only — post-update
+    # LLM steps skipped once cumulative cost meets budget ($1.00).
+    assert result[1] == pytest.approx(1.3)
 
 
 @patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
@@ -773,8 +774,8 @@ def test_update_main_repo_mode_dependency_ordering_for_budget(
     captured = capsys.readouterr()
     assert "budget cap reached" in captured.out.lower()
     assert result is not None
-    # Update cost plus mocked example regeneration ($0.10).
-    assert result[1] == pytest.approx(0.7)
+    # Update cost only — example regen skipped once cumulative cost >= budget ($0.10).
+    assert result[1] == pytest.approx(0.6)
 
 
 @patch("pdd.context_generator_main.context_generator_main")
