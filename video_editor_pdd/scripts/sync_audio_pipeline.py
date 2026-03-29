@@ -617,10 +617,39 @@ def compute_transcript_match_ratio(expected_text: str, actual_text: str) -> floa
     if not expected_tokens or not actual_tokens:
         return 0.0
 
-    return round(
-        SequenceMatcher(None, expected_tokens, actual_tokens).ratio(),
-        3,
-    )
+    matcher = SequenceMatcher(None, expected_tokens, actual_tokens)
+    raw_ratio = matcher.ratio()
+    matching_blocks = matcher.get_matching_blocks()
+
+    boundary_mismatch_count = 0
+    if matching_blocks:
+        first_block = matching_blocks[0]
+        last_block = next(
+            (block for block in reversed(matching_blocks) if block.size > 0),
+            None,
+        )
+
+        boundary_mismatch_count += first_block.a + first_block.b
+
+        if last_block is None:
+            boundary_mismatch_count += len(expected_tokens) + len(actual_tokens)
+        else:
+            boundary_mismatch_count += len(expected_tokens) - (
+                last_block.a + last_block.size
+            )
+            boundary_mismatch_count += len(actual_tokens) - (
+                last_block.b + last_block.size
+            )
+
+    if boundary_mismatch_count > 0:
+        total_tokens = len(expected_tokens) + len(actual_tokens)
+        boundary_penalty = max(
+            0.0,
+            1.0 - (boundary_mismatch_count / total_tokens),
+        )
+        raw_ratio *= boundary_penalty
+
+    return round(raw_ratio, 3)
 
 
 def load_segment_script_manifest(output_dir: str) -> Dict[str, str]:

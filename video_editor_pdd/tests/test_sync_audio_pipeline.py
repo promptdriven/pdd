@@ -45,6 +45,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 from sync_audio_pipeline import (
     build_segment_validation_report,
+    compute_transcript_match_ratio,
     evaluate_validation_gate,
     normalize_transcript_text,
     load_project,
@@ -1351,6 +1352,57 @@ class TestSegmentValidation:
         assert report["segments"][0]["status"] == "pass"
         assert report["segments"][0]["matchRatio"] == 1.0
         assert report["summary"]["failCount"] == 0
+
+    def test_compute_transcript_match_ratio_penalizes_boundary_hallucinated_words(self):
+        ratio = compute_transcript_match_ratio(
+            "If you use Cursor, or Claude Code, or Copilot...",
+            "Cripple if you use cursor or Claude Code or Copilot.",
+        )
+
+        assert ratio < 0.94
+        assert ratio >= 0.8
+
+    def test_compute_transcript_match_ratio_penalizes_missing_boundary_words(self):
+        ratio = compute_transcript_match_ratio(
+            "If you use Cursor, or Claude Code, or Copilot...",
+            "you use cursor or Claude Code or Copilot.",
+        )
+
+        assert ratio < 0.94
+        assert ratio >= 0.8
+
+    def test_build_segment_validation_report_marks_boundary_hallucination_as_warn(self, tmp_path):
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        manifest = {
+            "segments": [
+                {
+                    "id": "cold_open_001",
+                    "cleanText": "If you use Cursor, or Claude Code, or Copilot...",
+                },
+            ]
+        }
+        (output_dir / "segments.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+        report = build_segment_validation_report(
+            ["cold_open_001"],
+            str(output_dir),
+            [
+                {"word": "Cripple", "start": 0.0, "end": 0.52, "segmentId": "cold_open_001"},
+                {"word": "if", "start": 0.52, "end": 0.76, "segmentId": "cold_open_001"},
+                {"word": "you", "start": 0.76, "end": 0.88, "segmentId": "cold_open_001"},
+                {"word": "use", "start": 0.88, "end": 1.24, "segmentId": "cold_open_001"},
+                {"word": "cursor", "start": 1.24, "end": 1.68, "segmentId": "cold_open_001"},
+                {"word": "or", "start": 1.68, "end": 2.10, "segmentId": "cold_open_001"},
+                {"word": "Claude", "start": 2.10, "end": 2.54, "segmentId": "cold_open_001"},
+                {"word": "Code", "start": 2.54, "end": 2.78, "segmentId": "cold_open_001"},
+                {"word": "or", "start": 2.78, "end": 3.02, "segmentId": "cold_open_001"},
+                {"word": "Copilot", "start": 3.02, "end": 3.40, "segmentId": "cold_open_001"},
+            ],
+        )
+
+        assert report["segments"][0]["status"] == "warn"
+        assert report["segments"][0]["matchRatio"] < 0.94
 
     def test_build_segment_validation_report_uses_token_level_similarity(self, tmp_path):
         output_dir = tmp_path / "outputs" / "tts"
