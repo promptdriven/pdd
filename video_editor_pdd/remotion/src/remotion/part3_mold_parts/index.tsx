@@ -10,7 +10,6 @@ import { Part3MoldParts05BugAddsWall } from "../Part3MoldParts05BugAddsWall";
 import { Part3MoldParts06RatchetTimelapse } from "../Part3MoldParts06RatchetTimelapse";
 import { Part3MoldParts08BugForkRoad } from "../Part3MoldParts08BugForkRoad";
 import { Part3MoldParts09FiveGenerations } from "../Part3MoldParts09FiveGenerations";
-import { Part3MoldParts11ModuleBoundary } from "../Part3MoldParts11ModuleBoundary";
 import { Part3MoldParts12PromptNozzle } from "../Part3MoldParts12PromptNozzle";
 import { Part3MoldParts15GroundingStyles } from "../Part3MoldParts15GroundingStyles";
 import { Part3MoldParts17ComponentTable } from "../Part3MoldParts17ComponentTable";
@@ -24,7 +23,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "06_ratchet_timelapse": Part3MoldParts06RatchetTimelapse,
   "08_bug_fork_road": Part3MoldParts08BugForkRoad,
   "09_five_generations": Part3MoldParts09FiveGenerations,
-  "11_module_boundary": Part3MoldParts11ModuleBoundary,
   "12_prompt_nozzle": Part3MoldParts12PromptNozzle,
   "15_grounding_styles": Part3MoldParts15GroundingStyles,
   "17_component_table": Part3MoldParts17ComponentTable,
@@ -39,7 +37,6 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "06_ratchet_timelapse": 270,
   "08_bug_fork_road": 540,
   "09_five_generations": 540,
-  "11_module_boundary": 660,
   "12_prompt_nozzle": 720,
   "15_grounding_styles": 780,
   "17_component_table": 300,
@@ -111,11 +108,13 @@ export const Part3MoldPartsSection: React.FC = () => {
                 </VisualContractProvider>
               </SlotScaledSequence>
             ) : visualContract?.renderMode === "component" ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                  <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
+              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
+                <VisualContractProvider contract={visualContract}>
+                  <VisualMediaProvider media={visualMedia}>
+                    <GeneratedContractVisual />
+                  </VisualMediaProvider>
+                </VisualContractProvider>
+              </SlotScaledSequence>
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>

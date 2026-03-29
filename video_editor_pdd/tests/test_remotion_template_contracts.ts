@@ -283,6 +283,9 @@ describe("shared generated contract renderer", () => {
     expect(ghostBlock).toMatch(/crossing_point/);
     expect(titleBlock).toMatch(/resolvedTitleLines\[0\]/);
     expect(titleBlock).toMatch(/resolvedTitleLines\[1\]/);
+    expect(titleBlock).toMatch(/const url = asString\(data\.url\)/);
+    expect(titleBlock).toMatch(/whiteSpace:\s*["']nowrap["']/);
+    expect(titleBlock).toMatch(/>\$</);
   });
 
   it("keeps code-underlay thesis cards on one title line and suppresses the cold-open eyebrow", () => {
@@ -355,10 +358,9 @@ describe("shared generated contract renderer", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
     expect(source).toMatch(/chartId === "precision_tradeoff_curve"/);
-    expect(source).toMatch(/parser_v1\.prompt/);
-    expect(source).toMatch(/parser_v2\.prompt/);
-    expect(source).toMatch(/pdd test parser/);
-    expect(source).toMatch(/tests passing/);
+    expect(source).not.toMatch(/Left annotation/);
+    expect(source).not.toMatch(/Right annotation/);
+    expect(source).toMatch(/tickLabels/);
     expect(source).toMatch(/50\+/);
     expect(source).toMatch(/clipPath/);
   });
@@ -387,14 +389,24 @@ describe("shared generated contract renderer", () => {
     );
 
     expect(moldCounterBlock).toMatch(/10,000\+/);
+    expect(moldCounterBlock).toMatch(/productionProgress >= 0\.72/);
+    expect(moldCounterBlock).toMatch(/fontSize: 120/);
+    expect(moldCounterBlock).toMatch(/Array\.from\(\{ length: 60 \}\)/);
     expect(moldCounterBlock).toMatch(/"#D9944A"/);
     expect(moldCounterBlock).not.toMatch(/"#60A5FA"/);
 
+    expect(schematicBlock).toMatch(/repeat\(20, minmax\(0, 1fr\)\)/);
+    expect(schematicBlock).toMatch(/Array\.from\(\{ length: 640 \}\)/);
+    expect(schematicBlock).toMatch(/fontSize: 62/);
     expect(schematicBlock).toMatch(/stroke="#2D3748"/);
     expect(schematicBlock).toMatch(/stroke="#4A5568"/);
     expect(schematicBlock).not.toMatch(/backgroundColor:\s*"rgba\(15, 23, 42, 0\.92\)"/);
 
     expect(precisionBlock).toMatch(/asString\(asRecord\(series\[0\]\)\?\.color\)/);
+    expect(precisionBlock).toMatch(/leftZoneLabel/);
+    expect(precisionBlock).toMatch(/rightZoneLabel/);
+    expect(precisionBlock).not.toMatch(/Left annotation/);
+    expect(precisionBlock).not.toMatch(/Right annotation/);
     expect(precisionBlock).not.toMatch(/densePromptLines/);
     expect(precisionBlock).not.toMatch(/minimalPromptLines/);
 
@@ -453,9 +465,12 @@ describe("shared generated contract renderer", () => {
     const splitBlock = extractBlock(source, "const SplitVisual", "const TableVisual");
 
     expect(splitBlock).toMatch(/steps\.length > 0/);
-    expect(splitBlock).toMatch(/slice\(0, 6\)|slice\(0, 4\)|slice\(0, 5\)/);
-    expect(splitBlock).toMatch(/Bug impossible forever/);
-    expect(splitBlock).toMatch(/backgroundColor:\s*`?rgba\(2, 6, 23/);
+    expect(splitBlock).toMatch(/flowchartSteps/);
+    expect(splitBlock).toMatch(/panelKey === "left" \? 6 : 4/);
+    expect(splitBlock).toMatch(/includes\("forever"\)/);
+    expect(splitBlock).toMatch(/includes\("impossible"\)/);
+    expect(splitBlock).toMatch(/includes\("patch"\)/);
+    expect(splitBlock).toMatch(/backgroundColor:\s*["']rgba\(2, 6, 23, 0\.84\)["']/);
   });
 
   it("shows visible content and labels in value-flow and compression-ratio visuals instead of summary-only placeholders", () => {
@@ -470,6 +485,9 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/15,000 tokens of raw code/);
     expect(source).toMatch(/Module contracts and intent/);
     expect(source).toMatch(/Prompts for 10 modules/);
+    expect(source).toMatch(/Implement receipt totals/);
+    expect(source).toMatch(/generated_step_/);
+    expect(source).toMatch(/Dense\. Hard to parse\./);
   });
 
   it("supports contract-first callback charts with the current label set instead of stale exact-component copy", () => {
@@ -480,6 +498,8 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/Generate new/);
     expect(source).toMatch(/We are here\./);
     expect(source).toMatch(/When economics change, rational behavior changes\./);
+    expect(source).toMatch(/resolvedDebtShading/);
+    expect(source).toMatch(/translateX\(-50%\)/);
   });
 
   it("renders transition cards without the old debug title and center divider artifact", () => {
@@ -554,6 +574,8 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/threshold|keyDates|debtShading/);
     expect(source).toMatch(/computeSeriesBounds/);
     expect(source).toMatch(/trapArrow|annotations/);
+    expect(source).toMatch(/asString\(data\.reframeText\)/);
+    expect(source).toMatch(/When economics change, rational behavior changes\./);
   });
 
   it("supports current spec families for line charts, counters, schematic zooms, and code editor animations", () => {

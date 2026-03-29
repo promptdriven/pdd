@@ -5,15 +5,21 @@ import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from 
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Part5CompoundReturns04DivergingCostCurves } from "../Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "../Part5CompoundReturns05InvestmentComparisonTable";
+import { Part5CompoundReturns08EconomicsCrossingCallback } from "../Part5CompoundReturns08EconomicsCrossingCallback";
+import { Part5CompoundReturns09ContrarianQuoteCard } from "../Part5CompoundReturns09ContrarianQuoteCard";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "04_diverging_cost_curves": Part5CompoundReturns04DivergingCostCurves,
   "05_investment_comparison_table": Part5CompoundReturns05InvestmentComparisonTable,
+  "08_economics_crossing_callback": Part5CompoundReturns08EconomicsCrossingCallback,
+  "09_contrarian_quote_card": Part5CompoundReturns09ContrarianQuoteCard,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
   "04_diverging_cost_curves": 420,
   "05_investment_comparison_table": 420,
+  "08_economics_crossing_callback": 300,
+  "09_contrarian_quote_card": 660,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
@@ -71,11 +77,13 @@ export const Part5CompoundReturnsSection: React.FC = () => {
                 </VisualContractProvider>
               </SlotScaledSequence>
             ) : visualContract?.renderMode === "component" ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                  <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
+              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
+                <VisualContractProvider contract={visualContract}>
+                  <VisualMediaProvider media={visualMedia}>
+                    <GeneratedContractVisual />
+                  </VisualMediaProvider>
+                </VisualContractProvider>
+              </SlotScaledSequence>
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>

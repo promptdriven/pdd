@@ -6,7 +6,6 @@ import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
 import { Part4PrecisionTradeoff04DetailedPromptFile } from "../Part4PrecisionTradeoff04DetailedPromptFile";
 import { Part4PrecisionTradeoff05MinimalPromptWithTests } from "../Part4PrecisionTradeoff05MinimalPromptWithTests";
 import { Part4PrecisionTradeoff06DualGenerationComparison } from "../Part4PrecisionTradeoff06DualGenerationComparison";
-import { Part4PrecisionTradeoff07KeyInsightWalls } from "../Part4PrecisionTradeoff07KeyInsightWalls";
 import { Part4PrecisionTradeoff08EmbeddedCodeDocument } from "../Part4PrecisionTradeoff08EmbeddedCodeDocument";
 import { Part4PrecisionTradeoff09PromptCodeSpectrum } from "../Part4PrecisionTradeoff09PromptCodeSpectrum";
 
@@ -14,7 +13,6 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "04_detailed_prompt_file": Part4PrecisionTradeoff04DetailedPromptFile,
   "05_minimal_prompt_with_tests": Part4PrecisionTradeoff05MinimalPromptWithTests,
   "06_dual_generation_comparison": Part4PrecisionTradeoff06DualGenerationComparison,
-  "07_key_insight_walls": Part4PrecisionTradeoff07KeyInsightWalls,
   "08_embedded_code_document": Part4PrecisionTradeoff08EmbeddedCodeDocument,
   "09_prompt_code_spectrum": Part4PrecisionTradeoff09PromptCodeSpectrum,
 };
@@ -23,7 +21,6 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "04_detailed_prompt_file": 240,
   "05_minimal_prompt_with_tests": 240,
   "06_dual_generation_comparison": 240,
-  "07_key_insight_walls": 120,
   "08_embedded_code_document": 840,
   "09_prompt_code_spectrum": 480,
 };
@@ -84,11 +81,13 @@ export const Part4PrecisionTradeoffSection: React.FC = () => {
                 </VisualContractProvider>
               </SlotScaledSequence>
             ) : visualContract?.renderMode === "component" ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                  <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
+              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
+                <VisualContractProvider contract={visualContract}>
+                  <VisualMediaProvider media={visualMedia}>
+                    <GeneratedContractVisual />
+                  </VisualMediaProvider>
+                </VisualContractProvider>
+              </SlotScaledSequence>
             ) : null}
           </Sequence>
         );

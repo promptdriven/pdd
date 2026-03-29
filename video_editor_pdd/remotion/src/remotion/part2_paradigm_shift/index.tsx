@@ -4,6 +4,9 @@ import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedMediaVisual } from "../_shared/GeneratedMediaVisual";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
+import { Part2ParadigmShift04MoldProductionCounter } from "../Part2ParadigmShift04MoldProductionCounter";
+import { Part2ParadigmShift07SplitCraftsmanVsMold } from "../Part2ParadigmShift07SplitCraftsmanVsMold";
+import { Part2ParadigmShift11SchematicDensityZoom } from "../Part2ParadigmShift11SchematicDensityZoom";
 import { Part2ParadigmShift14SynopsysPddEquivalence } from "../Part2ParadigmShift14SynopsysPddEquivalence";
 import { Part2ParadigmShift15AbstractionStaircase } from "../Part2ParadigmShift15AbstractionStaircase";
 import { Part2ParadigmShift16BillionGateUnreviewable } from "../Part2ParadigmShift16BillionGateUnreviewable";
@@ -11,6 +14,9 @@ import { Part2ParadigmShift17ReviewSpecVerifyOutput } from "../Part2ParadigmShif
 import { Part2ParadigmShift18PromptMoldFinale } from "../Part2ParadigmShift18PromptMoldFinale";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
+  "04_mold_production_counter": Part2ParadigmShift04MoldProductionCounter,
+  "07_split_craftsman_vs_mold": Part2ParadigmShift07SplitCraftsmanVsMold,
+  "11_schematic_density_zoom": Part2ParadigmShift11SchematicDensityZoom,
   "14_synopsys_pdd_equivalence": Part2ParadigmShift14SynopsysPddEquivalence,
   "15_abstraction_staircase": Part2ParadigmShift15AbstractionStaircase,
   "16_billion_gate_unreviewable": Part2ParadigmShift16BillionGateUnreviewable,
@@ -19,6 +25,9 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "04_mold_production_counter": 300,
+  "07_split_craftsman_vs_mold": 600,
+  "11_schematic_density_zoom": 420,
   "14_synopsys_pdd_equivalence": 390,
   "15_abstraction_staircase": 690,
   "16_billion_gate_unreviewable": 360,
@@ -97,11 +106,13 @@ export const Part2ParadigmShiftSection: React.FC = () => {
                 </VisualContractProvider>
               </SlotScaledSequence>
             ) : visualContract?.renderMode === "component" ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                  <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
+              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
+                <VisualContractProvider contract={visualContract}>
+                  <VisualMediaProvider media={visualMedia}>
+                    <GeneratedContractVisual />
+                  </VisualMediaProvider>
+                </VisualContractProvider>
+              </SlotScaledSequence>
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>

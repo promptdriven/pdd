@@ -1,124 +1,85 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing, spring } from 'remotion';
+import {
+  TERMINAL_BG,
+  TERMINAL_TEXT,
+  TERMINAL_BORDER_RADIUS,
+  TERMINAL_WIDTH,
+  TERMINAL_HEIGHT,
+  TERMINAL_FONT_SIZE,
+  TERMINAL_MARGIN,
+  PHASE_TERMINAL_START,
+  PHASE_TERMINAL_END,
+} from './constants';
+
+const FPS = 30;
 
 /**
- * Bottom-right terminal showing `$ pdd generate process_order ✓`.
- * Fades in over 10 frames with easeOut(quad); checkmark uses spring.
+ * Bottom-right terminal overlay showing `$ pdd generate process_order ✓`.
  */
-
-interface TerminalOverlayProps {
-  fadeInStartFrame: number;
-  fadeInDuration: number;
-  command: string;
-  bgColor: string;
-  bgOpacity: number;
-  textColor: string;
-  fontSize: number;
-  width: number;
-  height: number;
-  right: number;
-  bottom: number;
-  borderRadius: number;
-  fps: number;
-}
-
-export const TerminalOverlay: React.FC<TerminalOverlayProps> = ({
-  fadeInStartFrame,
-  fadeInDuration,
-  command,
-  bgColor,
-  bgOpacity,
-  textColor,
-  fontSize,
-  width,
-  height,
-  right,
-  bottom,
-  borderRadius,
-  fps,
-}) => {
+export const TerminalOverlay: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Container fade
-  const containerOpacity = interpolate(
+  // Fade in over 10 frames (38-48)
+  const opacity = interpolate(
     frame,
-    [fadeInStartFrame, fadeInStartFrame + fadeInDuration],
+    [PHASE_TERMINAL_START, PHASE_TERMINAL_END],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
       extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    },
+    }
   );
 
-  if (containerOpacity <= 0) return null;
-
-  // Checkmark spring (appears slightly after text)
-  const checkFrame = frame - (fadeInStartFrame + fadeInDuration - 2);
+  // Checkmark spring animation
   const checkScale = spring({
-    frame: Math.max(0, checkFrame),
-    fps,
-    config: { stiffness: 200, damping: 15 },
+    frame: frame - PHASE_TERMINAL_START - 5,
+    fps: FPS,
+    config: {
+      stiffness: 200,
+      damping: 15,
+    },
   });
 
-  const checkOpacity = checkFrame >= 0 ? 1 : 0;
+  if (frame < PHASE_TERMINAL_START) return null;
 
   return (
     <div
       style={{
         position: 'absolute',
-        right,
-        bottom,
-        width,
-        height,
-        borderRadius,
-        backgroundColor: bgColor,
-        opacity: containerOpacity,
+        bottom: TERMINAL_MARGIN,
+        right: TERMINAL_MARGIN,
+        width: TERMINAL_WIDTH,
+        height: TERMINAL_HEIGHT,
+        backgroundColor: TERMINAL_BG,
+        opacity: opacity * 0.9,
+        borderRadius: TERMINAL_BORDER_RADIUS,
         display: 'flex',
         alignItems: 'center',
         paddingLeft: 16,
         paddingRight: 16,
-        boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        fontSize: TERMINAL_FONT_SIZE,
+        color: TERMINAL_TEXT,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
       }}
     >
-      {/* Semi-transparent overlay for the bg */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: bgColor,
-          opacity: bgOpacity,
-          borderRadius,
-        }}
-      />
-
+      <span style={{ opacity: 0.6, marginRight: 8, color: '#585B70' }}>$</span>
+      <span>pdd generate process_order</span>
       <span
         style={{
-          position: 'relative',
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize,
-          color: textColor,
-          zIndex: 1,
-          whiteSpace: 'nowrap',
+          marginLeft: 10,
+          transform: `scale(${checkScale})`,
+          display: 'inline-block',
+          color: '#A6E3A1',
+          fontWeight: 'bold',
         }}
       >
-        {'$ '}
-        {command}
-        {' '}
-        <span
-          style={{
-            display: 'inline-block',
-            transform: `scale(${checkScale})`,
-            opacity: checkOpacity,
-            color: textColor,
-          }}
-        >
-          ✓
-        </span>
+        ✓
       </span>
     </div>
   );
 };
+
+export default TerminalOverlay;

@@ -35,18 +35,14 @@ export const BEATS = {
   VISUAL_12_END: s2f(467.720),
   VISUAL_13_START: s2f(468.480),
   VISUAL_13_END: s2f(483.920),
-  VISUAL_14_START: s2f(468.480),
-  VISUAL_14_END: s2f(475.260),
-  VISUAL_15_START: s2f(468.480),
-  VISUAL_15_END: s2f(475.260),
-  VISUAL_16_START: s2f(472.368),
-  VISUAL_16_END: s2f(484.080),
-  VISUAL_17_START: s2f(472.368),
+  VISUAL_14_START: s2f(472.368),
+  VISUAL_14_END: s2f(484.080),
+  VISUAL_15_START: s2f(472.368),
+  VISUAL_15_END: s2f(484.080),
+  VISUAL_16_START: s2f(475.500),
+  VISUAL_16_END: s2f(483.920),
+  VISUAL_17_START: s2f(476.209),
   VISUAL_17_END: s2f(484.080),
-  VISUAL_18_START: s2f(475.500),
-  VISUAL_18_END: s2f(483.920),
-  VISUAL_19_START: s2f(476.209),
-  VISUAL_19_END: s2f(484.080),
 };
 
 export const VISUAL_SEQUENCE = [
@@ -64,12 +60,10 @@ export const VISUAL_SEQUENCE = [
   { start: BEATS.VISUAL_11_START, end: BEATS.VISUAL_11_END, id: "12_context_compression", desc: "12 context compression", lane: 0 },
   { start: BEATS.VISUAL_12_START, end: BEATS.VISUAL_12_END, id: "13_crossing_lines_moment", desc: "13 crossing lines moment", lane: 0 },
   { start: BEATS.VISUAL_13_START, end: BEATS.VISUAL_13_END, id: "14_split_developer_grandma", desc: "14 split developer grandma", lane: 0 },
-  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "15_developer_cursor", desc: "15 developer cursor", lane: 0 },
-  { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "16_grandmother_darning", desc: "16 grandmother darning", lane: 0 },
-  { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "19_double_meter_insight", desc: "19 double meter insight", lane: 0 },
-  { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "18_key_insight_stillness", desc: "18 key insight stillness", lane: 1 },
-  { start: BEATS.VISUAL_18_START, end: BEATS.VISUAL_18_END, id: "17_developer_codebase_zoomout", desc: "17 developer codebase zoomout", lane: 0 },
-  { start: BEATS.VISUAL_19_START, end: BEATS.VISUAL_19_END, id: "20_try_it_yourself", desc: "20 try it yourself", lane: 0 },
+  { start: BEATS.VISUAL_14_START, end: BEATS.VISUAL_14_END, id: "19_double_meter_insight", desc: "19 double meter insight", lane: 0 },
+  { start: BEATS.VISUAL_15_START, end: BEATS.VISUAL_15_END, id: "18_key_insight_stillness", desc: "18 key insight stillness", lane: 1 },
+  { start: BEATS.VISUAL_16_START, end: BEATS.VISUAL_16_END, id: "17_developer_codebase_zoomout", desc: "17 developer codebase zoomout", lane: 0 },
+  { start: BEATS.VISUAL_17_START, end: BEATS.VISUAL_17_END, id: "20_try_it_yourself", desc: "20 try it yourself", lane: 0 },
 ];
 
 export const Part1EconomicsSectionProps = z.object({

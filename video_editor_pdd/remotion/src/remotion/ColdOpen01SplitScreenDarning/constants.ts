@@ -1,25 +1,28 @@
-// ColdOpen01SplitScreenDarning – layout & color constants
-
-/** Canvas */
+// ─── Canvas ───────────────────────────────────────────────────────────
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
+export const FPS = 30;
+export const TOTAL_FRAMES = 270; // 9 seconds
 
-/** Total duration in frames (30 fps × 9s) */
-export const TOTAL_FRAMES = 270;
-
-/** Panel layout */
-export const PANEL_WIDTH = 940;
-export const DIVIDER_GAP = 40; // px between the two panels
-export const DIVIDER_THICKNESS = 2;
-export const DIVIDER_COLOR = "#FFFFFF";
+// ─── Layout ───────────────────────────────────────────────────────────
+export const DIVIDER_GAP = 40; // px gap between panels
+export const PANEL_WIDTH = (CANVAS_WIDTH - DIVIDER_GAP) / 2; // 940px each
+export const DIVIDER_LINE_WIDTH = 2;
 export const DIVIDER_MAX_OPACITY = 0.7;
 
-/** Background behind the divider strip */
-export const BG_COLOR = "#000000";
+// ─── Colors ───────────────────────────────────────────────────────────
+export const BG_COLOR = '#0A1628';
+export const DIVIDER_COLOR = '#FFFFFF';
 
-/** Timing (frames) */
-export const FADE_IN_END = 15; // divider + panels fade in over 0-15
-export const CLIP_A_END = 160; // first clip pair ends
-export const CROSSFADE_START = 150; // second clip pair begins (10-frame overlap)
-export const CROSSFADE_DURATION = 10;
-export const HOLD_START = 260; // final hold begins
+// ─── Timing (frame numbers) ──────────────────────────────────────────
+/** Frames 0-15: fade in from black, divider appears */
+export const FADE_IN_END = 15;
+
+/** Frame at which clip-1 ends and crossfade to clip-2 begins */
+export const CLIP1_DURATION = 160; // frames 0-159 (clip 1 plays)
+export const CROSSFADE_START = 150; // clip 2 fades in starting here
+export const CROSSFADE_FRAMES = 10; // 10-frame crossfade
+export const CLIP2_DURATION = 120; // clip 2 plays frames 150-269
+
+/** Frame 260-270: final hold */
+export const HOLD_START = 260;

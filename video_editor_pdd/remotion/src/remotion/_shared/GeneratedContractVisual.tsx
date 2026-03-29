@@ -966,8 +966,9 @@ const TitleCardVisual: React.FC<{
   const accent = resolveAccentColor(data);
   const explicitTitle = resolveExplicitTitle(data);
   const titleLines = explicitTitle ? resolveTitleLines(data) : [];
-  const subtitleLines = resolveSubtitleLines(data);
+  const url = asString(data.url);
   const commands = asStringArray(data.commands);
+  const subtitleLines = resolveSubtitleLines(data).filter((line) => !url || line !== url);
   const style = asString(data.style);
   const isStillnessBeat = style === "stillness_beat";
   const eyebrow = resolveEyebrow(data);
@@ -1164,34 +1165,75 @@ const TitleCardVisual: React.FC<{
         ))}
       </div>
       {commands.length > 0 ? (
-        <div
-          style={{
-            position: "absolute",
-            left: Math.max(80, width * 0.28),
-            right: Math.max(80, width * 0.28),
-            bottom: Math.max(80, height * 0.12),
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-            padding: "20px 24px",
-            borderRadius: 20,
-            backgroundColor: "rgba(2, 6, 23, 0.66)",
-            border: subtleBorder,
-          }}
-        >
-          {commands.slice(0, 2).map((command) => (
-            <div
-              key={command}
-              style={{
-                color: "#64748B",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 18,
-              }}
-            >
-              {command}
-            </div>
-          ))}
-        </div>
+        <>
+          <div
+            style={{
+              position: "absolute",
+              left: "50%",
+              bottom: Math.max(176, height * 0.23),
+              width: 400,
+              height: 1,
+              borderRadius: 999,
+              backgroundColor: ruleColor,
+              transform: "translateX(-50%)",
+              opacity: 1,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: Math.max(80, width * 0.22),
+              right: Math.max(80, width * 0.22),
+              bottom: Math.max(120, height * 0.14),
+              display: "flex",
+              flexDirection: "column",
+              gap: 14,
+              alignItems: "center",
+            }}
+          >
+            {commands.slice(0, 2).map((command, index) => (
+              <div
+                key={command}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  color: index === 1 ? "#4AD9A0" : "#94A3B8",
+                  fontFamily: "'JetBrains Mono', monospace",
+                  fontSize: 20,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <span style={{ color: "rgba(100, 116, 139, 0.72)" }}>$</span>
+                <span>{command}</span>
+              </div>
+            ))}
+            {url ? (
+              <div
+                style={{
+                  marginTop: 8,
+                  color: "#64748B",
+                  fontFamily: "'Inter', sans-serif",
+                  fontSize: 18,
+                  position: "relative",
+                  paddingBottom: 6,
+                }}
+              >
+                {url}
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: 1,
+                    backgroundColor: "rgba(100, 116, 139, 0.3)",
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        </>
       ) : null}
     </AbsoluteFill>
   );
@@ -1568,17 +1610,21 @@ const ChartVisual: React.FC<{
             },
           ]
         : [];
-  const eventLabel = asString(data.label) ?? asString(asRecord(data.takeaway)?.line1);
-  const eventSubLabel =
-    debtResetNote ??
+  const eventLabel =
+    asString(data.label) ??
     asString(data.reframeText) ??
     asString(data.newAnnotation) ??
-    (isCodeCostCallback ? "When economics change, rational behavior changes." : null) ??
-    asString(asRecord(data.takeaway)?.line2);
+    asString(asRecord(data.takeaway)?.line1);
+  const eventSubLabel =
+    debtResetNote ??
+    asString(asRecord(data.takeaway)?.line2) ??
+    (isCodeCostCallback ? "When economics change, rational behavior changes." : null);
   const showInsetCallout = data.type === "inset_chart" && causalChain.length > 0;
   const chartWidth = width * 0.72;
   const chartHeight = height * 0.5;
   const seriesBounds = computeSeriesBounds(series);
+  const resolvedDebtShading =
+    debtShading ?? (isCodeCostCallback ? { color: "#D9944A", opacity: 0.12 } : null);
   const reveal = interpolate(frame, [0, 24], [0.25, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
@@ -1592,20 +1638,24 @@ const ChartVisual: React.FC<{
     const milestoneValues = (Array.isArray(counter?.milestones) ? counter?.milestones : [])
       .map((entry) => asNumber(entry))
       .filter((entry): entry is number => entry !== null);
-    const holdStart = Math.max(1, Math.floor(durationInFrames * 0.78));
+    const holdStart = Math.max(1, Math.floor(durationInFrames * 0.68));
     const productionProgress = interpolate(frame, [0, holdStart], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
     });
-    const easedProgress = Math.pow(productionProgress, 0.42);
-    const currentValue =
-      productionProgress >= 0.96
-        ? endValue
-        : Math.max(startValue, startValue * Math.pow(endValue / startValue, easedProgress));
+    const currentValue = interpolate(
+      productionProgress,
+      [0, 0.22, 0.42, 0.62, 0.82, 1],
+      [startValue, 10, 100, 1000, 5000, endValue],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      }
+    );
     const finalDisplayValue =
       endValue >= 10000 ? "10,000+" : `${Math.round(endValue).toLocaleString()}+`;
     const displayValue =
-      productionProgress >= 0.8
+      productionProgress >= 0.72
         ? finalDisplayValue
         : Math.round(currentValue).toLocaleString();
     const cycleDots = Math.max(4, Math.min(10, Math.round(interpolate(
@@ -1669,15 +1719,15 @@ const ChartVisual: React.FC<{
               <rect x={316} y={84} width={148} height={46} rx={22} fill="rgba(226, 232, 240, 0.16)" />
               <path d="M 390 148 C 350 208, 330 236, 328 270 C 326 308, 358 336, 394 336 C 430 336, 460 306, 458 270 C 456 236, 434 208, 414 172 Z" fill="rgba(217, 148, 74, 0.28)" />
               <path d="M 390 138 L 390 54" stroke="rgba(217, 148, 74, 0.72)" strokeWidth={8} strokeLinecap="round" />
-              {Array.from({ length: 12 }).map((_, index) => (
+              {Array.from({ length: 60 }).map((_, index) => (
                 <rect
                   key={`part-${index}`}
-                  x={170 + (index % 4) * 112}
-                  y={372 + Math.floor(index / 4) * 38}
-                  width={52}
-                  height={28}
+                  x={126 + (index % 10) * 58}
+                  y={344 + Math.floor(index / 10) * 22}
+                  width={34}
+                  height={18}
                   rx={10}
-                  fill={index < Math.round(productionProgress * 12) ? "#D9944A" : "rgba(71, 85, 105, 0.55)"}
+                  fill={index < Math.round(productionProgress * 60) ? "#D9944A" : "rgba(71, 85, 105, 0.55)"}
                 />
               ))}
             </svg>
@@ -1697,9 +1747,11 @@ const ChartVisual: React.FC<{
               style={{
                 color: "#E2E8F0",
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 96,
+                fontSize: 120,
                 fontWeight: 700,
                 lineHeight: 1,
+                letterSpacing: -2,
+                textShadow: "0 0 18px rgba(226, 232, 240, 0.22)",
               }}
             >
               {displayValue}
@@ -1719,7 +1771,7 @@ const ChartVisual: React.FC<{
               style={{
                 marginTop: 22,
                 width: 300,
-                height: 4,
+                height: 8,
                 borderRadius: 999,
                 backgroundColor: "#1E293B",
                 overflow: "hidden",
@@ -1727,7 +1779,7 @@ const ChartVisual: React.FC<{
             >
               <div
                 style={{
-                  width: `${Math.max(6, productionProgress * 100)}%`,
+                  width: `${productionProgress >= 0.72 ? 98 : Math.max(12, productionProgress * 100)}%`,
                   height: "100%",
                   borderRadius: 999,
                   background: "linear-gradient(90deg, #4A90D9 0%, #5AAA6E 100%)",
@@ -1772,15 +1824,23 @@ const ChartVisual: React.FC<{
     const zoom = asRecord(data.zoom);
     const startValue = Math.max(1, asNumber(counter?.start) ?? 20);
     const endValue = Math.max(startValue + 1, asNumber(counter?.end) ?? 50000);
-    const zoomProgress = interpolate(frame, [0, Math.max(1, durationInFrames - 60)], [0, 1], {
+    const zoomProgress = interpolate(frame, [0, Math.max(1, durationInFrames - 96)], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
     });
-    const currentValue =
-      zoomProgress >= 0.82
-        ? endValue
-        : Math.max(startValue, startValue * Math.pow(endValue / startValue, Math.pow(zoomProgress, 0.58)));
-    const displayValue = zoomProgress >= 0.78 ? `${formatCompactMetric(endValue)}` : `${formatCompactMetric(currentValue)}`;
+    const currentValue = interpolate(
+      zoomProgress,
+      [0, 0.2, 0.4, 0.6, 0.8, 1],
+      [startValue, 500, 5000, 15000, 40000, endValue],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      }
+    );
+    const displayValue =
+      zoomProgress >= 0.74
+        ? `${formatCompactMetric(endValue)}+`
+        : `${formatCompactMetric(currentValue)}`;
     const finalScale = asNumber(zoom?.endScale) ?? 0.1;
 
     return (
@@ -1809,16 +1869,16 @@ const ChartVisual: React.FC<{
               position: "absolute",
               inset: "72px 110px 92px 72px",
               display: "grid",
-              gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
-              gap: 8,
-              transform: `scale(${interpolate(zoomProgress, [0, 1], [1.7, Math.max(1, 1 / finalScale) * 0.12], {
+              gridTemplateColumns: "repeat(20, minmax(0, 1fr))",
+              gap: 2,
+              transform: `scale(${interpolate(zoomProgress, [0, 1], [3.2, Math.max(0.45, 1 / finalScale) * 0.06], {
                 extrapolateLeft: "clamp",
                 extrapolateRight: "clamp",
               })})`,
               transformOrigin: "center center",
             }}
           >
-            {Array.from({ length: 120 }).map((_, index) => {
+            {Array.from({ length: 640 }).map((_, index) => {
               const wobble = ((index % 5) - 2) * 1.6;
               return (
                 <svg
@@ -1826,9 +1886,9 @@ const ChartVisual: React.FC<{
                   viewBox="0 0 82 56"
                   style={{
                     width: "100%",
-                    minHeight: 28,
+                    minHeight: 24,
                     overflow: "visible",
-                    opacity: 0.18 + (index % 7) * 0.08,
+                    opacity: 0.22 + (index % 9) * 0.05,
                   }}
                 >
                   <line x1="8" y1="28" x2="28" y2="28" stroke="#4A5568" strokeWidth="1" />
@@ -1868,8 +1928,8 @@ const ChartVisual: React.FC<{
               style={{
                 color: "#4A5568",
                 fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 36,
-                fontWeight: 400,
+                fontSize: 62,
+                fontWeight: 600,
                 lineHeight: 1,
               }}
             >
@@ -1879,7 +1939,7 @@ const ChartVisual: React.FC<{
               style={{
                 color: "#94A3B8",
                 fontFamily: "'Inter', sans-serif",
-                fontSize: 14,
+                fontSize: 18,
                 fontWeight: 400,
               }}
             >
@@ -2201,11 +2261,13 @@ const ChartVisual: React.FC<{
     const curveHeight = height * 0.52;
     const chartBottom = chartTop + curveHeight;
     const xTicks = asStringArray(xAxis?.ticks);
-    const yTicks = asStringArray(yAxis?.ticks);
+    const yTicks =
+      asStringArray(yAxis?.ticks).length > 0
+        ? asStringArray(yAxis?.ticks)
+        : asStringArray(yAxis?.tickLabels);
     const resolvedXTicks = xTicks.length > 0 ? xTicks : ["0", "10", "20", "30", "40", "50+"];
-    const resolvedYTicks = yTicks.length > 0 ? yTicks : ["Low", "Medium", "High"];
+    const resolvedYTicks = yTicks.length > 0 ? yTicks : ["Low", "High"];
     const introText = asString(data.introText) ?? "This maps directly to PDD.";
-    const rightTestCount = asNumber(rightAnnotation?.testCount) ?? 50;
     const resolveCalloutCopy = (
       annotation: Record<string, unknown> | null,
       fallbackLabel: string,
@@ -2240,6 +2302,12 @@ const ChartVisual: React.FC<{
     );
     const leftCalloutColor = asString(leftAnnotation?.color) ?? "#D9944A";
     const rightCalloutColor = asString(rightAnnotation?.color) ?? "#4A90D9";
+    const leftZoneLabel =
+      asString(asRecord(Array.isArray(data.zones) ? data.zones[0] : null)?.label) ??
+      "High prompt effort";
+    const rightZoneLabel =
+      asString(asRecord(Array.isArray(data.zones) ? data.zones[1] : null)?.label) ??
+      "Test-driven precision";
     const pointForTestCount = (testCount: number) => {
       const clamped = Math.max(0, Math.min(50, testCount));
       const x = chartLeft + (clamped / 50) * curveWidth;
@@ -2264,7 +2332,7 @@ const ChartVisual: React.FC<{
       asString(
         Array.isArray(data.zones) ? asRecord(data.zones[1])?.color : null
       ) ?? "#4A90D9";
-    const dotProgress = interpolate(frame, [300, 450], [0, 1], {
+    const dotProgress = interpolate(frame, [210, 420], [0, 1], {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
     });
@@ -2467,7 +2535,7 @@ const ChartVisual: React.FC<{
               letterSpacing: 0.18,
             }}
           >
-            parser_v1.prompt
+            {leftZoneLabel}
           </div>
           <div
             style={{
@@ -2511,7 +2579,7 @@ const ChartVisual: React.FC<{
               letterSpacing: 0.18,
             }}
           >
-            parser_v2.prompt
+            {rightZoneLabel}
           </div>
           <div
             style={{
@@ -2533,18 +2601,6 @@ const ChartVisual: React.FC<{
             }}
           >
             {rightCallout.description}
-          </div>
-          <div
-            style={{
-              marginTop: 14,
-              color: "#86EFAC",
-              fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 12,
-              lineHeight: 1.4,
-            }}
-          >
-            <div>$ pdd test parser</div>
-            <div>{`${rightTestCount} tests passing ✓`}</div>
           </div>
         </div>
       </AbsoluteFill>
@@ -2980,13 +3036,13 @@ const ChartVisual: React.FC<{
               />
             );
           })}
-          {debtShading ? (
+          {resolvedDebtShading ? (
             <rect
               x={chartWidth * 0.18}
               y={chartHeight * 0.22}
               width={chartWidth * 0.56}
               height={chartHeight * 0.5}
-              fill="rgba(217, 148, 74, 0.08)"
+              fill="rgba(217, 148, 74, 0.12)"
             />
           ) : null}
           {showInsetCallout ? (
@@ -3135,14 +3191,21 @@ const ChartVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              right: 28,
-              bottom: 64,
-              maxWidth: chartWidth * 0.34,
+              left: isCodeCostCallback ? "50%" : undefined,
+              right: isCodeCostCallback ? undefined : 28,
+              bottom: isCodeCostCallback ? 74 : 64,
+              transform: isCodeCostCallback ? "translateX(-50%)" : undefined,
+              width: isCodeCostCallback ? chartWidth * 0.62 : undefined,
+              maxWidth: isCodeCostCallback ? chartWidth * 0.62 : chartWidth * 0.34,
               color: "#E2E8F0",
               fontFamily: "'Inter', sans-serif",
-              fontSize: 24,
+              fontSize: isCodeCostCallback ? 30 : 24,
               fontWeight: 700,
-              textAlign: "right",
+              textAlign: isCodeCostCallback ? "center" : "right",
+              lineHeight: 1.15,
+              textShadow: isCodeCostCallback
+                ? "0 0 18px rgba(226, 232, 240, 0.18)"
+                : undefined,
             }}
           >
             {eventLabel}
@@ -3152,14 +3215,17 @@ const ChartVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              right: 28,
-              bottom: 30,
-              maxWidth: chartWidth * 0.42,
-              color: "#94A3B8",
+              left: isCodeCostCallback ? "50%" : undefined,
+              right: isCodeCostCallback ? undefined : 28,
+              bottom: isCodeCostCallback ? 26 : 30,
+              transform: isCodeCostCallback ? "translateX(-50%)" : undefined,
+              width: isCodeCostCallback ? chartWidth * 0.72 : undefined,
+              maxWidth: isCodeCostCallback ? 540 : chartWidth * 0.42,
+              color: isCodeCostCallback ? "#E2E8F0" : "#94A3B8",
               fontFamily: "'Inter', sans-serif",
-              fontSize: 18,
-              fontWeight: 500,
-              textAlign: "right",
+              fontSize: isCodeCostCallback ? 18 : 18,
+              fontWeight: isCodeCostCallback ? 700 : 500,
+              textAlign: isCodeCostCallback ? "center" : "right",
               lineHeight: 1.3,
             }}
           >
@@ -3914,6 +3980,10 @@ const SplitVisual: React.FC<{
       panelAccent,
       panelKey
     );
+    const showsFlowchartSteps = steps.length > 0 && !interior;
+    const flowchartSteps = showsFlowchartSteps
+      ? steps.slice(0, panelKey === "left" ? 6 : 4)
+      : [];
     const usagePercent =
       typeof panel.relevantPercent === "number" || typeof panel.relevantPercent === "string"
         ? `Context utilization: ~${panel.relevantPercent}%`
@@ -4044,6 +4114,164 @@ const SplitVisual: React.FC<{
           </div>
         ) : null}
         {interior}
+        {showsFlowchartSteps ? (
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              top: header ? 96 : 72,
+              bottom: 120,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "0 28px",
+            }}
+          >
+            {flowchartSteps.map((step, index) => {
+              const stepText = asString(step.label) ?? asString(step.text) ?? "";
+              const lowerStepText = stepText.toLowerCase();
+              const isPatchStep = lowerStepText.includes("patch");
+              const isFinalStep =
+                lowerStepText.includes("forever") ||
+                lowerStepText.includes("impossible") ||
+                lowerStepText.includes("✓");
+              return (
+                <React.Fragment key={`flow-step-${panelKey}-${index}`}>
+                  <div
+                    style={{
+                      width: panelKey === "left" ? 300 : 324,
+                      minHeight: 46,
+                      borderRadius: 12,
+                      backgroundColor: "rgba(2, 6, 23, 0.84)",
+                      border: `1.5px solid ${
+                        isFinalStep
+                          ? "rgba(74, 222, 128, 0.6)"
+                          : `${panelAccent}55`
+                      }`,
+                      boxShadow: isFinalStep
+                        ? "0 0 28px rgba(74, 222, 128, 0.16)"
+                        : undefined,
+                      padding: "11px 16px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        color: "#E2E8F0",
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: 16,
+                        fontWeight: 500,
+                        lineHeight: 1.25,
+                      }}
+                    >
+                      {stepText}
+                    </div>
+                    {isPatchStep ? (
+                      <div
+                        style={{
+                          position: "relative",
+                          width: 20,
+                          height: 20,
+                          borderRadius: 6,
+                          backgroundColor: "rgba(248, 113, 113, 0.18)",
+                          border: "1px solid rgba(248, 113, 113, 0.45)",
+                          transform: "rotate(-12deg)",
+                          flexShrink: 0,
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: 4,
+                            right: 4,
+                            top: 9,
+                            height: 2,
+                            backgroundColor: "rgba(248, 113, 113, 0.65)",
+                            borderRadius: 999,
+                          }}
+                        />
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 4,
+                            bottom: 4,
+                            left: 9,
+                            width: 2,
+                            backgroundColor: "rgba(248, 113, 113, 0.65)",
+                            borderRadius: 999,
+                          }}
+                        />
+                      </div>
+                    ) : isFinalStep ? (
+                      <div
+                        style={{
+                          color: "#4ADE80",
+                          fontSize: 20,
+                          fontWeight: 700,
+                          flexShrink: 0,
+                        }}
+                      >
+                        ✓
+                      </div>
+                    ) : null}
+                  </div>
+                  {index < flowchartSteps.length - 1 ? (
+                    <div
+                      style={{
+                        width: 2,
+                        height: 18,
+                        backgroundColor: `${panelAccent}66`,
+                        borderRadius: 999,
+                        position: "relative",
+                      }}
+                    >
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: -4,
+                          bottom: -2,
+                          width: 10,
+                          height: 10,
+                          borderBottom: `2px solid ${panelAccent}AA`,
+                          borderRight: `2px solid ${panelAccent}AA`,
+                          transform: "rotate(45deg)",
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                </React.Fragment>
+              );
+            })}
+            {Boolean(panel.infinite) ? (
+              <div
+                style={{
+                  marginTop: 6,
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                }}
+              >
+                {[0, 1, 2].map((dotIndex) => (
+                  <div
+                    key={`ellipsis-${dotIndex}`}
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 999,
+                      backgroundColor: "rgba(248, 113, 113, 0.55)",
+                    }}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div
           style={{
             position: "absolute",
@@ -4073,6 +4301,7 @@ const SplitVisual: React.FC<{
             </div>
           ) : null}
           {steps.length > 0 ? (
+            !showsFlowchartSteps ? (
             <div
               style={{
                 display: "flex",
@@ -4087,6 +4316,7 @@ const SplitVisual: React.FC<{
                 <div key={`step-${index}`}>{asString(step.label) ?? asString(step.text) ?? ""}</div>
               ))}
             </div>
+            ) : null
           ) : null}
           {caption ? (
             <div
@@ -7822,6 +8052,8 @@ const ModuleMigrationVisual: React.FC<{
           width: 980,
           maxWidth: "calc(100% - 180px)",
           transform: "translateX(-50%)",
+          display: "flex",
+          justifyContent: "center",
         }}
       >
         <div
@@ -7858,6 +8090,39 @@ const ModuleMigrationVisual: React.FC<{
               >
                 <div
                   style={{
+                    position: "absolute",
+                    right: 12,
+                    top: 12,
+                    width: 12,
+                    height: 16,
+                    borderRadius: 3,
+                    border: `1px solid ${migrated ? "rgba(90, 170, 110, 0.65)" : "rgba(100, 116, 139, 0.28)"}`,
+                    opacity: migrated ? 1 : 0.22,
+                  }}
+                >
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 2,
+                      right: 2,
+                      top: 3,
+                      height: 1,
+                      backgroundColor: migrated ? "rgba(90, 170, 110, 0.8)" : "rgba(100, 116, 139, 0.35)",
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 2,
+                      right: 3,
+                      top: 6,
+                      height: 1,
+                      backgroundColor: migrated ? "rgba(90, 170, 110, 0.8)" : "rgba(100, 116, 139, 0.35)",
+                    }}
+                  />
+                </div>
+                <div
+                  style={{
                     color: migrated ? "#DCFCE7" : "#CBD5E1",
                     fontFamily: "'JetBrains Mono', monospace",
                     fontSize: 13,
@@ -7866,20 +8131,7 @@ const ModuleMigrationVisual: React.FC<{
                 >
                   {moduleId}
                 </div>
-                <div
-                  style={{
-                    alignSelf: "flex-start",
-                    padding: "4px 8px",
-                    borderRadius: 999,
-                    backgroundColor: migrated ? "rgba(74, 222, 128, 0.18)" : "rgba(30, 41, 59, 0.72)",
-                    color: migrated ? "#86EFAC" : "#64748B",
-                    fontSize: 11,
-                    fontWeight: 700,
-                    letterSpacing: 0.4,
-                  }}
-                >
-                  {migrated ? "PROMPT" : "CODE"}
-                </div>
+                <div style={{ height: 18 }} />
               </div>
             );
           })}
@@ -7900,13 +8152,13 @@ const ModuleMigrationVisual: React.FC<{
           style={{
             color: "#5AAA6E",
             fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 52,
+            fontSize: 30,
             fontWeight: 700,
           }}
         >
           {`${migratedCount} / ${totalModules}`}
         </div>
-        <div style={{ color: "#E2E8F0", fontSize: 18, fontWeight: 600 }}>
+        <div style={{ color: "#E2E8F0", fontSize: 16, fontWeight: 600 }}>
           modules migrated
         </div>
       </div>
@@ -7921,14 +8173,78 @@ const KeyInsightCardVisual: React.FC<{
   const statements = asRecordArray(data.statements);
   const primaryText = asString(data.primaryText);
   const secondaryText = asString(data.secondaryText);
+
+  if (primaryText || secondaryText) {
+    return (
+      <AbsoluteFill>
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background:
+              "radial-gradient(circle at 24% 50%, rgba(74, 144, 217, 0.08), transparent 28%), radial-gradient(circle at 76% 50%, rgba(217, 148, 74, 0.08), transparent 28%)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: height * 0.41,
+            width: 200,
+            height: 1,
+            backgroundColor: "rgba(51, 65, 85, 0.3)",
+            transform: "translateX(-50%)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: height * 0.435,
+            transform: "translateX(-50%)",
+            maxWidth: 980,
+            color: "#E2E8F0",
+            fontSize: 56,
+            fontWeight: 700,
+            textAlign: "center",
+            lineHeight: 1.08,
+          }}
+        >
+          {primaryText}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: height * 0.515,
+            transform: "translateX(-50%)",
+            maxWidth: 920,
+            color: "#D9944A",
+            fontSize: 28,
+            fontWeight: 400,
+            textAlign: "center",
+          }}
+        >
+          {secondaryText}
+        </div>
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: height * 0.555,
+            width: 200,
+            height: 1,
+            backgroundColor: "rgba(51, 65, 85, 0.3)",
+            transform: "translateX(-50%)",
+          }}
+        />
+      </AbsoluteFill>
+    );
+  }
+
   const resolvedStatements =
     statements.length > 0
       ? statements
-      : primaryText || secondaryText
-        ? [
-            { text: primaryText ?? "More tests, less prompt.", color: "#E2E8F0", weight: 700 },
-            { text: secondaryText ?? "The walls do the precision work.", color: "#D9944A", weight: 600 },
-          ]
       : [
           { text: "No big bang.", color: "#E2E8F0", weight: 700 },
           { text: "No rewrite.", color: "#E2E8F0", weight: 700 },
@@ -8092,8 +8408,8 @@ const ValueFlowVisual: React.FC<{
                 style={{
                   textAlign: "center",
                   color: borderColor,
-                  fontSize: 18,
-                  fontWeight: 600,
+                  fontSize: 22,
+                  fontWeight: 700,
                   letterSpacing: 0.6,
                 }}
               >
@@ -8133,10 +8449,10 @@ const ValueFlowVisual: React.FC<{
           textAlign: "center",
           color: "#94A3B8",
           fontSize: 30,
-          fontWeight: 600,
+          fontWeight: 500,
         }}
       >
-        <span>from code to </span>
+        <span>{thesisText.toLowerCase().replace("specification", "").trim()} </span>
         <span style={{ color: "#5AAA6E" }}>specification</span>
       </div>
     </AbsoluteFill>
@@ -8278,6 +8594,40 @@ const CompressionRatioVisual: React.FC<{
   const contextComparison = asRecord(data.contextComparison);
   const leftContext = asRecord(contextComparison?.left);
   const rightContext = asRecord(contextComparison?.right);
+  const promptPreviewLines = [
+    "Implement receipt totals",
+    "Preserve discount semantics",
+    "Round currency safely",
+    "Keep public API unchanged",
+    "Emit order metrics",
+    "Respect tax edge cases",
+    "Handle empty carts",
+    "Preserve legacy fields",
+    "Use helper functions",
+    "Return stable structure",
+    "Document assumptions",
+    "Keep tests green",
+  ];
+  const codePreviewLines = Array.from({ length: 40 }).map((_, index) =>
+    index % 6 === 0
+      ? `def generated_step_${index}(ctx, receipt):`
+      : index % 5 === 0
+        ? "    emit_order_metrics(receipt, ctx)"
+        : index % 4 === 0
+          ? "    if receipt.total < 0: raise ValueError('negative total')"
+          : index % 3 === 0
+            ? "    receipt.tax = compute_tax(receipt)"
+            : "    return build_receipt_response(receipt)"
+  );
+  const denseLeftText = Array.from({ length: 26 }).map((_, index) =>
+    `if legacy_case_${index}: return fallback_path_${index}(ctx, req)`
+  );
+  const promptCards = [
+    "Module contracts and intent.",
+    "Grounding examples for edge cases.",
+    "Tests define correctness walls.",
+    "Every token stays problem-specific.",
+  ];
 
   return (
     <AbsoluteFill>
@@ -8297,19 +8647,68 @@ const CompressionRatioVisual: React.FC<{
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 180px 1fr",
+            gridTemplateColumns: "320px 160px minmax(0, 1fr)",
             gap: 24,
-            alignItems: "center",
+            alignItems: "stretch",
           }}
         >
-          <div style={{ padding: "24px 26px", borderRadius: 24, backgroundColor: subtleSurface, border: subtleBorder }}>
-            <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 700 }}>PROMPT</div>
-            <div style={{ color: "#E2E8F0", fontSize: 40, fontWeight: 700, marginTop: 10 }}>{`${promptLines} lines`}</div>
+          <div style={{ padding: "20px 22px", borderRadius: 24, backgroundColor: subtleSurface, border: "1px solid rgba(217, 148, 74, 0.3)" }}>
+            <div style={{ color: "#D9944A", fontSize: 16, fontWeight: 700 }}>Prompt</div>
+            <div style={{ color: "#D9944A", fontSize: 12, marginTop: 4 }}>{`~${promptLines} lines`}</div>
+            <div
+              style={{
+                marginTop: 14,
+                borderRadius: 18,
+                backgroundColor: "rgba(2, 6, 23, 0.72)",
+                border: "1px solid rgba(217, 148, 74, 0.18)",
+                padding: "14px 14px 12px",
+                minHeight: 320,
+                color: "rgba(217, 148, 74, 0.84)",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 11,
+                lineHeight: 1.42,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {promptPreviewLines.join("\n")}
+            </div>
           </div>
-          <div style={{ color: "#2DD4BF", fontSize: 62, fontWeight: 700, textAlign: "center" }}>{ratio}</div>
-          <div style={{ padding: "24px 26px", borderRadius: 24, backgroundColor: subtleSurface, border: subtleBorder }}>
-            <div style={{ color: "#94A3B8", fontSize: 18, fontWeight: 700 }}>GENERATED CODE</div>
-            <div style={{ color: "#E2E8F0", fontSize: 40, fontWeight: 700, marginTop: 10 }}>{`${codeLines} lines`}</div>
+          <div style={{ color: "#E2E8F0", fontSize: 58, fontWeight: 700, textAlign: "center", alignSelf: "center" }}>{ratio}</div>
+          <div style={{ padding: "20px 22px", borderRadius: 24, backgroundColor: subtleSurface, border: subtleBorder }}>
+            <div style={{ color: "#94A3B8", fontSize: 16, fontWeight: 700 }}>Generated Code</div>
+            <div style={{ color: "#94A3B8", fontSize: 12, marginTop: 4 }}>{`~${codeLines} lines`}</div>
+            <div
+              style={{
+                marginTop: 14,
+                borderRadius: 18,
+                backgroundColor: "rgba(2, 6, 23, 0.72)",
+                border: "1px solid rgba(148, 163, 184, 0.18)",
+                padding: "14px 14px 12px",
+                minHeight: 320,
+                color: "#CBD5E1",
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: 11,
+                lineHeight: 1.28,
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                columnGap: 20,
+              }}
+            >
+              <div>
+                {codePreviewLines.slice(0, 20).map((line, index) => (
+                  <div key={`code-left-${index}`} style={{ color: line.startsWith("def") ? "#93C5FD" : "#CBD5E1" }}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+              <div>
+                {codePreviewLines.slice(20).map((line, index) => (
+                  <div key={`code-right-${index}`} style={{ color: line.startsWith("def") ? "#93C5FD" : "#CBD5E1" }}>
+                    {line}
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
         <div
@@ -8322,7 +8721,7 @@ const CompressionRatioVisual: React.FC<{
           {[
             {
               label: "15,000 tokens of raw code",
-              sublabel: "Dense code context",
+              sublabel: "Dense. Hard to parse.",
               accent: "#EF4444",
               fill: "code",
               tokenCount: asNumber(leftContext?.tokens) ?? 15000,
@@ -8340,41 +8739,41 @@ const CompressionRatioVisual: React.FC<{
               style={{
                 borderRadius: 28,
                 backgroundColor: "rgba(15, 23, 42, 0.86)",
-                border: `2px solid ${panel.accent}33`,
-                boxShadow: `0 0 0 1px ${panel.accent}22 inset`,
-                padding: "24px 24px 20px",
-                display: "flex",
-                flexDirection: "column",
+              border: `2px solid ${panel.accent}33`,
+              boxShadow: `0 0 0 1px ${panel.accent}22 inset`,
+              padding: "24px 24px 20px",
+              display: "flex",
+              flexDirection: "column",
                 gap: 18,
               }}
-            >
-              <div style={{ color: panel.accent, fontSize: 20, fontWeight: 700 }}>{panel.label}</div>
-              <div
-                style={{
-                  flex: 1,
+                >
+                  <div style={{ color: panel.accent, fontSize: 20, fontWeight: 700 }}>{panel.label}</div>
+                  <div
+                    style={{
+                      flex: 1,
                   borderRadius: 20,
                   backgroundColor: "rgba(2, 6, 23, 0.72)",
                   border: `1px solid ${panel.accent}22`,
                   padding: "18px 18px 14px",
                   overflow: "hidden",
-                }}
-              >
-                {panel.fill === "code" ? (
-                  <div
-                    style={{
-                      color: "rgba(248, 113, 113, 0.86)",
-                      fontFamily: "'JetBrains Mono', monospace",
-                      fontSize: 12,
-                      lineHeight: 1.45,
-                      whiteSpace: "pre-wrap",
                     }}
                   >
-                    {Array.from({ length: 18 }).map((_, index) => `if (legacy_case_${index}) return fallback_${index};`).join("\n")}
-                  </div>
-                ) : (
-                  <div
-                    style={{
-                      color: "rgba(187, 247, 208, 0.92)",
+                    {panel.fill === "code" ? (
+                      <div
+                        style={{
+                          color: "rgba(248, 113, 113, 0.86)",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: 11,
+                          lineHeight: 1.32,
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                    {denseLeftText.join("\n")}
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          color: "rgba(187, 247, 208, 0.92)",
                       fontSize: 18,
                       lineHeight: 1.5,
                       display: "flex",
@@ -8382,18 +8781,199 @@ const CompressionRatioVisual: React.FC<{
                       gap: 8,
                     }}
                   >
-                    <div>Module contracts and intent.</div>
-                    <div>Grounding examples for edge cases.</div>
-                    <div>Tests define correctness walls.</div>
-                    <div>Every token stays problem-specific.</div>
+                    {promptCards.map((card) => (
+                      <div
+                        key={card}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: 14,
+                          backgroundColor: "rgba(45, 212, 191, 0.12)",
+                          border: "1px solid rgba(74, 222, 128, 0.18)",
+                        }}
+                      >
+                        {card}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
               <div style={{ color: "#E2E8F0", fontSize: 16 }}>{`~${panel.tokenCount.toLocaleString()} tokens`}</div>
-              <div style={{ color: panel.accent, fontSize: 14, fontWeight: 600 }}>{panel.sublabel}</div>
+              <div
+                style={{
+                  color: panel.accent,
+                  fontSize: 14,
+                  fontWeight: 700,
+                  textShadow: panel.fill === "prompts" ? "0 0 14px rgba(74, 222, 128, 0.28)" : undefined,
+                }}
+              >
+                {panel.sublabel}
+              </div>
             </div>
           ))}
         </div>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const SystemDiagramVisual: React.FC<{
+  data: Record<string, unknown>;
+  width: number;
+  height: number;
+}> = ({ data, width, height }) => {
+  const centralModule = asRecord(data.centralModule);
+  const surroundingModules = asRecordArray(data.surroundingModules);
+  const centerX = width / 2;
+  const centerY = height * 0.48;
+  const radius = 250;
+  const moduleAngles = [-130, -55, -10, 35, 105, 165];
+  const surrounding = (surroundingModules.length > 0
+    ? surroundingModules
+    : [
+        { name: "auth_service" },
+        { name: "db_layer" },
+        { name: "api_router" },
+        { name: "cache" },
+        { name: "logger" },
+        { name: "config" },
+      ]).slice(0, 6);
+  const label = asString(data.label) ?? "PDD operates at the module level.";
+  const subtext =
+    asString(data.subtext) ??
+    "The mold makes each part precise. The assembly is still yours.";
+
+  return (
+    <AbsoluteFill>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundImage:
+            "linear-gradient(rgba(30, 41, 59, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(30, 41, 59, 0.05) 1px, transparent 1px)",
+          backgroundSize: "60px 60px",
+        }}
+      />
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <circle
+          cx={centerX}
+          cy={centerY}
+          r={180}
+          fill="none"
+          stroke="rgba(74, 144, 217, 0.18)"
+          strokeWidth={2}
+          strokeDasharray="10 10"
+        />
+        {surrounding.map((module, index) => {
+          const angle = (moduleAngles[index] ?? index * 60) * (Math.PI / 180);
+          const moduleX = centerX + Math.cos(angle) * radius;
+          const moduleY = centerY + Math.sin(angle) * radius;
+          return (
+            <g key={`surrounding-module-${index}`}>
+              <line
+                x1={centerX}
+                y1={centerY}
+                x2={moduleX}
+                y2={moduleY}
+                stroke="rgba(51, 65, 85, 0.5)"
+                strokeWidth={1.5}
+                strokeDasharray={index % 2 === 0 ? "8 8" : undefined}
+              />
+              <rect
+                x={moduleX - 90}
+                y={moduleY - 40}
+                width={180}
+                height={80}
+                rx={14}
+                fill="rgba(30, 30, 46, 0.92)"
+                stroke="rgba(51, 65, 85, 0.9)"
+              />
+              <text
+                x={moduleX}
+                y={moduleY + 5}
+                fill="#64748B"
+                fontSize={12}
+                fontFamily="'JetBrains Mono', monospace"
+                textAnchor="middle"
+              >
+                {asString(module.name) ?? `module_${index + 1}`}
+              </text>
+            </g>
+          );
+        })}
+        <rect
+          x={centerX - 120}
+          y={centerY - 60}
+          width={240}
+          height={120}
+          rx={20}
+          fill="rgba(30, 30, 46, 0.96)"
+          stroke={asString(centralModule?.color) ?? "#4A90D9"}
+          strokeWidth={2}
+        />
+        <rect
+          x={centerX - 120}
+          y={centerY - 60}
+          width={240}
+          height={120}
+          rx={20}
+          fill="none"
+          stroke="rgba(74, 144, 217, 0.18)"
+          strokeWidth={10}
+        />
+        <text
+          x={centerX}
+          y={centerY + 6}
+          fill="#CDD6F4"
+          fontSize={14}
+          fontFamily="'JetBrains Mono', monospace"
+          textAnchor="middle"
+        >
+          {asString(centralModule?.name) ?? "user_parser"}
+        </text>
+      </svg>
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: centerY - 205,
+          transform: "translateX(-50%)",
+          color: "rgba(74, 144, 217, 0.4)",
+          fontSize: 11,
+        }}
+      >
+        PDD boundary
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 224,
+          textAlign: "center",
+          color: "#E2E8F0",
+          fontSize: 22,
+          fontWeight: 600,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 188,
+          textAlign: "center",
+          color: "#94A3B8",
+          fontSize: 14,
+        }}
+      >
+        {subtext}
       </div>
     </AbsoluteFill>
   );

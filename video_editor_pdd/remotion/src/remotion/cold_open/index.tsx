@@ -69,11 +69,13 @@ export const ColdOpenSection: React.FC = () => {
                 </VisualContractProvider>
               </SlotScaledSequence>
             ) : visualContract?.renderMode === "component" ? (
-              <VisualContractProvider contract={visualContract}>
-                <VisualMediaProvider media={visualMedia}>
-                  <GeneratedContractVisual />
-                </VisualMediaProvider>
-              </VisualContractProvider>
+              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>
+                <VisualContractProvider contract={visualContract}>
+                  <VisualMediaProvider media={visualMedia}>
+                    <GeneratedContractVisual />
+                  </VisualMediaProvider>
+                </VisualContractProvider>
+              </SlotScaledSequence>
             ) : visualMedia?.defaultSrc ? (
               <VisualContractProvider contract={visualContract}>
                 <VisualMediaProvider media={visualMedia}>

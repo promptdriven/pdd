@@ -4,6 +4,7 @@ import path from "path";
 
 import { loadProject } from "@/lib/project";
 import { getProjectDir } from "@/lib/projects";
+import { extractSplitChildClipIds } from "@/lib/split-spec-children";
 
 /**
  * GET /api/pipeline/specs/list
@@ -85,49 +86,8 @@ function listSpecFiles(specDirAbs: string, specDirRel: string): SpecFile[] {
   return files;
 }
 
-const DATA_POINTS_JSON_RE = /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
-const SPLIT_MARKER_RE = /^\s*\[split:[^\]]*\]/i;
-
 function extractChildClipIds(content: string): string[] {
-  if (!SPLIT_MARKER_RE.test(content)) {
-    return [];
-  }
-
-  const match = DATA_POINTS_JSON_RE.exec(content);
-  if (!match?.[1]) {
-    return [];
-  }
-
-  let dataPoints: Record<string, unknown>;
-  try {
-    dataPoints = JSON.parse(match[1]);
-  } catch {
-    return [];
-  }
-
-  const ids: string[] = [];
-
-  function collect(value: unknown): void {
-    if (typeof value === "string" && value.trim()) {
-      ids.push(value.trim());
-    } else if (value && typeof value === "object" && !Array.isArray(value)) {
-      for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-        const normalized = key.replace(/[_-]/g, "").toLowerCase();
-        if (
-          (normalized === "leftclipid" || normalized === "rightclipid" ||
-           normalized === "clipid" || normalized === "content") &&
-          typeof nested === "string" && nested.trim()
-        ) {
-          ids.push(nested.trim());
-        } else if (typeof nested === "object" && nested !== null) {
-          collect(nested);
-        }
-      }
-    }
-  }
-
-  collect(dataPoints);
-  return ids;
+  return extractSplitChildClipIds(content);
 }
 
 function resolveParentSpecs(files: SpecFile[], specDirAbs: string): void {

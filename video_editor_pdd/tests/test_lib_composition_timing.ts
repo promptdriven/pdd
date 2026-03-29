@@ -326,6 +326,100 @@ describe("lib/composition-timing", () => {
     expect(source).toContain('id: "03_narration_overlay_intro"');
   });
 
+  it("prefers generated section timeline entries over raw spec timing windows", () => {
+    const specDir = path.join(tmpDir, "specs", "animation_section");
+    const compositionsDir = path.join(tmpDir, "outputs", "compositions");
+    const ttsDir = path.join(tmpDir, "outputs", "tts", "animation_section");
+
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(compositionsDir, { recursive: true });
+    fs.mkdirSync(ttsDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(specDir, "01_title_card.md"),
+      [
+        "**Timestamp:** 0:00 - 0:03",
+        "",
+        "## Animation Sequence",
+        "1. Frame 0-15: Fade in.",
+        "2. Frame 15-45: Title reveal.",
+        "3. Frame 45-65: Rule expansion.",
+        "4. Frame 65-90: Hold — all elements static at full opacity.",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_key_visual.md"),
+      [
+        "**Timestamp:** 0:03 - 0:08",
+        "",
+        "## Animation Sequence",
+        "1. Frame 0-30: Build.",
+        "2. Frame 30-90: Hold.",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(compositionsDir, "section-timeline.json"),
+      JSON.stringify({
+        version: 1,
+        updatedAt: "2026-03-28T00:00:00Z",
+        sections: [
+          {
+            sectionId: "animation_section",
+            durationSeconds: 10,
+            entries: [
+              {
+                id: "01_title_card",
+                startSeconds: 0,
+                endSeconds: 4,
+                lane: 0,
+                source: "segment-anchor",
+                desc: "01 title card",
+              },
+              {
+                id: "02_key_visual",
+                startSeconds: 4,
+                endSeconds: 10,
+                lane: 0,
+                source: "segment-anchor",
+                desc: "02 key visual",
+              },
+            ],
+          },
+        ],
+      })
+    );
+    fs.writeFileSync(
+      path.join(ttsDir, "word_timestamps.json"),
+      JSON.stringify([{ word: "Hello", start: 0, end: 10 }])
+    );
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "animation_section",
+        specDir: "animation_section",
+        durationSeconds: 10,
+        compositionId: "AnimationSection",
+      },
+      ["01_title_card", "02_key_visual"]
+    );
+
+    expect(timings).toEqual([
+      expect.objectContaining({
+        id: "01_title_card",
+        startSeconds: 0,
+        endSeconds: 4,
+        source: "project",
+      }),
+      expect.objectContaining({
+        id: "02_key_visual",
+        startSeconds: 4,
+        endSeconds: 10,
+        source: "project",
+      }),
+    ]);
+  });
+
   it("drops spec-only visuals that have no component and no explicit staged media", () => {
     const specDir = path.join(tmpDir, "specs", "animation_section");
     fs.mkdirSync(specDir, { recursive: true });
@@ -1098,6 +1192,76 @@ describe("lib/composition-timing", () => {
     );
 
     expect(visualIds).toContain("02_broll");
+  });
+
+  it("excludes companion veo specs referenced by panels.left.clips arrays", () => {
+    const specDir = path.join(tmpDir, "specs", "cold_open");
+    fs.mkdirSync(specDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(specDir, "01_split_screen_darning.md"),
+      [
+        "[split:]",
+        "**Timestamp:** 0:00 - 0:09",
+        "",
+        "## Data Points JSON",
+        "```json",
+        "{",
+        '  "type": "split_screen",',
+        '  "panels": {',
+        '    "left": { "clips": ["developer_cursor_edit", "developer_codebase_zoomout"] },',
+        '    "right": { "clips": ["grandmother_darning", "grandmother_drawer_zoomout"] }',
+        "  }",
+        "}",
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "02_developer_cursor_edit.md"),
+      "[veo:]\n**Timestamp:** 0:00 - 0:05\n\n# Developer Cursor Edit"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "03_grandmother_darning.md"),
+      "[veo:]\n**Timestamp:** 0:00 - 0:05\n\n# Grandmother Darning"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "04_developer_codebase_zoomout.md"),
+      "[veo:]\n**Timestamp:** 0:05 - 0:09\n\n# Developer Codebase Zoomout"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "05_grandmother_drawer_zoomout.md"),
+      "[veo:]\n**Timestamp:** 0:05 - 0:09\n\n# Grandmother Drawer Zoomout"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "06_sock_toss.md"),
+      "[veo:]\n**Timestamp:** 0:09 - 0:12\n\n# Sock Toss"
+    );
+
+    const remotionVeoDir = path.join(tmpDir, "remotion", "public", "veo");
+    fs.mkdirSync(remotionVeoDir, { recursive: true });
+    fs.writeFileSync(path.join(remotionVeoDir, "developer_cursor_edit.mp4"), "stub");
+    fs.writeFileSync(path.join(remotionVeoDir, "grandmother_darning.mp4"), "stub");
+    fs.writeFileSync(path.join(remotionVeoDir, "developer_codebase_zoomout.mp4"), "stub");
+    fs.writeFileSync(path.join(remotionVeoDir, "grandmother_drawer_zoomout.mp4"), "stub");
+    fs.writeFileSync(path.join(remotionVeoDir, "06_sock_toss.mp4"), "stub");
+
+    const visualIds = listSectionVisualIds(
+      tmpDir,
+      {
+        id: "cold_open",
+        specDir: "cold_open",
+        durationSeconds: 12,
+        compositionId: "ColdOpenSection",
+      },
+      ["cold_open_01_split_screen_darning"]
+    );
+
+    expect(visualIds).toContain("cold_open_01_split_screen_darning");
+    expect(visualIds).toContain("06_sock_toss");
+    expect(visualIds).not.toContain("02_developer_cursor_edit");
+    expect(visualIds).not.toContain("03_grandmother_darning");
+    expect(visualIds).not.toContain("04_developer_codebase_zoomout");
+    expect(visualIds).not.toContain("05_grandmother_drawer_zoomout");
   });
 
   // -----------------------------------------------------------------------

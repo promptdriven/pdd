@@ -1,80 +1,91 @@
-// ColdOpen09TitleCardPdd – constants
-
-export const CANVAS_WIDTH = 1920;
-export const CANVAS_HEIGHT = 1080;
-export const FPS = 30;
-export const DURATION_FRAMES = 60;
-
-// Colors
+// === Colors ===
 export const BG_COLOR = "#1E1E2E";
 export const TITLE_COLOR = "#CDD6F4";
 export const RULE_COLOR = "#6C7086";
 export const ACCENT_COLOR = "#89B4FA";
 
-// Opacities
-export const CODE_BG_OPACITY = 0.15;
-export const OVERLAY_TARGET_OPACITY = 0.7;
-export const RULE_OPACITY = 0.5;
-export const ACCENT_GLOW_OPACITY = 0.2;
+// === Layout (1920x1080) ===
+export const CANVAS_WIDTH = 1920;
+export const CANVAS_HEIGHT = 1080;
 
-// Title positioning
+// Title positions
+export const TITLE_Y_TOP = 470;
+export const TITLE_Y_BOTTOM = 545;
+export const TITLE_BOTTOM_OFFSET_X = 10; // offset-right for "DEVELOPMENT"
 export const TITLE_FONT_SIZE = 64;
 export const TITLE_FONT_WEIGHT = 700;
 export const TITLE_FONT_FAMILY = "Inter, sans-serif";
-export const TITLE_LINE1_Y = 470;
-export const TITLE_LINE2_Y = 545;
-export const TITLE_LINE2_OFFSET_X = 10;
 
-// Rule dimensions
+// Horizontal rule
 export const RULE_Y = 510;
 export const RULE_WIDTH = 300;
 export const RULE_HEIGHT = 2;
+export const RULE_OPACITY = 0.7;
 
-// Accent glow
+// Accent glow line
 export const ACCENT_GLOW_WIDTH = 200;
+export const ACCENT_GLOW_HEIGHT = 1;
 export const ACCENT_GLOW_Y = 512;
+export const ACCENT_GLOW_OPACITY = 0.2;
 
-// Animation frame markers
-export const OVERLAY_START = 0;
-export const OVERLAY_END = 10;
-export const LINE1_START = 10;
-export const LINE1_END = 25;
+// Overlay
+export const OVERLAY_OPACITY = 0.7;
+export const CODE_BG_OPACITY = 0.15;
+
+// === Animation Frames ===
+export const OVERLAY_FADE_START = 0;
+export const OVERLAY_FADE_END = 10;
+
+export const TITLE_TOP_START = 10;
+export const TITLE_TOP_END = 25;
+
 export const RULE_DRAW_START = 25;
 export const RULE_DRAW_END = 30;
-export const LINE2_START = 30;
-export const LINE2_END = 45;
+
+export const TITLE_BOTTOM_START = 30;
+export const TITLE_BOTTOM_END = 45;
+
 export const ACCENT_PULSE_START = 45;
 export const ACCENT_PULSE_END = 48;
 
-// Slide distance for title text animation
+export const TOTAL_FRAMES = 60;
+
+// Slide distance in px
 export const SLIDE_DISTANCE = 5;
 
-// Background code sample (representative regenerated code)
-export const CLEAN_FUNCTION_CODE = `def process_data(records: list[dict]) -> dict:
-    """Process and aggregate records."""
-    totals: dict[str, float] = {}
-    for record in records:
-        key = record["category"]
-        value = record["amount"]
-        totals[key] = totals.get(key, 0.0) + value
-    return {
-        "categories": len(totals),
-        "totals": totals,
-        "grand_total": sum(totals.values()),
-    }
+// === Background code snippet (regenerated clean function from prior shot) ===
+export const CLEAN_FUNCTION_CODE = `def calculate_shipping_cost(order: Order) -> Decimal:
+    """Calculate shipping cost based on order weight and destination."""
+    base_rate = get_base_rate(order.destination.zone)
+    weight_charge = order.total_weight * RATE_PER_KG
 
-def validate_input(data: dict) -> bool:
-    """Validate incoming data structure."""
-    required = {"category", "amount"}
-    return all(
-        required.issubset(r.keys())
-        for r in data.get("records", [])
-    )
+    if order.is_expedited:
+        surcharge = base_rate * Decimal("0.35")
+    else:
+        surcharge = Decimal("0")
 
-def format_report(results: dict) -> str:
-    """Format aggregated results as report."""
-    lines = [f"Categories: {results['categories']}"]
-    for cat, total in results["totals"].items():
-        lines.append(f"  {cat}: \${total:,.2f}")
-    lines.append(f"Grand Total: \${results['grand_total']:,.2f}")
-    return "\\n".join(lines)`;
+    subtotal = base_rate + weight_charge + surcharge
+
+    if order.total_weight > FREE_SHIPPING_THRESHOLD:
+        discount = subtotal * Decimal("0.10")
+    else:
+        discount = Decimal("0")
+
+    return max(subtotal - discount, MIN_SHIPPING_COST)`;
+
+// Code display styling
+export const CODE_FONT_SIZE = 14;
+export const CODE_LINE_HEIGHT = 1.6;
+export const CODE_FONT_FAMILY = "'Fira Code', 'Cascadia Code', 'JetBrains Mono', monospace";
+export const CODE_PADDING_TOP = 200;
+export const CODE_PADDING_LEFT = 520;
+
+// Syntax highlight colors (Catppuccin Mocha-inspired)
+export const SYN_KEYWORD = "#CBA6F7";  // purple - def, if, else, return
+export const SYN_STRING = "#A6E3A1";   // green - strings
+export const SYN_FUNCTION = "#89B4FA"; // blue - function names
+export const SYN_TYPE = "#F9E2AF";     // yellow - type hints
+export const SYN_COMMENT = "#6C7086";  // gray - comments
+export const SYN_NUMBER = "#FAB387";   // peach - numbers
+export const SYN_OPERATOR = "#89DCEB"; // teal - operators
+export const SYN_DEFAULT = "#CDD6F4";  // text - default

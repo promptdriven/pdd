@@ -3,6 +3,10 @@ import path from "path";
 import { resolveSectionVisualContract } from "@/app/api/pipeline/_lib/visual-contract-manifest";
 import { resolveSectionNarrativeTiming } from "./section-timing";
 import { resolveSectionTimelineEntries } from "./section-timeline";
+import {
+  extractSplitChildClipIds,
+  isEmbeddedCompanionSpecBase,
+} from "./split-spec-children";
 
 import {
   normalizeSpecTimestampRangeToSection,
@@ -81,6 +85,21 @@ type TimingCandidate = {
   desc: string;
   specPath?: string;
 };
+
+function mapTimelineEntrySourceToTimingSource(
+  source: string
+): TimingSource {
+  if (source === "segment-anchor" || source === "absolute") {
+    return "project";
+  }
+  if (source === "timestamp-fallback") {
+    return "spec";
+  }
+  if (source === "audio-sync") {
+    return "audio-sync";
+  }
+  return "fallback";
+}
 
 function stripSpecsPrefix(specDir: string): string {
   return specDir.replace(/^specs[\\/]/, "").replace(/^[\\/]+/, "");
@@ -614,8 +633,6 @@ function resolveSpecMediaInfo(
   };
 }
 
-const SPLIT_MARKER_RE = /^\s*\[split:[^\]]*\]/i;
-
 function collectEmbeddedCompanionIds(
   projectDir: string,
   section: Pick<SectionTimingTarget, "id" | "specDir">
@@ -638,56 +655,12 @@ function collectEmbeddedCompanionIds(
       continue;
     }
 
-    if (!SPLIT_MARKER_RE.test(content)) continue;
-
-    const dataPoints = extractDataPointsJson(content);
-    if (!dataPoints) {
-      continue;
+    for (const clipId of extractSplitChildClipIds(content)) {
+      companionIds.add(clipId);
     }
-
-    const collect = (value: unknown): void => {
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-          const normalized = key.replace(/[_-]/g, "").toLowerCase();
-          if (
-            (normalized === "leftclipid" || normalized === "rightclipid" ||
-             normalized === "clipid" || normalized === "content") &&
-            typeof nested === "string" && nested.trim()
-          ) {
-            companionIds.add(nested.trim());
-          } else if (typeof nested === "object" && nested !== null) {
-            collect(nested);
-          }
-        }
-      }
-    };
-
-    collect(dataPoints);
   }
 
   return companionIds;
-}
-
-function isEmbeddedCompanion(specBaseName: string, companionIds: Set<string>): boolean {
-  if (companionIds.size === 0) return false;
-
-  const stripped = specBaseName.replace(/^\d+_/, "");
-  const normalizedBase = specBaseName.replace(/[_-]/g, "").toLowerCase();
-  const normalizedStripped = stripped.replace(/[_-]/g, "").toLowerCase();
-
-  for (const id of companionIds) {
-    const normalizedId = id.replace(/[_-]/g, "").toLowerCase();
-    if (
-      normalizedBase === normalizedId ||
-      normalizedStripped === normalizedId ||
-      normalizedBase.includes(normalizedId) ||
-      normalizedStripped.includes(normalizedId)
-    ) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 export function resolveSectionVisuals(
@@ -762,7 +735,7 @@ export function resolveSectionVisuals(
 
     // Skip companion veo specs embedded in a parent [split:] — the parent
     // component already renders them; they shouldn't occupy timeline slots.
-    if (isEmbeddedCompanion(specBaseName, companionIds)) {
+    if (isEmbeddedCompanionSpecBase(specBaseName, companionIds)) {
       continue;
     }
 
@@ -1314,6 +1287,27 @@ export function resolveSectionVisualTimings(
   componentIds: string[]
 ): ResolvedVisualTiming[] {
   const visualIds = listSectionVisualIds(projectDir, section, componentIds);
+  const timelineEntries = resolveSectionTimelineEntries(section.id, projectDir);
+  if (timelineEntries.length > 0) {
+    const timelineById = new Map(
+      timelineEntries.map((entry) => [
+        entry.id,
+        {
+          id: entry.id,
+          startSeconds: entry.resolvedStartSeconds ?? entry.startSeconds,
+          endSeconds: entry.resolvedEndSeconds ?? entry.endSeconds,
+          source: mapTimelineEntrySourceToTimingSource(entry.source),
+          desc: entry.desc,
+        } satisfies ResolvedVisualTiming,
+      ])
+    );
+    const timelineTimings = visualIds
+      .map((visualId) => timelineById.get(visualId))
+      .filter((timing): timing is ResolvedVisualTiming => Boolean(timing));
+    if (timelineTimings.length === visualIds.length) {
+      return timelineTimings;
+    }
+  }
   const sectionNarrativeTiming = resolveSectionNarrativeTiming(projectDir, section);
   const candidates = scaleSpecCandidatesToSectionDuration(
     buildTimingCandidates(projectDir, section, visualIds, sectionNarrativeTiming),
@@ -1350,7 +1344,7 @@ export function buildSectionConstantsSource(
       id: entry.id,
       startSeconds: entry.resolvedStartSeconds ?? entry.startSeconds,
       endSeconds: entry.resolvedEndSeconds ?? entry.endSeconds,
-      source: (entry.source === "segment-anchor" ? "project" : entry.source === "timestamp-fallback" ? "spec" : "fallback") as TimingSource,
+      source: mapTimelineEntrySourceToTimingSource(entry.source),
       desc: entry.desc,
       lane: entry.lane,
     }));

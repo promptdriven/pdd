@@ -1,4 +1,4 @@
 ## Verdict
-warn
+fail
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (nozzle, deposits, material, point, coordinate), so the frame does not support a hard missing-text failure.
+The split-screen composition and core metaphor (3D printer vs injection mold) are visually present and recognizable, but several material deviations from the spec exist. (1) Panel headers show long descriptive captions at bottom ('Nozzle deposits material point-by-point on coordinate grid' / 'Liquid flows freely until walls constrain it into shape') instead of the specified short labels ('3D Printer' / 'Injection Mold') positioned at top-center. (2) At 93.7% progress (frame 449/480, well into the hold phase 420-480), the left panel's coordinate grid should be fully filled with deposited dots, but appears only partially filled — roughly half the grid has dots, which corresponds more to the phase 2-3 animation state. (3) The nozzle appears blue-tinted rather than white (#E2E8F0). (4) Both panels have visible rounded border outlines not called for in the spec. The right panel's mold cavity, wall glow, and liquid flow are closer to spec intent, though the liquid reads as a single blob rather than animated particles.

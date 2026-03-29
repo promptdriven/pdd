@@ -407,6 +407,12 @@ Instructions:
   files for EACH embedded clip. The Veo generation pipeline only discovers standalone [veo:] specs —
   clips referenced inside [split:] or [Remotion] specs will NOT be generated unless they have their
   own dedicated [veo:] spec file. Name companions like {NN}_{clip_id}.md with a [veo:] marker.
+- IMPORTANT: Companion [veo:] specs embedded inside a [split:] or other container MUST declare the
+  parent/container link in ## Data Points JSON. Use:
+  - "usedIn": "{parent_spec_base} (left panel)" or "usedIn": "{parent_spec_base} (right panel)" when the panel is known
+  - otherwise "embeddedIn": "{parent_spec_base}"
+  This linkage is required so downstream composition/timeline stages treat the companion clip as
+  subordinate to the parent container instead of rendering it as a standalone top-level visual.
 - For EVERY [veo:] spec, use this exact canonical structure:
   - first line must be exactly: [veo:]
   - include a dedicated heading: ### Veo Prompt

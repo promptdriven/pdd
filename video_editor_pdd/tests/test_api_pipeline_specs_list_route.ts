@@ -142,6 +142,62 @@ describe("GET /api/pipeline/specs/list — parent-child relationships", () => {
     expect(code.parentSpec).toBe("01_sock_callback_split.md");
   });
 
+  it("matches children by panels.left.clips and panels.right.clips arrays", async () => {
+    mockLoadProject.mockReturnValue(
+      mockProjectConfig([{ id: "cold_open", label: "Cold Open", specDir: "cold_open" }])
+    );
+
+    const specsDir = path.join(projectDir, "specs", "cold_open");
+    fs.mkdirSync(specsDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(specsDir, "01_split_screen_darning.md"),
+      [
+        "[split:]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        "{",
+        '  "type": "split_screen",',
+        '  "panels": {',
+        '    "left": { "clips": ["developer_cursor_edit", "developer_codebase_zoomout"] },',
+        '    "right": { "clips": ["grandmother_darning", "grandmother_drawer_zoomout"] }',
+        "  }",
+        "}",
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specsDir, "02_developer_cursor_edit.md"),
+      "[veo:]\n\n# Developer Cursor Edit"
+    );
+    fs.writeFileSync(
+      path.join(specsDir, "03_grandmother_darning.md"),
+      "[veo:]\n\n# Grandmother Darning"
+    );
+    fs.writeFileSync(
+      path.join(specsDir, "04_developer_codebase_zoomout.md"),
+      "[veo:]\n\n# Developer Codebase Zoomout"
+    );
+    fs.writeFileSync(
+      path.join(specsDir, "05_grandmother_drawer_zoomout.md"),
+      "[veo:]\n\n# Grandmother Drawer Zoomout"
+    );
+
+    const response = await GET();
+    const data = await response.json();
+    const files = data.sections[0].files;
+
+    expect(files.find((f: any) => f.path.includes("02_developer_cursor_edit"))?.parentSpec)
+      .toBe("01_split_screen_darning.md");
+    expect(files.find((f: any) => f.path.includes("03_grandmother_darning"))?.parentSpec)
+      .toBe("01_split_screen_darning.md");
+    expect(files.find((f: any) => f.path.includes("04_developer_codebase_zoomout"))?.parentSpec)
+      .toBe("01_split_screen_darning.md");
+    expect(files.find((f: any) => f.path.includes("05_grandmother_drawer_zoomout"))?.parentSpec)
+      .toBe("01_split_screen_darning.md");
+  });
+
   it("does not assign parentSpec when no split container exists", async () => {
     mockLoadProject.mockReturnValue(
       mockProjectConfig([{ id: "simple", label: "Simple", specDir: "simple" }])

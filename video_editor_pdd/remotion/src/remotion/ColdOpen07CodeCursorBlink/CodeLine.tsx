@@ -1,121 +1,106 @@
 import React from "react";
 import {
-  LINE_HEIGHT,
-  FONT_SIZE,
-  LINE_NUMBER_FONT_SIZE,
-  LINE_NUMBER_COLOR,
-  GUTTER_WIDTH,
+  CODE_FONT,
+  CODE_FONT_SIZE,
   CODE_LEFT_PADDING,
-  PATCH_BORDER_WIDTH,
-  COMMENT_COLOR,
-  TODO_COMMENT_COLOR,
-  HOTFIX_COMMENT_COLOR,
-  KEYWORD_COLOR,
-  FUNCTION_COLOR,
-  STRING_COLOR,
-  TYPE_COLOR,
-  OPERATOR_COLOR,
-  NUMBER_COLOR,
-  PARAM_COLOR,
-  VARIABLE_COLOR,
-  RECENT_PATCH_COLOR,
-  RECENT_PATCH_OPACITY,
-  MEDIUM_PATCH_COLOR,
-  MEDIUM_PATCH_OPACITY,
-  OLD_PATCH_COLOR,
-  OLD_PATCH_OPACITY,
+  GUTTER_WIDTH,
+  LINE_HEIGHT,
+  LINE_NUMBER_COLOR,
+  LINE_NUMBER_FONT_SIZE,
+  TOP_PADDING,
+  LINE_HIGHLIGHTS,
+  PATCH_COMMENTS,
+  getTokenColor,
+  type CodeToken,
+  type PatchAge,
 } from "./constants";
 
-// ─── Token types for syntax highlighting ───
-type TokenType =
-  | "keyword"
-  | "function"
-  | "string"
-  | "type"
-  | "operator"
-  | "number"
-  | "comment"
-  | "todo"
-  | "hotfix"
-  | "param"
-  | "variable"
-  | "plain";
-
-interface Token {
-  text: string;
-  type: TokenType;
-}
-
-export type PatchAge = "recent" | "medium" | "old" | null;
-
 interface CodeLineProps {
-  lineNumber: number;
-  tokens: Token[];
-  patchAge: PatchAge;
-  yOffset: number;
+  lineNumber: number; // 1-based
+  tokens: CodeToken[];
 }
 
-const TOKEN_COLORS: Record<TokenType, string> = {
-  keyword: KEYWORD_COLOR,
-  function: FUNCTION_COLOR,
-  string: STRING_COLOR,
-  type: TYPE_COLOR,
-  operator: OPERATOR_COLOR,
-  number: NUMBER_COLOR,
-  comment: COMMENT_COLOR,
-  todo: TODO_COMMENT_COLOR,
-  hotfix: HOTFIX_COMMENT_COLOR,
-  param: PARAM_COLOR,
-  variable: VARIABLE_COLOR,
-  plain: VARIABLE_COLOR,
-};
-
-function getPatchBorderStyle(age: PatchAge): React.CSSProperties {
-  if (!age) return {};
-  const map: Record<string, { color: string; opacity: number }> = {
-    recent: { color: RECENT_PATCH_COLOR, opacity: RECENT_PATCH_OPACITY },
-    medium: { color: MEDIUM_PATCH_COLOR, opacity: MEDIUM_PATCH_OPACITY },
-    old: { color: OLD_PATCH_COLOR, opacity: OLD_PATCH_OPACITY },
-  };
-  const { color, opacity } = map[age];
+function getPatchLeftBorderStyle(lineNumber: number): React.CSSProperties | null {
+  const highlight = LINE_HIGHLIGHTS.find((h) => h.line === lineNumber);
+  if (!highlight) return null;
   return {
-    borderLeft: `${PATCH_BORDER_WIDTH}px solid ${color}`,
-    backgroundColor: `${color}${Math.round(opacity * 255)
-      .toString(16)
-      .padStart(2, "0")}`,
+    borderLeft: `3px solid ${highlight.color}`,
+    borderLeftColor: highlight.color,
+    opacity: 1,
   };
 }
 
-export const CodeLine: React.FC<CodeLineProps> = ({
-  lineNumber,
-  tokens,
-  patchAge,
-  yOffset,
-}) => {
-  const isComment = tokens.some(
-    (t) => t.type === "comment" || t.type === "todo" || t.type === "hotfix"
-  );
+function getPatchBorderOpacity(lineNumber: number): number {
+  const patchComment = PATCH_COMMENTS.find((p) => p.line === lineNumber);
+  if (!patchComment) return 0;
+  const ageOpacity: Record<PatchAge, number> = {
+    recent: 0.6,
+    medium: 0.3,
+    old: 0.15,
+  };
+  return ageOpacity[patchComment.age];
+}
+
+function getLineBgHighlight(lineNumber: number): string | null {
+  const highlight = LINE_HIGHLIGHTS.find((h) => h.line === lineNumber);
+  if (!highlight) return null;
+  // Convert hex color to rgba with specified opacity
+  const hex = highlight.color.replace("#", "");
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${highlight.opacity})`;
+}
+
+export const CodeLine: React.FC<CodeLineProps> = ({ lineNumber, tokens }) => {
+  const y = TOP_PADDING + (lineNumber - 1) * LINE_HEIGHT;
+  const bgColor = getLineBgHighlight(lineNumber);
+  const borderOpacity = getPatchBorderOpacity(lineNumber);
+  const hasPatchBorder = borderOpacity > 0;
+  const highlight = LINE_HIGHLIGHTS.find((h) => h.line === lineNumber);
 
   return (
     <div
       style={{
         position: "absolute",
-        top: yOffset,
+        top: y,
         left: 0,
-        right: 0,
+        width: "100%",
         height: LINE_HEIGHT,
         display: "flex",
         alignItems: "center",
-        ...getPatchBorderStyle(patchAge),
+        backgroundColor: bgColor || "transparent",
+        borderLeft: hasPatchBorder
+          ? `3px solid ${highlight?.color || "transparent"}`
+          : "3px solid transparent",
+        borderLeftColor: hasPatchBorder
+          ? highlight?.color || "transparent"
+          : "transparent",
+        opacity: 1,
       }}
     >
+      {/* Left border opacity overlay — applied separately for subtle effect */}
+      {hasPatchBorder && (
+        <div
+          style={{
+            position: "absolute",
+            left: -3,
+            top: 0,
+            width: 3,
+            height: LINE_HEIGHT,
+            backgroundColor: highlight?.color || "transparent",
+            opacity: borderOpacity,
+          }}
+        />
+      )}
+
       {/* Line number */}
-      <span
+      <div
         style={{
           width: GUTTER_WIDTH,
           textAlign: "right",
           paddingRight: 12,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
+          fontFamily: CODE_FONT,
           fontSize: LINE_NUMBER_FONT_SIZE,
           color: LINE_NUMBER_COLOR,
           opacity: 0.5,
@@ -124,52 +109,39 @@ export const CodeLine: React.FC<CodeLineProps> = ({
         }}
       >
         {lineNumber}
-      </span>
+      </div>
 
       {/* Code tokens */}
-      <span
+      <div
         style={{
           paddingLeft: CODE_LEFT_PADDING,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace",
-          fontSize: FONT_SIZE,
-          fontStyle: isComment ? "italic" : "normal",
+          fontFamily: CODE_FONT,
+          fontSize: CODE_FONT_SIZE,
           whiteSpace: "pre",
           lineHeight: `${LINE_HEIGHT}px`,
         }}
       >
-        {tokens.map((token, i) => (
-          <span
-            key={i}
-            style={{
-              color: TOKEN_COLORS[token.type],
-              fontStyle:
-                token.type === "comment" ||
-                token.type === "todo" ||
-                token.type === "hotfix"
-                  ? "italic"
-                  : "inherit",
-            }}
-          >
-            {token.text}
-          </span>
-        ))}
-      </span>
+        {tokens.map((token, i) => {
+          const isComment =
+            token.type === "patch_comment" ||
+            token.type === "todo_comment" ||
+            token.type === "hotfix_comment" ||
+            token.type === "comment";
+          return (
+            <span
+              key={i}
+              style={{
+                color: getTokenColor(token.type),
+                fontStyle: isComment ? "italic" : "normal",
+              }}
+            >
+              {token.text}
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 };
 
 export default CodeLine;
-
-// ─── Helper to build token arrays quickly ───
-export function kw(text: string): Token { return { text, type: "keyword" }; }
-export function fn(text: string): Token { return { text, type: "function" }; }
-export function str(text: string): Token { return { text, type: "string" }; }
-export function typ(text: string): Token { return { text, type: "type" }; }
-export function op(text: string): Token { return { text, type: "operator" }; }
-export function num(text: string): Token { return { text, type: "number" }; }
-export function cmt(text: string): Token { return { text, type: "comment" }; }
-export function todo(text: string): Token { return { text, type: "todo" }; }
-export function hotfix(text: string): Token { return { text, type: "hotfix" }; }
-export function param(text: string): Token { return { text, type: "param" }; }
-export function v(text: string): Token { return { text, type: "variable" }; }
-export function plain(text: string): Token { return { text, type: "plain" }; }

@@ -3651,7 +3651,7 @@ class TestDigitPrefixedIdentifiers:
         assert "Part1Economics07StatCalloutGitclear" in root
         assert "Part1Economics09ContextDegradationChart" in root
 
-    def test_generate_section_component_imports_manifest_backed_component_visuals(self, tmp_path):
+    def test_generate_section_component_prefers_generated_contract_for_structured_title_cards_even_when_exact_component_exists(self, tmp_path):
         project_dir = tmp_path
         remotion_dir = tmp_path / "remotion"
         remotion_src = remotion_dir / "src" / "remotion"
@@ -3704,11 +3704,12 @@ class TestDigitPrefixedIdentifiers:
             project_dir=str(project_dir),
         )
 
-        assert 'import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";' in tsx
+        assert 'import { Closing09FinalTitleCard } from "../Closing09FinalTitleCard";' not in tsx
         assert '"08_final_title_card": {"specBaseName": "08_final_title_card"' in tsx
-        assert '"08_final_title_card": Closing09FinalTitleCard' in tsx
+        assert '"08_final_title_card": Closing09FinalTitleCard' not in tsx
+        assert "<GeneratedContractVisual />" in tsx
 
-    def test_generate_root_tsx_uses_exact_component_preview_for_structured_title_cards_when_available(self, tmp_path):
+    def test_generate_root_tsx_uses_generated_contract_preview_for_structured_title_cards_even_when_exact_component_exists(self, tmp_path):
         project_dir = tmp_path
         remotion_dir = tmp_path / "remotion"
         remotion_src = remotion_dir / "src" / "remotion"
@@ -3752,9 +3753,9 @@ class TestDigitPrefixedIdentifiers:
             project_dir=str(project_dir),
         )
 
-        assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' in root
+        assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' not in root
         assert 'id="closing08-final-title-card"' in root
-        assert 'component={Closing09FinalTitleCardPreview}' in root
+        assert 'GeneratedContractVisual' in root
 
     def test_generate_root_tsx_includes_preview_media_and_contract_aliases_from_visual_contract_manifest(self, tmp_path):
         project_dir = tmp_path
@@ -4141,7 +4142,16 @@ class TestDigitPrefixedIdentifiers:
 
         assert 'import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";' in tsx
         assert 'visualContract?.renderMode === "component" ? (' in tsx
-        assert '<GeneratedContractVisual />' in tsx
+        assert (
+            '            ) : visualContract?.renderMode === "component" ? (\n'
+            '              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>\n'
+            '                <VisualContractProvider contract={visualContract}>\n'
+            '                  <VisualMediaProvider media={visualMedia}>\n'
+            '                    <GeneratedContractVisual />\n'
+            '                  </VisualMediaProvider>\n'
+            '                </VisualContractProvider>\n'
+            '              </SlotScaledSequence>\n'
+        ) in tsx
 
     def test_generate_section_component_prefers_generated_contract_when_name_drift_is_semantic_not_exact(self, tmp_path):
         project_dir = tmp_path
@@ -5308,6 +5318,122 @@ class TestVisualContractManifestNewFields:
         assert "children" in parent
         assert "02_veo_left" in parent["children"]
 
+    def test_build_visual_contract_manifest_infers_parent_child_from_split_panel_clips(
+        self, tmp_path
+    ):
+        project_dir = tmp_path
+        remotion_public = tmp_path / "remotion" / "public"
+        specs_dir = project_dir / "specs" / "cold_open"
+        specs_dir.mkdir(parents=True)
+        remotion_public.mkdir(parents=True, exist_ok=True)
+
+        (specs_dir / "01_split_screen_darning.md").write_text(
+            "\n".join([
+                "[split:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "split_screen",
+                        "panels": {
+                            "left": {
+                                "clips": [
+                                    "developer_cursor_edit",
+                                    "developer_codebase_zoomout",
+                                ]
+                            },
+                            "right": {
+                                "clips": [
+                                    "grandmother_darning",
+                                    "grandmother_drawer_zoomout",
+                                ]
+                            },
+                        },
+                    }
+                ),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "02_developer_cursor_edit.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps({"type": "veo_clip", "clipId": "developer_cursor_edit"}),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "03_grandmother_darning.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps({"type": "veo_clip", "clipId": "grandmother_darning"}),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "04_developer_codebase_zoomout.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps({"type": "veo_clip", "clipId": "developer_codebase_zoomout"}),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+        (specs_dir / "05_grandmother_drawer_zoomout.md").write_text(
+            "\n".join([
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps({"type": "veo_clip", "clipId": "grandmother_drawer_zoomout"}),
+                "```",
+            ]),
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": [
+                "01_split_screen_darning",
+                "02_developer_cursor_edit",
+                "03_grandmother_darning",
+                "04_developer_codebase_zoomout",
+                "05_grandmother_drawer_zoomout",
+            ],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section], str(project_dir), str(remotion_public)
+        )
+        visuals_by_id = {v["id"]: v for v in manifest["sections"][0]["visuals"]}
+
+        parent = visuals_by_id["01_split_screen_darning"]
+        assert visuals_by_id["02_developer_cursor_edit"]["parentId"] == "01_split_screen_darning"
+        assert visuals_by_id["03_grandmother_darning"]["parentId"] == "01_split_screen_darning"
+        assert visuals_by_id["04_developer_codebase_zoomout"]["parentId"] == "01_split_screen_darning"
+        assert visuals_by_id["05_grandmother_drawer_zoomout"]["parentId"] == "01_split_screen_darning"
+        assert set(parent["children"]) == {
+            "02_developer_cursor_edit",
+            "03_grandmother_darning",
+            "04_developer_codebase_zoomout",
+            "05_grandmother_drawer_zoomout",
+        }
+
     def test_build_visual_contract_manifest_laneHint_defaults_to_main(self, tmp_path):
         """Visuals without overlay or explicit laneHint have no laneHint field (implicitly main)."""
         spec_content = "\n".join([
@@ -5745,8 +5871,8 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
-    def test_keeps_exact_component_for_command_driven_title_cards_when_available(self):
-        assert not _should_prefer_generated_contract_renderer(
+    def test_prefers_generated_contract_for_command_driven_title_cards_when_available(self):
+        assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "title_card",
@@ -5793,6 +5919,19 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_keeps_exact_component_for_quote_cards_with_accent_word_and_single_quote(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "quote_card",
+                    "quote": "This is either the way of the future or it's going to crash and burn spectacularly.",
+                    "attribution": "Research engineer, after seeing PDD for the first time.",
+                    "accentWord": "spectacularly",
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_prefers_generated_contract_for_chart_events_even_with_exact_component(self):
         assert _should_prefer_generated_contract_renderer(
             {
@@ -5812,6 +5951,19 @@ class TestContractFirstVisualResolution:
                     "type": "chart_callback",
                     "chartId": "code_cost_triple_line",
                     "event": "crossing_reprise",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_chart_callbacks_with_source_spec_and_reframe_only(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "chart_callback",
+                    "chartRef": "code_cost_generate_vs_patch",
+                    "sourceSpec": "part1_economics/13_crossing_lines_moment",
+                    "reframeText": "The economics changed.",
                 }
             },
             has_exact_component=True,
@@ -5863,12 +6015,42 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_keeps_exact_component_for_counter_animation_with_mold_cycle_profile(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "counter_animation",
+                    "chartId": "mold_production_counter",
+                    "moldCycle": {
+                        "startFramesPerCycle": 60,
+                        "endFramesPerCycle": 6,
+                    },
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_prefers_generated_contract_for_schematic_zoom_even_with_exact_component(self):
         assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "schematic_zoom",
                     "chartId": "schematic_density_zoom",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_schematic_zoom_with_explicit_zoom_profile(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "schematic_zoom",
+                    "chartId": "schematic_density_zoom",
+                    "zoom": {
+                        "startScale": 8,
+                        "endScale": 0.1,
+                    },
                 }
             },
             has_exact_component=True,
@@ -6011,6 +6193,26 @@ class TestExtractVisualOverlayConfig:
                 "dataPoints": {
                     "type": "split_screen",
                     "layout": "vertical_split",
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_split_with_aura_and_part_dissolve(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "split_screen",
+                    "layout": "vertical_50_50",
+                    "panels": {
+                        "left": {
+                            "aura": {"color": "#D9944A", "target": "object"},
+                        },
+                        "right": {
+                            "aura": {"color": "#4A90D9", "target": "mold"},
+                            "partDissolve": True,
+                        },
+                    },
                 }
             },
             has_exact_component=True,

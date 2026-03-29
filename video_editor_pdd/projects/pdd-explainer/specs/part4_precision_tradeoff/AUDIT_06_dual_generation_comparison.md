@@ -1,4 +1,4 @@
 ## Verdict
-warn
+pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (high, prompt, effort, tests, same), so the frame does not support a hard missing-text failure.
+The frame at 93.7% progress correctly shows the hold/fade-out phase (frames 210-240) with all required elements visible. Both columns are present with correct styling: left column has amber-bordered 50-line prompt with '50 lines' badge, downward arrow, green-glowing code block, and amber label; right column has blue-bordered 10-line prompt with '10 lines' badge, blue test indicator squares arranged around it, downward arrow, identical green-glowing code block, and blue label. Both code blocks display the same generateWidget function, reinforcing the 'same output' message. The comparison bar at the bottom shows the 5:1 ratio with amber/blue segments and '5× less' callout. Column headers 'HIGH PROMPT EFFORT' and 'LOW PROMPT + TESTS' are clearly visible. The columns are slightly wider-spaced than the spec's 40px center gap, but the overall composition and visual intent are fully preserved. Background is the correct deep navy-black.

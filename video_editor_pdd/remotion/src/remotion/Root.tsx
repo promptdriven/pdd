@@ -25,6 +25,9 @@ import { Part1Economics13CrossingLinesMoment } from "./Part1Economics13CrossingL
 import { Part1Economics18KeyInsightStillness } from "./Part1Economics18KeyInsightStillness";
 import { Part1Economics19DoubleMeterInsight } from "./Part1Economics19DoubleMeterInsight";
 import { Part1Economics20TryItYourself } from "./Part1Economics20TryItYourself";
+import { Part2ParadigmShift04MoldProductionCounter } from "./Part2ParadigmShift04MoldProductionCounter";
+import { Part2ParadigmShift07SplitCraftsmanVsMold } from "./Part2ParadigmShift07SplitCraftsmanVsMold";
+import { Part2ParadigmShift11SchematicDensityZoom } from "./Part2ParadigmShift11SchematicDensityZoom";
 import { Part2ParadigmShift14SynopsysPddEquivalence } from "./Part2ParadigmShift14SynopsysPddEquivalence";
 import { Part2ParadigmShift15AbstractionStaircase } from "./Part2ParadigmShift15AbstractionStaircase";
 import { Part2ParadigmShift16BillionGateUnreviewable } from "./Part2ParadigmShift16BillionGateUnreviewable";
@@ -37,7 +40,6 @@ import { Part3MoldParts05BugAddsWall } from "./Part3MoldParts05BugAddsWall";
 import { Part3MoldParts06RatchetTimelapse } from "./Part3MoldParts06RatchetTimelapse";
 import { Part3MoldParts08BugForkRoad } from "./Part3MoldParts08BugForkRoad";
 import { Part3MoldParts09FiveGenerations } from "./Part3MoldParts09FiveGenerations";
-import { Part3MoldParts11ModuleBoundary } from "./Part3MoldParts11ModuleBoundary";
 import { Part3MoldParts12PromptNozzle } from "./Part3MoldParts12PromptNozzle";
 import { Part3MoldParts15GroundingStyles } from "./Part3MoldParts15GroundingStyles";
 import { Part3MoldParts17ComponentTable } from "./Part3MoldParts17ComponentTable";
@@ -45,13 +47,13 @@ import { Part3MoldParts18CodeOutputFinale } from "./Part3MoldParts18CodeOutputFi
 import { Part4PrecisionTradeoff04DetailedPromptFile } from "./Part4PrecisionTradeoff04DetailedPromptFile";
 import { Part4PrecisionTradeoff05MinimalPromptWithTests } from "./Part4PrecisionTradeoff05MinimalPromptWithTests";
 import { Part4PrecisionTradeoff06DualGenerationComparison } from "./Part4PrecisionTradeoff06DualGenerationComparison";
-import { Part4PrecisionTradeoff07KeyInsightWalls } from "./Part4PrecisionTradeoff07KeyInsightWalls";
 import { Part4PrecisionTradeoff08EmbeddedCodeDocument } from "./Part4PrecisionTradeoff08EmbeddedCodeDocument";
 import { Part4PrecisionTradeoff09PromptCodeSpectrum } from "./Part4PrecisionTradeoff09PromptCodeSpectrum";
 import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturns04DivergingCostCurves";
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
+import { Part5CompoundReturns08EconomicsCrossingCallback } from "./Part5CompoundReturns08EconomicsCrossingCallback";
+import { Part5CompoundReturns09ContrarianQuoteCard } from "./Part5CompoundReturns09ContrarianQuoteCard";
 import { WhereToStart04SourceOfTruthLabel } from "./WhereToStart04SourceOfTruthLabel";
-import { Closing07FinalTitleCard } from "./Closing07FinalTitleCard";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "cold_open:01_split_screen_darning": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
@@ -604,7 +606,7 @@ const Part2ParadigmShift04MoldProductionCounterPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:04_mold_production_counter"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part2ParadigmShift04MoldProductionCounter />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -631,7 +633,7 @@ const Part2ParadigmShift07SplitCraftsmanVsMoldPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:07_split_craftsman_vs_mold"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:07_split_craftsman_vs_mold"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:07_split_craftsman_vs_mold"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part2ParadigmShift07SplitCraftsmanVsMold />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -667,7 +669,7 @@ const Part2ParadigmShift11SchematicDensityZoomPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:11_schematic_density_zoom"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:11_schematic_density_zoom"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:11_schematic_density_zoom"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part2ParadigmShift11SchematicDensityZoom />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -829,7 +831,7 @@ const Part3MoldParts11ModuleBoundaryPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:11_module_boundary"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:11_module_boundary"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:11_module_boundary"] ?? 150}>
-        <Part3MoldParts11ModuleBoundary />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -955,7 +957,7 @@ const Part4PrecisionTradeoff07KeyInsightWallsPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part4_precision_tradeoff:07_key_insight_walls"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part4_precision_tradeoff:07_key_insight_walls"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part4_precision_tradeoff:07_key_insight_walls"] ?? 150}>
-        <Part4PrecisionTradeoff07KeyInsightWalls />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1045,7 +1047,7 @@ const Part5CompoundReturns08EconomicsCrossingCallbackPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:08_economics_crossing_callback"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:08_economics_crossing_callback"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part5CompoundReturns08EconomicsCrossingCallback />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1054,7 +1056,7 @@ const Part5CompoundReturns09ContrarianQuoteCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part5_compound_returns:09_contrarian_quote_card"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part5_compound_returns:09_contrarian_quote_card"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part5CompoundReturns09ContrarianQuoteCard />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1180,7 +1182,7 @@ const Closing07FinalTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["closing:07_final_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["closing:07_final_title_card"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["closing:07_final_title_card"] ?? 150}>
-        <Closing07FinalTitleCard />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1264,7 +1266,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open02-developer-cursor-edit"
         component={ColdOpen02DeveloperCursorEditPreview}
-        durationInFrames={537}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1272,7 +1274,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open03-grandmother-darning"
         component={ColdOpen03GrandmotherDarningPreview}
-        durationInFrames={537}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1280,7 +1282,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open04-developer-codebase-zoomout"
         component={ColdOpen04DeveloperCodebaseZoomoutPreview}
-        durationInFrames={239}
+        durationInFrames={120}
         fps={30}
         width={1920}
         height={1080}
@@ -1288,7 +1290,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open05-grandmother-drawer-zoomout"
         component={ColdOpen05GrandmotherDrawerZoomoutPreview}
-        durationInFrames={239}
+        durationInFrames={120}
         fps={30}
         width={1920}
         height={1080}
@@ -1440,7 +1442,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics15-developer-cursor"
         component={Part1Economics15DeveloperCursorPreview}
-        durationInFrames={203}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1448,7 +1450,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics16-grandmother-darning"
         component={Part1Economics16GrandmotherDarningPreview}
-        durationInFrames={203}
+        durationInFrames={150}
         fps={30}
         width={1920}
         height={1080}
@@ -1544,7 +1546,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift08-veo-craftsman-carving"
         component={Part2ParadigmShift08VeoCraftsmanCarvingPreview}
-        durationInFrames={1190}
+        durationInFrames={600}
         fps={30}
         width={1920}
         height={1080}
@@ -1552,7 +1554,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift09-veo-mold-plastic-flow"
         component={Part2ParadigmShift09VeoMoldPlasticFlowPreview}
-        durationInFrames={1190}
+        durationInFrames={600}
         fps={30}
         width={1920}
         height={1080}

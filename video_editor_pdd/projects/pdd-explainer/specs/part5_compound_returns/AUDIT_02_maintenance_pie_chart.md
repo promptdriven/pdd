@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (maintenance, initial, development, stripe, trillion), so the frame does not support a hard missing-text failure.
+The pie chart renders correctly with proper segment colors (amber maintenance, blue development), proportions (80-90% vs 10-20%), and labels with connector lines. Three deviations noted: (1) Statistic callouts are placed to the right of the chart rather than below it as specified. (2) There is an extra third callout ('$1.52 trillion annually in US —CISQ') not present in the spec, which only lists McKinsey and Stripe callouts. (3) The 'Initial Development' label is positioned to the lower-left of the chart rather than to the right as specified. The callout text formatting differs slightly (attribution as subtitle rather than prefix) but content is equivalent. The chart is slightly left of dead center to accommodate right-side callouts. Overall the visual communicates the intended message effectively.

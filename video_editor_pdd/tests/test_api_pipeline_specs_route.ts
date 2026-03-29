@@ -864,6 +864,11 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/separate.*\[veo:\].*spec.*embedded|embedded.*\[veo:\].*separate/is);
   });
 
+  it("prompt requires companion [veo:] specs to link back to their parent split/container", () => {
+    expect(sourceCode).toMatch(/usedIn.*left panel.*right panel|embeddedIn.*parent_spec_base/is);
+    expect(sourceCode).toMatch(/subordinate.*standalone top-level visual|standalone top-level visual/is);
+  });
+
   it("prompt instructs Veo prompts to describe a single continuous action, not multi-phase sequences", () => {
     // Veo models can't reliably produce complex multi-action sequences in a single
     // 8-second clip. The spec gen prompt must guide Claude to write simple, single-action

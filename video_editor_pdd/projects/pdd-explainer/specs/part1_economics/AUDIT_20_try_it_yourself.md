@@ -1,17 +1,13 @@
 ## Verdict
 pass
 ## Summary
-The frame is sampled at 81.2% progress (frame 194/240), which falls in the hold phase (frames 150-240). All expected elements are visible and correctly rendered:
+The frame at 81.2% progress (frame 194/240) is in the hold phase (frames 150-240), which matches the expected animation state. All required elements are present and correctly composed:
 
-1. **Background:** Deep navy-black (#0A0F1A range) with subtle dark tone — matches spec.
-2. **Main text:** "Try it yourself." is displayed in a handwritten-style font (Caveat or similar), visually centered on canvas, with light color (#E2E8F0 range). A slight rotation is present giving the hand-drawn feel. Size appears approximately 64px as specified.
-3. **Underline:** A wavy, hand-drawn style underline is visible beneath the main text in a muted blue tone (#4A90D9 at reduced opacity), consistent with spec.
-4. **Instruction text:** Three lines of instruction text are visible below the main title:
-   - "Give your favorite LLM a hard coding problem as code," — muted gray, regular weight
-   - "then as natural language." — muted gray, regular weight
-   - "The natural language version will win." — brighter/bolder weight, higher opacity
-   All three lines are centered and properly spaced, matching the spec's typography and layout intent.
-5. **Animation phase:** At frame 194, we are in the hold phase. All elements (title, underline, all instruction lines) are fully revealed, which is correct for this phase.
-6. **Layout:** Everything is visually centered on the canvas as specified. The vertical positioning of the instruction text relative to the title is reasonable and maintains the intended composition.
-
-No material discrepancies found between the rendered frame and the spec.
+1. **Background:** Deep navy-black background (#0A0F1A range) with subtle paper texture — matches spec.
+2. **Main text:** "Try it yourself." is displayed in a handwritten-style font (Caveat or similar), appears roughly 64px, light color (#E2E8F0 range), visually centered on canvas. A slight rotation is visible, consistent with the -1.5° hand-drawn imperfection spec.
+3. **Underline:** A slightly wavy, hand-drawn style underline is visible beneath the main text in a blue tone (#4A90D9 range at low opacity) — matches spec.
+4. **Instruction text line 1:** "Give your favorite LLM a hard coding problem as code," — visible in muted gray (#94A3B8 range), smaller font, centered below the main text.
+5. **Instruction text line 2:** "then as natural language." — visible in the same muted gray, centered.
+6. **Instruction text line 3:** "The natural language version will win." — visible in a brighter/bolder weight (#E2E8F0 range), semi-bold as specified, centered below.
+7. **Layout:** All text is centered horizontally. The vertical positioning places the challenge text slightly above center with instruction text below, consistent with the centered overlay layout intent.
+8. **Timing:** Frame 194 is squarely in the hold phase (150-240), so all elements should be fully visible and static — which they are.

@@ -1,18 +1,18 @@
 ## Verdict
 pass
 ## Summary
-The frame at 92.9% progress (frame 389/420, animation phase 360-420: hold on complete diagram with subtle pulse) matches the spec requirements. All three critical elements are present and correctly rendered:
+The frame at 92.9% progress (frame 389/420, animation phase 360-420: 'Hold on complete diagram with subtle pulse') matches the spec requirements well. All three regions are visible and glowing simultaneously as expected for this late animation phase:
 
-1. **TESTS label** (blue, #4A90D9 range) — visible on the left side outside the mold walls, with a connector line pointing to the left wall region. The walls show blue glow on left and right sides. ✓
-2. **PROMPT label** (amber, #D9944A range) — visible above the nozzle with a connector line. The nozzle funnel shape is rendered in amber/brown at the top entry point. ✓
-3. **GROUNDING label** (teal, #4AD9A0 range) — visible below the cavity with a connector line. The interior cavity space is filled with teal glow. ✓
+1. **Walls (TESTS):** Left and right walls show blue glow (#4A90D9 range). The 'TESTS' label is visible in blue on the left side with a connector line leading to the wall region. Correct.
 
-**Layout:** The mold cross-section is centered on the canvas with generous padding, matching the spec's centered layout intent. The overall dimensions are roughly consistent with the ~600×400px mold outline specification.
+2. **Nozzle (PROMPT):** Top entry point shows an amber/gold funnel shape. The 'PROMPT' label appears above in amber (#D9944A range) with a connector line. Correct.
 
-**Background:** Deep navy-black background consistent with #0A0F1A. Blueprint grid is subtly visible.
+3. **Cavity (GROUNDING):** Interior space is filled with teal (#4AD9A0 range) glow. The 'GROUNDING' label appears below the cavity in teal with a connector line. Correct.
 
-**Animation phase:** At 92.9% progress (frame 389), we are in the final hold phase (360-420) where all three regions should be glowing simultaneously with a subtle pulse. All three regions are indeed illuminated — walls (blue), nozzle (amber), cavity (teal) — confirming correct animation state.
+4. **Layout:** Mold is centered on canvas with generous padding. Labels are positioned outside the mold structure (TESTS to the left, PROMPT above, GROUNDING below). Background is deep navy-black consistent with #0A0F1A. Blueprint grid is subtle but present.
 
-**Typography:** Labels use bold styling with colors matching their respective regions, consistent with the Inter 18px bold spec. Connector lines are visible from each label to its region.
+5. **Mold outline:** Outer shell is visible with a lighter stroke. Inner cavity and overall proportions are reasonable (~600×400 outer, inner offset downward).
 
-**Minor observations (non-failing):** The TESTS label appears only on the left side rather than having labels on both sides, but the spec says "positioned outside the mold walls" (singular positioning is acceptable). The mold appears slightly wider than the specified ~600px but well within acceptable layout drift. Glow intensities are present and visually read correctly, with the pulse effect potentially at a low point in its sine cycle.
+6. **Animation state:** At frame 389, all three regions are glowing simultaneously with the subtle pulse phase active, which is correct for the 360-420 frame range.
+
+All critical elements (TESTS, PROMPT, GROUNDING labels; three-region illumination; centered layout) are present and correctly rendered. Colors match their specified hues. The composition reads clearly as a three-part mold cross-section diagram.

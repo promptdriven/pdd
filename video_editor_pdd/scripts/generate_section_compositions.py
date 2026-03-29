@@ -537,6 +537,44 @@ def _extract_split_panel_clip_ids(data_points: Any) -> Dict[str, List[str]]:
     return panels
 
 
+def _collect_split_companion_ids(data_points: Any) -> List[str]:
+    """Return all companion clip ids declared by a split/container spec."""
+    if not isinstance(data_points, dict):
+        return []
+
+    clip_ids: List[str] = []
+
+    def _add(raw_value: Any) -> None:
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            return
+        normalized = _normalize_clip_identifier(raw_value)
+        if normalized and normalized not in clip_ids:
+            clip_ids.append(normalized)
+
+    panel_clip_ids = _extract_split_panel_clip_ids(data_points)
+    for clips in panel_clip_ids.values():
+        for clip_id in clips:
+            _add(clip_id)
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for raw_key, nested in value.items():
+                key = str(raw_key).strip().lower().replace('_', '').replace('-', '')
+                if key in {'leftclipid', 'rightclipid', 'clipid', 'clip', 'content'}:
+                    _add(nested)
+                elif key in {'embeddedveoclips', 'clips'} and isinstance(nested, list):
+                    for item in nested:
+                        _add(item)
+                _walk(nested)
+            return
+        if isinstance(value, list):
+            for nested in value:
+                _walk(nested)
+
+    _walk(data_points)
+    return clip_ids
+
+
 def _iter_structured_media_candidates(
     raw_value: str,
     embedded_clip_ids: List[str],
@@ -1397,6 +1435,7 @@ CONTRACT_FIRST_EXACT_OVERRIDE_CHART_IDS = {
 
 CONTRACT_FIRST_EXACT_OVERRIDE_COMPONENT_IDS = {
     'dissolve_regenerate_loop',
+    'final_title_card',
     'pdd_triangle',
 }
 
@@ -1419,6 +1458,86 @@ def _should_keep_exact_title_card_component(data_points: Dict[str, Any]) -> bool
     return False
 
 
+def _should_keep_exact_component_when_available(data_points: Dict[str, Any]) -> bool:
+    visual_type = data_points.get('type')
+    if not isinstance(visual_type, str):
+        return False
+
+    normalized_type = visual_type.strip().lower()
+
+    if normalized_type == 'split_screen':
+        panels = data_points.get('panels')
+        if not isinstance(panels, dict):
+            return False
+        for panel in panels.values():
+            if not isinstance(panel, dict):
+                continue
+            if isinstance(panel.get('aura'), dict):
+                return True
+            if panel.get('partDissolve') or panel.get('partDissolveReappear'):
+                return True
+        return False
+
+    if normalized_type == 'counter_animation':
+        chart_id = data_points.get('chartId')
+        if (
+            isinstance(chart_id, str)
+            and chart_id.strip().lower() == 'mold_production_counter'
+            and isinstance(data_points.get('moldCycle'), dict)
+        ):
+            return True
+        return False
+
+    if normalized_type == 'schematic_zoom':
+        chart_id = data_points.get('chartId')
+        if (
+            isinstance(chart_id, str)
+            and chart_id.strip().lower() == 'schematic_density_zoom'
+            and isinstance(data_points.get('zoom'), dict)
+        ):
+            return True
+        return False
+
+    if normalized_type == 'chart_callback':
+        source_spec = data_points.get('sourceSpec')
+        takeaway = data_points.get('takeaway')
+        has_secondary_callback_text = any(
+            isinstance(data_points.get(key), str) and data_points.get(key, '').strip()
+            for key in ('secondaryText', 'subtext', 'debtResetNote', 'newAnnotation')
+        ) or (
+            isinstance(takeaway, dict)
+            and any(
+                isinstance(takeaway.get(key), str) and takeaway.get(key, '').strip()
+                for key in ('line1', 'line2')
+            )
+        )
+        return (
+            isinstance(source_spec, str)
+            and source_spec.strip()
+            and not has_secondary_callback_text
+        )
+
+    if normalized_type == 'quote_card':
+        quote = data_points.get('quote')
+        attribution = data_points.get('attribution')
+        accent_word = data_points.get('accentWord')
+        has_structured_lines = any(
+            isinstance(data_points.get(key), str) and data_points.get(key, '').strip()
+            for key in ('quoteLine1', 'quoteLine2', 'secondaryText', 'summary', 'subtext')
+        )
+        return (
+            isinstance(quote, str)
+            and quote.strip()
+            and isinstance(attribution, str)
+            and attribution.strip()
+            and isinstance(accent_word, str)
+            and accent_word.strip()
+            and not has_structured_lines
+        )
+
+    return False
+
+
 def _should_prefer_generated_contract_renderer(
     visual_contract: Dict[str, Any],
     has_exact_component: bool,
@@ -1429,6 +1548,9 @@ def _should_prefer_generated_contract_renderer(
 
     if _is_structured_title_card(data_points):
         return not (has_exact_component and _should_keep_exact_title_card_component(data_points))
+
+    if has_exact_component and _should_keep_exact_component_when_available(data_points):
+        return False
 
     visual_type = data_points.get('type')
     if not isinstance(visual_type, str):
@@ -1649,6 +1771,55 @@ def build_visual_contract_manifest(
 
         # Second pass: populate children arrays from parentId references
         id_to_visual: Dict[str, Dict[str, Any]] = {v['id']: v for v in visuals}
+
+        split_parent_companion_ids: Dict[str, List[str]] = {}
+        for visual in visuals:
+            data_points = visual.get('dataPoints')
+            if not isinstance(data_points, dict):
+                continue
+            visual_type = data_points.get('type')
+            if not isinstance(visual_type, str) or visual_type.strip().lower() != 'split_screen':
+                continue
+            companion_ids = _collect_split_companion_ids(data_points)
+            if companion_ids:
+                split_parent_companion_ids[visual['id']] = companion_ids
+
+        def _matches_split_companion(visual_entry: Dict[str, Any], clip_ids: List[str]) -> bool:
+            data_points = visual_entry.get('dataPoints')
+            candidate_values: List[str] = [visual_entry.get('specBaseName', '')]
+            if isinstance(data_points, dict):
+                raw_clip_id = data_points.get('clipId') or data_points.get('clip')
+                if isinstance(raw_clip_id, str) and raw_clip_id.strip():
+                    candidate_values.append(raw_clip_id)
+
+            normalized_candidates = {
+                re.sub(r'[_-]+', '', _normalize_clip_identifier(value)).lower()
+                for value in candidate_values
+                if isinstance(value, str) and value.strip()
+            }
+
+            for clip_id in clip_ids:
+                normalized_id = re.sub(r'[_-]+', '', _normalize_clip_identifier(clip_id)).lower()
+                if any(
+                    candidate == normalized_id
+                    or normalized_id in candidate
+                    or candidate in normalized_id
+                    for candidate in normalized_candidates
+                ):
+                    return True
+
+            return False
+
+        for visual in visuals:
+            if visual.get('parentId'):
+                continue
+            for parent_id, companion_ids in split_parent_companion_ids.items():
+                if visual['id'] == parent_id:
+                    continue
+                if _matches_split_companion(visual, companion_ids):
+                    visual['parentId'] = parent_id
+                    break
+
         for visual in visuals:
             pid = visual.get('parentId')
             if pid and pid in id_to_visual:
@@ -2729,11 +2900,13 @@ def generate_generated_timeline_wrapper(
     lines.append('              </SlotScaledSequence>')
     if visual_media_manifest:
         lines.append('            ) : visualContract?.renderMode === "component" ? (')
-        lines.append('              <VisualContractProvider contract={visualContract}>')
-        lines.append('                <VisualMediaProvider media={visualMedia}>')
-        lines.append('                  <GeneratedContractVisual />')
-        lines.append('                </VisualMediaProvider>')
-        lines.append('              </VisualContractProvider>')
+        lines.append('              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
+        lines.append('                <VisualContractProvider contract={visualContract}>')
+        lines.append('                  <VisualMediaProvider media={visualMedia}>')
+        lines.append('                    <GeneratedContractVisual />')
+        lines.append('                  </VisualMediaProvider>')
+        lines.append('                </VisualContractProvider>')
+        lines.append('              </SlotScaledSequence>')
         lines.append('            ) : visualMedia?.defaultSrc ? (')
         lines.append('              <VisualContractProvider contract={visualContract}>')
         lines.append('                <VisualMediaProvider media={visualMedia}>')
@@ -2750,11 +2923,13 @@ def generate_generated_timeline_wrapper(
         lines.append('            ) : null}')
     else:
         lines.append('            ) : visualContract?.renderMode === "component" ? (')
-        lines.append('              <VisualContractProvider contract={visualContract}>')
-        lines.append('                <VisualMediaProvider media={visualMedia}>')
-        lines.append('                  <GeneratedContractVisual />')
-        lines.append('                </VisualMediaProvider>')
-        lines.append('              </VisualContractProvider>')
+        lines.append('              <SlotScaledSequence intrinsicDurationInFrames={intrinsicDurationInFrames}>')
+        lines.append('                <VisualContractProvider contract={visualContract}>')
+        lines.append('                  <VisualMediaProvider media={visualMedia}>')
+        lines.append('                    <GeneratedContractVisual />')
+        lines.append('                  </VisualMediaProvider>')
+        lines.append('                </VisualContractProvider>')
+        lines.append('              </SlotScaledSequence>')
         lines.append('            ) : null}')
     lines.append('          </Sequence>')
     lines.append('        );')
