@@ -1459,16 +1459,39 @@ class TestPushWithRetryNonFastForward:
             f"All calls: {calls}"
         )
 
-    def test_non_fast_forward_rejected_keyword_detected(self, tmp_path):
-        """The '[rejected]' keyword in push stderr should trigger force-with-lease retry."""
+    def test_non_fast_forward_logs_warning(self, tmp_path):
+        """Non-fast-forward retry should log a warning via console.print."""
         from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
 
-        calls = []
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect), \
+             patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console:
+            _push_with_retry(tmp_path, "owner", "repo")
+
+        mock_console.print.assert_called()
+        warning_text = mock_console.print.call_args[0][0]
+        assert "yellow" in warning_text.lower() or "[yellow]" in warning_text
+        assert "force-with-lease" in warning_text.lower() or "non-fast-forward" in warning_text.lower()
+
+    def test_non_fast_forward_fetch_first_not_detected(self, tmp_path):
+        """'fetch first' rejection (without non-fast-forward) should NOT trigger force-with-lease.
+
+        Only specific non-fast-forward markers should trigger the retry,
+        not generic [rejected] which could be protected branches or hooks.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
 
         def mock_run_side_effect(cmd, **kwargs):
-            calls.append(cmd)
             result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
             if cmd == ["git", "push", "-u", "origin", "HEAD"]:
                 result.returncode = 1
                 result.stderr = (
@@ -1482,7 +1505,28 @@ class TestPushWithRetryNonFastForward:
         with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
             success, err = _push_with_retry(tmp_path, "owner", "repo")
 
-        assert success is True
+        # Should NOT retry — "fetch first" means remote has new work, force-push would lose it
+        assert success is False
+
+    def test_protected_branch_rejection_not_detected(self, tmp_path):
+        """Protected branch rejection should NOT trigger force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [remote rejected] HEAD -> main (protected branch hook declined)\n"
+                    "error: failed to push some refs"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "protected branch" in err
 
     def test_non_fast_forward_force_with_lease_also_fails(self, tmp_path):
         """If --force-with-lease also fails, return the error."""
@@ -1514,7 +1558,7 @@ class TestPushWithRetryNonFastForward:
     def test_non_fast_forward_takes_precedence_over_auth_retry(self, tmp_path, monkeypatch):
         """Non-fast-forward should be detected before auth failure check.
 
-        An error containing both 'rejected' and auth-like text should
+        An error containing both non-ff markers and auth-like text should
         be handled as non-fast-forward, not as an auth failure.
         """
         from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
@@ -1534,7 +1578,10 @@ class TestPushWithRetryNonFastForward:
                 result.returncode = 1
                 result.stderr = (
                     " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
-                    "hint: Updates were rejected because the tip is behind"
+                    "hint: Updates were rejected because the tip of your current branch is behind\n"
+                    "hint: its remote counterpart.\n"
+                    "remote: HTTP 401: Unauthorized\n"
+                    "fatal: Authentication failed for 'https://example.com/owner/repo.git'\n"
                 )
             return result
 
@@ -1547,6 +1594,34 @@ class TestPushWithRetryNonFastForward:
         assert len(set_url_calls) == 0, (
             f"Non-fast-forward should not trigger auth retry. set-url calls: {set_url_calls}"
         )
+
+    def test_commit_and_push_surfaces_force_push_success(self, tmp_path):
+        """_commit_and_push should return success when _push_with_retry uses --force-with-lease."""
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._push_with_retry") as mock_push, \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+
+            # Simulate a file that changed during workflow
+            mock_hashes.return_value = {"backend/functions/get_waitlist_status.py": "new_hash"}
+            # Simulate _push_with_retry succeeding via --force-with-lease
+            mock_push.return_value = (True, "")
+            mock_run.return_value = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            success, message = _commit_and_push(
+                cwd=tmp_path, issue_number=608,
+                issue_title="Add fallback in get_waitlist_status.py",
+                repo_owner="promptdriven", repo_name="pdd_cloud",
+                initial_file_hashes={
+                    "backend/functions/get_waitlist_status.py": "old_hash"
+                },
+                quiet=True
+            )
+
+        assert success is True
+        assert "1 file(s)" in message
+        mock_push.assert_called_once_with(tmp_path, "promptdriven", "pdd_cloud")
 
 
 class TestProviderFailureAbort:

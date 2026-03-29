@@ -735,10 +735,16 @@ def _push_with_retry(
     # Non-fast-forward: branch diverged (e.g. after rebase onto main).
     # Retry with --force-with-lease which is safe — it only overwrites
     # the remote if it matches what we last fetched.
-    non_ff_markers = ["non-fast-forward", "[rejected]", "tip of your current branch is behind"]
+    # Only match specific non-ff markers — avoid generic "[rejected]" which
+    # could be protected branches, pre-receive hooks, etc.
+    non_ff_markers = ["non-fast-forward", "tip of your current branch is behind"]
     is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
 
     if is_non_fast_forward:
+        console.print(
+            "[yellow]WARNING: Push rejected (non-fast-forward). "
+            "Retrying with --force-with-lease...[/yellow]"
+        )
         retry_result = subprocess.run(
             ["git", "push", "--force-with-lease", "-u", "origin", "HEAD"],
             cwd=cwd,
