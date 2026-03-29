@@ -116,6 +116,94 @@ def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
         pass
 
 
+def _scope_architecture_to_changed_files(
+    worktree_path: Path,
+    previous_architecture: Optional[List[Dict[str, Any]]],
+    changed_files: List[str],
+) -> None:
+    """Revert architecture.json entries for files not in changed_files to their previous state.
+
+    After Step 10, the LLM may mutate entries for modules it was never asked to
+    touch (reason, dependencies, interface signatures, etc.). This function
+    enforces scope by replacing out-of-scope entries with their pre-Step-10
+    versions and removing entries that didn't exist before and aren't in scope.
+    """
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists() or previous_architecture is None:
+        return
+
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            current_architecture = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+
+    # Build a set of filenames that are in scope from changed_files.
+    # changed_files may contain paths like "pdd/prompts/foo_python.prompt",
+    # "prompts/foo_python.prompt", "pdd/prompts/commands/foo_python.prompt",
+    # or "architecture.json".
+    #
+    # We add both the basename and the relative path under "prompts/"
+    # so that subdirectory prompts (e.g. "commands/maintenance_python.prompt")
+    # match their architecture.json filename field.
+    in_scope_filenames: set = set()
+    for fp in changed_files:
+        normalized = fp.replace("\\", "/")
+        prompts_idx = normalized.rfind("prompts/")
+        if prompts_idx != -1:
+            rel = normalized[prompts_idx + len("prompts/"):]
+        else:
+            rel = normalized
+        basename = rel.rsplit("/", 1)[-1] if "/" in rel else rel
+        if basename.endswith(".prompt"):
+            in_scope_filenames.add(basename)
+            if rel != basename:
+                in_scope_filenames.add(rel)
+
+    # Build lookup from previous architecture by filename and filepath
+    prev_by_filename: Dict[str, Dict[str, Any]] = {}
+    prev_by_filepath: Dict[str, Dict[str, Any]] = {}
+    for entry in previous_architecture:
+        if not isinstance(entry, dict):
+            continue
+        fn = entry.get("filename")
+        fp = entry.get("filepath")
+        if fn:
+            prev_by_filename[fn] = entry
+        if fp:
+            prev_by_filepath[fp] = entry
+
+    scoped: List[Dict[str, Any]] = []
+    for entry in current_architecture:
+        if not isinstance(entry, dict):
+            scoped.append(entry)
+            continue
+
+        filename = entry.get("filename", "")
+        filepath = entry.get("filepath", "")
+
+        # Determine if this entry is in scope
+        entry_in_scope = filename in in_scope_filenames
+
+        if entry_in_scope:
+            # Changed file — keep LLM's mutations
+            scoped.append(entry)
+        else:
+            # Out of scope — look up previous version
+            prev_entry = prev_by_filename.get(filename)
+            if prev_entry is None and filepath:
+                prev_entry = prev_by_filepath.get(filepath)
+            if prev_entry is not None:
+                # Revert to previous
+                scoped.append(prev_entry)
+            # else: entry didn't exist before AND isn't in scope — drop it (hallucination)
+
+    try:
+        with open(arch_path, "w", encoding="utf-8") as f:
+            json.dump(scoped, f, indent=2)
+    except OSError:
+        pass
+
 def _sanitize_architecture_interfaces(
     worktree_path: Path,
     previous_architecture: Optional[List[Dict[str, Any]]],
@@ -836,6 +924,7 @@ def run_agentic_change_orchestrator(
             context["worktree_path"] = str(worktree_path)
 
     consecutive_provider_failures = 0
+    previous_architecture = None
 
     for step_num, name, description in steps_config:
         if step_num < start_step:
@@ -892,6 +981,7 @@ def run_agentic_change_orchestrator(
         if not quiet:
             console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
 
+        # Snapshot architecture.json before Step 10 so we can revert out-of-scope mutations
         if step_num == 10 and worktree_path:
             arch_path = worktree_path / "architecture.json"
             if arch_path.exists():
@@ -1021,6 +1111,9 @@ def run_agentic_change_orchestrator(
             changed_files.extend(new_files)
             context["files_to_stage"] = ", ".join(changed_files)
             if worktree_path:
+                _scope_architecture_to_changed_files(
+                    worktree_path, previous_architecture, changed_files
+                )
                 _sanitize_architecture_dependencies(worktree_path)
                 interface_warnings = _sanitize_architecture_interfaces(
                     worktree_path,
@@ -1115,7 +1208,7 @@ def run_agentic_change_orchestrator(
     file_list = [f.strip() for f in files_to_stage_str.split(",") if f.strip()]
     modified_modules: Set[str] = set()
     for file_path in file_list:
-        if file_path.startswith("prompts/") and file_path.endswith(".prompt"):
+        if file_path.endswith(".prompt") and ("/prompts/" in file_path or file_path.startswith("prompts/")):
             module = extract_module_from_include(file_path)
             if module: modified_modules.add(module)
 
@@ -1133,19 +1226,14 @@ def run_agentic_change_orchestrator(
                     # Generate clean command list for PR body (not full bash script)
                     sync_order_list = "\n".join([f"pdd sync {m}" for m in affected])
 
-                    # Write script to user's CWD (accessible after workflow completes)
-                    user_script_path = cwd / "sync_order.sh"
+                    # Write change-specific script to .pdd/ (NOT sync_order.sh which
+                    # may contain the full repo module list — overwriting it destroys
+                    # the original, as seen in issue #571).
+                    pdd_dir = cwd / ".pdd"
+                    pdd_dir.mkdir(parents=True, exist_ok=True)
+                    user_script_path = pdd_dir / "sync_order_change.sh"
                     generate_sync_order_script(affected, user_script_path, worktree_path=None)
                     sync_order_script = str(user_script_path)
-
-                    # Also generate in worktree for Step 13 to commit
-                    worktree_script_path = worktree_path / "sync_order.sh"
-                    generate_sync_order_script(affected, worktree_script_path, worktree_path=None)
-
-                    # Ensure sync_order.sh is staged by step 13
-                    if "sync_order.sh" not in changed_files:
-                        changed_files.append("sync_order.sh")
-                    context["files_to_stage"] = ", ".join(changed_files)
 
                     if not quiet:
                         console.print(f"\n[bold]Sync commands (run after merge):[/bold]")

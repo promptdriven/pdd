@@ -383,7 +383,8 @@ def test(
                 target_coverage=target_coverage,
                 merge=merge,
                 strength=strength,
-                temperature=temperature
+                temperature=temperature,
+                manual=manual
             )
 
             return unit_test_code, cost, model

@@ -37,8 +37,15 @@ Previous steps checked for duplicates and reviewed documentation.
    - Are there reproduction steps or enough context to infer them?
    - Can we identify the general area of code involved?
 
-2. **Decide**
-   - **Proceed**: We have enough to attempt reproduction
+2. **Check for pre-existing root cause analysis**
+   - Does the issue already contain specific file paths with line numbers pointing to the bug?
+   - Does the issue include a causal explanation of why the bug occurs?
+   - Does the issue provide reproduction evidence (logs, stack traces, or test cases)?
+   - If ALL three criteria are met, the issue is **pre-diagnosed** — diagnosis steps can be skipped.
+
+3. **Decide**
+   - **Fast-Track**: The issue already contains a detailed root cause analysis with file paths, line numbers, and causal explanation. Diagnosis steps (4-5) can be skipped.
+   - **Proceed**: We have enough to attempt reproduction but root cause is not yet identified
    - **Needs More Info**: Critical gaps prevent meaningful reproduction attempt
 
 % Output
@@ -50,6 +57,36 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 ```
 
 Your comment should follow this format:
+
+**If Fast-Track (issue already contains root cause analysis):**
+```markdown
+## Step 3: Triage
+
+**Status:** Fast-Track
+
+### Pre-Diagnosed Issue Detected
+The issue author has provided a detailed root cause analysis:
+
+**Identified Root Cause:**
+[Summarize the root cause analysis from the issue, including file paths, line numbers, and causal explanation]
+
+**Evidence Quality:**
+- File paths with line numbers: [Yes/No — list them]
+- Causal explanation: [Yes/No — brief summary]
+- Reproduction evidence: [Yes/No — logs, traces, or test cases]
+
+### Summary
+[What we understand and why diagnosis steps can be skipped]
+
+---
+*Fast-tracking to Step 6: Root Cause Analysis (skipping Steps 4-5)*
+```
+
+**IMPORTANT:** When the status is "Fast-Track", you MUST also include the following line on its own line in your final output (outside the GitHub comment):
+```
+FAST_TRACK: [One-paragraph summary of the provided root cause analysis, including the specific file paths, line numbers, and causal explanation from the issue]
+```
+This line is required for the orchestrator to skip diagnosis steps. Omit it when status is "Proceed" or "Needs More Info".
 
 **If Proceed:**
 ```markdown

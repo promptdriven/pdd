@@ -102,25 +102,40 @@ class TestExtractTestFilesHashDetection:
 
     def test_partial_tracking_finds_second_commit_file(self, tmp_project):
         """Simulate: commit 1 file is in changed_files, commit 2 file is not.
-        After the fix, both files should be discovered.
+        After the fix, both files should be discovered via hash detection.
 
-        The fix orchestrator should find test_concurrent_label_race_issue_613.py
-        via a fallback discovery path (directory scan or branch diff), even when
-        it's not in changed_files and hash detection is disabled.
+        In production, initial_file_hashes is always a dict (never None),
+        so hash detection catches files created during the workflow even when
+        they're not in changed_files or issue_content.
         """
         issue_content = ""
         # Only the first commit's file is tracked
         changed_files = ["test_trigger_logic.py"]
 
-        result = _extract_test_files(
-            issue_content, changed_files, tmp_project, initial_file_hashes=None
-        )
+        # Production scenario: empty dict = snapshot before workflow started
+        current_hashes = {
+            "test_trigger_logic.py": hashlib.md5(
+                b"def test_trigger(): assert True\n"
+            ).hexdigest(),
+            "test_concurrent_label_race_issue_613.py": hashlib.md5(
+                b"def test_race(): assert True\n"
+            ).hexdigest(),
+        }
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value=current_hashes,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content, changed_files, tmp_project, initial_file_hashes={}
+            )
 
         # Both files should be found after the fix
         assert "test_trigger_logic.py" in result
         assert "test_concurrent_label_race_issue_613.py" in result, (
-            "Second commit file should be found via fallback discovery "
-            "(e.g., directory scan for test_*.py files). "
+            "Second commit file should be found via hash detection. "
             f"Got: {result}"
         )
 
@@ -186,11 +201,11 @@ class TestVerifyTestsIndependentlyScope:
 
     def test_verify_catches_failing_test_on_disk(self, tmp_project):
         """End-to-end scenario: after the fix, _extract_test_files discovers all
-        test files (including committed ones), and _verify_tests_independently
-        detects failures in them.
+        test files (including committed ones) via hash detection, and
+        _verify_tests_independently detects failures in them.
 
         1. Two test files exist on disk (one failing)
-        2. _extract_test_files discovers BOTH files (via fallback discovery)
+        2. _extract_test_files discovers BOTH files (via hash detection)
         3. _verify_tests_independently checks both files
         4. Result: failure is detected, not a false ALL_TESTS_PASS
         """
@@ -200,13 +215,28 @@ class TestVerifyTestsIndependentlyScope:
             "def test_race_condition():\n    assert False, 'bug not fixed'\n"
         )
 
-        # Step 1: Extract test files (no hash detection, partial tracking)
+        # Step 1: Extract test files (production scenario: hash detection enabled)
         issue_content = ""
         changed_files = ["test_trigger_logic.py"]  # Only first commit tracked
 
-        discovered_files = _extract_test_files(
-            issue_content, changed_files, tmp_project, initial_file_hashes=None
-        )
+        current_hashes = {
+            "test_trigger_logic.py": hashlib.md5(
+                b"def test_trigger(): assert True\n"
+            ).hexdigest(),
+            "test_concurrent_label_race_issue_613.py": hashlib.md5(
+                b"def test_race_condition():\n    assert False, 'bug not fixed'\n"
+            ).hexdigest(),
+        }
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value=current_hashes,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            discovered_files = _extract_test_files(
+                issue_content, changed_files, tmp_project, initial_file_hashes={}
+            )
 
         # After fix: both files should be discovered
         assert len(discovered_files) >= 2, (

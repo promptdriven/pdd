@@ -299,12 +299,113 @@ def _verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]:
     return not any_setup_error, "\n".join(all_outputs)
 
 
+def _count_planned_tests(step8_output: str) -> int:
+    """Count planned tests from Step 8's PLANNED_TEST_COUNT marker.
+
+    Falls back to counting '#### Test N:' headers if marker is absent.
+    """
+    match = re.search(r"PLANNED_TEST_COUNT:\s*(\d+)", step8_output)
+    if match:
+        return int(match.group(1))
+    # Fallback: count markdown headers (for older runs without marker)
+    return len(re.findall(r"####\s+Test\s+\d+:", step8_output))
+
+
+def _count_generated_tests(file_paths: List[str], cwd: Path) -> Tuple[int, int]:
+    """Count test functions in files on disk.
+
+    Returns (total_test_functions, stub_count).
+    A stub is a test function whose body is only a docstring, pass, or ellipsis.
+    Uses regex heuristic — no AST parsing needed.
+    """
+    # Matches def test_xxx(...): followed by lines that are only
+    # whitespace, docstrings, pass, or ... (i.e. a stub body)
+    stub_pattern = re.compile(
+        r"(?:async\s+)?def\s+test_\w+\s*\([^)]*\)[^:]*:\s*\n"
+        r"(?:\s*(?:#[^\n]*)?\n)*"                # optional blank/comment lines
+        r'(?:\s*(?:"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')\s*\n)?'  # optional docstring
+        r"(?:\s*(?:pass|\.\.\.)\s*\n?)*"          # only pass/... remaining
+        r"\s*(?=\n\S|\n*$)",                      # followed by dedent or EOF
+    )
+    total = 0
+    stubs = 0
+    for fpath in file_paths:
+        abs_path = (cwd / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+        if not abs_path.exists():
+            continue
+        content = abs_path.read_text()
+        total += len(re.findall(r"(?:async\s+)?def\s+test_", content))
+        stubs += len(stub_pattern.findall(content))
+    return total, stubs
+
+
 def _parse_changed_files(output: str, marker: str) -> List[str]:
     """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
     for match in re.finditer(rf"{marker}:\s*(.*)", output):
         files.extend([f.strip() for f in match.group(1).split(",") if f.strip()])
     return files
+
+
+def _parse_fix_locations(step6_output: str) -> List[str]:
+    """Extract fix locations from Step 6's FIX_LOCATIONS marker.
+
+    Returns a deduplicated list of file paths (stripped of whitespace and backticks).
+    Reuses _parse_changed_files for the core parsing logic.
+    """
+    raw = _parse_changed_files(step6_output, "FIX_LOCATIONS")
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for f in raw:
+        cleaned = f.strip("`")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return deduped
+
+
+def _verify_fix_location_coverage(
+    fix_locations: List[str], test_files: List[str], work_dir: Path
+) -> List[str]:
+    """Check that generated test files reference all fix_location modules.
+
+    Converts each fix_location path to a dotted module path and checks if any
+    test file contains a reference to it (import, patch target, string literal).
+
+    Returns a list of fix_locations that have NO coverage in any test file.
+    """
+    if len(fix_locations) <= 1:
+        return []  # Single-file bugs don't need cross-file coverage
+
+    uncovered: List[str] = []
+    # Read all test file contents once
+    test_contents: List[str] = []
+    for tf in test_files:
+        abs_path = (work_dir / tf) if not Path(tf).is_absolute() else Path(tf)
+        try:
+            test_contents.append(abs_path.read_text())
+        except OSError:
+            continue
+
+    for fix_loc in fix_locations:
+        # Convert path to module: pdd/commands/generate.py -> pdd.commands.generate
+        module_path = fix_loc.replace("/", ".").removesuffix(".py")
+        # Also check for the slash-separated path without extension
+        path_no_ext = fix_loc.removesuffix(".py")
+        # Word-boundary regex for the bare filename — avoids false positives
+        # where e.g. "generate" matches "generate_report" or "generated"
+        basename = Path(fix_loc).stem
+        basename_re = re.compile(r"\b" + re.escape(basename) + r"\b")
+
+        found = False
+        for content in test_contents:
+            if module_path in content or path_no_ext in content or basename_re.search(content):
+                found = True
+                break
+        if not found:
+            uncovered.append(fix_loc)
+
+    return uncovered
 
 
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
@@ -709,6 +810,7 @@ def run_agentic_bug_orchestrator(
         "issue_author": issue_author,
         "issue_title": issue_title,
         "step5_reproduction_tests": "",
+        "fix_locations": "none",
     }
     
     # Populate context with previous step outputs
@@ -731,17 +833,30 @@ def run_agentic_bug_orchestrator(
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
         changed_files.extend(prompt_fixed)
 
+    # Step 6: re-extract fix locations for downstream steps
+    if "step6_output" in context:
+        fix_locs = _parse_fix_locations(context["step6_output"])
+        context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
+
     # Step 7
     if "step7_output" in context:
         s7_out = context["step7_output"]
+        prompt_fixed = _parse_changed_files(s7_out, "PROMPT_FIXED")
         created = _parse_changed_files(s7_out, "FILES_CREATED")
         modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
-        changed_files.extend(created + modified)
-    
+        changed_files.extend(prompt_fixed + created + modified)
+
     # Step 9
     if "step9_output" in context:
         s9_out = context["step9_output"]
-        e2e_created = _parse_changed_files(s9_out, "E2E_FILES_CREATED")
+        created = _parse_changed_files(s9_out, "FILES_CREATED")
+        modified = _parse_changed_files(s9_out, "FILES_MODIFIED")
+        changed_files.extend(created + modified)
+
+    # Step 11
+    if "step11_output" in context:
+        s11_out = context["step11_output"]
+        e2e_created = _parse_changed_files(s11_out, "E2E_FILES_CREATED")
         changed_files.extend(e2e_created)
 
     changed_files = list(set(changed_files))  # Deduplicate
@@ -896,6 +1011,11 @@ def run_agentic_bug_orchestrator(
         if not quiet:
             console.print(f"[bold][Step {step_index}/{total_steps}][/bold] {description}...")
 
+        # Snapshot filesystem BEFORE step 7 (prompt classification) runs (for fallback detection)
+        pre_step7_prompt_files: List[str] = []
+        if step_num == 7:
+            pre_step7_prompt_files = _get_modified_and_untracked(current_work_dir)
+
         # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
         pre_step7_files: List[str] = []
         if step_num == 9:
@@ -965,6 +1085,24 @@ def run_agentic_bug_orchestrator(
         # Store output in context
         context[f"step{str(step_num)}_output"] = step_output
 
+        # FAST_TRACK: skip Steps 4-5 when issue is pre-diagnosed (issue #836)
+        if step_num == 3 and "FAST_TRACK:" in step_output:
+            fast_track_match = re.search(r"FAST_TRACK:\s*(.+)", step_output)
+            fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
+            skip_msg = f"Step {{}} skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            context["step4_output"] = skip_msg.format(4)
+            context["step5_output"] = skip_msg.format(5)
+            state["step_outputs"]["4"] = context["step4_output"]
+            state["step_outputs"]["5"] = context["step5_output"]
+            state["last_completed_step"] = 5
+            last_completed_step = 5
+            # Recalculate start_step so the loop skips 4 and 5
+            start_step = 6
+            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if not quiet:
+                console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
+            continue
+
         files_extracted = False
 
         # Step-specific handling
@@ -976,6 +1114,17 @@ def run_agentic_bug_orchestrator(
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
 
+        if step_num == 6:
+            fix_locs = _parse_fix_locations(step_output)
+            if fix_locs:
+                context["fix_locations"] = ", ".join(fix_locs)
+            else:
+                context["fix_locations"] = "none"
+                logger.warning(
+                    "Step 6 output missing FIX_LOCATIONS marker — "
+                    "downstream call-boundary checks will be skipped"
+                )
+
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
             if defect_type_match:
@@ -984,8 +1133,30 @@ def run_agentic_bug_orchestrator(
                     prompt_fixed = _parse_changed_files(step_output, "PROMPT_FIXED")
                     if prompt_fixed:
                         changed_files.extend(prompt_fixed)
+                        changed_files = list(set(changed_files))
                         context["files_to_stage"] = ", ".join(changed_files)
                         files_extracted = True
+                    else:
+                        # Filesystem fallback: detect modified .prompt files (#966)
+                        post_step7_files = _get_modified_and_untracked(current_work_dir)
+                        new_prompt_files = [
+                            f for f in post_step7_files
+                            if f not in pre_step7_prompt_files and f.endswith(".prompt")
+                        ]
+                        if new_prompt_files:
+                            changed_files.extend(new_prompt_files)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+                            files_extracted = True
+                    # Warn if DEFECT_TYPE is prompt but no .prompt files detected
+                    prompt_in_changed = any(f.endswith(".prompt") for f in changed_files)
+                    if not prompt_in_changed and not quiet:
+                        console.print("[yellow]Warning: DEFECT_TYPE is 'prompt' but no .prompt files detected in changed_files[/yellow]")
+
+        if step_num == 8:
+            # Parse planned test count for Step 9 prompt injection
+            planned = _count_planned_tests(step_output)
+            context["planned_test_count"] = str(planned) if planned > 0 else "all"
 
         if step_num == 9:
             created = _parse_changed_files(step_output, "FILES_CREATED")
@@ -1004,6 +1175,8 @@ def run_agentic_bug_orchestrator(
 
             # Structural test guard: scan generated files for banned patterns
             file_violations: dict = {}  # fpath -> [violations]
+            retry_extracted: List[str] = []
+            cv_extracted: List[str] = []
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
@@ -1155,6 +1328,148 @@ def run_agentic_bug_orchestrator(
                     # Update step output to the retry output
                     step_output = retry_output
                     context["step9_output"] = retry_output
+
+            # Cross-validation: compare Step 8 planned test count vs Step 9 generated count
+            step8_output = context.get("step8_output", "")
+            planned_count = _count_planned_tests(step8_output)
+            if planned_count > 0:
+                all_extracted = list(set(extracted + retry_extracted))
+                total_generated, stub_count = _count_generated_tests(all_extracted, current_work_dir)
+                real_count = total_generated - stub_count
+
+                if real_count < planned_count:
+                    if not quiet:
+                        detail = f"{total_generated} tests" if stub_count == 0 else f"{real_count} real tests ({stub_count} stubs)"
+                        console.print(
+                            f"[yellow]  → Cross-validation: generated {detail} "
+                            f"but Step 8 planned {planned_count}, retrying[/yellow]"
+                        )
+
+                    missing_addendum = (
+                        f"\n\n% IMPORTANT: Your previous attempt only generated {real_count} "
+                        f"of {planned_count} planned tests. Re-read the Step 8 plan above and "
+                        f"generate ALL {planned_count} tests with real assertions. "
+                        f"Do NOT generate stub functions with only pass or ellipsis."
+                    )
+
+                    cv_success, cv_output, cv_cost, cv_model = run_agentic_task(
+                        instruction=formatted_prompt + missing_addendum,
+                        cwd=current_work_dir,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label="step9",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += cv_cost
+                    model_used = cv_model
+                    state["total_cost"] = total_cost
+                    state["model_used"] = model_used
+
+                    cv_extracted: List[str] = []
+                    if cv_success:
+                        cv_created = _parse_changed_files(cv_output, "FILES_CREATED")
+                        cv_modified = _parse_changed_files(cv_output, "FILES_MODIFIED")
+                        cv_extracted = cv_created + cv_modified
+                        if not cv_extracted:
+                            post_files = _get_modified_and_untracked(current_work_dir)
+                            cv_extracted = [f for f in post_files if f not in pre_step7_files]
+                        if cv_extracted:
+                            changed_files.extend(cv_extracted)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+
+                        step_output = cv_output
+                        context["step9_output"] = cv_output
+
+                    # Log final count (whether retry helped or not)
+                    final_all = list(set(all_extracted + cv_extracted))
+                    final_total, final_stubs = _count_generated_tests(final_all, current_work_dir)
+                    final_real = final_total - final_stubs
+                    if final_real < planned_count and not quiet:
+                        console.print(
+                            f"[yellow]  → After retry: {final_real} of "
+                            f"{planned_count} tests (proceeding with warning)[/yellow]"
+                        )
+
+            # Deterministic fix-location coverage check (replaces LLM-based Step 10 check)
+            fix_locs_str = context.get("fix_locations", "none")
+            if fix_locs_str != "none":
+                fix_locs_list = [f.strip() for f in fix_locs_str.split(",") if f.strip()]
+                # Gather all test files generated so far (including retries)
+                all_test_files = list(set(extracted + retry_extracted + cv_extracted))
+                uncovered = _verify_fix_location_coverage(
+                    fix_locs_list, all_test_files, current_work_dir
+                )
+                if uncovered:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]  → Fix-location coverage gap: no tests reference "
+                            f"{', '.join(uncovered)}, retrying Step 9[/yellow]"
+                        )
+                    coverage_addendum = (
+                        "\n\n% IMPORTANT — MISSING FIX-LOCATION COVERAGE\n"
+                        "Your previous attempt only generated tests for SOME of the fix locations.\n"
+                        f"The fix locations are: {fix_locs_str}\n"
+                        f"Missing test coverage for: {', '.join(uncovered)}\n\n"
+                        "You MUST generate tests that cover ALL fix locations. For multi-file bugs, "
+                        "mock the callee and verify the caller passes correct arguments, AND test "
+                        "the callee directly. Each fix location file must appear in at least one "
+                        "test (via import, patch target, or direct invocation)."
+                    )
+                    cov_success, cov_output, cov_cost, cov_model = run_agentic_task(
+                        instruction=formatted_prompt + coverage_addendum,
+                        cwd=current_work_dir,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label="step9",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += cov_cost
+                    model_used = cov_model
+                    state["total_cost"] = total_cost
+                    state["model_used"] = model_used
+
+                    cov_retry_extracted: List[str] = []
+                    if cov_success:
+                        cov_created = _parse_changed_files(cov_output, "FILES_CREATED")
+                        cov_modified = _parse_changed_files(cov_output, "FILES_MODIFIED")
+                        cov_retry_extracted = cov_created + cov_modified
+                        if cov_retry_extracted:
+                            changed_files.extend(cov_retry_extracted)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+
+                        # Scan coverage-retry files for structural test patterns
+                        cov_violations: List[str] = []
+                        for fpath in cov_retry_extracted:
+                            abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+                            v = detect_structural_test_patterns(str(abs_path))
+                            if v:
+                                cov_violations.extend(v)
+                        if cov_violations and not quiet:
+                            console.print(
+                                "[yellow]  → Coverage retry contains structural patterns "
+                                "(proceeding with warning):[/yellow]"
+                            )
+                            for v in cov_violations:
+                                console.print(f"[yellow]    • {v}[/yellow]")
+
+                        step_output = cov_output
+                        context["step9_output"] = cov_output
+
+                    # Log whether retry fixed the gap
+                    still_uncovered = _verify_fix_location_coverage(
+                        fix_locs_list,
+                        list(set(all_test_files + cov_retry_extracted)),
+                        current_work_dir,
+                    )
+                    if still_uncovered and not quiet:
+                        console.print(
+                            f"[yellow]  → After retry, still missing coverage for: "
+                            f"{', '.join(still_uncovered)} (proceeding with warning)[/yellow]"
+                        )
 
         if step_num == 10:
             # Check for E2E classification marker in step output.

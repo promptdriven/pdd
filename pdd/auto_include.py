@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
+from .embed_retrieve import embed_and_retrieve
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
 from .summarize_directory import summarize_directory
@@ -98,6 +99,24 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
     except Exception as ex:
         console.print(f"[red]Error parsing CSV: {ex}[/red]")
         return ""
+
+
+def _embed_and_rank(input_prompt: str, candidates: List[str], top_n: int = 50) -> List[str]:
+    """Pre-filter candidates by cosine similarity using embed_and_retrieve.
+
+    When the number of candidates exceeds a threshold, this function uses
+    embedding-based retrieval to select the top-N most relevant candidates
+    before passing them to the LLM.
+
+    Falls back to returning all candidates if the embedding call fails.
+    """
+    try:
+        ranked = embed_and_retrieve(query=input_prompt, candidates=candidates, top_n=top_n)
+        # Extract just the candidate texts (drop scores)
+        return [text for text, _score in ranked]
+    except Exception as ex:
+        console.print(f"[yellow]Warning: embed_and_rank fallback – {ex}[/yellow]")
+        return candidates
 
 
 def _directory_prefix(directory_path: str) -> str:
@@ -413,6 +432,8 @@ def auto_include(
     time: float = DEFAULT_TIME,
     verbose: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    max_workers: int = 1,
     csv_path: Optional[str] = None,
 ) -> Tuple[str, str, float, str]:
     """
@@ -446,12 +467,28 @@ def auto_include(
         csv_file=csv_file,
         progress_callback=progress_callback,
         csv_path=csv_path,
+        include_docs=include_docs,
+        max_workers=max_workers,
         **llm_kwargs,
     )
 
     available_includes = _format_csv_rows_for_llm(csv_output, directory_path=directory_path)
 
-    # Req 3: invoke LLM with Pydantic structured output
+    # Req 3: Two-stage retrieval — pre-filter with embeddings when candidates > 50
+    if available_includes:
+        # Split formatted entries by the "File: " line prefix
+        candidate_entries = re.split(r'(?=^File: )', available_includes, flags=re.MULTILINE)
+        candidate_entries = [e.strip() for e in candidate_entries if e.strip()]
+        if len(candidate_entries) > 50:
+            if verbose:
+                console.print(
+                    f"[blue]Candidates ({len(candidate_entries)}) exceed 50 — "
+                    f"running embedding pre-filter[/blue]"
+                )
+            filtered_entries = _embed_and_rank(input_prompt, candidate_entries, top_n=50)
+            available_includes = "\n".join(filtered_entries)
+
+    # Req 4: invoke LLM with Pydantic structured output
     if verbose:
         console.print(Panel("Step 2: Running auto_include_LLM", style="blue"))
 

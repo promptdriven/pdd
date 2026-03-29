@@ -226,7 +226,7 @@ flowchart TD
 
 A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contrasting with the constant supervision model of interactive patching:
 
-1. **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context.
+1. **Define**: Start with a requirement (e.g., from a PRD) and break it down into a specific prompt for a code module. Use `auto-deps` to find and include necessary context — both code examples and relevant documentation files.
 2. **Generate**: Use `generate` to create the code module from the prompt.
 3. **Example**: Use `example` to create a minimal usage example (the interface).
 4. **Verify (Initial)**: Use `verify` or `crash` to ensure the example/code runs and aligns with the prompt's intent, fixing basic issues iteratively.
@@ -332,6 +332,7 @@ pdd generate --output "cost_tracker/cost_tracker_python.prompt" "cost_tracker/co
 ```
 
 **Phase 2: Find Dependencies (auto-deps)**
+Use `auto-deps` to discover relevant code examples and documentation files, inserting them as `<include>` directives.
 ```bash
 pdd auto-deps --output "cost_tracker/cost_tracker_modified_prompt.prompt" "cost_tracker/cost_tracker_python.prompt" "."
 ```

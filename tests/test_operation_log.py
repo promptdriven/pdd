@@ -711,3 +711,100 @@ def test_basename_sanitization_deeply_nested(temp_pdd_env):
 
     # Verify no nested directories created
     assert log_path.parent == Path(temp_pdd_env)
+
+
+# --------------------------------------------------------------------------------
+# REGRESSION TESTS: Issue #983 - save_fingerprint resolves paths when None
+# --------------------------------------------------------------------------------
+
+def test_save_fingerprint_resolves_paths_when_none_issue_983(temp_pdd_env, tmp_path):
+    """
+    Regression test for Issue #983: save_fingerprint() must resolve paths via
+    get_pdd_file_paths() when called without paths, producing non-null hashes.
+
+    Bug: When paths=None, calculate_current_hashes() was skipped entirely,
+    making all hash fields null.
+
+    Fix: save_fingerprint now calls get_pdd_file_paths(basename, language)
+    internally when paths is not provided.
+    """
+    # Create real files so hashes can be computed
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "hashmod_python.prompt"
+    prompt_file.write_text("% Hash Module\nCreate a hash utility.\n")
+
+    code_file = tmp_path / "hashmod.py"
+    code_file.write_text("def compute_hash(): pass\n")
+
+    mock_paths = {"prompt": prompt_file, "code": code_file}
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths
+    ), patch(
+        "pdd.sync_determine_operation.get_meta_dir",
+        return_value=Path(temp_pdd_env),
+    ):
+        # Call WITHOUT paths — the old bug
+        operation_log.save_fingerprint("hashmod", "python", operation="generate")
+
+    fp_path = operation_log.get_fingerprint_path("hashmod", "python")
+    assert fp_path.exists(), "Fingerprint file should be created"
+
+    with open(fp_path) as f:
+        fp_data = json.load(f)
+
+    # THE BUG: With issue #983, these were all null
+    assert fp_data["prompt_hash"] is not None, (
+        "Issue #983: prompt_hash is null — save_fingerprint must resolve paths when None"
+    )
+    assert fp_data["code_hash"] is not None, (
+        "Issue #983: code_hash is null — save_fingerprint must resolve paths when None"
+    )
+
+    # Verify SHA-256 format
+    for field in ["prompt_hash", "code_hash"]:
+        val = fp_data[field]
+        assert len(val) == 64 and all(c in "0123456789abcdef" for c in val), (
+            f"{field} should be a 64-char hex SHA-256 hash, got: {val}"
+        )
+
+
+def test_save_fingerprint_skips_resolution_when_paths_provided_issue_983(temp_pdd_env, tmp_path):
+    """
+    Issue #983: When paths is explicitly provided, save_fingerprint should use
+    them directly and NOT call get_pdd_file_paths.
+    """
+    prompt_file = tmp_path / "prompts" / "mymod_python.prompt"
+    prompt_file.parent.mkdir(parents=True)
+    prompt_file.write_text("% My Module\nDo stuff.\n")
+
+    explicit_paths = {"prompt": prompt_file}
+
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths"
+    ) as mock_get_paths:
+        operation_log.save_fingerprint(
+            "mymod", "python", operation="generate", paths=explicit_paths
+        )
+
+        mock_get_paths.assert_not_called()
+
+
+def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_env):
+    """
+    Issue #983: If get_pdd_file_paths raises a recoverable error during
+    path resolution, save_fingerprint should warn and produce null hashes
+    (graceful degradation) rather than crashing.
+    """
+    with patch(
+        "pdd.sync_determine_operation.get_pdd_file_paths",
+        side_effect=OSError("prompts dir not found"),
+    ), patch("pdd.operation_log.logger") as mock_logger:
+        # Should NOT raise
+        operation_log.save_fingerprint("badmod", "python", operation="generate")
+
+        mock_logger.warning.assert_called_once()
+        warning_args = str(mock_logger.warning.call_args)
+        assert "badmod" in warning_args
+        assert "python" in warning_args
