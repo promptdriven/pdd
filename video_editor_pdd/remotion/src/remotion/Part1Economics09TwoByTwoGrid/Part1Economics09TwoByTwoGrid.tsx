@@ -1,172 +1,244 @@
 import React from "react";
-import { AbsoluteFill, Sequence } from "remotion";
-import { GridLines } from "./GridLines";
-import { AxisLabels } from "./AxisLabels";
-import { QuadrantFill } from "./QuadrantFill";
-import { NeutralQuadrants } from "./NeutralQuadrants";
-import { InsightText } from "./InsightText";
 import {
-  BG_COLOR,
+  AbsoluteFill,
+  Sequence,
+  interpolate,
+  useCurrentFrame,
+  Easing,
+} from "remotion";
+import GridLines from "./GridLines";
+import QuadrantFill from "./QuadrantFill";
+import {
+  BACKGROUND_COLOR,
   GRID_SIZE,
   CELL_SIZE,
   GRID_LEFT,
   GRID_TOP,
   GRID_LINE_COLOR,
   GRID_LINE_WIDTH,
-  GREEN_QUADRANT,
-  GREEN_FILL_OPACITY,
-  GREEN_GLOW_OPACITY,
-  RED_QUADRANT,
-  RED_FILL_OPACITY,
-  RED_GLOW_OPACITY,
-  NEUTRAL_FILL,
-  NEUTRAL_FILL_OPACITY,
   AXIS_LABEL_COLOR,
   AXIS_LABEL_SIZE,
+  GREEN_QUADRANT_COLOR,
+  GREEN_FILL_OPACITY,
+  GREEN_GLOW_OPACITY,
+  RED_QUADRANT_COLOR,
+  RED_FILL_OPACITY,
+  RED_GLOW_OPACITY,
+  NEUTRAL_COLOR,
+  NEUTRAL_FILL_OPACITY,
   QUADRANT_LABEL_SIZE,
-  INSIGHT_COLOR,
-  INSIGHT_SIZE,
+  INSIGHT_TEXT_COLOR,
+  INSIGHT_TEXT_SIZE,
   INSIGHT_Y,
-  GRID_DRAW_START,
   GRID_DRAW_END,
   GREEN_QUADRANT_START,
-  GREEN_QUADRANT_END,
+  QUADRANT_FILL_DURATION,
   RED_QUADRANT_START,
-  RED_QUADRANT_END,
   INSIGHT_FADE_START,
   INSIGHT_FADE_DURATION,
-  X_LABELS,
-  Y_LABELS,
-  GREEN_LABEL_TEXT,
-  RED_LABEL_TEXT,
-  INSIGHT_TEXT,
-  DURATION_FRAMES,
+  TOTAL_FRAMES,
+  FRAMES_PER_CHAR,
+  GRID_DRAW_DURATION,
 } from "./constants";
 
 export const defaultPart1Economics09TwoByTwoGridProps = {};
+
+/** Neutral quadrant fill — non-animated, fades in with grid */
+const NeutralQuadrant: React.FC<{
+  left: number;
+  top: number;
+  size: number;
+  color: string;
+  fillOpacity: number;
+}> = ({ left, top, size, color, fillOpacity }) => {
+  const frame = useCurrentFrame();
+  const opacity = interpolate(frame, [0, GRID_DRAW_DURATION], [0, fillOpacity], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width: size,
+        height: size,
+        backgroundColor: color,
+        opacity,
+      }}
+    />
+  );
+};
+
+/** Insight text that fades in */
+const InsightText: React.FC = () => {
+  const frame = useCurrentFrame();
+  const opacity = interpolate(frame, [0, INSIGHT_FADE_DURATION], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        top: INSIGHT_Y,
+        width: 1920,
+        display: "flex",
+        justifyContent: "center",
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: INSIGHT_TEXT_SIZE,
+          fontWeight: 400,
+          color: INSIGHT_TEXT_COLOR,
+          textAlign: "center",
+          maxWidth: 800,
+          lineHeight: 1.5,
+        }}
+      >
+        Every study is correct. They just measured different quadrants.
+      </div>
+    </div>
+  );
+};
+
+/** Section title at the top */
+const SectionTitle: React.FC = () => {
+  const frame = useCurrentFrame();
+  const opacity = interpolate(frame, [10, 40], [0, 0.85], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 50,
+        width: 1920,
+        display: "flex",
+        justifyContent: "center",
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: 28,
+          fontWeight: 600,
+          color: "#E2E8F0",
+          textAlign: "center",
+          letterSpacing: 0.5,
+        }}
+      >
+        Reconciling the Studies
+      </div>
+    </div>
+  );
+};
 
 export const Part1Economics09TwoByTwoGrid: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
+        backgroundColor: BACKGROUND_COLOR,
         overflow: "hidden",
       }}
     >
-      {/* Title at the top */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
-        <div
-          style={{
-            position: "absolute",
-            top: 60,
-            left: 0,
-            width: 1920,
-            display: "flex",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            style={{
-              fontFamily: "Inter, sans-serif",
-              fontSize: 28,
-              fontWeight: 600,
-              color: "#E2E8F0",
-              letterSpacing: "-0.02em",
-              opacity: 0.9,
-            }}
-          >
-            Study Reconciliation Grid
-          </div>
-        </div>
+      {/* Section title */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <SectionTitle />
       </Sequence>
 
-      {/* Neutral quadrant fills — appear with grid */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
-        <NeutralQuadrants
-          gridLeft={GRID_LEFT}
-          gridTop={GRID_TOP}
-          cellSize={CELL_SIZE}
-          fillColor={NEUTRAL_FILL}
+      {/* Neutral quadrants (top-right, bottom-left) — appear with grid */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <NeutralQuadrant
+          left={GRID_LEFT + CELL_SIZE}
+          top={GRID_TOP}
+          size={CELL_SIZE}
+          color={NEUTRAL_COLOR}
           fillOpacity={NEUTRAL_FILL_OPACITY}
-          fadeStart={GRID_DRAW_START + 15}
-          fadeEnd={GRID_DRAW_END}
+        />
+        <NeutralQuadrant
+          left={GRID_LEFT}
+          top={GRID_TOP + CELL_SIZE}
+          size={CELL_SIZE}
+          color={NEUTRAL_COLOR}
+          fillOpacity={NEUTRAL_FILL_OPACITY}
         />
       </Sequence>
 
-      {/* Grid lines draw in */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+      {/* Grid lines and axis labels — draw from frame 0 */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <GridLines
           gridLeft={GRID_LEFT}
           gridTop={GRID_TOP}
           gridSize={GRID_SIZE}
-          cellSize={CELL_SIZE}
           lineColor={GRID_LINE_COLOR}
           lineWidth={GRID_LINE_WIDTH}
-          drawStart={GRID_DRAW_START}
-          drawEnd={GRID_DRAW_END}
+          axisLabelColor={AXIS_LABEL_COLOR}
+          axisLabelSize={AXIS_LABEL_SIZE}
+          drawDuration={GRID_DRAW_END}
         />
       </Sequence>
 
-      {/* Axis labels fade in with grid */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
-        <AxisLabels
-          gridLeft={GRID_LEFT}
-          gridTop={GRID_TOP}
-          gridSize={GRID_SIZE}
-          cellSize={CELL_SIZE}
-          xLabels={X_LABELS}
-          yLabels={Y_LABELS}
-          labelColor={AXIS_LABEL_COLOR}
-          labelSize={AXIS_LABEL_SIZE}
-          fadeStart={GRID_DRAW_START + 15}
-          fadeEnd={GRID_DRAW_END + 10}
-        />
-      </Sequence>
-
-      {/* Top-left quadrant: GREEN (GitHub study: +55%) */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+      {/* Top-left quadrant: Green (GitHub study +55%) */}
+      <Sequence
+        from={GREEN_QUADRANT_START}
+        durationInFrames={TOTAL_FRAMES - GREEN_QUADRANT_START}
+      >
         <QuadrantFill
-          x={GRID_LEFT}
-          y={GRID_TOP}
-          size={CELL_SIZE}
-          color={GREEN_QUADRANT}
+          quadrantLeft={GRID_LEFT}
+          quadrantTop={GRID_TOP}
+          cellSize={CELL_SIZE}
+          accentColor={GREEN_QUADRANT_COLOR}
           fillOpacity={GREEN_FILL_OPACITY}
           glowOpacity={GREEN_GLOW_OPACITY}
-          label={GREEN_LABEL_TEXT}
-          labelColor={GREEN_QUADRANT}
+          labelText="GitHub study: +55%"
+          labelColor={GREEN_QUADRANT_COLOR}
           labelSize={QUADRANT_LABEL_SIZE}
-          animStart={GREEN_QUADRANT_START}
-          animEnd={GREEN_QUADRANT_END}
+          animateInDuration={QUADRANT_FILL_DURATION}
+          framesPerChar={FRAMES_PER_CHAR}
         />
       </Sequence>
 
-      {/* Bottom-right quadrant: RED (METR study: −19%) */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+      {/* Bottom-right quadrant: Red (METR study −19%) */}
+      <Sequence
+        from={RED_QUADRANT_START}
+        durationInFrames={TOTAL_FRAMES - RED_QUADRANT_START}
+      >
         <QuadrantFill
-          x={GRID_LEFT + CELL_SIZE}
-          y={GRID_TOP + CELL_SIZE}
-          size={CELL_SIZE}
-          color={RED_QUADRANT}
+          quadrantLeft={GRID_LEFT + CELL_SIZE}
+          quadrantTop={GRID_TOP + CELL_SIZE}
+          cellSize={CELL_SIZE}
+          accentColor={RED_QUADRANT_COLOR}
           fillOpacity={RED_FILL_OPACITY}
           glowOpacity={RED_GLOW_OPACITY}
-          label={RED_LABEL_TEXT}
-          labelColor={RED_QUADRANT}
+          labelText="METR study: −19%"
+          labelColor={RED_QUADRANT_COLOR}
           labelSize={QUADRANT_LABEL_SIZE}
-          animStart={RED_QUADRANT_START}
-          animEnd={RED_QUADRANT_END}
+          animateInDuration={QUADRANT_FILL_DURATION}
+          framesPerChar={FRAMES_PER_CHAR}
         />
       </Sequence>
 
-      {/* Key insight text */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
-        <InsightText
-          text={INSIGHT_TEXT}
-          color={INSIGHT_COLOR}
-          fontSize={INSIGHT_SIZE}
-          y={INSIGHT_Y}
-          fadeStart={INSIGHT_FADE_START}
-          fadeDuration={INSIGHT_FADE_DURATION}
-        />
+      {/* Insight text */}
+      <Sequence
+        from={INSIGHT_FADE_START}
+        durationInFrames={TOTAL_FRAMES - INSIGHT_FADE_START}
+      >
+        <InsightText />
       </Sequence>
     </AbsoluteFill>
   );

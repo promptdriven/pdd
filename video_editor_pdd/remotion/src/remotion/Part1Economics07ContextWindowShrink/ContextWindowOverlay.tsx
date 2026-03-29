@@ -3,35 +3,32 @@ import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
   CONTEXT_WINDOW_WIDTH,
   CONTEXT_WINDOW_HEIGHT,
-  WINDOW_BORDER_COLOR,
-  WINDOW_GLOW_OPACITY,
-  WINDOW_GLOW_BLUR,
-  WINDOW_TINT_OPACITY,
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
+  CONTEXT_BORDER_COLOR,
+  GRID_CENTER_X,
+  GRID_CENTER_Y,
 } from "./constants";
 
 /**
- * The fixed-size "context window" overlay.
- * Always centered on the grid (screen center). Never changes size.
- * Has a glowing border and faint interior tint.
+ * Fixed-size context window overlay that stays the same size
+ * while the grid grows beneath it.
  */
-export const ContextWindowOverlay: React.FC = () => {
+
+const ContextWindowOverlay: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade in during the first 60 frames
-  const opacity = interpolate(frame, [20, 60], [0, 1], {
+  // Visible from frame 0, fully bright by frame 30
+  const opacity = interpolate(frame, [0, 30], [0.6, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.cubic),
+    easing: Easing.out(Easing.quad),
   });
 
-  // Gentle pulse on the glow
-  const pulsePhase = Math.sin(frame * 0.03) * 0.5 + 0.5;
-  const glowIntensity = WINDOW_GLOW_BLUR + pulsePhase * 4;
+  // Subtle pulse on the glow
+  const pulsePhase = Math.sin(frame * 0.04) * 0.5 + 0.5;
+  const glowIntensity = 12 + pulsePhase * 6;
 
-  const left = (CANVAS_WIDTH - CONTEXT_WINDOW_WIDTH) / 2;
-  const top = (CANVAS_HEIGHT - CONTEXT_WINDOW_HEIGHT) / 2;
+  const left = GRID_CENTER_X - CONTEXT_WINDOW_WIDTH / 2;
+  const top = GRID_CENTER_Y - CONTEXT_WINDOW_HEIGHT / 2;
 
   return (
     <div
@@ -41,11 +38,10 @@ export const ContextWindowOverlay: React.FC = () => {
         top,
         width: CONTEXT_WINDOW_WIDTH,
         height: CONTEXT_WINDOW_HEIGHT,
+        border: `2px solid ${CONTEXT_BORDER_COLOR}`,
+        backgroundColor: "rgba(74, 144, 217, 0.05)",
+        boxShadow: `0 0 ${glowIntensity}px rgba(74, 144, 217, 0.2)`,
         opacity,
-        border: `2px solid ${WINDOW_BORDER_COLOR}`,
-        borderRadius: 4,
-        backgroundColor: `rgba(74, 144, 217, ${WINDOW_TINT_OPACITY})`,
-        boxShadow: `0 0 ${glowIntensity}px rgba(74, 144, 217, ${WINDOW_GLOW_OPACITY}), inset 0 0 ${glowIntensity * 0.5}px rgba(74, 144, 217, ${WINDOW_GLOW_OPACITY * 0.5})`,
         pointerEvents: "none",
         zIndex: 10,
       }}

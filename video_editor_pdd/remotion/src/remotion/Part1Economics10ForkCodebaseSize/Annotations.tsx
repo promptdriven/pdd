@@ -3,57 +3,91 @@ import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
   LARGE_CODEBASE_COLOR,
   CONTEXT_LABEL_COLOR,
-  FONT_FAMILY,
-  PHASE_CONTEXT_LABEL_START,
-  PHASE_METR_ANNOTATION_START,
-  PHASE_PERCEPTION_ANNOTATION_START,
-  FADE_DURATION,
+  CONTEXT_LABEL_APPEAR,
+  METR_ANNOTATION_START,
+  BELIEF_ANNOTATION_START,
+  FORK_POINT,
+  mapX,
+  mapY,
 } from "./constants";
-import { xToPixel, yToPixel } from "./ChartAxes";
 
-const Annotations: React.FC = () => {
+export const Annotations: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // ── "Same tools. Different codebase sizes." context label ──
+  // "Same tools. Different codebase sizes." — appears at fork point
   const contextOpacity = interpolate(
     frame,
-    [PHASE_CONTEXT_LABEL_START, PHASE_CONTEXT_LABEL_START + FADE_DURATION],
+    [CONTEXT_LABEL_APPEAR, CONTEXT_LABEL_APPEAR + 20],
     [0, 0.85],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // ── METR annotation ───────────────────────────────────
+  // METR annotation
   const metrOpacity = interpolate(
     frame,
-    [PHASE_METR_ANNOTATION_START, PHASE_METR_ANNOTATION_START + FADE_DURATION],
+    [METR_ANNOTATION_START, METR_ANNOTATION_START + 20],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // ── "Developers believed..." annotation ───────────────
-  const perceptionOpacity = interpolate(
+  const metrSlideY = interpolate(
     frame,
-    [PHASE_PERCEPTION_ANNOTATION_START, PHASE_PERCEPTION_ANNOTATION_START + FADE_DURATION],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    [METR_ANNOTATION_START, METR_ANNOTATION_START + 20],
+    [8, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Annotation positions — near the upper (large codebase) fork
-  const annotationX = xToPixel(2023);
-  const annotationBaseY = yToPixel(0.45) - 50;
+  // "Developers believed AI saved 20%..." annotation
+  const beliefOpacity = interpolate(
+    frame,
+    [BELIEF_ANNOTATION_START, BELIEF_ANNOTATION_START + 20],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const beliefSlideY = interpolate(
+    frame,
+    [BELIEF_ANNOTATION_START, BELIEF_ANNOTATION_START + 20],
+    [8, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  // Position annotations near the upper fork (large codebase)
+  const annotationX = mapX(2022.5);
+  const annotationY = mapY(0.46) - 60;
 
   return (
-    <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-      {/* ── Context label near fork point ──────────── */}
-      {frame >= PHASE_CONTEXT_LABEL_START && (
+    <>
+      {/* Context label near fork point */}
+      {frame >= CONTEXT_LABEL_APPEAR && (
         <div
           style={{
             position: "absolute",
-            left: xToPixel(2020) - 80,
-            top: yToPixel(0.48) + 30,
+            left: mapX(FORK_POINT.x) - 130,
+            top: mapY(FORK_POINT.y) + 30,
             opacity: contextOpacity,
-            fontFamily: FONT_FAMILY,
-            fontSize: 18,
+            fontFamily: "Inter, sans-serif",
+            fontSize: 14,
             fontWeight: 400,
             color: CONTEXT_LABEL_COLOR,
             whiteSpace: "nowrap",
@@ -63,75 +97,67 @@ const Annotations: React.FC = () => {
         </div>
       )}
 
-      {/* ── METR annotation callout ────────────────── */}
-      {frame >= PHASE_METR_ANNOTATION_START && (
+      {/* METR annotation */}
+      {frame >= METR_ANNOTATION_START && (
         <div
           style={{
             position: "absolute",
             left: annotationX,
-            top: annotationBaseY,
+            top: annotationY + metrSlideY,
             opacity: metrOpacity,
-            maxWidth: 460,
+            fontFamily: "Inter, sans-serif",
+            fontSize: 13,
+            fontWeight: 400,
+            color: LARGE_CODEBASE_COLOR,
+            whiteSpace: "nowrap",
+            lineHeight: 1.4,
           }}
         >
-          {/* Callout line */}
-          <svg
-            width={460}
-            height={60}
-            style={{ position: "absolute", top: -10, left: -30 }}
-          >
-            <line
-              x1={0}
-              y1={50}
-              x2={30}
-              y2={30}
-              stroke={LARGE_CODEBASE_COLOR}
-              strokeWidth={1.5}
-              opacity={0.5}
-            />
-          </svg>
-          <div
-            style={{
-              fontFamily: FONT_FAMILY,
-              fontSize: 18,
-              fontWeight: 500,
-              color: LARGE_CODEBASE_COLOR,
-              lineHeight: 1.4,
-              textShadow: "0 1px 4px rgba(0,0,0,0.6)",
-            }}
-          >
-            METR, 2025: experienced devs 19% slower on mature repos
-          </div>
+          METR, 2025: experienced devs 19% slower on mature repos
         </div>
       )}
 
-      {/* ── Perception gap annotation ─────────────── */}
-      {frame >= PHASE_PERCEPTION_ANNOTATION_START && (
+      {/* Devastating belief annotation */}
+      {frame >= BELIEF_ANNOTATION_START && (
         <div
           style={{
             position: "absolute",
             left: annotationX,
-            top: annotationBaseY + 36,
-            opacity: perceptionOpacity,
-            maxWidth: 460,
+            top: annotationY + 26 + beliefSlideY,
+            opacity: beliefOpacity,
+            fontFamily: "Inter, sans-serif",
+            fontSize: 13,
+            fontWeight: 400,
+            fontStyle: "italic",
+            color: LARGE_CODEBASE_COLOR,
+            whiteSpace: "nowrap",
+            lineHeight: 1.4,
           }}
         >
-          <div
-            style={{
-              fontFamily: FONT_FAMILY,
-              fontSize: 18,
-              fontWeight: 500,
-              fontStyle: "italic",
-              color: LARGE_CODEBASE_COLOR,
-              lineHeight: 1.4,
-              textShadow: "0 1px 4px rgba(0,0,0,0.6)",
-            }}
-          >
-            Developers believed AI saved 20%. It cost 19%.
-          </div>
+          Developers believed AI saved 20%. It cost 19%.
         </div>
       )}
-    </div>
+
+      {/* Callout line from METR annotation to large codebase line */}
+      {frame >= METR_ANNOTATION_START && (
+        <svg
+          width={1920}
+          height={1080}
+          style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        >
+          <line
+            x1={annotationX - 8}
+            y1={annotationY + 10}
+            x2={mapX(2024)}
+            y2={mapY(0.46)}
+            stroke={LARGE_CODEBASE_COLOR}
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            opacity={metrOpacity * 0.5}
+          />
+        </svg>
+      )}
+    </>
   );
 };
 

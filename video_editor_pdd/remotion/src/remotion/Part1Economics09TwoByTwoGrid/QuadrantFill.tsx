@@ -1,109 +1,143 @@
 import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
 
 interface QuadrantFillProps {
   /** Pixel position of the quadrant's top-left corner */
-  x: number;
-  y: number;
-  size: number;
-  color: string;
+  quadrantLeft: number;
+  quadrantTop: number;
+  /** Size of each cell */
+  cellSize: number;
+  /** The accent color for the quadrant */
+  accentColor: string;
+  /** Background fill opacity target */
   fillOpacity: number;
+  /** Border glow opacity target */
   glowOpacity: number;
-  label: string;
+  /** Label text displayed in the quadrant center */
+  labelText: string;
+  /** Label color */
   labelColor: string;
+  /** Label font size */
   labelSize: number;
-  /** Frame at which illumination starts (relative to Sequence, so use absolute frame) */
-  animStart: number;
-  animEnd: number;
+  /** Frame at which this quadrant starts animating (relative to Sequence) */
+  animateInDuration: number;
+  /** Frames per character for type-in effect */
+  framesPerChar: number;
 }
 
-export const QuadrantFill: React.FC<QuadrantFillProps> = ({
-  x,
-  y,
-  size,
-  color,
+const QuadrantFill: React.FC<QuadrantFillProps> = ({
+  quadrantLeft,
+  quadrantTop,
+  cellSize,
+  accentColor,
   fillOpacity,
   glowOpacity,
-  label,
+  labelText,
   labelColor,
   labelSize,
-  animStart,
-  animEnd,
+  animateInDuration,
+  framesPerChar,
 }) => {
   const frame = useCurrentFrame();
 
-  // Fill fade-in
-  const fill = interpolate(frame, [animStart, animEnd], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.cubic),
-  });
-
-  // Typewriter effect: 2 frames per character
-  const charsVisible = Math.floor(
-    interpolate(frame, [animStart + 10, animStart + 10 + label.length * 2], [0, label.length], {
+  // Fill opacity animation
+  const currentFillOpacity = interpolate(
+    frame,
+    [0, animateInDuration],
+    [0, fillOpacity],
+    {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-    })
+      easing: Easing.out(Easing.cubic),
+    }
   );
 
-  const displayedText = label.slice(0, charsVisible);
+  // Glow opacity animation
+  const currentGlowOpacity = interpolate(
+    frame,
+    [0, animateInDuration],
+    [0, glowOpacity],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
+  );
 
-  // Subtle pulsing glow after fully revealed
-  const pulsePhase = Math.max(0, frame - animEnd);
-  const pulse = 1 + 0.08 * Math.sin((pulsePhase / 30) * Math.PI * 2);
+  // Type-in effect for label
+  const totalChars = labelText.length;
+  const typeStartFrame = animateInDuration * 0.5;
+  const charsVisible = Math.floor(
+    interpolate(
+      frame,
+      [typeStartFrame, typeStartFrame + totalChars * framesPerChar],
+      [0, totalChars],
+      {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      }
+    )
+  );
+  const visibleText = labelText.slice(0, charsVisible);
+
+  // Pulsing glow effect (subtle, after fill-in completes)
+  const pulsePhase = interpolate(
+    frame,
+    [animateInDuration, animateInDuration + 120],
+    [0, Math.PI * 2],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "extend",
+    }
+  );
+  const pulseMultiplier =
+    frame > animateInDuration ? 1 + Math.sin(pulsePhase) * 0.1 : 1;
 
   return (
-    <>
+    <div
+      style={{
+        position: "absolute",
+        left: quadrantLeft,
+        top: quadrantTop,
+        width: cellSize,
+        height: cellSize,
+      }}
+    >
       {/* Background fill */}
       <div
         style={{
           position: "absolute",
-          left: x,
-          top: y,
-          width: size,
-          height: size,
-          backgroundColor: color,
-          opacity: fillOpacity * fill,
+          left: 0,
+          top: 0,
+          width: cellSize,
+          height: cellSize,
+          backgroundColor: accentColor,
+          opacity: currentFillOpacity * pulseMultiplier,
         }}
       />
 
-      {/* Glow border */}
+      {/* Border glow */}
       <div
         style={{
           position: "absolute",
-          left: x,
-          top: y,
-          width: size,
-          height: size,
-          boxShadow: `inset 0 0 ${30 * fill * pulse}px ${color}`,
-          opacity: glowOpacity * fill,
-          pointerEvents: "none",
+          left: 0,
+          top: 0,
+          width: cellSize,
+          height: cellSize,
+          border: `2px solid ${accentColor}`,
+          opacity: currentGlowOpacity * pulseMultiplier,
+          boxShadow: `inset 0 0 30px ${accentColor}40, 0 0 20px ${accentColor}30`,
         }}
       />
 
-      {/* Outer glow */}
+      {/* Label text */}
       <div
         style={{
           position: "absolute",
-          left: x - 4,
-          top: y - 4,
-          width: size + 8,
-          height: size + 8,
-          boxShadow: `0 0 ${20 * fill * pulse}px ${8 * fill}px ${color}`,
-          opacity: glowOpacity * fill * 0.5,
-          pointerEvents: "none",
-        }}
-      />
-
-      {/* Label */}
-      <div
-        style={{
-          position: "absolute",
-          left: x,
-          top: y,
-          width: size,
-          height: size,
+          left: 0,
+          top: 0,
+          width: cellSize,
+          height: cellSize,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -111,15 +145,16 @@ export const QuadrantFill: React.FC<QuadrantFillProps> = ({
           fontSize: labelSize,
           fontWeight: 700,
           color: labelColor,
-          whiteSpace: "nowrap",
-          pointerEvents: "none",
+          textAlign: "center",
+          padding: 20,
+          lineHeight: 1.4,
         }}
       >
-        {displayedText}
-        {charsVisible < label.length && charsVisible > 0 && (
+        {visibleText}
+        {charsVisible < totalChars && charsVisible > 0 && (
           <span
             style={{
-              opacity: Math.sin(frame * 0.3) > 0 ? 1 : 0,
+              opacity: frame % 10 < 5 ? 1 : 0.3,
               marginLeft: 1,
             }}
           >
@@ -127,7 +162,7 @@ export const QuadrantFill: React.FC<QuadrantFillProps> = ({
           </span>
         )}
       </div>
-    </>
+    </div>
   );
 };
 

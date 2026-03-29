@@ -1,243 +1,240 @@
 import React from 'react';
 import {
 	AbsoluteFill,
-	Easing,
-	Sequence,
-	interpolate,
 	useCurrentFrame,
+	interpolate,
+	Easing,
 } from 'remotion';
-import { BlueprintGrid } from './BlueprintGrid';
-import { GhostShapes } from './GhostShapes';
+import {BlueprintGrid} from './BlueprintGrid';
+import {MoldSilhouette} from './MoldSilhouette';
 import {
 	BG_COLOR,
-	WIDTH,
-	HEIGHT,
+	CANVAS_WIDTH,
 	TITLE_COLOR,
-	TITLE_FONT,
-	TITLE_SIZE,
-	TITLE_WEIGHT,
-	SECTION_LABEL_COLOR,
-	LABEL_SIZE,
-	LABEL_WEIGHT,
+	LABEL_COLOR,
+	LABEL_OPACITY,
+	RULE_COLOR,
+	RULE_OPACITY,
+	TITLE_FONT_SIZE,
+	LABEL_FONT_SIZE,
 	LABEL_LETTER_SPACING,
+	RULE_WIDTH,
+	RULE_THICKNESS,
 	LABEL_Y,
 	TITLE_LINE1_Y,
 	RULE_Y,
 	TITLE_LINE2_Y,
 	TITLE_LINE2_OFFSET_X,
-	RULE_WIDTH,
-	RULE_HEIGHT,
-	RULE_COLOR,
+	BG_FADE_START,
 	BG_FADE_END,
 	LABEL_FADE_START,
 	LABEL_FADE_DURATION,
-	GHOST_DRAW_START,
-	TITLE1_TYPE_START,
-	TITLE1_CHAR_DELAY,
+	MOLD_DRAW_START,
+	TYPEWRITER_START,
+	TYPEWRITER_CHAR_DELAY,
 	RULE_DRAW_START,
 	RULE_DRAW_DURATION,
-	TITLE2_FADE_START,
-	TITLE2_FADE_DURATION,
-	TITLE2_SLIDE_DISTANCE,
+	SHIFT_FADE_START,
+	SHIFT_FADE_DURATION,
+	FADEOUT_START,
+	FADEOUT_DURATION,
+	SECTION_LABEL,
+	TITLE_LINE1,
+	TITLE_LINE2,
 } from './constants';
 
-// ─── Section Label ("PART 2") ────────────────────────────────────────
+export const defaultPart2ParadigmShift01SectionTitleCardProps = {};
 
-const SectionLabel: React.FC = () => {
+export const Part2ParadigmShift01SectionTitleCard: React.FC = () => {
 	const frame = useCurrentFrame();
 
-	const opacity = interpolate(frame, [0, LABEL_FADE_DURATION], [0, 0.5], {
+	// ── Background fade-in from black ───────────────────────
+	const bgOpacity = interpolate(frame, [BG_FADE_START, BG_FADE_END], [0, 1], {
+		extrapolateLeft: 'clamp',
 		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
 	});
 
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				top: LABEL_Y,
-				left: 0,
-				width: WIDTH,
-				textAlign: 'center',
-				fontFamily: TITLE_FONT,
-				fontSize: LABEL_SIZE,
-				fontWeight: LABEL_WEIGHT,
-				color: SECTION_LABEL_COLOR,
-				letterSpacing: LABEL_LETTER_SPACING,
-				opacity,
-			}}
-		>
-			PART 2
-		</div>
-	);
-};
-
-// ─── Typewriter Title ("THE PARADIGM") ───────────────────────────────
-
-const TITLE1_TEXT = 'THE PARADIGM';
-
-const TypewriterTitle: React.FC = () => {
-	const frame = useCurrentFrame();
-
-	const charsVisible = Math.min(
-		TITLE1_TEXT.length,
-		Math.floor(frame / TITLE1_CHAR_DELAY) + 1,
-	);
-
-	const displayText = TITLE1_TEXT.slice(0, charsVisible);
-
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				top: TITLE_LINE1_Y,
-				left: 0,
-				width: WIDTH,
-				textAlign: 'center',
-				fontFamily: TITLE_FONT,
-				fontSize: TITLE_SIZE,
-				fontWeight: TITLE_WEIGHT,
-				color: TITLE_COLOR,
-			}}
-		>
-			{displayText}
-		</div>
-	);
-};
-
-// ─── Horizontal Rule ─────────────────────────────────────────────────
-
-const HorizontalRule: React.FC = () => {
-	const frame = useCurrentFrame();
-
-	const progress = interpolate(frame, [0, RULE_DRAW_DURATION], [0, 1], {
-		extrapolateRight: 'clamp',
-		easing: Easing.inOut(Easing.quad),
-	});
-
-	const currentWidth = RULE_WIDTH * progress;
-
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				top: RULE_Y,
-				left: (WIDTH - currentWidth) / 2,
-				width: currentWidth,
-				height: RULE_HEIGHT,
-				backgroundColor: RULE_COLOR,
-				opacity: 0.8,
-				zIndex: 5,
-			}}
-		/>
-	);
-};
-
-// ─── Slide-up + Fade-in Title ("SHIFT") ──────────────────────────────
-
-const ShiftTitle: React.FC = () => {
-	const frame = useCurrentFrame();
-
-	const opacity = interpolate(frame, [0, TITLE2_FADE_DURATION], [0, 1], {
-		extrapolateRight: 'clamp',
-		easing: Easing.out(Easing.quad),
-	});
-
-	const translateY = interpolate(
+	// ── Global fade-out at end ──────────────────────────────
+	const fadeOutOpacity = interpolate(
 		frame,
-		[0, TITLE2_FADE_DURATION],
-		[TITLE2_SLIDE_DISTANCE, 0],
+		[FADEOUT_START, FADEOUT_START + FADEOUT_DURATION],
+		[1, 0],
 		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.in(Easing.quad),
+		},
+	);
+
+	// ── "PART 2" label fade-in ──────────────────────────────
+	const labelOpacity = interpolate(
+		frame,
+		[LABEL_FADE_START, LABEL_FADE_START + LABEL_FADE_DURATION],
+		[0, LABEL_OPACITY],
+		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.out(Easing.quad),
+		},
+	);
+
+	// ── "THE PARADIGM" typewriter ───────────────────────────
+	const totalChars = TITLE_LINE1.length;
+	const typewriterEnd =
+		TYPEWRITER_START + totalChars * TYPEWRITER_CHAR_DELAY;
+	const charsVisible =
+		frame < TYPEWRITER_START
+			? 0
+			: Math.min(
+					totalChars,
+					Math.floor(
+						(frame - TYPEWRITER_START) / TYPEWRITER_CHAR_DELAY,
+					) + 1,
+				);
+	const paradigmText = TITLE_LINE1.slice(0, charsVisible);
+
+	// ── Horizontal rule drawing from center ─────────────────
+	const ruleProgress = interpolate(
+		frame,
+		[RULE_DRAW_START, RULE_DRAW_START + RULE_DRAW_DURATION],
+		[0, 1],
+		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.inOut(Easing.quad),
+		},
+	);
+	const ruleCurrentWidth = RULE_WIDTH * ruleProgress;
+
+	// ── "SHIFT" fade-in + slide-up ──────────────────────────
+	const shiftOpacity = interpolate(
+		frame,
+		[SHIFT_FADE_START, SHIFT_FADE_START + SHIFT_FADE_DURATION],
+		[0, 1],
+		{
+			extrapolateLeft: 'clamp',
+			extrapolateRight: 'clamp',
+			easing: Easing.out(Easing.quad),
+		},
+	);
+	const shiftSlideY = interpolate(
+		frame,
+		[SHIFT_FADE_START, SHIFT_FADE_START + SHIFT_FADE_DURATION],
+		[10, 0],
+		{
+			extrapolateLeft: 'clamp',
 			extrapolateRight: 'clamp',
 			easing: Easing.out(Easing.cubic),
 		},
 	);
 
-	return (
-		<div
-			style={{
-				position: 'absolute',
-				top: TITLE_LINE2_Y,
-				left: TITLE_LINE2_OFFSET_X,
-				width: WIDTH,
-				textAlign: 'center',
-				fontFamily: TITLE_FONT,
-				fontSize: TITLE_SIZE,
-				fontWeight: TITLE_WEIGHT,
-				color: TITLE_COLOR,
-				opacity,
-				transform: `translateY(${translateY}px)`,
-			}}
-		>
-			SHIFT
-		</div>
-	);
-};
-
-// ─── Background Fade ─────────────────────────────────────────────────
-
-const BackgroundFade: React.FC = () => {
-	const frame = useCurrentFrame();
-
-	// Black overlay that fades out to reveal the background
-	const blackOpacity = interpolate(frame, [0, BG_FADE_END], [1, 0], {
-		extrapolateRight: 'clamp',
-	});
+	// Local frame for mold (starts at MOLD_DRAW_START)
+	const moldLocalFrame = Math.max(0, frame - MOLD_DRAW_START);
 
 	return (
 		<AbsoluteFill
 			style={{
 				backgroundColor: '#000000',
-				opacity: blackOpacity,
-				zIndex: 10,
-			}}
-		/>
-	);
-};
-
-// ─── Main Component ──────────────────────────────────────────────────
-
-export const defaultPart2ParadigmShift01SectionTitleCardProps = {};
-
-export const Part2ParadigmShift01SectionTitleCard: React.FC = () => {
-	return (
-		<AbsoluteFill
-			style={{
-				backgroundColor: BG_COLOR,
-				width: WIDTH,
-				height: HEIGHT,
 			}}
 		>
-			{/* Blueprint grid — visible from frame 0, fades in */}
-			<BlueprintGrid />
+			<AbsoluteFill
+				style={{
+					opacity: bgOpacity * fadeOutOpacity,
+					backgroundColor: BG_COLOR,
+				}}
+			>
+				{/* Blueprint grid */}
+				<BlueprintGrid />
 
-			{/* Black overlay that fades out during frames 0-15 */}
-			<BackgroundFade />
+				{/* Ghost mold silhouette */}
+				{frame >= MOLD_DRAW_START && (
+					<MoldSilhouette localFrame={moldLocalFrame} />
+				)}
 
-			{/* Ghost shapes — mold cavity + circuit schematic */}
-			<Sequence from={GHOST_DRAW_START} durationInFrames={105}>
-				<GhostShapes />
-			</Sequence>
+				{/* "PART 2" section label */}
+				<div
+					style={{
+						position: 'absolute',
+						top: LABEL_Y,
+						left: 0,
+						width: CANVAS_WIDTH,
+						textAlign: 'center',
+						fontFamily: 'Inter, sans-serif',
+						fontSize: LABEL_FONT_SIZE,
+						fontWeight: 600,
+						color: LABEL_COLOR,
+						opacity: labelOpacity,
+						letterSpacing: LABEL_LETTER_SPACING,
+						lineHeight: 1,
+					}}
+				>
+					{SECTION_LABEL}
+				</div>
 
-			{/* Section label "PART 2" */}
-			<Sequence from={LABEL_FADE_START} durationInFrames={105}>
-				<SectionLabel />
-			</Sequence>
+				{/* "THE PARADIGM" typewriter text */}
+				<div
+					style={{
+						position: 'absolute',
+						top: TITLE_LINE1_Y,
+						left: 0,
+						width: CANVAS_WIDTH,
+						textAlign: 'center',
+						fontFamily: 'Inter, sans-serif',
+						fontSize: TITLE_FONT_SIZE,
+						fontWeight: 700,
+						color: TITLE_COLOR,
+						lineHeight: 1,
+						whiteSpace: 'pre',
+					}}
+				>
+					{paradigmText}
+					{/* Typing cursor blink while typing */}
+					{frame >= TYPEWRITER_START && frame < typewriterEnd + 10 && (
+						<span
+							style={{
+								opacity: Math.sin(frame * 0.3) > 0 ? 0.8 : 0,
+								color: TITLE_COLOR,
+							}}
+						>
+							|
+						</span>
+					)}
+				</div>
 
-			{/* Title line 1: "THE PARADIGM" — typewriter */}
-			<Sequence from={TITLE1_TYPE_START} durationInFrames={80}>
-				<TypewriterTitle />
-			</Sequence>
+				{/* Horizontal rule — drawn from center outward */}
+				{frame >= RULE_DRAW_START && (
+					<div
+						style={{
+							position: 'absolute',
+							top: RULE_Y,
+							left: (CANVAS_WIDTH - ruleCurrentWidth) / 2,
+							width: ruleCurrentWidth,
+							height: RULE_THICKNESS,
+							backgroundColor: RULE_COLOR,
+							opacity: RULE_OPACITY,
+						}}
+					/>
+				)}
 
-			{/* Horizontal rule — draws from center */}
-			<Sequence from={RULE_DRAW_START} durationInFrames={60}>
-				<HorizontalRule />
-			</Sequence>
-
-			{/* Title line 2: "SHIFT" — fade + slide up */}
-			<Sequence from={TITLE2_FADE_START} durationInFrames={50}>
-				<ShiftTitle />
-			</Sequence>
+				{/* "SHIFT" — fade-in with slide-up */}
+				<div
+					style={{
+						position: 'absolute',
+						top: TITLE_LINE2_Y + shiftSlideY,
+						left: TITLE_LINE2_OFFSET_X,
+						width: CANVAS_WIDTH,
+						textAlign: 'center',
+						fontFamily: 'Inter, sans-serif',
+						fontSize: TITLE_FONT_SIZE,
+						fontWeight: 700,
+						color: TITLE_COLOR,
+						opacity: shiftOpacity,
+						lineHeight: 1,
+					}}
+				>
+					{TITLE_LINE2}
+				</div>
+			</AbsoluteFill>
 		</AbsoluteFill>
 	);
 };

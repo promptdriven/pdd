@@ -1,69 +1,62 @@
-// Part1Economics10ForkCodebaseSize — constants & data
-
-// ── Canvas ──────────────────────────────────────────────
-export const WIDTH = 1920;
-export const HEIGHT = 1080;
-export const FPS = 30;
-export const TOTAL_FRAMES = 1380;
-
-// ── Background ──────────────────────────────────────────
+// === COLORS ===
 export const BG_COLOR = "#0A0F1A";
-
-// ── Chart layout (matches spec 03 style) ────────────────
-export const CHART_LEFT = 180;
-export const CHART_RIGHT = 1780;
-export const CHART_TOP = 140;
-export const CHART_BOTTOM = 900;
-export const CHART_WIDTH = CHART_RIGHT - CHART_LEFT;
-export const CHART_HEIGHT = CHART_BOTTOM - CHART_TOP;
-
-// ── Axis ranges ─────────────────────────────────────────
-export const X_MIN = 2014;
-export const X_MAX = 2026;
-export const Y_MIN = 0;
-export const Y_MAX = 0.6; // developer-hours scale (relative)
-
-// ── Colors ──────────────────────────────────────────────
 export const AXIS_COLOR = "#475569";
 export const AXIS_LABEL_COLOR = "#94A3B8";
 export const GRID_COLOR = "#1E293B";
 
-export const GENERATE_LINE_COLOR = "#3B82F6"; // blue — generate line
-export const PATCH_LINE_COLOR = "#F59E0B";    // amber — original patch line (pre-fork)
-
+// Chart line colors
+export const GENERATE_LINE_COLOR = "#3B82F6";
+export const PATCH_LINE_COLOR = "#F59E0B";
 export const SMALL_CODEBASE_COLOR = "#5AAA6E";
 export const LARGE_CODEBASE_COLOR = "#EF4444";
-
 export const ARROW_COLOR = "#F59E0B";
 export const CONTEXT_LABEL_COLOR = "#94A3B8";
 
-// ── Line widths ─────────────────────────────────────────
-export const MAIN_LINE_WIDTH = 3;
-export const ARROW_LINE_WIDTH = 2;
+// Debt area
+export const DEBT_AREA_COLOR = "rgba(239, 68, 68, 0.08)";
 
-// ── Typography ──────────────────────────────────────────
-export const FONT_FAMILY = "Inter, system-ui, -apple-system, sans-serif";
+// === DIMENSIONS ===
+export const WIDTH = 1920;
+export const HEIGHT = 1080;
 
-// ── Pre-fork patch line (amber, from ~2014 to 2020) ─────
+// Chart area
+export const CHART_LEFT = 160;
+export const CHART_RIGHT = 1760;
+export const CHART_TOP = 100;
+export const CHART_BOTTOM = 900;
+export const CHART_WIDTH = CHART_RIGHT - CHART_LEFT;
+export const CHART_HEIGHT = CHART_BOTTOM - CHART_TOP;
+
+// === DATA ===
+// X-axis: years 2013-2026
+export const X_MIN = 2013;
+export const X_MAX = 2026;
+
+// Y-axis: cost in developer hours (normalized 0-1 scale representing 0-20 hours)
+export const Y_MIN = 0;
+export const Y_MAX = 1.0;
+export const Y_HOUR_MAX = 20; // for axis labels
+
+// Generate line (blue) — cost of writing new code from scratch
+export const GENERATE_LINE_DATA = [
+  { x: 2013, y: 0.90 },
+  { x: 2016, y: 0.85 },
+  { x: 2018, y: 0.78 },
+  { x: 2020, y: 0.55 },
+  { x: 2022, y: 0.30 },
+  { x: 2024, y: 0.15 },
+  { x: 2026, y: 0.08 },
+];
+
+// Patch/maintain line (amber) — cost of patching existing code, before fork
 export const PATCH_LINE_DATA = [
-  { x: 2014, y: 0.55 },
-  { x: 2016, y: 0.52 },
-  { x: 2018, y: 0.50 },
+  { x: 2013, y: 0.15 },
+  { x: 2016, y: 0.22 },
+  { x: 2018, y: 0.35 },
   { x: 2020, y: 0.48 },
 ];
 
-// ── Generate cost line (blue, from 2014 to 2026) ────────
-export const GENERATE_LINE_DATA = [
-  { x: 2014, y: 0.10 },
-  { x: 2016, y: 0.08 },
-  { x: 2018, y: 0.06 },
-  { x: 2020, y: 0.04 },
-  { x: 2022, y: 0.03 },
-  { x: 2024, y: 0.02 },
-  { x: 2026, y: 0.015 },
-];
-
-// ── Fork data ───────────────────────────────────────────
+// Fork data
 export const FORK_POINT = { x: 2020, y: 0.48 };
 
 export const SMALL_CODEBASE_DATA = [
@@ -80,33 +73,61 @@ export const LARGE_CODEBASE_DATA = [
   { x: 2026, y: 0.45 },
 ];
 
-// ── Debt-shaded area (between generate & patch/large) ───
-// Fill area between generate and patch/large codebase line
+// === ANIMATION TIMING (frames) ===
+export const TOTAL_FRAMES = 1380;
 
-// ── Y-axis tick marks ───────────────────────────────────
-export const Y_TICKS = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6];
-export const X_TICKS = [2014, 2016, 2018, 2020, 2022, 2024, 2026];
+// Phase 1: Chart visible (0-90)
+export const CHART_APPEAR_END = 90;
 
-// ── Animation timing (frames) ───────────────────────────
-export const PHASE_CHART_IN_START = 0;
-export const PHASE_CHART_IN_END = 90;
+// Phase 2: Fork begins (90-210)
+export const FORK_START = 90;
+export const FORK_DIVERGE_END = 210;
+export const CONTEXT_LABEL_APPEAR = 180;
 
-export const PHASE_FORK_START = 90;
-export const PHASE_FORK_END = 210;
-export const FORK_DURATION = 120; // frames for the fork to diverge
+// Phase 3: Fork diverges further (210-420)
+export const FORK_EXTEND_END = 420;
 
-export const PHASE_CONTEXT_LABEL_START = 180;
+// Phase 4: Annotations (420-600)
+export const METR_ANNOTATION_START = 420;
+export const BELIEF_ANNOTATION_START = 540;
 
-export const PHASE_DIVERGE_START = 210;
-export const PHASE_DIVERGE_END = 420;
+// Phase 5: Hold on annotations (600-900)
 
-export const PHASE_METR_ANNOTATION_START = 420;
-export const PHASE_PERCEPTION_ANNOTATION_START = 540;
+// Phase 6: Trap arrow (900-1050)
+export const ARROW_DRAW_START = 900;
+export const ARROW_DRAW_END = 990; // 90 frames
+export const ARROW_LABEL_START = 960;
 
-export const PHASE_ARROW_START = 900;
-export const PHASE_ARROW_END = 990;
-export const ARROW_DRAW_DURATION = 90;
+// Phase 7: Hold (1050-1380)
 
-export const PHASE_ARROW_LABEL_START = 960;
+// === HELPERS ===
+export function mapX(xVal: number): number {
+  return CHART_LEFT + ((xVal - X_MIN) / (X_MAX - X_MIN)) * CHART_WIDTH;
+}
 
-export const FADE_DURATION = 20;
+export function mapY(yVal: number): number {
+  return CHART_BOTTOM - ((yVal - Y_MIN) / (Y_MAX - Y_MIN)) * CHART_HEIGHT;
+}
+
+export function dataToPath(data: { x: number; y: number }[]): string {
+  return data
+    .map((pt, i) => `${i === 0 ? "M" : "L"} ${mapX(pt.x)} ${mapY(pt.y)}`)
+    .join(" ");
+}
+
+// Cubic bezier path for smoother curves
+export function dataToCurvePath(data: { x: number; y: number }[]): string {
+  if (data.length < 2) return "";
+  const points = data.map((pt) => ({ x: mapX(pt.x), y: mapY(pt.y) }));
+  let path = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const cpx1 = prev.x + (curr.x - prev.x) * 0.5;
+    const cpy1 = prev.y;
+    const cpx2 = prev.x + (curr.x - prev.x) * 0.5;
+    const cpy2 = curr.y;
+    path += ` C ${cpx1} ${cpy1}, ${cpx2} ${cpy2}, ${curr.x} ${curr.y}`;
+  }
+  return path;
+}

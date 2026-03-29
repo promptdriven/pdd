@@ -1,103 +1,113 @@
+// PhaseLabels.tsx — Animated phase labels: overflow message + result message
 import React from "react";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
+
 import {
-  useCurrentFrame,
-  interpolate,
-  Easing,
-} from "remotion";
+  PHASE_LABEL_COLOR,
+  OVERFLOW_RED,
+  REMAINING_GREEN,
+  WINDOW_TOP,
+  WINDOW_HEIGHT,
+  PHASE_OVERFLOW_HOLD_START,
+  PHASE_COMPRESS_START,
+  PHASE_RESULT_START,
+} from "./constants";
 
-// Inline constants
-const WINDOW_CENTER_X = 960;
-const WINDOW_CENTER_Y = 480;
-const WINDOW_HEIGHT = 700;
-const WINDOW_BOTTOM = WINDOW_CENTER_Y - WINDOW_HEIGHT / 2 + WINDOW_HEIGHT;
+const LABEL_Y = WINDOW_TOP + WINDOW_HEIGHT + 60;
 
-const LABEL_COLOR = "#E2E8F0";
-const RATIO_COLOR = "#5AAA6E";
-
-const FRAME_OVERFLOW_APPEAR = 300;
-const FRAME_COMPRESS_START = 420;
-const FRAME_RESULT_APPEAR = 600;
-
-/**
- * Phase labels that appear at key moments:
- * - "20 modules as code — doesn't fit" (Phase 1)
- * - "Same system. 5-10× more fits." (Phase 2)
- */
-export const PhaseLabels: React.FC = () => {
+const PhaseLabels: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Phase 1 label: appears at frame 300, fades out at frame 420
-  const phase1In = interpolate(
+  // Phase 1 label: "20 modules as code — doesn't fit"
+  const phase1FadeIn = interpolate(
     frame,
-    [FRAME_OVERFLOW_APPEAR, FRAME_OVERFLOW_APPEAR + 25],
+    [PHASE_OVERFLOW_HOLD_START + 10, PHASE_OVERFLOW_HOLD_START + 35],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.cubic) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
-  const phase1Out = interpolate(
+  const phase1FadeOut = interpolate(
     frame,
-    [FRAME_COMPRESS_START, FRAME_COMPRESS_START + 30],
+    [PHASE_COMPRESS_START, PHASE_COMPRESS_START + 30],
     [1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.in(Easing.quad),
+    }
   );
-  const phase1Opacity = phase1In * phase1Out;
+  const phase1Opacity = phase1FadeIn * phase1FadeOut;
 
-  // Phase 2 label: appears at frame 600 with easeOut(back) overshoot
-  const phase2Progress = interpolate(
+  // Phase 2 label: "Same system. 5-10× more fits."
+  const phase2FadeIn = interpolate(
     frame,
-    [FRAME_RESULT_APPEAR, FRAME_RESULT_APPEAR + 40],
+    [PHASE_RESULT_START, PHASE_RESULT_START + 30],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.back(1.4)) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.cubic),
+    }
   );
-  const phase2Opacity = interpolate(
+
+  // Subtle scale overshoot (back easing effect via spring-like interpolation)
+  const phase2Scale = interpolate(
     frame,
-    [FRAME_RESULT_APPEAR, FRAME_RESULT_APPEAR + 30],
-    [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [PHASE_RESULT_START, PHASE_RESULT_START + 20, PHASE_RESULT_START + 35],
+    [0.85, 1.04, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
   );
 
   return (
-    <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-      {/* Phase 1: "20 modules as code — doesn't fit" */}
-      {phase1Opacity > 0.001 && (
+    <>
+      {/* Phase 1: overflow label */}
+      {phase1Opacity > 0 && (
         <div
           style={{
             position: "absolute",
             left: 0,
-            top: WINDOW_BOTTOM + 60,
+            top: LABEL_Y,
             width: 1920,
             textAlign: "center",
             fontFamily: "Inter, sans-serif",
             fontSize: 18,
             fontWeight: 700,
-            color: LABEL_COLOR,
+            color: PHASE_LABEL_COLOR,
             opacity: phase1Opacity,
           }}
         >
-          20 modules as code — doesn&apos;t fit.
+          20 modules as code —{" "}
+          <span style={{ color: OVERFLOW_RED }}>doesn&apos;t fit</span>
         </div>
       )}
 
-      {/* Phase 2: "Same system. 5-10× more fits." */}
-      {phase2Opacity > 0.001 && (
+      {/* Phase 2: result label */}
+      {phase2FadeIn > 0 && (
         <div
           style={{
             position: "absolute",
             left: 0,
-            top: WINDOW_BOTTOM + 60,
+            top: LABEL_Y,
             width: 1920,
             textAlign: "center",
             fontFamily: "Inter, sans-serif",
             fontSize: 20,
             fontWeight: 700,
-            color: RATIO_COLOR,
-            opacity: phase2Opacity,
-            transform: `scale(${interpolate(phase2Progress, [0, 1], [0.85, 1])})`,
+            color: REMAINING_GREEN,
+            opacity: phase2FadeIn,
+            transform: `scale(${phase2Scale})`,
           }}
         >
           Same system. 5-10× more fits.
         </div>
       )}
-    </div>
+    </>
   );
 };
 

@@ -1,14 +1,25 @@
+// DebtLayer.tsx — A single debt layer with fill, optional noise, and label
 import React from "react";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
+import { NoiseTexture } from "./NoiseTexture";
+import {
+  LABEL_FONT_SIZE,
+  LABEL_FONT_WEIGHT,
+  LABEL_FONT_FAMILY,
+  LABEL_MIN_OPACITY,
+  LABEL_FADE_START,
+  LABEL_FADE_END,
+} from "./constants";
 
 interface DebtLayerProps {
-  /** Top offset of the layer */
+  /** Absolute top position of this layer */
   top: number;
-  /** Height of the layer */
+  /** Height of this layer */
   layerHeight: number;
+  /** Left edge */
+  left: number;
   /** Width of the layer */
   layerWidth: number;
-  /** Left offset */
-  left: number;
   /** Fill color */
   fillColor: string;
   /** Fill opacity */
@@ -17,36 +28,38 @@ interface DebtLayerProps {
   label: string;
   /** Label color */
   labelColor: string;
-  /** Label opacity (0-1) for fade-in */
-  labelOpacity: number;
-  /** Label font size */
-  labelFontSize: number;
-  /** Label font weight */
-  labelFontWeight: number;
-  /** Font family */
-  fontFamily: string;
-  /** Optional children (e.g., noise overlay) */
-  children?: React.ReactNode;
-  /** Border radius for the shape */
-  borderRadius?: number;
+  /** Whether to show noise texture overlay */
+  showNoise?: boolean;
+  /** Current opacity of the entire layer (for split animation) */
+  layerOpacity?: number;
 }
 
-const DebtLayer: React.FC<DebtLayerProps> = ({
+export const DebtLayer: React.FC<DebtLayerProps> = ({
   top,
   layerHeight,
-  layerWidth,
   left,
+  layerWidth,
   fillColor,
   fillOpacity,
   label,
   labelColor,
-  labelOpacity,
-  labelFontSize,
-  labelFontWeight,
-  fontFamily,
-  children,
-  borderRadius = 4,
+  showNoise = false,
+  layerOpacity = 1,
 }) => {
+  const frame = useCurrentFrame();
+
+  // Label fades in from frame 180-200
+  const labelOpacity = interpolate(
+    frame,
+    [LABEL_FADE_START, LABEL_FADE_END],
+    [0, LABEL_MIN_OPACITY],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
   return (
     <div
       style={{
@@ -55,11 +68,11 @@ const DebtLayer: React.FC<DebtLayerProps> = ({
         left,
         width: layerWidth,
         height: layerHeight,
-        borderRadius,
+        opacity: layerOpacity,
         overflow: "hidden",
       }}
     >
-      {/* Layer fill */}
+      {/* Fill background */}
       <div
         style={{
           position: "absolute",
@@ -72,10 +85,12 @@ const DebtLayer: React.FC<DebtLayerProps> = ({
         }}
       />
 
-      {/* Noise overlay or other children */}
-      {children}
+      {/* Optional noise overlay for Context Rot */}
+      {showNoise && (
+        <NoiseTexture width={layerWidth} height={layerHeight} />
+      )}
 
-      {/* Label — centered in the layer */}
+      {/* Label centered within the layer */}
       <div
         style={{
           position: "absolute",
@@ -87,14 +102,13 @@ const DebtLayer: React.FC<DebtLayerProps> = ({
           alignItems: "center",
           justifyContent: "center",
           opacity: labelOpacity,
-          pointerEvents: "none",
         }}
       >
         <span
           style={{
-            fontFamily,
-            fontSize: labelFontSize,
-            fontWeight: labelFontWeight,
+            fontFamily: LABEL_FONT_FAMILY,
+            fontSize: LABEL_FONT_SIZE,
+            fontWeight: LABEL_FONT_WEIGHT,
             color: labelColor,
             letterSpacing: "0.05em",
             textTransform: "uppercase",

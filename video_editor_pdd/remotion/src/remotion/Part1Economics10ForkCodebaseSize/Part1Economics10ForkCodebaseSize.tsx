@@ -1,45 +1,54 @@
 import React from "react";
 import { AbsoluteFill, Sequence } from "remotion";
 import { BG_COLOR, TOTAL_FRAMES } from "./constants";
-import ChartAxes from "./ChartAxes";
-import ForkingLines from "./ForkingLines";
-import Annotations from "./Annotations";
-import TrapArrow from "./TrapArrow";
+import { ChartAxes } from "./ChartAxes";
+import { ForkingLines } from "./ForkingLines";
+import { Annotations } from "./Annotations";
+import { TrapArrow } from "./TrapArrow";
 
 export const defaultPart1Economics10ForkCodebaseSizeProps = {};
 
 /**
- * Section 1.10 — Fork by Codebase Size: The Trap
+ * Section 1.10: Fork by Codebase Size — The Trap
  *
- * Visualises how AI-assisted patching cost forks into two diverging stories
- * depending on codebase size:
- *   • Small codebases — cost plunges (green)
- *   • Large codebases — cost stays flat / devs slower (red)
+ * The patch cost line forks at ~2020 into two diverging paths:
+ * - Small codebase: AI patching is transformative (plunges down)
+ * - Large codebase: experienced devs are actually slower with AI (stays flat)
  *
- * Duration: 1380 frames @ 30 fps (~46 s)
+ * Annotations reveal the METR 2025 finding and the perception gap.
+ * A curved arrow shows the trap: every patch adds code, pushing you
+ * from the world where AI helps into the world where it doesn't.
+ *
+ * Duration: ~46s (1380 frames @ 30fps)
  */
 export const Part1Economics10ForkCodebaseSize: React.FC = () => {
   return (
-    <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-      <AbsoluteFill
-        style={{
-          backgroundColor: BG_COLOR,
-          overflow: "hidden",
-        }}
-      >
-        {/* Layer 1: Chart grid, axes, labels */}
+    <AbsoluteFill
+      style={{
+        backgroundColor: BG_COLOR,
+        overflow: "hidden",
+      }}
+    >
+      {/* Base chart: axes, grid, labels — visible from frame 0 */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <ChartAxes />
+      </Sequence>
 
-        {/* Layer 2: Generate line, patch line, forking lines, debt area */}
+      {/* Chart lines: generate line, patch line, forking lines */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <ForkingLines />
+      </Sequence>
 
-        {/* Layer 3: Text annotations (METR, perception gap, context label) */}
+      {/* Annotations: context label, METR citation, belief gap */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <Annotations />
+      </Sequence>
 
-        {/* Layer 4: Curved trap arrow + label */}
+      {/* Trap arrow: curved dashed arrow + "Every patch adds code." */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <TrapArrow />
-      </AbsoluteFill>
-    </Sequence>
+      </Sequence>
+    </AbsoluteFill>
   );
 };
 

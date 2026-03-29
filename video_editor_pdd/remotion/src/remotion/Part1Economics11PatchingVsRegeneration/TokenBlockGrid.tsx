@@ -3,115 +3,112 @@ import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   TOKEN_ROWS,
   TOKEN_COLS,
-  TOKEN_GAP,
-  PANEL_PADDING,
-  PANEL_WIDTH,
-  PANEL_HEIGHT,
-  COLOR_RED_BLOCK,
-  COLOR_GREEN_BLOCK,
-  COLOR_GRAY_BLOCK,
-  DIST_IRRELEVANT,
-  DIST_RELEVANT,
+  TOKEN_BLOCK_GAP,
+  BLOCK_RED,
+  BLOCK_GREEN_RELEVANT,
+  BLOCK_GRAY,
+  DISTRIBUTION,
   LEFT_FILL_START,
-  LEFT_FILL_END,
 } from './constants';
 
-type BlockType = 'red' | 'green' | 'gray';
+// Deterministic seeded random for consistent block colors
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed * 9301 + 49297) * 49297;
+  return x - Math.floor(x);
+}
 
 interface TokenBlockGridProps {
-  panelX: number;
-  panelY: number;
+  panelWidth: number;
+  panelHeight: number;
 }
 
-/**
- * Generates a deterministic grid of token block types based on the distribution.
- */
-function generateGrid(rows: number, cols: number): BlockType[][] {
-  const grid: BlockType[][] = [];
-  // Use a simple seeded approach for deterministic layout
-  let seed = 42;
-  const nextRand = () => {
-    seed = (seed * 16807 + 0) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-
-  for (let r = 0; r < rows; r++) {
-    const row: BlockType[] = [];
-    for (let c = 0; c < cols; c++) {
-      const val = nextRand();
-      if (val < DIST_IRRELEVANT) {
-        row.push('red');
-      } else if (val < DIST_IRRELEVANT + DIST_RELEVANT) {
-        row.push('green');
-      } else {
-        row.push('gray');
-      }
-    }
-    grid.push(row);
-  }
-  return grid;
-}
-
-const BLOCK_COLORS: Record<BlockType, { color: string; opacity: number }> = {
-  red: { color: COLOR_RED_BLOCK, opacity: 0.25 },
-  green: { color: COLOR_GREEN_BLOCK, opacity: 0.3 },
-  gray: { color: COLOR_GRAY_BLOCK, opacity: 0.15 },
-};
-
-const TokenBlockGrid: React.FC<TokenBlockGridProps> = ({ panelX, panelY }) => {
+const TokenBlockGrid: React.FC<TokenBlockGridProps> = ({
+  panelWidth,
+  panelHeight,
+}) => {
   const frame = useCurrentFrame();
 
-  const grid = useMemo(() => generateGrid(TOKEN_ROWS, TOKEN_COLS), []);
+  const innerPadding = 12;
+  const availableW = panelWidth - innerPadding * 2;
+  const availableH = panelHeight - innerPadding * 2;
+  const blockW =
+    (availableW - (TOKEN_COLS - 1) * TOKEN_BLOCK_GAP) / TOKEN_COLS;
+  const blockH =
+    (availableH - (TOKEN_ROWS - 1) * TOKEN_BLOCK_GAP) / TOKEN_ROWS;
 
-  // Compute available space inside the panel
-  const innerWidth = PANEL_WIDTH - PANEL_PADDING * 2;
-  const innerHeight = PANEL_HEIGHT - PANEL_PADDING * 2;
-  const blockWidth = (innerWidth - (TOKEN_COLS - 1) * TOKEN_GAP) / TOKEN_COLS;
-  const blockHeight = (innerHeight - (TOKEN_ROWS - 1) * TOKEN_GAP) / TOKEN_ROWS;
-
-  // Total animation frames for the fill
-  const fillDuration = LEFT_FILL_END - LEFT_FILL_START;
-  const staggerPerRow = 3;
+  // Pre-compute the color assignment for each cell
+  const blockColors = useMemo(() => {
+    const colors: string[] = [];
+    for (let row = 0; row < TOKEN_ROWS; row++) {
+      for (let col = 0; col < TOKEN_COLS; col++) {
+        const idx = row * TOKEN_COLS + col;
+        const r = seededRandom(idx + 42);
+        if (r < DISTRIBUTION.irrelevant) {
+          colors.push(BLOCK_RED);
+        } else if (r < DISTRIBUTION.irrelevant + DISTRIBUTION.relevant) {
+          colors.push(BLOCK_GREEN_RELEVANT);
+        } else {
+          colors.push(BLOCK_GRAY);
+        }
+      }
+    }
+    return colors;
+  }, []);
 
   return (
-    <>
-      {grid.map((row, rowIdx) =>
-        row.map((blockType, colIdx) => {
-          const rowStart = LEFT_FILL_START + rowIdx * staggerPerRow;
-          const rowEnd = Math.min(rowStart + 30, LEFT_FILL_START + fillDuration);
+    <div
+      style={{
+        position: 'absolute',
+        top: innerPadding,
+        left: innerPadding,
+        width: availableW,
+        height: availableH,
+      }}
+    >
+      {Array.from({ length: TOKEN_ROWS }).map((_, row) => {
+        // Stagger: each row starts 3 frames after the previous
+        const rowStart = LEFT_FILL_START + row * 3;
+        const rowProgress = interpolate(frame, [rowStart, rowStart + 20], [0, 1], {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+          easing: Easing.out(Easing.quad),
+        });
 
-          const opacity = interpolate(
-            frame,
-            [rowStart, rowEnd],
-            [0, BLOCK_COLORS[blockType].opacity],
-            {
-              extrapolateLeft: 'clamp',
-              extrapolateRight: 'clamp',
-              easing: Easing.out(Easing.quad),
-            }
-          );
+        return Array.from({ length: TOKEN_COLS }).map((_, col) => {
+          const idx = row * TOKEN_COLS + col;
+          const color = blockColors[idx];
 
-          const x = panelX + PANEL_PADDING + colIdx * (blockWidth + TOKEN_GAP);
-          const y = panelY + PANEL_PADDING + rowIdx * (blockHeight + TOKEN_GAP);
+          // Opacity based on color type
+          let baseOpacity: number;
+          if (color === BLOCK_RED) {
+            baseOpacity = 0.25;
+          } else if (color === BLOCK_GREEN_RELEVANT) {
+            baseOpacity = 0.3;
+          } else {
+            baseOpacity = 0.15;
+          }
+
+          const x = col * (blockW + TOKEN_BLOCK_GAP);
+          const y = row * (blockH + TOKEN_BLOCK_GAP);
 
           return (
             <div
-              key={`${rowIdx}-${colIdx}`}
+              key={`${row}-${col}`}
               style={{
                 position: 'absolute',
                 left: x,
                 top: y,
-                width: blockWidth,
-                height: blockHeight,
-                backgroundColor: BLOCK_COLORS[blockType].color,
-                opacity,
+                width: blockW,
+                height: blockH,
+                backgroundColor: color,
+                opacity: baseOpacity * rowProgress,
                 borderRadius: 2,
               }}
             />
           );
-        })
-      )}
-    </>
+        });
+      })}
+    </div>
   );
 };
 

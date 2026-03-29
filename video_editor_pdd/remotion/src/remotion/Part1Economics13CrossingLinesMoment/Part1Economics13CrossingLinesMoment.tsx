@@ -1,248 +1,198 @@
+// Part1Economics13CrossingLinesMoment.tsx
+// The "We Are Here" crossing-lines chart — generate cost plunges below both
+// amber cost lines, marking the threshold where regeneration beats patching.
+//
+// Duration: 360 frames (12s @ 30fps)
+// Phases:
+//   0-60    Chart establishes; blue line visible up to ~2025
+//   60-120  Blue line descends, crosses dashed amber (total cost w/ debt)
+//   120-180 Blue line crosses solid amber (immediate patch cost)
+//   180-240 "We are here." label fades in
+//   240-360 Hold — deliberate stillness
+
 import React from "react";
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from "remotion";
+
 import {
-  AbsoluteFill,
-  useCurrentFrame,
-  Sequence,
-  interpolate,
-  Easing,
-} from "remotion";
-import {
-  BG_COLOR,
+  BACKGROUND_COLOR,
   BLUE_LINE_COLOR,
   AMBER_SOLID_COLOR,
   AMBER_DASHED_COLOR,
-  TOTAL_FRAMES,
-  CHART_LEFT,
-  CHART_RIGHT,
-  CHART_BOTTOM,
-  CHART_WIDTH,
-  CHART_HEIGHT,
-  X_MIN_YEAR,
-  X_MAX_YEAR,
-  Y_MAX,
-  TOTAL_COST_DEBT_Y,
-  IMMEDIATE_PATCH_Y,
-  GENERATE_LINE_POINTS,
-  CROSSING1_YEAR,
-  CROSSING1_Y,
-  CROSSING2_YEAR,
-  CROSSING2_Y,
-  BLUE_LINE_STROKE_WIDTH,
-  AMBER_LINE_STROKE_WIDTH,
-  FLASH1_RADIUS,
-  FLASH2_RADIUS,
-  FLASH1_FRAME,
-  FLASH2_FRAME,
+  TOTAL_COST_DEBT_POINTS,
+  IMMEDIATE_PATCH_POINTS,
+  GENERATE_COST_POINTS,
+  GENERATE_DESCENT_POINTS,
+  GENERATE_VISIBLE_BEFORE_INDEX,
+  CROSSING_1_X,
+  CROSSING_1_Y,
+  CROSSING_2_X,
+  CROSSING_2_Y,
+  FLASH_1_FRAME,
+  FLASH_2_FRAME,
+  FLASH_DURATION,
   PHASE_ESTABLISH_END,
-  PHASE_CROSS1_START,
-  PHASE_CROSS1_END,
-  PHASE_CROSS2_START,
-  PHASE_CROSS2_END,
-  PHASE_LABEL_START,
+  FONT_FAMILY,
+  AXIS_LABEL_COLOR,
 } from "./constants";
+
 import { ChartAxes } from "./ChartAxes";
 import { AnimatedLine } from "./AnimatedLine";
 import { RadialFlash } from "./RadialFlash";
 import { WeAreHereLabel } from "./WeAreHereLabel";
-import { ChartLegend } from "./ChartLegend";
-
-// ── Coordinate helpers ──────────────────────────────────────────────
-
-function yearToX(year: number): number {
-  return CHART_LEFT + ((year - X_MIN_YEAR) / (X_MAX_YEAR - X_MIN_YEAR)) * CHART_WIDTH;
-}
-
-function costToY(cost: number): number {
-  return CHART_BOTTOM - (cost / Y_MAX) * CHART_HEIGHT;
-}
-
-// ── Amber line data ─────────────────────────────────────────────────
-
-const TOTAL_COST_LINE: [number, number][] = [
-  [X_MIN_YEAR, TOTAL_COST_DEBT_Y],
-  [X_MAX_YEAR, TOTAL_COST_DEBT_Y + 5], // slight upward drift for realism
-];
-
-const IMMEDIATE_PATCH_LINE: [number, number][] = [
-  [X_MIN_YEAR, IMMEDIATE_PATCH_Y],
-  [X_MAX_YEAR, IMMEDIATE_PATCH_Y + 3], // slight upward drift
-];
-
-// ── Compute crossing points in pixel space ──────────────────────────
-
-const crossing1Px = { x: yearToX(CROSSING1_YEAR), y: costToY(CROSSING1_Y) };
-const crossing2Px = { x: yearToX(CROSSING2_YEAR), y: costToY(CROSSING2_Y) };
-
-// ── Blue line reveal computation ────────────────────────────────────
-// The blue line has GENERATE_LINE_POINTS.length points.
-// We reveal them progressively:
-//   Frame 0-60:   show points 0..5 (years 2020..2024.8 — above amber lines)
-//   Frame 60-120: reveal points 5..7 (crossing total_cost_debt)
-//   Frame 120-180: reveal points 7..9 (crossing immediate_patch, final)
-
-const INITIAL_POINTS = 6; // points visible at frame 0 (indices 0..5)
-const CROSS1_POINTS = 7; // through first crossing zone
-const CROSS2_POINTS = GENERATE_LINE_POINTS.length; // all points
-
-function getBlueRevealCount(frame: number): number {
-  if (frame <= PHASE_ESTABLISH_END) {
-    // Establish phase: show initial points
-    return INITIAL_POINTS;
-  }
-  if (frame <= PHASE_CROSS1_END) {
-    // First crossing: reveal to point 7
-    const progress = interpolate(
-      frame,
-      [PHASE_CROSS1_START, PHASE_CROSS1_END],
-      [INITIAL_POINTS, CROSS1_POINTS],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.in(Easing.quad),
-      }
-    );
-    return progress;
-  }
-  if (frame <= PHASE_CROSS2_END) {
-    // Second crossing: reveal remaining
-    const progress = interpolate(
-      frame,
-      [PHASE_CROSS2_START, PHASE_CROSS2_END],
-      [CROSS1_POINTS, CROSS2_POINTS],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.in(Easing.quad),
-      }
-    );
-    return progress;
-  }
-  return CROSS2_POINTS;
-}
-
-// ── Main component ──────────────────────────────────────────────────
 
 export const defaultPart1Economics13CrossingLinesMomentProps = {};
 
 export const Part1Economics13CrossingLinesMoment: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const blueRevealCount = getBlueRevealCount(frame);
+  // ── Legend Opacity ─────────────────────────────────────────────────
+  // Fade legend in during first 30 frames
+  const legendOpacity = interpolate(frame, [0, 30], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
+        backgroundColor: BACKGROUND_COLOR,
         overflow: "hidden",
       }}
     >
-      {/* Chart axes & grid — visible from frame 0 */}
+      {/* ── Chart Axes & Grid ──────────────────────────────────────── */}
       <ChartAxes />
 
-      {/* Legend */}
-      <ChartLegend x={CHART_RIGHT - 320} y={CHART_BOTTOM + 50} />
-
-      {/* Amber dashed line: Total cost with tech debt — fully visible from frame 0 */}
+      {/* ── Amber Dashed Line: Total Cost with Debt ────────────────── */}
+      {/* Visible from frame 0, drawn instantly */}
       <AnimatedLine
-        points={TOTAL_COST_LINE}
+        points={TOTAL_COST_DEBT_POINTS}
         color={AMBER_DASHED_COLOR}
-        strokeWidth={AMBER_LINE_STROKE_WIDTH}
-        revealCount={TOTAL_COST_LINE.length}
-        dashArray="10 6"
-        opacity={0.85}
+        strokeWidth={2.5}
+        dashed
+        drawStartFrame={0}
+        drawDuration={40}
+        easeInDraw={false}
       />
 
-      {/* Amber solid line: Immediate patch cost — fully visible from frame 0 */}
+      {/* ── Amber Solid Line: Immediate Patch Cost ─────────────────── */}
+      {/* Visible from frame 0, drawn instantly */}
       <AnimatedLine
-        points={IMMEDIATE_PATCH_LINE}
+        points={IMMEDIATE_PATCH_POINTS}
         color={AMBER_SOLID_COLOR}
-        strokeWidth={AMBER_LINE_STROKE_WIDTH}
-        revealCount={IMMEDIATE_PATCH_LINE.length}
-        opacity={0.85}
+        strokeWidth={2.5}
+        drawStartFrame={0}
+        drawDuration={40}
+        easeInDraw={false}
       />
 
-      {/* Blue "cost to generate" line — animates progressively */}
+      {/* ── Blue Line: Pre-crossing portion (up to ~2025) ──────────── */}
+      {/* Already visible at frame 0 (establishing shot) */}
       <AnimatedLine
-        points={GENERATE_LINE_POINTS}
+        points={GENERATE_COST_POINTS}
         color={BLUE_LINE_COLOR}
-        strokeWidth={BLUE_LINE_STROKE_WIDTH}
-        revealCount={blueRevealCount}
+        strokeWidth={3}
+        drawStartFrame={0}
+        drawDuration={40}
+        easeInDraw={false}
+        staticPointCount={GENERATE_VISIBLE_BEFORE_INDEX + 1}
       />
 
-      {/* Radial flash at first crossing point */}
+      {/* ── Blue Line: Descent through both crossings ──────────────── */}
+      {/* Draws from frame 60 to 180 (2 seconds per crossing phase) */}
+      <AnimatedLine
+        points={GENERATE_DESCENT_POINTS}
+        color={BLUE_LINE_COLOR}
+        strokeWidth={3}
+        drawStartFrame={PHASE_ESTABLISH_END}
+        drawDuration={120}
+        easeInDraw
+      />
+
+      {/* ── Crossing Flash 1 (total cost debt) ─────────────────────── */}
       <RadialFlash
-        cx={crossing1Px.x}
-        cy={crossing1Px.y}
-        radius={FLASH1_RADIUS}
-        triggerFrame={FLASH1_FRAME}
-        duration={20}
+        cx={CROSSING_1_X}
+        cy={CROSSING_1_Y}
+        maxRadius={30}
+        startFrame={FLASH_1_FRAME}
+        duration={FLASH_DURATION}
       />
 
-      {/* Radial flash at second crossing point */}
+      {/* ── Crossing Flash 2 (immediate patch) ─────────────────────── */}
       <RadialFlash
-        cx={crossing2Px.x}
-        cy={crossing2Px.y}
-        radius={FLASH2_RADIUS}
-        triggerFrame={FLASH2_FRAME}
-        duration={20}
+        cx={CROSSING_2_X}
+        cy={CROSSING_2_Y}
+        maxRadius={22}
+        startFrame={FLASH_2_FRAME}
+        duration={FLASH_DURATION}
       />
 
-      {/* "We are here." label — appears at frame 180 */}
-      <Sequence from={PHASE_LABEL_START} durationInFrames={TOTAL_FRAMES - PHASE_LABEL_START}>
-        <WeAreHereLabel
-          targetX={crossing2Px.x}
-          targetY={crossing2Px.y}
-          labelOffsetX={60}
-          labelOffsetY={55}
-        />
-      </Sequence>
+      {/* ── "We are here." Label ───────────────────────────────────── */}
+      <WeAreHereLabel />
 
-      {/* Amber line labels — visible from frame 0 */}
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+      {/* ── Legend ──────────────────────────────────────────────────── */}
+      <div
+        style={{
+          position: "absolute",
+          top: 40,
+          right: 80,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          opacity: legendOpacity,
+        }}
       >
-        {/* Label for dashed amber line */}
-        <text
-          x={CHART_RIGHT + 10}
-          y={costToY(TOTAL_COST_DEBT_Y + 2.5) + 5}
-          fill={AMBER_DASHED_COLOR}
-          fontFamily="Inter, system-ui, sans-serif"
-          fontSize={14}
-          fontWeight={500}
-          opacity={0.9}
-        >
-          Total cost
-        </text>
-        <text
-          x={CHART_RIGHT + 10}
-          y={costToY(TOTAL_COST_DEBT_Y + 2.5) + 20}
-          fill={AMBER_DASHED_COLOR}
-          fontFamily="Inter, system-ui, sans-serif"
-          fontSize={12}
-          fontWeight={400}
-          opacity={0.7}
-        >
-          (with debt)
-        </text>
-
-        {/* Label for solid amber line */}
-        <text
-          x={CHART_RIGHT + 10}
-          y={costToY(IMMEDIATE_PATCH_Y + 1.5) + 5}
-          fill={AMBER_SOLID_COLOR}
-          fontFamily="Inter, system-ui, sans-serif"
-          fontSize={14}
-          fontWeight={500}
-          opacity={0.9}
-        >
-          Patch cost
-        </text>
-      </svg>
+        <LegendItem
+          color={BLUE_LINE_COLOR}
+          label="Cost to Generate"
+          dashed={false}
+        />
+        <LegendItem
+          color={AMBER_DASHED_COLOR}
+          label="Total Cost (with debt)"
+          dashed
+        />
+        <LegendItem
+          color={AMBER_SOLID_COLOR}
+          label="Immediate Patch Cost"
+          dashed={false}
+        />
+      </div>
     </AbsoluteFill>
   );
 };
+
+// ── Legend Item ──────────────────────────────────────────────────────
+interface LegendItemProps {
+  color: string;
+  label: string;
+  dashed: boolean;
+}
+
+const LegendItem: React.FC<LegendItemProps> = ({ color, label, dashed }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <svg width={36} height={4}>
+      <line
+        x1={0}
+        y1={2}
+        x2={36}
+        y2={2}
+        stroke={color}
+        strokeWidth={2.5}
+        strokeDasharray={dashed ? "6 4" : "none"}
+      />
+    </svg>
+    <span
+      style={{
+        fontFamily: FONT_FAMILY,
+        fontSize: 16,
+        color: AXIS_LABEL_COLOR,
+        fontWeight: 500,
+      }}
+    >
+      {label}
+    </span>
+  </div>
+);
 
 export default Part1Economics13CrossingLinesMoment;

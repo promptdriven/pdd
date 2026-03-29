@@ -1,3 +1,6 @@
+// Part1Economics06DebtLayersZoom.tsx — Main component
+// Camera zooms into the debt area from a cost chart, then the monolithic amber
+// area separates into two layers: Code Complexity (lower) and Context Rot (upper).
 import React from "react";
 import {
   AbsoluteFill,
@@ -6,218 +9,306 @@ import {
   Easing,
   Sequence,
 } from "remotion";
-import ChartBackdrop from "./ChartBackdrop";
-import DebtLayer from "./DebtLayer";
-import NoiseOverlay from "./NoiseOverlay";
+import { DebtLayer } from "./DebtLayer";
 import {
-  BG_COLOR,
-  CODE_COMPLEXITY_COLOR,
-  CODE_COMPLEXITY_OPACITY,
-  CONTEXT_ROT_COLOR,
-  CONTEXT_ROT_OPACITY,
-  UNIFIED_DEBT_COLOR,
-  UNIFIED_DEBT_OPACITY,
-  NOISE_COLOR,
-  NOISE_OPACITY,
-  NOISE_GRAIN_SIZE,
-  NOISE_DRIFT_PX_PER_FRAME,
-  LABEL_FONT_SIZE,
-  LABEL_FONT_WEIGHT,
-  LABEL_FONT_FAMILY,
-  AXIS_COLOR,
-  AXIS_OPACITY,
-  GRID_LINE_OPACITY,
+  BACKGROUND_COLOR,
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
-  CHART_LEFT,
-  CHART_TOP,
-  CHART_WIDTH,
-  CHART_HEIGHT,
-  DEBT_AREA_X,
-  DEBT_AREA_WIDTH,
-  DEBT_AREA_Y_TOP,
-  DEBT_AREA_Y_BOTTOM,
-  ZOOM_ORIGIN_X,
-  ZOOM_ORIGIN_Y,
-  ZOOM_FACTOR,
-  LAYER_GAP,
+  // Zoom
   ZOOM_START,
   ZOOM_END,
+  ZOOM_ORIGIN_X,
+  ZOOM_ORIGIN_Y,
+  ZOOM_SCALE_FROM,
+  ZOOM_SCALE_TO,
+  // Split
   SPLIT_START,
   SPLIT_END,
-  LABEL_START,
-  LABEL_FADE_DURATION,
-  TEXTURE_START,
-  TEXTURE_FADE_DURATION,
+  // Layers
+  CODE_COMPLEXITY_COLOR,
+  CODE_COMPLEXITY_FILL_OPACITY,
+  CONTEXT_ROT_COLOR,
+  CONTEXT_ROT_FILL_OPACITY,
+  DEBT_AREA_COLOR,
+  DEBT_AREA_OPACITY,
+  // Layout
+  LAYER_GAP,
+  LAYER_AREA_TOP,
+  LAYER_AREA_BOTTOM,
+  LAYER_AREA_LEFT,
+  LAYER_AREA_RIGHT,
+  LAYER_MIDPOINT_RATIO,
+  // Chart
+  CHART_GRID_COLOR,
+  CHART_GRID_OPACITY,
+  CHART_AXIS_COLOR,
+  CHART_AXIS_OPACITY,
+  CHART_LINE_COLOR,
   YEAR_LABELS,
+  // Typography
+  LABEL_FONT_FAMILY,
 } from "./constants";
 
+// === Default props (required by spec) ===
 export const defaultPart1Economics06DebtLayersZoomProps = {};
 
-/**
- * Section 1.6: Debt Layers Zoom — Code Complexity vs. Context Rot
- *
- * Camera zooms into the shaded debt area from the code cost chart.
- * The monolithic amber area separates into two distinct layers:
- *   - Lower: "Code Complexity" (darker amber)
- *   - Upper: "Context Rot" (lighter amber with noise texture)
- */
+// === Simplified cost chart background (pre-zoom view) ===
+const ChartBackground: React.FC = () => {
+  // Simplified representation of the code cost chart that we're zooming into
+  const chartLeft = 160;
+  const chartRight = 1760;
+  const chartTop = 120;
+  const chartBottom = 860;
+  const chartWidth = chartRight - chartLeft;
+  const chartHeight = chartBottom - chartTop;
+
+  // Generate cost curve points (generate vs patch with debt area)
+  const generateCurve: string[] = [];
+  const patchCurve: string[] = [];
+  const numPoints = 100;
+
+  for (let i = 0; i <= numPoints; i++) {
+    const t = i / numPoints;
+    const x = chartLeft + t * chartWidth;
+
+    // Generate cost: starts low, rises steeply after 2023
+    const genY =
+      chartBottom - chartHeight * (0.15 + 0.05 * t + 0.6 * Math.pow(t, 3));
+    generateCurve.push(`${x},${genY}`);
+
+    // Patch cost: starts very low, rises even more steeply
+    const patchY =
+      chartBottom -
+      chartHeight * (0.08 + 0.02 * t + 0.75 * Math.pow(t, 3.5));
+    patchCurve.push(`${x},${patchY}`);
+  }
+
+  // Debt area: region between the two curves (right portion)
+  const debtAreaPoints: string[] = [];
+  for (let i = 40; i <= numPoints; i++) {
+    debtAreaPoints.push(generateCurve[i]);
+  }
+  for (let i = numPoints; i >= 40; i--) {
+    debtAreaPoints.push(patchCurve[i]);
+  }
+
+  return (
+    <svg
+      width={CANVAS_WIDTH}
+      height={CANVAS_HEIGHT}
+      style={{ position: "absolute", top: 0, left: 0 }}
+    >
+      {/* Grid lines */}
+      {[0.2, 0.4, 0.6, 0.8].map((frac) => (
+        <line
+          key={`h-${frac}`}
+          x1={chartLeft}
+          y1={chartTop + frac * chartHeight}
+          x2={chartRight}
+          y2={chartTop + frac * chartHeight}
+          stroke={CHART_GRID_COLOR}
+          strokeOpacity={CHART_GRID_OPACITY}
+          strokeWidth={1}
+        />
+      ))}
+      {YEAR_LABELS.map((_, idx) => {
+        const x = chartLeft + ((idx + 0.5) / YEAR_LABELS.length) * chartWidth;
+        return (
+          <line
+            key={`v-${idx}`}
+            x1={x}
+            y1={chartTop}
+            x2={x}
+            y2={chartBottom}
+            stroke={CHART_GRID_COLOR}
+            strokeOpacity={CHART_GRID_OPACITY}
+            strokeWidth={1}
+          />
+        );
+      })}
+
+      {/* Axes */}
+      <line
+        x1={chartLeft}
+        y1={chartBottom}
+        x2={chartRight}
+        y2={chartBottom}
+        stroke={CHART_AXIS_COLOR}
+        strokeOpacity={CHART_AXIS_OPACITY}
+        strokeWidth={2}
+      />
+      <line
+        x1={chartLeft}
+        y1={chartTop}
+        x2={chartLeft}
+        y2={chartBottom}
+        stroke={CHART_AXIS_COLOR}
+        strokeOpacity={CHART_AXIS_OPACITY}
+        strokeWidth={2}
+      />
+
+      {/* Year labels */}
+      {YEAR_LABELS.map((year, idx) => {
+        const x = chartLeft + ((idx + 0.5) / YEAR_LABELS.length) * chartWidth;
+        return (
+          <text
+            key={year}
+            x={x}
+            y={chartBottom + 30}
+            fill={CHART_AXIS_COLOR}
+            fillOpacity={0.5}
+            fontSize={14}
+            fontFamily={LABEL_FONT_FAMILY}
+            textAnchor="middle"
+          >
+            {year}
+          </text>
+        );
+      })}
+
+      {/* Debt area (shaded region between curves) */}
+      <polygon
+        points={debtAreaPoints.join(" ")}
+        fill={DEBT_AREA_COLOR}
+        fillOpacity={DEBT_AREA_OPACITY}
+      />
+
+      {/* Generate cost curve */}
+      <polyline
+        points={generateCurve.join(" ")}
+        fill="none"
+        stroke={CHART_LINE_COLOR}
+        strokeWidth={2.5}
+        strokeOpacity={0.8}
+      />
+
+      {/* Patch cost curve */}
+      <polyline
+        points={patchCurve.join(" ")}
+        fill="none"
+        stroke="#22C55E"
+        strokeWidth={2.5}
+        strokeOpacity={0.8}
+      />
+    </svg>
+  );
+};
+
+// === Main Component ===
 export const Part1Economics06DebtLayersZoom: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // ── Phase 1: Camera zoom (frames 0-90) ──
-  const zoomScale = interpolate(frame, [ZOOM_START, ZOOM_END], [1.0, ZOOM_FACTOR], {
-    easing: Easing.inOut(Easing.cubic),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Translate so zoom centers on the target region
-  const translateX = interpolate(
+  // --- Phase 1: Camera zoom (frame 0-90) ---
+  const zoomScale = interpolate(
     frame,
     [ZOOM_START, ZOOM_END],
-    [0, -(ZOOM_ORIGIN_X - CANVAS_WIDTH / 2) * (ZOOM_FACTOR - 1)],
+    [ZOOM_SCALE_FROM, ZOOM_SCALE_TO],
     {
-      easing: Easing.inOut(Easing.cubic),
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-    }
-  );
-  const translateY = interpolate(
-    frame,
-    [ZOOM_START, ZOOM_END],
-    [0, -(ZOOM_ORIGIN_Y - CANVAS_HEIGHT / 2) * (ZOOM_FACTOR - 1)],
-    {
       easing: Easing.inOut(Easing.cubic),
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
     }
   );
 
-  // Chart periphery fades out during zoom
-  const chartPeripheryOpacity = interpolate(frame, [ZOOM_START, ZOOM_END], [1, 0], {
-    easing: Easing.inOut(Easing.cubic),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  // Translate so zoom centers on ZOOM_ORIGIN
+  const translateX = -(ZOOM_ORIGIN_X * (zoomScale - 1));
+  const translateY = -(ZOOM_ORIGIN_Y * (zoomScale - 1));
 
-  // ── Phase 2: Layer separation (frames 90-180) ──
-  // The unified debt area splits into two layers with a gap between them
-  const splitProgress = interpolate(frame, [SPLIT_START, SPLIT_END], [0, 1], {
-    easing: Easing.out(Easing.quad),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  // Chart periphery fades as we zoom in
+  const chartPeripheryOpacity = interpolate(
+    frame,
+    [ZOOM_START, ZOOM_END],
+    [1, 0],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.inOut(Easing.cubic),
+    }
+  );
 
-  // Unified debt area dimensions (as seen after zoom)
-  // These represent the debt region in the zoomed view
-  const unifiedTop = 260;
-  const unifiedHeight = 500;
-  const unifiedLeft = 180;
-  const unifiedWidth = 1560;
+  // --- Phase 2: Layer separation (frame 90-180) ---
+  const totalAreaHeight = LAYER_AREA_BOTTOM - LAYER_AREA_TOP;
+  const lowerHeight = totalAreaHeight * LAYER_MIDPOINT_RATIO;
+  const upperHeight = totalAreaHeight * (1 - LAYER_MIDPOINT_RATIO);
 
-  // Split: lower layer stays mostly in place, upper layer moves up
-  const finalLowerTop = unifiedTop + unifiedHeight * 0.52 + LAYER_GAP / 2;
-  const finalLowerHeight = unifiedHeight * 0.44;
-  const finalUpperTop = unifiedTop + unifiedHeight * 0.04;
-  const finalUpperHeight = unifiedHeight * 0.48; // slightly taller — growing faster
-
-  // Animate from unified block to split layers
-  const lowerLayerTop = interpolate(
-    splitProgress,
+  // Split progress: 0 = merged, 1 = fully separated
+  const splitProgress = interpolate(
+    frame,
+    [SPLIT_START, SPLIT_END],
     [0, 1],
-    [unifiedTop + unifiedHeight * 0.5, finalLowerTop],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
+
+  // When merged: both layers occupy the full area as one block
+  // When split: lower layer moves down, upper layer moves up, gap appears
+  const halfGap = (LAYER_GAP / 2) * splitProgress;
+  const splitOffset = splitProgress * 20; // extra separation for visual clarity
+
+  // Lower layer: starts at LAYER_AREA_TOP, ends at mid-gap
+  const lowerLayerTop =
+    LAYER_AREA_TOP +
+    interpolate(splitProgress, [0, 1], [upperHeight, 0]) +
+    halfGap;
   const lowerLayerHeight = interpolate(
     splitProgress,
     [0, 1],
-    [unifiedHeight * 0.5, finalLowerHeight],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [totalAreaHeight, lowerHeight]
   );
-  const upperLayerTop = interpolate(
-    splitProgress,
-    [0, 1],
-    [unifiedTop, finalUpperTop],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-  );
+
+  // Upper layer: starts at LAYER_AREA_TOP
+  const upperLayerTop = LAYER_AREA_TOP - splitOffset;
   const upperLayerHeight = interpolate(
     splitProgress,
     [0, 1],
-    [unifiedHeight * 0.5, finalUpperHeight],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [totalAreaHeight, upperHeight]
   );
 
-  // Opacity transition: unified -> separate colors
-  const lowerOpacity = interpolate(
+  // Layer opacity transitions: merged = debt area opacity, split = individual opacities
+  const lowerFillOpacity = interpolate(
     splitProgress,
     [0, 1],
-    [UNIFIED_DEBT_OPACITY, CODE_COMPLEXITY_OPACITY],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    [DEBT_AREA_OPACITY, CODE_COMPLEXITY_FILL_OPACITY]
   );
-  const upperOpacity = interpolate(
+  const upperFillOpacity = interpolate(
     splitProgress,
     [0, 1],
-    [UNIFIED_DEBT_OPACITY, CONTEXT_ROT_OPACITY],
+    [DEBT_AREA_OPACITY, CONTEXT_ROT_FILL_OPACITY]
+  );
+
+  // Upper layer color transitions from debt amber to context rot amber
+  const showNoise = splitProgress > 0.3;
+
+  const layerWidth = LAYER_AREA_RIGHT - LAYER_AREA_LEFT;
+
+  // Monolithic pre-split opacity (fades as split begins)
+  const monolithicOpacity = interpolate(
+    splitProgress,
+    [0, 0.15],
+    [1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Color transition for upper layer
-  const upperColorProgress = interpolate(splitProgress, [0, 1], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Gap (hairline crack) between layers
-  const gapOpacity = interpolate(splitProgress, [0.2, 0.5], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // ── Phase 3: Labels fade in (frames 180-200) ──
-  const labelOpacity = interpolate(
-    frame,
-    [LABEL_START, LABEL_START + LABEL_FADE_DURATION],
-    [0, 0.9],
-    {
-      easing: Easing.out(Easing.quad),
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
-  // Noise texture fade-in
-  const noiseOpacity = interpolate(
-    frame,
-    [TEXTURE_START, TEXTURE_START + TEXTURE_FADE_DURATION],
+  // Split layers fade in
+  const splitLayerOpacity = interpolate(
+    splitProgress,
+    [0, 0.2],
     [0, 1],
-    {
-      easing: Easing.out(Easing.quad),
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // ── Phase 4: Subtle pulse on Context Rot layer (frames 270+) ──
+  // --- Context Rot pulse effect during hold (frame 270+) ---
   const pulseOpacity =
     frame >= 270
-      ? interpolate(
-          Math.sin((frame - 270) * 0.05),
-          [-1, 1],
-          [CONTEXT_ROT_OPACITY * 0.85, CONTEXT_ROT_OPACITY * 1.15],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-        )
-      : upperOpacity;
-
-  // Should we show the split layers? They appear once the split starts
-  const showLayers = frame >= SPLIT_START;
-
-  // Should we show the unified debt block? It's visible before the split completes
-  // (the chart backdrop handles this via its debt area polygon)
-  const showUnifiedDebt = frame < SPLIT_START;
+      ? CONTEXT_ROT_FILL_OPACITY +
+        0.02 * Math.sin((frame - 270) * 0.05)
+      : upperFillOpacity;
 
   return (
-    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
+    <AbsoluteFill style={{ backgroundColor: BACKGROUND_COLOR }}>
       {/* Zooming container */}
       <div
         style={{
@@ -227,203 +318,86 @@ export const Part1Economics06DebtLayersZoom: React.FC = () => {
           width: CANVAS_WIDTH,
           height: CANVAS_HEIGHT,
           transform: `translate(${translateX}px, ${translateY}px) scale(${zoomScale})`,
-          transformOrigin: `${ZOOM_ORIGIN_X}px ${ZOOM_ORIGIN_Y}px`,
+          transformOrigin: "0 0",
         }}
       >
-        {/* Chart backdrop — fades as we zoom in */}
-        <ChartBackdrop
-          opacity={chartPeripheryOpacity}
-          chartLeft={CHART_LEFT}
-          chartTop={CHART_TOP}
-          chartWidth={CHART_WIDTH}
-          chartHeight={CHART_HEIGHT}
-          debtAreaX={DEBT_AREA_X}
-          debtAreaWidth={DEBT_AREA_WIDTH}
-          debtAreaYTop={DEBT_AREA_Y_TOP}
-          debtAreaYBottom={DEBT_AREA_Y_BOTTOM}
-          debtColor={UNIFIED_DEBT_COLOR}
-          debtOpacity={UNIFIED_DEBT_OPACITY}
-          axisColor={AXIS_COLOR}
-          axisOpacity={AXIS_OPACITY}
-          gridLineOpacity={GRID_LINE_OPACITY}
-          yearLabels={YEAR_LABELS}
-          fontFamily={LABEL_FONT_FAMILY}
-        />
+        {/* Chart background (fades as we zoom) */}
+        <div style={{ opacity: chartPeripheryOpacity }}>
+          <ChartBackground />
+        </div>
 
-        {/* Unified debt area — visible before split */}
-        {showUnifiedDebt && (
+        {/* Monolithic debt area (visible before split) */}
+        {monolithicOpacity > 0 && (
           <div
             style={{
               position: "absolute",
-              top: DEBT_AREA_Y_TOP,
-              left: DEBT_AREA_X,
-              width: DEBT_AREA_WIDTH,
-              height: DEBT_AREA_Y_BOTTOM - DEBT_AREA_Y_TOP,
-              backgroundColor: UNIFIED_DEBT_COLOR,
-              opacity: UNIFIED_DEBT_OPACITY,
+              top: LAYER_AREA_TOP,
+              left: LAYER_AREA_LEFT,
+              width: layerWidth,
+              height: totalAreaHeight,
+              backgroundColor: DEBT_AREA_COLOR,
+              opacity: DEBT_AREA_OPACITY * monolithicOpacity,
               borderRadius: 4,
             }}
           />
         )}
-      </div>
 
-      {/* ── Post-zoom overlay: split layers ── */}
-      {/* These render on top of the zoomed content, in screen space */}
-      {showLayers && (
-        <AbsoluteFill>
-          {/* Hairline gap / crack between layers */}
-          <div
-            style={{
-              position: "absolute",
-              top: lowerLayerTop - LAYER_GAP,
-              left: unifiedLeft,
-              width: unifiedWidth,
-              height: LAYER_GAP,
-              backgroundColor: BG_COLOR,
-              opacity: gapOpacity,
-            }}
-          />
-
-          {/* Lower Layer — Code Complexity */}
+        {/* Split layers */}
+        <Sequence from={SPLIT_START}>
+          {/* Lower layer — Code Complexity */}
           <DebtLayer
             top={lowerLayerTop}
-            layerHeight={lowerLayerHeight}
-            layerWidth={unifiedWidth}
-            left={unifiedLeft}
+            layerHeight={Math.max(lowerLayerHeight, 0)}
+            left={LAYER_AREA_LEFT}
+            layerWidth={layerWidth}
             fillColor={CODE_COMPLEXITY_COLOR}
-            fillOpacity={lowerOpacity}
+            fillOpacity={lowerFillOpacity}
             label="Code Complexity"
             labelColor={CODE_COMPLEXITY_COLOR}
-            labelOpacity={labelOpacity}
-            labelFontSize={LABEL_FONT_SIZE}
-            labelFontWeight={LABEL_FONT_WEIGHT}
-            fontFamily={LABEL_FONT_FAMILY}
+            layerOpacity={splitLayerOpacity}
           />
 
-          {/* Upper Layer — Context Rot */}
+          {/* Upper layer — Context Rot */}
           <DebtLayer
             top={upperLayerTop}
-            layerHeight={upperLayerHeight}
-            layerWidth={unifiedWidth}
-            left={unifiedLeft}
-            fillColor={
-              upperColorProgress > 0.5 ? CONTEXT_ROT_COLOR : UNIFIED_DEBT_COLOR
-            }
-            fillOpacity={frame >= 270 ? pulseOpacity : upperOpacity}
+            layerHeight={Math.max(upperLayerHeight, 0)}
+            left={LAYER_AREA_LEFT}
+            layerWidth={layerWidth}
+            fillColor={CONTEXT_ROT_COLOR}
+            fillOpacity={frame >= 270 ? pulseOpacity : upperFillOpacity}
             label="Context Rot"
             labelColor={CONTEXT_ROT_COLOR}
-            labelOpacity={labelOpacity}
-            labelFontSize={LABEL_FONT_SIZE}
-            labelFontWeight={LABEL_FONT_WEIGHT}
-            fontFamily={LABEL_FONT_FAMILY}
-          >
-            {/* Noise texture overlay — fades in during Phase 3 */}
-            <NoiseOverlay
-              width={unifiedWidth}
-              height={upperLayerHeight}
-              grainColor={NOISE_COLOR}
-              grainOpacity={NOISE_OPACITY}
-              grainSize={NOISE_GRAIN_SIZE}
-              driftSpeed={NOISE_DRIFT_PX_PER_FRAME}
-              opacity={noiseOpacity}
-            />
-          </DebtLayer>
+            showNoise={showNoise}
+            layerOpacity={splitLayerOpacity}
+          />
+        </Sequence>
 
-          {/* Subtle description labels below each layer */}
+        {/* Hairline gap indicator between layers (visible after split) */}
+        {splitProgress > 0.5 && (
           <div
             style={{
               position: "absolute",
-              top: lowerLayerTop + lowerLayerHeight + 12,
-              left: unifiedLeft,
-              width: unifiedWidth,
-              display: "flex",
-              justifyContent: "center",
-              opacity: labelOpacity * 0.7,
-            }}
-          >
-            <span
-              style={{
-                fontFamily: LABEL_FONT_FAMILY,
-                fontSize: 13,
-                color: CODE_COMPLEXITY_COLOR,
-                opacity: 0.7,
-                letterSpacing: "0.03em",
-              }}
-            >
-              spaghetti code · dependency tangles · unclear interfaces
-            </span>
-          </div>
-
-          <div
-            style={{
-              position: "absolute",
-              top: upperLayerTop - 28,
-              left: unifiedLeft,
-              width: unifiedWidth,
-              display: "flex",
-              justifyContent: "center",
-              opacity: labelOpacity * 0.7,
-            }}
-          >
-            <span
-              style={{
-                fontFamily: LABEL_FONT_FAMILY,
-                fontSize: 13,
-                color: CONTEXT_ROT_COLOR,
-                opacity: 0.7,
-                letterSpacing: "0.03em",
-              }}
-            >
-              model performance degrades as codebase exceeds context window
-            </span>
-          </div>
-
-          {/* Divider line between the two layers (visible rule) */}
-          <div
-            style={{
-              position: "absolute",
-              top: lowerLayerTop - LAYER_GAP / 2 - 1,
-              left: unifiedLeft + 40,
-              width: unifiedWidth - 80,
-              height: 2,
-              backgroundColor: "#FFFFFF",
-              opacity: gapOpacity * 0.7,
-              borderRadius: 1,
+              top:
+                upperLayerTop +
+                upperLayerHeight -
+                1,
+              left: LAYER_AREA_LEFT,
+              width: layerWidth,
+              height: LAYER_GAP,
+              backgroundColor: BACKGROUND_COLOR,
+              opacity: interpolate(
+                splitProgress,
+                [0.5, 0.8],
+                [0, 1],
+                {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                }
+              ),
             }}
           />
-        </AbsoluteFill>
-      )}
-
-      {/* ── Title overlay: visible throughout ── */}
-      <Sequence from={0}>
-        <div
-          style={{
-            position: "absolute",
-            bottom: 60,
-            left: 0,
-            width: CANVAS_WIDTH,
-            display: "flex",
-            justifyContent: "center",
-          }}
-        >
-          <div
-            style={{
-              fontFamily: LABEL_FONT_FAMILY,
-              fontSize: 20,
-              fontWeight: 600,
-              color: "#FFFFFF",
-              opacity: interpolate(frame, [0, 20], [0, 0.8], {
-                extrapolateLeft: "clamp",
-                extrapolateRight: "clamp",
-              }),
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-            }}
-          >
-            Two Kinds of Technical Debt
-          </div>
-        </div>
-      </Sequence>
+        )}
+      </div>
     </AbsoluteFill>
   );
 };

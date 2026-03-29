@@ -1,88 +1,104 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 
-const FONT_FAMILY = 'Inter, sans-serif';
-const CALLOUT_BG = '#1E293B';
-const SOURCE_TEXT_COLOR = '#94A3B8';
+/**
+ * Placeholder "previous annotations" (GitHub / Uplevel) that were on screen
+ * before this section begins. They fade to 30% opacity over the first 60 frames.
+ */
 
-interface PrevAnnotation {
-  text: string;
-  source: string;
-  x: number;
-  y: number;
-  accentColor: string;
+const PREV_FADE_END = 60;
+const COLOR_PREV_BORDER = "#3B82F6";
+
+interface PrevAnnotationBoxProps {
+  posX: number;
+  posY: number;
+  label: string;
+  subLabel: string;
+  opacity: number;
 }
 
-const PREVIOUS_ANNOTATIONS: PrevAnnotation[] = [
-  {
-    text: 'GitHub survey: 55% faster',
-    source: '(GitHub, 2024)',
-    x: 900,
-    y: 260,
-    accentColor: '#3B82F6',
-  },
-  {
-    text: 'Uplevel: +41% PRs merged',
-    source: '(Uplevel, 2024)',
-    x: 900,
-    y: 370,
-    accentColor: '#8B5CF6',
-  },
-];
+const PrevAnnotationBox: React.FC<PrevAnnotationBoxProps> = ({
+  posX,
+  posY,
+  label,
+  subLabel,
+  opacity,
+}) => (
+  <div
+    style={{
+      position: "absolute",
+      left: posX,
+      top: posY,
+      width: 320,
+      background: "#1E293B",
+      border: `1.5px solid ${COLOR_PREV_BORDER}`,
+      borderRadius: 8,
+      padding: "10px 16px",
+      opacity,
+    }}
+  >
+    <div
+      style={{
+        fontFamily: "Inter, sans-serif",
+        fontSize: 16,
+        fontWeight: 700,
+        color: COLOR_PREV_BORDER,
+        lineHeight: 1.3,
+      }}
+    >
+      {label}
+    </div>
+    <div
+      style={{
+        fontFamily: "Inter, sans-serif",
+        fontSize: 11,
+        fontWeight: 400,
+        color: "#94A3B8",
+        marginTop: 2,
+        lineHeight: 1.3,
+      }}
+    >
+      {subLabel}
+    </div>
+  </div>
+);
 
 export const PreviousAnnotations: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade from full opacity to 0.3 over frames 0-30
-  const opacity = interpolate(frame, [0, 30], [1.0, 0.3], {
+  const opacity = interpolate(frame, [0, PREV_FADE_END], [1.0, 0.3], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
     easing: Easing.in(Easing.quad),
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
   });
 
   return (
     <>
-      {PREVIOUS_ANNOTATIONS.map((ann) => (
-        <div
-          key={ann.text}
-          style={{
-            position: 'absolute',
-            left: ann.x,
-            top: ann.y,
-            width: 360,
-            background: CALLOUT_BG,
-            border: `1.5px solid ${ann.accentColor}`,
-            borderRadius: 8,
-            padding: '12px 18px',
-            boxSizing: 'border-box',
-            opacity,
-          }}
-        >
-          <div
-            style={{
-              fontFamily: FONT_FAMILY,
-              fontSize: 17,
-              fontWeight: 700,
-              color: ann.accentColor,
-              lineHeight: 1.3,
-            }}
-          >
-            {ann.text}
-          </div>
-          <div
-            style={{
-              fontFamily: FONT_FAMILY,
-              fontSize: 12,
-              fontWeight: 400,
-              color: SOURCE_TEXT_COLOR,
-              marginTop: 3,
-              lineHeight: 1.3,
-            }}
-          >
-            {ann.source}
-          </div>
-        </div>
-      ))}
+      {/* Connector lines for previous annotations */}
+      <svg
+        width={1920}
+        height={1080}
+        viewBox="0 0 1920 1080"
+        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none", opacity }}
+      >
+        <line x1={1320} y1={230} x2={1050} y2={350} stroke={COLOR_PREV_BORDER} strokeWidth={1} opacity={0.4} />
+        <line x1={1320} y1={310} x2={1080} y2={420} stroke={COLOR_PREV_BORDER} strokeWidth={1} opacity={0.4} />
+      </svg>
+
+      <PrevAnnotationBox
+        posX={1320}
+        posY={200}
+        label="GitHub survey: 'more code'"
+        subLabel="(Uplevel, 2024)"
+        opacity={opacity}
+      />
+      <PrevAnnotationBox
+        posX={1320}
+        posY={280}
+        label="PR volume: +25%"
+        subLabel="(GitHub, 2024)"
+        opacity={opacity}
+      />
     </>
   );
 };

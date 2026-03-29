@@ -1,11 +1,6 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import {
-  PANEL_DRAW_START,
-  PANEL_DRAW_DURATION,
-  FONT_FAMILY,
-  HEADER_FONT_SIZE,
-} from './constants';
+import { PANEL_DRAW_START, PANEL_DRAW_END } from './constants';
 
 interface ContextWindowPanelProps {
   x: number;
@@ -16,6 +11,7 @@ interface ContextWindowPanelProps {
   headerColor: string;
   borderColor: string;
   borderStyle: 'solid' | 'dashed';
+  children?: React.ReactNode;
 }
 
 const ContextWindowPanel: React.FC<ContextWindowPanelProps> = ({
@@ -27,13 +23,14 @@ const ContextWindowPanel: React.FC<ContextWindowPanelProps> = ({
   headerColor,
   borderColor,
   borderStyle,
+  children,
 }) => {
   const frame = useCurrentFrame();
 
-  // Panel outline draws in over PANEL_DRAW_DURATION frames
+  // Panel outline draws from 0-60 frames
   const drawProgress = interpolate(
     frame,
-    [PANEL_DRAW_START, PANEL_DRAW_START + PANEL_DRAW_DURATION],
+    [PANEL_DRAW_START, PANEL_DRAW_END],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -42,80 +39,52 @@ const ContextWindowPanel: React.FC<ContextWindowPanelProps> = ({
     }
   );
 
-  // Header types in character by character
-  const headerChars = Math.round(
-    interpolate(
-      frame,
-      [PANEL_DRAW_START, PANEL_DRAW_START + PANEL_DRAW_DURATION],
-      [0, header.length],
-      {
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-        easing: Easing.out(Easing.quad),
-      }
-    )
-  );
+  // Header types in over same period
+  const headerChars = Math.round(header.length * drawProgress);
+  const displayedHeader = header.slice(0, headerChars);
 
-  const displayHeader = header.substring(0, headerChars);
-
-  // Perimeter for clip-path stroke animation
-  const perimeter = 2 * (width + height);
-  const dashLength = perimeter * drawProgress;
+  // Border opacity matches draw progress
+  const borderOpacity = drawProgress;
 
   return (
-    <>
-      {/* Panel header */}
+    <div
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y - 40, // Room for header above panel
+        width,
+      }}
+    >
+      {/* Header */}
       <div
         style={{
-          position: 'absolute',
-          left: x,
-          top: y - 36,
-          fontFamily: FONT_FAMILY,
-          fontSize: HEADER_FONT_SIZE,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 20,
           fontWeight: 700,
           color: headerColor,
-          opacity: 0.95,
-          whiteSpace: 'nowrap',
+          marginBottom: 12,
+          opacity: drawProgress,
+          height: 28,
         }}
       >
-        {displayHeader}
+        {displayedHeader}
       </div>
 
-      {/* Panel outline using SVG for animated dashed/solid border */}
-      <svg
+      {/* Panel outline + content area */}
+      <div
         style={{
-          position: 'absolute',
-          left: x,
-          top: y,
+          position: 'relative',
           width,
           height,
-          overflow: 'visible',
+          border: `2px ${borderStyle} ${borderColor}`,
+          borderRadius: 8,
+          opacity: borderOpacity,
+          overflow: 'hidden',
         }}
       >
-        <rect
-          x={1}
-          y={1}
-          width={width - 2}
-          height={height - 2}
-          fill="none"
-          stroke={borderColor}
-          strokeWidth={2}
-          strokeDasharray={
-            borderStyle === 'dashed'
-              ? `8 4`
-              : `${perimeter}`
-          }
-          strokeDashoffset={
-            borderStyle === 'dashed'
-              ? perimeter - dashLength
-              : perimeter - dashLength
-          }
-          rx={4}
-          ry={4}
-          opacity={drawProgress}
-        />
-      </svg>
-    </>
+        {children}
+      </div>
+    </div>
   );
 };
 

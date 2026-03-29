@@ -2,28 +2,26 @@ import React from "react";
 import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
   ARROW_COLOR,
-  ARROW_LINE_WIDTH,
-  FONT_FAMILY,
+  ARROW_DRAW_START,
+  ARROW_DRAW_END,
+  ARROW_LABEL_START,
   SMALL_CODEBASE_DATA,
   LARGE_CODEBASE_DATA,
-  PHASE_ARROW_START,
-  ARROW_DRAW_DURATION,
-  PHASE_ARROW_LABEL_START,
-  FADE_DURATION,
+  mapX,
+  mapY,
 } from "./constants";
-import { xToPixel, yToPixel } from "./ChartAxes";
 
 /**
- * Curved arrow from the small codebase line sweeping upward to the large
- * codebase line, with an animated draw-on effect and "Every patch adds code." label.
+ * Curved dashed arrow from the small codebase line sweeping up to the large codebase line.
+ * Visualizes: "Every patch adds code" — the trap.
  */
-const TrapArrow: React.FC = () => {
+export const TrapArrow: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // ── Arrow draw progress ───────────────────────────────
+  // Arrow draw progress
   const drawProgress = interpolate(
     frame,
-    [PHASE_ARROW_START, PHASE_ARROW_START + ARROW_DRAW_DURATION],
+    [ARROW_DRAW_START, ARROW_DRAW_END],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -32,10 +30,10 @@ const TrapArrow: React.FC = () => {
     }
   );
 
-  // ── Arrow label fade ──────────────────────────────────
+  // Arrow label opacity
   const labelOpacity = interpolate(
     frame,
-    [PHASE_ARROW_LABEL_START, PHASE_ARROW_LABEL_START + FADE_DURATION],
+    [ARROW_LABEL_START, ARROW_LABEL_START + 20],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -44,108 +42,101 @@ const TrapArrow: React.FC = () => {
     }
   );
 
-  if (frame < PHASE_ARROW_START) return null;
+  if (frame < ARROW_DRAW_START) return null;
 
-  // ── Arrow endpoints ───────────────────────────────────
-  // From: end of small codebase line (2025, ~0.14 interpolated)
-  const fromX = xToPixel(2025);
-  const fromY = yToPixel(0.14);
+  // Arrow start: near end of small codebase line (around 2025)
+  const arrowStartX = mapX(2024.5);
+  const arrowStartY = mapY(0.15);
 
-  // To: midpoint of large codebase line (2024, 0.46)
-  const toX = xToPixel(2024);
-  const toY = yToPixel(0.46);
+  // Arrow end: mid-point of large codebase line (around 2024)
+  const arrowEndX = mapX(2024);
+  const arrowEndY = mapY(0.46);
 
-  // Control points for the cubic Bezier curve (sweeping upward)
-  const cp1x = fromX + 40;
-  const cp1y = fromY - 180;
-  const cp2x = toX + 60;
-  const cp2y = toY + 80;
+  // Control points for the curve — sweeping right then up
+  const cp1x = arrowStartX + 80;
+  const cp1y = arrowStartY - 60;
+  const cp2x = arrowEndX + 100;
+  const cp2y = arrowEndY + 80;
 
-  const pathD = `M ${fromX} ${fromY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${toX} ${toY}`;
+  const curvePath = `M ${arrowStartX} ${arrowStartY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${arrowEndX} ${arrowEndY}`;
 
-  // We need a total path length for dash-offset animation.
-  // Approximate; will be set dynamically via pathLength.
-  const totalLength = 600;
+  // Approximate curve length for dash animation
+  const pathLength = 500;
+  const dashOffset = pathLength * (1 - drawProgress);
 
-  // Arrowhead at the end
-  const arrowSize = 10;
-  // Approximate tangent at the end of the curve
-  const tangentX = toX - cp2x;
-  const tangentY = toY - cp2y;
+  // Arrowhead angle (approximate tangent at end)
+  const arrowHeadSize = 10;
+  // Tangent at end of cubic bezier: derivative at t=1 is 3*(P3-P2)
+  const tangentX = arrowEndX - cp2x;
+  const tangentY = arrowEndY - cp2y;
   const angle = Math.atan2(tangentY, tangentX);
-  const arrowP1x = toX - arrowSize * Math.cos(angle - 0.4);
-  const arrowP1y = toY - arrowSize * Math.sin(angle - 0.4);
-  const arrowP2x = toX - arrowSize * Math.cos(angle + 0.4);
-  const arrowP2y = toY - arrowSize * Math.sin(angle + 0.4);
 
-  // Label position — midpoint of the curve
-  const labelX = (fromX + toX) / 2 + 50;
-  const labelY = (fromY + toY) / 2 - 60;
+  // Arrow label position — midpoint of curve
+  const labelX = (arrowStartX + arrowEndX) / 2 + 60;
+  const labelY = (arrowStartY + arrowEndY) / 2 - 10;
 
   return (
-    <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
-        {/* ── Curved dashed arrow ──────────────────── */}
-        <path
-          d={pathD}
-          fill="none"
-          stroke={ARROW_COLOR}
-          strokeWidth={ARROW_LINE_WIDTH}
-          strokeDasharray="6 4"
-          pathLength={totalLength}
-          strokeDashoffset={totalLength * (1 - drawProgress)}
-          strokeLinecap="round"
-        />
+    <svg
+      width={1920}
+      height={1080}
+      style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+    >
+      {/* Curved dashed arrow path */}
+      <path
+        d={curvePath}
+        fill="none"
+        stroke={ARROW_COLOR}
+        strokeWidth={2}
+        strokeDasharray="6 4"
+        strokeDashoffset={dashOffset}
+        style={{
+          transition: "none",
+        }}
+      />
 
-        {/* ── Arrowhead ───────────────────────────── */}
-        {drawProgress > 0.85 && (
-          <polygon
-            points={`${toX},${toY} ${arrowP1x},${arrowP1y} ${arrowP2x},${arrowP2y}`}
-            fill={ARROW_COLOR}
-            opacity={interpolate(
-              drawProgress,
-              [0.85, 1],
-              [0, 1],
-              { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-            )}
-          />
-        )}
-
-        {/* ── Start dot ──────────────────────────── */}
-        <circle
-          cx={fromX}
-          cy={fromY}
-          r={4}
+      {/* Arrowhead */}
+      {drawProgress > 0.9 && (
+        <polygon
+          points={`
+            ${arrowEndX},${arrowEndY}
+            ${arrowEndX - arrowHeadSize * Math.cos(angle - 0.4)},${arrowEndY - arrowHeadSize * Math.sin(angle - 0.4)}
+            ${arrowEndX - arrowHeadSize * Math.cos(angle + 0.4)},${arrowEndY - arrowHeadSize * Math.sin(angle + 0.4)}
+          `}
           fill={ARROW_COLOR}
-          opacity={drawProgress > 0 ? 1 : 0}
+          opacity={interpolate(drawProgress, [0.9, 1], [0, 1], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          })}
         />
-      </svg>
-
-      {/* ── Arrow label ──────────────────────────── */}
-      {frame >= PHASE_ARROW_LABEL_START && (
-        <div
-          style={{
-            position: "absolute",
-            left: labelX,
-            top: labelY,
-            opacity: labelOpacity,
-            fontFamily: FONT_FAMILY,
-            fontSize: 19,
-            fontWeight: 700,
-            color: ARROW_COLOR,
-            textShadow: "0 2px 6px rgba(0,0,0,0.7)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          Every patch adds code.
-        </div>
       )}
-    </div>
+
+      {/* Arrow label */}
+      {frame >= ARROW_LABEL_START && (
+        <>
+          {/* Label background for readability */}
+          <rect
+            x={labelX - 6}
+            y={labelY - 14}
+            width={200}
+            height={24}
+            rx={4}
+            fill="#0A0F1A"
+            opacity={labelOpacity * 0.8}
+          />
+          <text
+            x={labelX}
+            y={labelY}
+            fill={ARROW_COLOR}
+            fontSize={14}
+            fontFamily="Inter, sans-serif"
+            fontWeight={700}
+            opacity={labelOpacity}
+          >
+            Every patch adds code.
+          </text>
+        </>
+      )}
+    </svg>
   );
 };
 

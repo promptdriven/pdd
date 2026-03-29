@@ -1,170 +1,154 @@
-import React from 'react';
-import { useCurrentFrame, interpolate, Easing, spring, useVideoConfig } from 'remotion';
-
-const FONT_FAMILY = 'Inter, sans-serif';
-const CALLOUT_BG = '#1E293B';
-const SOURCE_TEXT_COLOR = '#94A3B8';
-const CONNECTOR_DRAW_FRAMES = 30;
-const CALLOUT_SCALE_FRAMES = 20;
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 
 interface AnnotationCalloutProps {
-  /** Frame at which this annotation starts appearing */
-  startFrame: number;
-  /** Position of the callout box */
-  x: number;
-  y: number;
-  /** Main annotation text (e.g. "Code churn: +44%") */
+  /** Frame at which this annotation begins materializing */
+  appearFrame: number;
+  /** Border / accent color for the callout */
+  borderColor: string;
+  /** Primary stat text, e.g. "Code churn: +44%" */
   mainText: string;
-  /** Source/fine-print line */
+  /** Source line, e.g. "(GitClear, 2025, 211M lines analyzed)" */
   sourceText: string;
-  /** Accent/border color */
-  accentColor: string;
-  /** Connector target point (where the line points into the chart) */
+  /** Top-left position of the callout box */
+  posX: number;
+  posY: number;
+  /** Connector line end-point (the target in the chart area) */
   connectorTargetX: number;
   connectorTargetY: number;
 }
 
+const CALLOUT_WIDTH = 340;
+const CONNECTOR_DRAW_DUR = 30;
+const SCALE_DUR = 20;
+const TYPE_DUR = 18;
+
 export const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
-  startFrame,
-  x,
-  y,
+  appearFrame,
+  borderColor,
   mainText,
   sourceText,
-  accentColor,
+  posX,
+  posY,
   connectorTargetX,
   connectorTargetY,
 }) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const localFrame = frame - startFrame;
+  const rel = frame - appearFrame; // relative frame since appear
 
-  if (localFrame < 0) return null;
+  if (rel < 0) return null;
 
-  // Connector line draws in over CONNECTOR_DRAW_FRAMES
-  const connectorProgress = interpolate(
-    localFrame,
-    [0, CONNECTOR_DRAW_FRAMES],
-    [0, 1],
-    {
-      easing: Easing.out(Easing.quad),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
-
-  // Callout scales in after connector starts drawing (overlapping slightly)
-  const scaleProgress = spring({
-    frame: Math.max(0, localFrame - 10),
-    fps,
-    config: {
-      damping: 12,
-      stiffness: 150,
-      mass: 0.6,
-    },
+  // 1. Connector line draws in over CONNECTOR_DRAW_DUR frames
+  const connectorProgress = interpolate(rel, [0, CONNECTOR_DRAW_DUR], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
   });
 
-  // Text typing effect: fades in over a few frames after the callout appears
-  const textOpacity = interpolate(
-    localFrame,
-    [CALLOUT_SCALE_FRAMES, CALLOUT_SCALE_FRAMES + 15],
-    [0, 1],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
+  // 2. Callout box scales in (starts after connector is 60% drawn)
+  const scaleStart = Math.round(CONNECTOR_DRAW_DUR * 0.6);
+  const scale = interpolate(rel, [scaleStart, scaleStart + SCALE_DUR], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.back(1.4)),
+  });
+
+  // 3. Text types in (starts when box is mostly scaled)
+  const typeStart = scaleStart + Math.round(SCALE_DUR * 0.5);
+  const textReveal = interpolate(rel, [typeStart, typeStart + TYPE_DUR], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.out(Easing.quad),
+  });
+  const visibleMainChars = Math.round(textReveal * mainText.length);
+  const visibleSourceChars = Math.round(
+    interpolate(rel, [typeStart + 6, typeStart + TYPE_DUR + 6], [0, 1], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }) * sourceText.length
   );
 
-  // Connector line intermediate point: from callout left edge to target
-  const connectorStartX = x;
-  const connectorStartY = y + 40;
-
-  const currentEndX = interpolate(
-    connectorProgress,
-    [0, 1],
-    [connectorStartX, connectorTargetX],
-  );
-  const currentEndY = interpolate(
-    connectorProgress,
-    [0, 1],
-    [connectorStartY, connectorTargetY],
-  );
+  // Connector line geometry: from left-center of callout box toward target
+  const calloutCenterY = posY + 36;
+  const lineStartX = posX;
+  const lineStartY = calloutCenterY;
+  const currentEndX = lineStartX + (connectorTargetX - lineStartX) * connectorProgress;
+  const currentEndY = lineStartY + (connectorTargetY - lineStartY) * connectorProgress;
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: 0, width: 1920, height: 1080 }}>
+    <>
       {/* Connector line */}
       <svg
         width={1920}
         height={1080}
         viewBox="0 0 1920 1080"
-        style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
       >
         <line
-          x1={connectorStartX}
-          y1={connectorStartY}
+          x1={lineStartX}
+          y1={lineStartY}
           x2={currentEndX}
           y2={currentEndY}
-          stroke={accentColor}
+          stroke={borderColor}
           strokeWidth={1}
           opacity={0.5}
         />
-        {/* Small dot at the target end */}
+        {/* Small dot at the end of connector */}
         {connectorProgress > 0.9 && (
-          <circle
-            cx={connectorTargetX}
-            cy={connectorTargetY}
-            r={3}
-            fill={accentColor}
-            opacity={connectorProgress}
-          />
+          <circle cx={currentEndX} cy={currentEndY} r={3} fill={borderColor} opacity={0.7} />
         )}
       </svg>
 
       {/* Callout box */}
       <div
         style={{
-          position: 'absolute',
-          left: x,
-          top: y,
-          width: 440,
-          transform: `scale(${scaleProgress})`,
-          transformOrigin: 'left center',
-          background: CALLOUT_BG,
-          border: `1.5px solid ${accentColor}`,
+          position: "absolute",
+          left: posX,
+          top: posY,
+          width: CALLOUT_WIDTH,
+          background: "#1E293B",
+          border: `1.5px solid ${borderColor}`,
           borderRadius: 8,
-          padding: '14px 20px',
-          boxSizing: 'border-box',
+          padding: "14px 18px",
+          transform: `scale(${scale})`,
+          transformOrigin: "left center",
+          opacity: scale > 0.01 ? 1 : 0,
         }}
       >
-        {/* Main text */}
+        {/* Main stat text */}
         <div
           style={{
-            fontFamily: FONT_FAMILY,
+            fontFamily: "Inter, sans-serif",
             fontSize: 18,
             fontWeight: 700,
-            color: accentColor,
-            opacity: textOpacity,
+            color: borderColor,
             lineHeight: 1.3,
+            minHeight: 24,
           }}
         >
-          {mainText}
+          {mainText.slice(0, visibleMainChars)}
+          {visibleMainChars < mainText.length && (
+            <span style={{ opacity: 0.5 }}>|</span>
+          )}
         </div>
 
-        {/* Source text */}
+        {/* Source / fine print */}
         <div
           style={{
-            fontFamily: FONT_FAMILY,
+            fontFamily: "Inter, sans-serif",
             fontSize: 12,
             fontWeight: 400,
-            color: SOURCE_TEXT_COLOR,
-            opacity: textOpacity * 0.85,
+            color: "#94A3B8",
             marginTop: 4,
             lineHeight: 1.3,
+            minHeight: 16,
           }}
         >
-          {sourceText}
+          {sourceText.slice(0, visibleSourceChars)}
         </div>
       </div>
-    </div>
+    </>
   );
 };
 

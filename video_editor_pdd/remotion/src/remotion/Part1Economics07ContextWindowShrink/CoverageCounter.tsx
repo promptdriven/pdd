@@ -1,92 +1,65 @@
 import React, { useMemo } from "react";
-import { useCurrentFrame, interpolate, Easing, spring, useVideoConfig } from "remotion";
+import { useCurrentFrame, interpolate } from "remotion";
 import {
-  GROWTH_STAGES,
-  TRANSITION_FRAMES,
   COUNTER_X,
   COUNTER_Y,
   LABEL_COLOR,
+  GROWTH_STAGES,
 } from "./constants";
 
 /**
- * Displays the "Context coverage: XX%" counter in the top-right.
- * Color transitions between stage colors; number uses spring physics.
+ * Top-right coverage counter showing "Context coverage: XX%"
+ * with color transitions and spring-animated number changes.
  */
-export const CoverageCounter: React.FC = () => {
+
+interface CoverageCounterProps {
+  currentStageIndex: number;
+  transitionProgress: number;
+}
+
+const CoverageCounter: React.FC<CoverageCounterProps> = ({
+  currentStageIndex,
+  transitionProgress,
+}) => {
   const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
 
-  // Compute the current coverage percentage (animated)
-  const currentCoverage = useMemo(() => {
-    let coverage = GROWTH_STAGES[0].coveragePercent;
+  const stage = GROWTH_STAGES[currentStageIndex];
+  const prevStage =
+    currentStageIndex > 0
+      ? GROWTH_STAGES[currentStageIndex - 1]
+      : GROWTH_STAGES[0];
 
-    for (let i = 1; i < GROWTH_STAGES.length; i++) {
-      const stage = GROWTH_STAGES[i];
-      const prevStage = GROWTH_STAGES[i - 1];
-      const transitionStart = stage.startFrame;
-      const transitionEnd = transitionStart + TRANSITION_FRAMES;
-
-      if (frame >= transitionEnd) {
-        coverage = stage.coveragePercent;
-      } else if (frame >= transitionStart) {
-        const progress = interpolate(
-          frame,
-          [transitionStart, transitionEnd],
-          [0, 1],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-        );
-        coverage = prevStage.coveragePercent + (stage.coveragePercent - prevStage.coveragePercent) * progress;
-      }
+  // Interpolate coverage number during transitions
+  const displayCoverage = useMemo(() => {
+    if (transitionProgress >= 1 || currentStageIndex === 0) {
+      return stage.coverage;
     }
-    return Math.round(coverage);
-  }, [frame]);
+    return Math.round(
+      prevStage.coverage +
+        (stage.coverage - prevStage.coverage) * transitionProgress
+    );
+  }, [stage, prevStage, transitionProgress, currentStageIndex]);
 
-  // Compute the current color by interpolating between stages
-  const currentColor = useMemo(() => {
-    for (let i = GROWTH_STAGES.length - 1; i >= 0; i--) {
-      const stage = GROWTH_STAGES[i];
-      if (i === 0) return stage.coverageColor;
-
-      const transitionEnd = stage.startFrame + TRANSITION_FRAMES;
-      if (frame >= transitionEnd) return stage.coverageColor;
-
-      if (frame >= stage.startFrame) {
-        // During transition — interpolate color via opacity crossfade
-        const prevColor = GROWTH_STAGES[i - 1].coverageColor;
-        const progress = interpolate(
-          frame,
-          [stage.startFrame, transitionEnd],
-          [0, 1],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
-        );
-        // Return the new color once past halfway; otherwise the old
-        return progress > 0.5 ? stage.coverageColor : prevColor;
-      }
+  // Interpolate color
+  const coverageColor = useMemo(() => {
+    if (transitionProgress >= 1 || currentStageIndex === 0) {
+      return stage.coverageColor;
     }
-    return GROWTH_STAGES[0].coverageColor;
-  }, [frame]);
+    // Parse hex colors and lerp
+    const from = hexToRgb(prevStage.coverageColor);
+    const to = hexToRgb(stage.coverageColor);
+    const t = transitionProgress;
+    const r = Math.round(from.r + (to.r - from.r) * t);
+    const g = Math.round(from.g + (to.g - from.g) * t);
+    const b = Math.round(from.b + (to.b - from.b) * t);
+    return `rgb(${r}, ${g}, ${b})`;
+  }, [stage, prevStage, transitionProgress, currentStageIndex]);
 
-  // Fade in
-  const opacity = interpolate(frame, [40, 70], [0, 1], {
+  // Visible from frame 0, fully bright by frame 20
+  const opacity = interpolate(frame, [0, 20], [0.7, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
-
-  // Spring-driven scale on number changes
-  const numberScale = useMemo(() => {
-    for (let i = 1; i < GROWTH_STAGES.length; i++) {
-      const start = GROWTH_STAGES[i].startFrame;
-      if (frame >= start && frame < start + TRANSITION_FRAMES) {
-        const s = spring({
-          frame: frame - start,
-          fps,
-          config: { stiffness: 100, damping: 12, mass: 0.5 },
-        });
-        return 0.85 + s * 0.15;
-      }
-    }
-    return 1;
-  }, [frame, fps]);
 
   return (
     <div
@@ -98,36 +71,42 @@ export const CoverageCounter: React.FC = () => {
         display: "flex",
         flexDirection: "column",
         alignItems: "flex-end",
-        transform: "translateX(-50%)",
+        zIndex: 20,
       }}
     >
-      <div
+      <span
         style={{
           fontFamily: "Inter, sans-serif",
           fontSize: 14,
           fontWeight: 400,
           color: LABEL_COLOR,
           marginBottom: 4,
-          whiteSpace: "nowrap",
         }}
       >
         Context coverage:
-      </div>
-      <div
+      </span>
+      <span
         style={{
           fontFamily: "Inter, sans-serif",
           fontSize: 36,
           fontWeight: 700,
-          color: currentColor,
-          transform: `scale(${numberScale})`,
-          transformOrigin: "center right",
-          whiteSpace: "nowrap",
+          color: coverageColor,
+          lineHeight: 1,
         }}
       >
-        {currentCoverage}%
-      </div>
+        {displayCoverage}%
+      </span>
     </div>
   );
 };
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const h = hex.replace("#", "");
+  return {
+    r: parseInt(h.substring(0, 2), 16),
+    g: parseInt(h.substring(2, 4), 16),
+    b: parseInt(h.substring(4, 6), 16),
+  };
+}
 
 export default CoverageCounter;

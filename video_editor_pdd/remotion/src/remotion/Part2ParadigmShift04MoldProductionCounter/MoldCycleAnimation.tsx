@@ -1,159 +1,157 @@
-import React from 'react';
-import { useCurrentFrame, Easing, interpolate } from 'remotion';
+import React from "react";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
+import {
+  MOLD_COLOR,
+  PART_COLOR,
+  MOLD_CENTER_X,
+  MOLD_CENTER_Y,
+  MOLD_HALF_WIDTH,
+  MOLD_HALF_HEIGHT,
+  MOLD_GAP_OPEN,
+  PART_WIDTH,
+  PART_HEIGHT,
+  MOLD_START_SPEED,
+  MOLD_END_SPEED,
+  TOTAL_FRAMES,
+} from "./constants";
 
 /**
- * MoldCycleAnimation renders a 2D cross-section of two mold halves
- * opening and closing with a plastic part ejecting each cycle.
- * The cycle speed accelerates over the duration.
+ * Returns the current cycle speed (frames per cycle) at a given frame,
+ * easing from MOLD_START_SPEED down to MOLD_END_SPEED using easeIn(quad).
  */
+function getCycleSpeed(frame: number): number {
+  const t = interpolate(frame, [0, TOTAL_FRAMES], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+    easing: Easing.in(Easing.quad),
+  });
+  return MOLD_START_SPEED - t * (MOLD_START_SPEED - MOLD_END_SPEED);
+}
 
-const MOLD_COLOR = '#78909C';
-const PART_COLOR = '#D9944A';
-const MOLD_CENTER_X = 700;
-const MOLD_CENTER_Y = 450;
-const MOLD_HALF_WIDTH = 200;
-const MOLD_HALF_HEIGHT = 280;
-const MOLD_GAP_OPEN = 120;
-const MOLD_GAP_CLOSED = 2;
-const PART_WIDTH = 80;
-const PART_HEIGHT = 60;
-const TOTAL_FRAMES = 300;
-const START_FRAMES_PER_CYCLE = 60;
-const END_FRAMES_PER_CYCLE = 6;
+/**
+ * Returns the phase within the current cycle [0..1].
+ * 0 = mold fully closed, 0.5 = mold fully open (part ejects), 1 = mold closed again.
+ * We accumulate fractional cycle progress frame-by-frame.
+ */
+function getCyclePhase(frame: number): number {
+  let accumulated = 0;
+  for (let f = 0; f < frame; f++) {
+    const speed = getCycleSpeed(f);
+    accumulated += 1 / speed;
+  }
+  return accumulated % 1;
+}
 
+/**
+ * A simple 2D mold cross-section animation.
+ * Two mold halves open/close horizontally, a plastic part ejects upward when open.
+ */
 export const MoldCycleAnimation: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Calculate current cycle speed — accelerates from 60 to 6 frames/cycle
-  const cycleSpeed = interpolate(
-    frame,
-    [0, TOTAL_FRAMES],
-    [START_FRAMES_PER_CYCLE, END_FRAMES_PER_CYCLE],
-    {
-      easing: Easing.in(Easing.quad),
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-    },
-  );
+  const phase = getCyclePhase(frame);
 
-  // Compute cumulative cycle progress by integrating the speed curve
-  // At each frame, figure out where we are in the current cycle (0..1)
-  // Use a simulated approach: compute total elapsed "cycles" up to this frame
-  let totalCycleProgress = 0;
-  for (let f = 0; f < frame; f++) {
-    const speed = interpolate(
-      f,
-      [0, TOTAL_FRAMES],
-      [START_FRAMES_PER_CYCLE, END_FRAMES_PER_CYCLE],
-      {
+  // Mold opening: phase 0→0.3 open, 0.3→0.5 hold, 0.5→0.8 close, 0.8→1 hold closed
+  const openAmount = (() => {
+    if (phase < 0.3) {
+      // opening
+      return interpolate(phase, [0, 0.3], [0, 1], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.quad),
+      });
+    }
+    if (phase < 0.5) {
+      return 1; // fully open
+    }
+    if (phase < 0.8) {
+      // closing
+      return interpolate(phase, [0.5, 0.8], [1, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
         easing: Easing.in(Easing.quad),
-        extrapolateLeft: 'clamp',
-        extrapolateRight: 'clamp',
-      },
-    );
-    totalCycleProgress += 1 / speed;
-  }
+      });
+    }
+    return 0; // fully closed
+  })();
 
-  const cyclePhase = totalCycleProgress % 1; // 0..1 within current cycle
+  const gapX = openAmount * MOLD_GAP_OPEN;
 
-  // Cycle phases:
-  // 0.0 - 0.3: Mold closing
-  // 0.3 - 0.5: Mold closed (injection)
-  // 0.5 - 0.7: Mold opening
-  // 0.7 - 1.0: Part eject + reset
+  // Part ejection: eject upward during open phase (0.3→0.5)
+  const partProgress = (() => {
+    if (phase >= 0.25 && phase < 0.55) {
+      return interpolate(phase, [0.25, 0.55], [0, 1], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+        easing: Easing.out(Easing.quad),
+      });
+    }
+    return phase >= 0.55 ? 1 : 0;
+  })();
 
-  let moldGap: number;
-  let partEjectY = 0;
-  let partVisible = false;
-  let partOpacity = 1;
+  const partEjectY = partProgress * 200; // pixels upward
+  const partOpacity = (() => {
+    if (phase < 0.25) return 0;
+    if (phase < 0.55) return 1;
+    // fade out after ejection
+    return interpolate(phase, [0.55, 0.7], [1, 0], {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    });
+  })();
 
-  if (cyclePhase < 0.3) {
-    // Closing
-    const t = cyclePhase / 0.3;
-    moldGap = interpolate(t, [0, 1], [MOLD_GAP_OPEN, MOLD_GAP_CLOSED]);
-  } else if (cyclePhase < 0.5) {
-    // Closed (injection phase)
-    moldGap = MOLD_GAP_CLOSED;
-  } else if (cyclePhase < 0.7) {
-    // Opening
-    const t = (cyclePhase - 0.5) / 0.2;
-    moldGap = interpolate(t, [0, 1], [MOLD_GAP_CLOSED, MOLD_GAP_OPEN]);
-  } else {
-    // Part ejects
-    moldGap = MOLD_GAP_OPEN;
-    partVisible = true;
-    const t = (cyclePhase - 0.7) / 0.3;
-    const easedT = Easing.out(Easing.quad)(t);
-    partEjectY = easedT * 200; // eject upward
-    partOpacity = interpolate(t, [0, 0.7, 1], [1, 1, 0.3]);
-  }
-
-  // Also show part being formed during injection phase
-  const showForming = cyclePhase >= 0.3 && cyclePhase < 0.5;
-  const formingOpacity = interpolate(
-    cyclePhase,
-    [0.3, 0.5],
-    [0.2, 0.8],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
-  );
-
-  // Mold glow effect at high speed
-  const speedRatio = interpolate(
-    frame,
-    [0, TOTAL_FRAMES],
-    [0, 1],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
-  );
-  const glowIntensity = speedRatio * 0.6;
+  // Subtle glow around the mold area
+  const glowOpacity = interpolate(frame, [0, 60, 180, 300], [0.3, 0.5, 0.7, 0.8], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 
   return (
     <div
       style={{
-        position: 'absolute',
-        left: MOLD_CENTER_X - MOLD_HALF_WIDTH - MOLD_GAP_OPEN,
-        top: MOLD_CENTER_Y - MOLD_HALF_HEIGHT / 2 - 40,
-        width: (MOLD_HALF_WIDTH + MOLD_GAP_OPEN) * 2,
-        height: MOLD_HALF_HEIGHT + 300,
+        position: "absolute",
+        top: 0,
+        left: 0,
+        width: 1920,
+        height: 1080,
       }}
     >
-      {/* Background glow */}
+      {/* Ambient glow behind mold */}
       <div
         style={{
-          position: 'absolute',
-          left: '50%',
-          top: '40%',
-          transform: 'translate(-50%, -50%)',
+          position: "absolute",
+          left: MOLD_CENTER_X - 200,
+          top: MOLD_CENTER_Y - 200,
           width: 400,
           height: 400,
-          borderRadius: '50%',
-          background: `radial-gradient(circle, rgba(217,148,74,${glowIntensity}) 0%, transparent 70%)`,
-          pointerEvents: 'none',
+          borderRadius: "50%",
+          background: `radial-gradient(circle, rgba(217,148,74,${glowOpacity * 0.15}) 0%, transparent 70%)`,
         }}
       />
 
       {/* Left mold half */}
       <div
         style={{
-          position: 'absolute',
-          left: MOLD_GAP_OPEN - moldGap / 2 - MOLD_HALF_WIDTH / 2,
-          top: 40,
-          width: MOLD_HALF_WIDTH / 2,
+          position: "absolute",
+          left: MOLD_CENTER_X - MOLD_HALF_WIDTH - gapX / 2,
+          top: MOLD_CENTER_Y - MOLD_HALF_HEIGHT / 2,
+          width: MOLD_HALF_WIDTH,
           height: MOLD_HALF_HEIGHT,
-          background: `linear-gradient(90deg, ${MOLD_COLOR}, #90A4AE)`,
-          borderRadius: '8px 0 0 8px',
-          boxShadow: `inset -4px 0 12px rgba(0,0,0,0.4), 2px 0 8px rgba(0,0,0,0.3)`,
+          backgroundColor: MOLD_COLOR,
+          borderRadius: "8px 0 0 8px",
+          boxShadow: "inset -4px 0 12px rgba(0,0,0,0.4), 2px 4px 16px rgba(0,0,0,0.3)",
         }}
       >
-        {/* Cavity detail */}
+        {/* Cavity cutout on right side */}
         <div
           style={{
-            position: 'absolute',
+            position: "absolute",
             right: 0,
             top: MOLD_HALF_HEIGHT / 2 - PART_HEIGHT / 2,
-            width: PART_WIDTH / 2,
-            height: PART_HEIGHT,
-            background: '#546E7A',
-            borderRadius: '4px 0 0 4px',
+            width: PART_WIDTH / 2 + 4,
+            height: PART_HEIGHT + 8,
+            backgroundColor: "#4A5568",
+            borderRadius: "4px 0 0 4px",
           }}
         />
       </div>
@@ -161,82 +159,61 @@ export const MoldCycleAnimation: React.FC = () => {
       {/* Right mold half */}
       <div
         style={{
-          position: 'absolute',
-          left: MOLD_GAP_OPEN + moldGap / 2,
-          top: 40,
-          width: MOLD_HALF_WIDTH / 2,
+          position: "absolute",
+          left: MOLD_CENTER_X + gapX / 2,
+          top: MOLD_CENTER_Y - MOLD_HALF_HEIGHT / 2,
+          width: MOLD_HALF_WIDTH,
           height: MOLD_HALF_HEIGHT,
-          background: `linear-gradient(270deg, ${MOLD_COLOR}, #90A4AE)`,
-          borderRadius: '0 8px 8px 0',
-          boxShadow: `inset 4px 0 12px rgba(0,0,0,0.4), -2px 0 8px rgba(0,0,0,0.3)`,
+          backgroundColor: MOLD_COLOR,
+          borderRadius: "0 8px 8px 0",
+          boxShadow: "inset 4px 0 12px rgba(0,0,0,0.4), -2px 4px 16px rgba(0,0,0,0.3)",
         }}
       >
-        {/* Cavity detail */}
+        {/* Cavity cutout on left side */}
         <div
           style={{
-            position: 'absolute',
+            position: "absolute",
             left: 0,
             top: MOLD_HALF_HEIGHT / 2 - PART_HEIGHT / 2,
-            width: PART_WIDTH / 2,
-            height: PART_HEIGHT,
-            background: '#546E7A',
-            borderRadius: '0 4px 4px 0',
+            width: PART_WIDTH / 2 + 4,
+            height: PART_HEIGHT + 8,
+            backgroundColor: "#4A5568",
+            borderRadius: "0 4px 4px 0",
           }}
         />
       </div>
 
-      {/* Forming part (visible during injection) */}
-      {showForming && (
+      {/* Ejected plastic part */}
+      {partOpacity > 0 && (
         <div
           style={{
-            position: 'absolute',
-            left: MOLD_GAP_OPEN - PART_WIDTH / 2,
-            top: 40 + MOLD_HALF_HEIGHT / 2 - PART_HEIGHT / 2,
+            position: "absolute",
+            left: MOLD_CENTER_X - PART_WIDTH / 2,
+            top: MOLD_CENTER_Y - PART_HEIGHT / 2 - partEjectY,
             width: PART_WIDTH,
             height: PART_HEIGHT,
-            background: PART_COLOR,
-            borderRadius: 6,
-            opacity: formingOpacity,
-            boxShadow: `0 0 12px rgba(217,148,74,${formingOpacity * 0.5})`,
-          }}
-        />
-      )}
-
-      {/* Ejecting part */}
-      {partVisible && (
-        <div
-          style={{
-            position: 'absolute',
-            left: MOLD_GAP_OPEN - PART_WIDTH / 2,
-            top: 40 + MOLD_HALF_HEIGHT / 2 - PART_HEIGHT / 2 - partEjectY,
-            width: PART_WIDTH,
-            height: PART_HEIGHT,
-            background: PART_COLOR,
+            backgroundColor: PART_COLOR,
             borderRadius: 6,
             opacity: partOpacity,
-            boxShadow: `0 0 16px rgba(217,148,74,0.6)`,
+            boxShadow: `0 4px 20px rgba(217, 148, 74, ${partOpacity * 0.5})`,
           }}
         />
       )}
 
-      {/* Speed lines (visible at high speed) */}
-      {speedRatio > 0.4 && (
-        <>
-          {[...Array(Math.floor(speedRatio * 6))].map((_, i) => (
-            <div
-              key={i}
-              style={{
-                position: 'absolute',
-                left: MOLD_GAP_OPEN - 1,
-                top: 40 + MOLD_HALF_HEIGHT / 2 - 100 - i * 30,
-                width: 2,
-                height: 20,
-                background: `rgba(217,148,74,${speedRatio * 0.4})`,
-                borderRadius: 1,
-              }}
-            />
-          ))}
-        </>
+      {/* Static part in mold cavity (when mold is closed) */}
+      {openAmount < 0.15 && (
+        <div
+          style={{
+            position: "absolute",
+            left: MOLD_CENTER_X - PART_WIDTH / 2,
+            top: MOLD_CENTER_Y - PART_HEIGHT / 2,
+            width: PART_WIDTH,
+            height: PART_HEIGHT,
+            backgroundColor: PART_COLOR,
+            borderRadius: 6,
+            opacity: 0.6,
+          }}
+        />
       )}
     </div>
   );

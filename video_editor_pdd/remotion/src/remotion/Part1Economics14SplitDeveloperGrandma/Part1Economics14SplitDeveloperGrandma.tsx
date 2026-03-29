@@ -1,58 +1,61 @@
-import React from "react";
-import { AbsoluteFill, staticFile } from "remotion";
+import React from 'react';
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from 'remotion';
+import { useVisualMediaAssetSrc } from '../_shared/visual-runtime';
+import { SplitPanel } from './SplitPanel';
 import {
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   BACKGROUND_COLOR,
   DIVIDER_COLOR,
-  DIVIDER_WIDTH_PX,
   DIVIDER_OPACITY,
+  DIVIDER_WIDTH,
+  DIVIDER_FADE_FRAMES,
   DIVIDER_GAP,
   PANEL_WIDTH,
-  DIVIDER_FADE_FRAMES,
-  PANEL_FADE_FRAMES,
-  LABEL_FONT_SIZE,
-  LABEL_COLOR,
-  LABEL_OPACITY,
-  LABEL_BG_OPACITY,
-} from "./constants";
-import { SplitDivider } from "./SplitDivider";
-import { VideoPanel } from "./VideoPanel";
+  LEFT_LABEL,
+  RIGHT_LABEL,
+} from './constants';
 
 export const defaultPart1Economics14SplitDeveloperGrandmaProps = {};
 
-// Attempt to import the shared visual-runtime hook.
-// If unavailable (standalone usage), we fall back to staticFile.
-let useVisualMediaAssetSrc: ((alias: string) => string | null) | null = null;
-try {
-  const mod = require("../_shared/visual-runtime");
-  useVisualMediaAssetSrc = mod.useVisualMediaAssetSrc ?? null;
-} catch {
-  // Not available — will use staticFile fallback
-}
-
-function useMediaSrc(
-  alias: string,
-  fallbackAsset: string
-): string {
-  if (useVisualMediaAssetSrc) {
-    const resolved = useVisualMediaAssetSrc(alias);
-    if (resolved) return resolved;
-    // Try defaultSrc as secondary fallback
-    const defaultResolved = useVisualMediaAssetSrc("defaultSrc");
-    if (defaultResolved) return defaultResolved;
-  }
-  return staticFile(fallbackAsset);
-}
-
-/**
- * Split-screen: Developer with Cursor (left) / Grandmother darning (right).
- * 510 frames @ 30fps (~17s). Respectful comparison of two skilled craftspeople
- * using the best tools of their eras.
- */
 export const Part1Economics14SplitDeveloperGrandma: React.FC = () => {
-  const leftSrc = useMediaSrc("leftSrc", "veo/developer_cursor_p1.mp4");
-  const rightSrc = useMediaSrc("rightSrc", "veo/grandmother_darning_p1.mp4");
+  const frame = useCurrentFrame();
+
+  // Resolve video sources via the visual media runtime
+  const leftSrc = useVisualMediaAssetSrc('leftSrc');
+  const rightSrc = useVisualMediaAssetSrc('rightSrc');
+
+  // Divider fade-in: easeOut(quad) over 15 frames
+  const dividerOpacity = interpolate(
+    frame,
+    [0, DIVIDER_FADE_FRAMES],
+    [0, DIVIDER_OPACITY],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  // Divider vertical draw-in: extends from center outward
+  const dividerHeight = interpolate(
+    frame,
+    [0, DIVIDER_FADE_FRAMES],
+    [0, CANVAS_HEIGHT],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  // Center x position for divider
+  const dividerX = PANEL_WIDTH + DIVIDER_GAP / 2 - DIVIDER_WIDTH / 2;
 
   return (
     <AbsoluteFill
@@ -62,46 +65,33 @@ export const Part1Economics14SplitDeveloperGrandma: React.FC = () => {
         height: CANVAS_HEIGHT,
       }}
     >
-      {/* Left panel: Developer with Cursor */}
-      <VideoPanel
-        src={leftSrc}
+      {/* Left panel — Developer with Cursor */}
+      <SplitPanel
         side="left"
-        panelWidth={PANEL_WIDTH}
-        canvasHeight={CANVAS_HEIGHT}
-        canvasWidth={CANVAS_WIDTH}
-        dividerGap={DIVIDER_GAP}
-        fadeFrames={PANEL_FADE_FRAMES}
-        label="Developer with Cursor"
-        labelFontSize={LABEL_FONT_SIZE}
-        labelColor={LABEL_COLOR}
-        labelOpacity={LABEL_OPACITY}
-        labelBgOpacity={LABEL_BG_OPACITY}
-      />
-
-      {/* Right panel: Grandmother darning */}
-      <VideoPanel
-        src={rightSrc}
-        side="right"
-        panelWidth={PANEL_WIDTH}
-        canvasHeight={CANVAS_HEIGHT}
-        canvasWidth={CANVAS_WIDTH}
-        dividerGap={DIVIDER_GAP}
-        fadeFrames={PANEL_FADE_FRAMES}
-        label="Grandmother darning"
-        labelFontSize={LABEL_FONT_SIZE}
-        labelColor={LABEL_COLOR}
-        labelOpacity={LABEL_OPACITY}
-        labelBgOpacity={LABEL_BG_OPACITY}
+        videoSrc={leftSrc}
+        label={LEFT_LABEL}
+        fallbackGradient="linear-gradient(135deg, #0A1628 0%, #1E3A5F 50%, #2563EB 100%)"
       />
 
       {/* Center divider */}
-      <SplitDivider
-        canvasWidth={CANVAS_WIDTH}
-        canvasHeight={CANVAS_HEIGHT}
-        dividerColor={DIVIDER_COLOR}
-        dividerWidthPx={DIVIDER_WIDTH_PX}
-        dividerOpacity={DIVIDER_OPACITY}
-        fadeFrames={DIVIDER_FADE_FRAMES}
+      <div
+        style={{
+          position: 'absolute',
+          left: dividerX,
+          top: (CANVAS_HEIGHT - dividerHeight) / 2,
+          width: DIVIDER_WIDTH,
+          height: dividerHeight,
+          backgroundColor: DIVIDER_COLOR,
+          opacity: dividerOpacity,
+        }}
+      />
+
+      {/* Right panel — Grandmother darning */}
+      <SplitPanel
+        side="right"
+        videoSrc={rightSrc}
+        label={RIGHT_LABEL}
+        fallbackGradient="linear-gradient(135deg, #3D2B1F 0%, #78593A 50%, #D4A76A 100%)"
       />
     </AbsoluteFill>
   );

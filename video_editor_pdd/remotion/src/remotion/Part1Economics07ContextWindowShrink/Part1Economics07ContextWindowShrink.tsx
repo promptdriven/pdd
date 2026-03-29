@@ -1,25 +1,87 @@
 import React from "react";
-import { AbsoluteFill, Sequence, useCurrentFrame, interpolate, Easing } from "remotion";
-import { BG_COLOR, TOTAL_FRAMES, MISMATCH_START_FRAME } from "./constants";
-import { CodeBlockGrid } from "./CodeBlockGrid";
-import { ContextWindowOverlay } from "./ContextWindowOverlay";
-import { CoverageCounter } from "./CoverageCounter";
-import { MismatchHighlights } from "./MismatchHighlights";
+import {
+  AbsoluteFill,
+  useCurrentFrame,
+  interpolate,
+  Easing,
+} from "remotion";
+import {
+  BG_COLOR,
+  GROWTH_STAGES,
+} from "./constants";
+import CodeBlockGrid from "./CodeBlockGrid";
+import ContextWindowOverlay from "./ContextWindowOverlay";
+import CoverageCounter from "./CoverageCounter";
+import MismatchHighlights from "./MismatchHighlights";
 
 export const defaultPart1Economics07ContextWindowShrinkProps = {};
 
 /**
- * Section 1.7: Context Window Shrink — Codebase Growth vs. Fixed Window
+ * Section 1.7: Context Window Shrink
  *
- * Visualizes how a fixed-size AI context window covers less and less
- * of a growing codebase: 80% → 40% → 10% → 2%.
+ * Demonstrates how a fixed-size context window covers less and less
+ * of a growing codebase, from 80% at 4×4 down to 2% at 32×32.
  *
- * Phase 1 (0-180): Small 4×4 grid, 80% coverage — AI sees almost everything
- * Phase 2 (180-540): Grid grows through 8×8, 16×16, 32×32 — window stays fixed
- * Phase 3 (720-1560): Red/green mismatch highlights — irrelevant code grabbed,
- *                      needed code missed
+ * Duration: 1560 frames (52s @ 30fps)
  */
+
+/**
+ * Determines the current growth stage and transition progress.
+ */
+function useGridStage(frame: number) {
+  // Find which stage we're currently in or transitioning to
+  let currentStageIndex = 0;
+  let transitionProgress = 1; // 1 = fully in current stage
+  let previousGridSize = GROWTH_STAGES[0].gridSize;
+
+  for (let i = GROWTH_STAGES.length - 1; i >= 0; i--) {
+    const stage = GROWTH_STAGES[i];
+    if (frame >= stage.startFrame) {
+      currentStageIndex = i;
+
+      // Calculate transition progress within this stage's transition period
+      const framesIntoStage = frame - stage.startFrame;
+      if (framesIntoStage < stage.transitionFrames) {
+        transitionProgress = interpolate(
+          framesIntoStage,
+          [0, stage.transitionFrames],
+          [0, 1],
+          {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+            easing: Easing.inOut(Easing.cubic),
+          }
+        );
+      } else {
+        transitionProgress = 1;
+      }
+
+      previousGridSize =
+        i > 0 ? GROWTH_STAGES[i - 1].gridSize : GROWTH_STAGES[0].gridSize;
+      break;
+    }
+  }
+
+  return {
+    currentStageIndex,
+    currentGridSize: GROWTH_STAGES[currentStageIndex].gridSize,
+    previousGridSize,
+    transitionProgress,
+  };
+}
+
 export const Part1Economics07ContextWindowShrink: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  const { currentStageIndex, currentGridSize, previousGridSize, transitionProgress } =
+    useGridStage(frame);
+
+  // Title text that fades in early and out after a few seconds
+  const titleOpacity = interpolate(frame, [0, 20, 120, 160], [0.8, 0.9, 0.9, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
   return (
     <AbsoluteFill
       style={{
@@ -27,103 +89,93 @@ export const Part1Economics07ContextWindowShrink: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Title label — visible from frame 0 */}
+      {/* Section title */}
       <div
         style={{
           position: "absolute",
-          left: 80,
-          top: 60,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 22,
-          fontWeight: 600,
-          color: "#E2E8F0",
-          opacity: 0.9,
-          letterSpacing: 0.5,
+          top: 40,
+          left: 0,
+          width: "100%",
+          textAlign: "center",
+          opacity: titleOpacity,
+          zIndex: 30,
         }}
       >
-        Codebase Growth vs. Fixed Context Window
+        <span
+          style={{
+            fontFamily: "Inter, sans-serif",
+            fontSize: 28,
+            fontWeight: 600,
+            color: "#E2E8F0",
+            letterSpacing: 1,
+          }}
+        >
+          Codebase Growth vs. Fixed Context Window
+        </span>
       </div>
 
-      {/* Growing code grid */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <CodeBlockGrid />
-      </Sequence>
+      {/* Growing code block grid */}
+      <CodeBlockGrid
+        currentGridSize={currentGridSize}
+        previousGridSize={previousGridSize}
+        transitionProgress={transitionProgress}
+      />
 
       {/* Fixed-size context window overlay */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <ContextWindowOverlay />
-      </Sequence>
+      <ContextWindowOverlay />
 
-      {/* Coverage counter (top-right) */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <CoverageCounter />
-      </Sequence>
+      {/* Coverage percentage counter */}
+      <CoverageCounter
+        currentStageIndex={currentStageIndex}
+        transitionProgress={transitionProgress}
+      />
 
-      {/* Red/green mismatch highlights — Phase 3 */}
-      <Sequence from={MISMATCH_START_FRAME} durationInFrames={TOTAL_FRAMES - MISMATCH_START_FRAME}>
-        <MismatchHighlights />
-      </Sequence>
+      {/* Red/green mismatch highlights (Phase 3, from frame 720) */}
+      <MismatchHighlights />
 
-      {/* Legend for Phase 3 highlights */}
-      <Sequence from={MISMATCH_START_FRAME} durationInFrames={TOTAL_FRAMES - MISMATCH_START_FRAME}>
-        <MismatchLegend />
-      </Sequence>
+      {/* Grid size label at bottom */}
+      <GridSizeLabel currentGridSize={currentGridSize} />
     </AbsoluteFill>
   );
 };
 
 /**
- * Small legend in the bottom-right showing what red/green highlights mean.
+ * Shows the current grid dimensions (e.g., "32×32 blocks") at the bottom.
  */
-const MismatchLegend: React.FC = () => {
+const GridSizeLabel: React.FC<{
+  currentGridSize: number;
+}> = ({ currentGridSize }) => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(frame, [0, 30], [0, 0.85], {
+  const opacity = interpolate(frame, [0, 20], [0.6, 0.85], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
   });
 
   return (
     <div
       style={{
         position: "absolute",
-        right: 80,
-        bottom: 80,
+        bottom: 50,
+        left: 0,
+        width: "100%",
+        textAlign: "center",
         opacity,
-        display: "flex",
-        flexDirection: "column",
-        gap: 10,
+        zIndex: 20,
       }}
     >
-      <LegendItem color="#EF4444" label="Irrelevant code grabbed" />
-      <LegendItem color="#5AAA6E" label="Needed code missed" />
+      <span
+        style={{
+          fontFamily: "Inter, sans-serif",
+          fontSize: 18,
+          fontWeight: 500,
+          color: "#94A3B8",
+        }}
+      >
+        {currentGridSize}×{currentGridSize} code blocks
+      </span>
     </div>
   );
 };
-
-const LegendItem: React.FC<{ color: string; label: string }> = ({ color, label }) => (
-  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-    <div
-      style={{
-        width: 14,
-        height: 14,
-        backgroundColor: color,
-        borderRadius: 2,
-        opacity: 0.6,
-      }}
-    />
-    <span
-      style={{
-        fontFamily: "Inter, sans-serif",
-        fontSize: 14,
-        fontWeight: 500,
-        color: "#CBD5E1",
-      }}
-    >
-      {label}
-    </span>
-  </div>
-);
 
 export default Part1Economics07ContextWindowShrink;

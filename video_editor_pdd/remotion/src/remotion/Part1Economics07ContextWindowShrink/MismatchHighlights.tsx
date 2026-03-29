@@ -1,58 +1,65 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  RED_HIGHLIGHT,
-  GREEN_HIGHLIGHT,
-  HIGHLIGHT_OVERLAY_OPACITY,
+  HIGHLIGHT_RED,
+  HIGHLIGHT_GREEN,
+  BLOCK_GAP,
+  GRID_CENTER_X,
+  GRID_CENTER_Y,
+  MISMATCH_START_FRAME,
+  MISMATCH_FADE_FRAMES,
   RED_BLOCK_INDICES,
   GREEN_BLOCK_INDICES,
-  HIGHLIGHT_FADE_FRAMES,
-  GRID_STAGE_SIZES,
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
 } from "./constants";
 
+/**
+ * Renders colored overlays on specific grid blocks:
+ * - Red blocks inside the context window (irrelevant code grabbed)
+ * - Green blocks outside the context window (needed code missed)
+ *
+ * Appears starting at MISMATCH_START_FRAME with a fade-in.
+ */
+
+const GRID_SIZE = 32;
+const MAX_GRID_AREA = Math.min(CANVAS_WIDTH - 200, CANVAS_HEIGHT - 160);
+
+function getBlockSize(): number {
+  return Math.max(2, (MAX_GRID_AREA - (GRID_SIZE - 1) * BLOCK_GAP) / GRID_SIZE);
+}
+
+function indexToXY(index: number): { row: number; col: number } {
+  return {
+    row: Math.floor(index / GRID_SIZE),
+    col: index % GRID_SIZE,
+  };
+}
+
 interface HighlightBlockProps {
-  row: number;
-  col: number;
-  blockPixelSize: number;
-  gap: number;
-  gridLeft: number;
-  gridTop: number;
+  index: number;
   color: string;
-  localFrame: number;
-  delayIndex: number;
+  label: string;
+  fadeProgress: number;
+  blockPx: number;
+  gridOriginX: number;
+  gridOriginY: number;
 }
 
 const HighlightBlock: React.FC<HighlightBlockProps> = ({
-  row,
-  col,
-  blockPixelSize,
-  gap,
-  gridLeft,
-  gridTop,
+  index,
   color,
-  localFrame,
-  delayIndex,
+  label,
+  fadeProgress,
+  blockPx,
+  gridOriginX,
+  gridOriginY,
 }) => {
-  const delay = delayIndex * 5;
-  const fadeStart = delay;
-  const fadeEnd = delay + HIGHLIGHT_FADE_FRAMES;
+  const { row, col } = indexToXY(index);
+  const x = gridOriginX + col * (blockPx + BLOCK_GAP);
+  const y = gridOriginY + row * (blockPx + BLOCK_GAP);
 
-  const opacity = interpolate(localFrame, [fadeStart, fadeEnd], [0, HIGHLIGHT_OVERLAY_OPACITY], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  const scale = interpolate(localFrame, [fadeStart, fadeEnd], [0.95, 1.0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  const x = gridLeft + col * (blockPixelSize + gap);
-  const y = gridTop + row * (blockPixelSize + gap);
+  const scale = 0.95 + 0.05 * fadeProgress;
 
   return (
     <div
@@ -60,92 +67,82 @@ const HighlightBlock: React.FC<HighlightBlockProps> = ({
         position: "absolute",
         left: x,
         top: y,
-        width: blockPixelSize,
-        height: blockPixelSize,
+        width: blockPx,
+        height: blockPx,
         backgroundColor: color,
-        opacity,
+        opacity: 0.3 * fadeProgress,
+        borderRadius: Math.max(1, blockPx > 10 ? 3 : 1),
         transform: `scale(${scale})`,
-        transformOrigin: "center center",
-        borderRadius: 2,
-        pointerEvents: "none",
         zIndex: 15,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
       }}
-    />
+    >
+      {blockPx > 14 && (
+        <span
+          style={{
+            fontFamily: "Inter, sans-serif",
+            fontSize: 11,
+            color: color,
+            opacity: 0.7 * fadeProgress,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </span>
+      )}
+    </div>
   );
 };
 
-/**
- * Renders red (irrelevant, inside window) and green (needed, outside window)
- * highlight overlays on the 32×32 grid during Phase 3.
- * Labels are provided by the MismatchLegend in the main component.
- */
-export const MismatchHighlights: React.FC = () => {
+const MismatchHighlights: React.FC = () => {
   const frame = useCurrentFrame();
-  const localFrame = frame;
 
-  const gridSize = 32;
-  const cfg = GRID_STAGE_SIZES[gridSize];
-  const gap = cfg.gapPx;
-  const blockPixelSize = cfg.blockPx;
-  const totalGapSpace = (gridSize - 1) * gap;
-
-  const gridTotalWidth = gridSize * blockPixelSize + totalGapSpace;
-  const gridLeft = (CANVAS_WIDTH - gridTotalWidth) / 2;
-  const gridTop = (CANVAS_HEIGHT - gridTotalWidth) / 2;
-
-  const indexToRowCol = (index: number) => ({
-    row: Math.floor(index / gridSize),
-    col: index % gridSize,
-  });
-
-  const redBlocks = useMemo(
-    () =>
-      RED_BLOCK_INDICES.map((idx, i) => {
-        const { row, col } = indexToRowCol(idx);
-        return (
-          <HighlightBlock
-            key={`red-${idx}`}
-            row={row}
-            col={col}
-            blockPixelSize={blockPixelSize}
-            gap={gap}
-            gridLeft={gridLeft}
-            gridTop={gridTop}
-            color={RED_HIGHLIGHT}
-            localFrame={localFrame}
-            delayIndex={i}
-          />
-        );
-      }),
-    [localFrame, blockPixelSize, gridLeft, gridTop, gap]
+  const fadeProgress = interpolate(
+    frame,
+    [MISMATCH_START_FRAME, MISMATCH_START_FRAME + MISMATCH_FADE_FRAMES],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  const greenBlocks = useMemo(
-    () =>
-      GREEN_BLOCK_INDICES.map((idx, i) => {
-        const { row, col } = indexToRowCol(idx);
-        return (
-          <HighlightBlock
-            key={`green-${idx}`}
-            row={row}
-            col={col}
-            blockPixelSize={blockPixelSize}
-            gap={gap}
-            gridLeft={gridLeft}
-            gridTop={gridTop}
-            color={GREEN_HIGHLIGHT}
-            localFrame={localFrame}
-            delayIndex={i + RED_BLOCK_INDICES.length}
-          />
-        );
-      }),
-    [localFrame, blockPixelSize, gridLeft, gridTop, gap]
-  );
+  const blockPx = getBlockSize();
+  const gridDim = GRID_SIZE * blockPx + (GRID_SIZE - 1) * BLOCK_GAP;
+  const gridOriginX = GRID_CENTER_X - gridDim / 2;
+  const gridOriginY = GRID_CENTER_Y - gridDim / 2;
+
+  if (fadeProgress <= 0) return null;
 
   return (
     <>
-      {redBlocks}
-      {greenBlocks}
+      {RED_BLOCK_INDICES.map((idx) => (
+        <HighlightBlock
+          key={`red-${idx}`}
+          index={idx}
+          color={HIGHLIGHT_RED}
+          label="Irrelevant"
+          fadeProgress={fadeProgress}
+          blockPx={blockPx}
+          gridOriginX={gridOriginX}
+          gridOriginY={gridOriginY}
+        />
+      ))}
+      {GREEN_BLOCK_INDICES.map((idx) => (
+        <HighlightBlock
+          key={`green-${idx}`}
+          index={idx}
+          color={HIGHLIGHT_GREEN}
+          label="Needed"
+          fadeProgress={fadeProgress}
+          blockPx={blockPx}
+          gridOriginX={gridOriginX}
+          gridOriginY={gridOriginY}
+        />
+      ))}
     </>
   );
 };
