@@ -957,6 +957,36 @@ describe("specs executor — word timestamp injection", () => {
     expect(prompt).toContain("17.6");
   });
 
+  it("prefers newer failed word timestamps over older accepted timestamps", async () => {
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "cold_open");
+    fs.mkdirSync(wordsDir, { recursive: true });
+    const acceptedPath = path.join(wordsDir, "word_timestamps.json");
+    const failedPath = path.join(wordsDir, "word_timestamps.failed.json");
+    fs.writeFileSync(
+      acceptedPath,
+      JSON.stringify([
+        { word: "hello", start: 0.0, end: 0.5, segmentId: "cold_open_001" },
+      ])
+    );
+    fs.writeFileSync(
+      failedPath,
+      JSON.stringify([
+        { word: "Watch", start: 12.8, end: 13.1, segmentId: "cold_open_007" },
+        { word: "this", start: 13.1, end: 13.4, segmentId: "cold_open_007" },
+      ])
+    );
+    const now = new Date();
+    fs.utimesSync(acceptedPath, new Date(now.getTime() - 60_000), new Date(now.getTime() - 60_000));
+    fs.utimesSync(failedPath, now, now);
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const prompt = mockRunClaudeFix.mock.calls[0][0] as string;
+    expect(prompt).toContain("cold_open_007");
+    expect(prompt).toContain("13.4");
+  });
+
   it("instructs Claude to derive timestamps from segment times", async () => {
     const wordsDir = path.join(tmpDir, "outputs", "tts", "cold_open");
     fs.mkdirSync(wordsDir, { recursive: true });

@@ -12,6 +12,7 @@ import {
   normalizeSpecTimestampRangeToSection,
   parseSpecTimestampRange,
 } from "./spec-timestamp";
+import { loadLatestWordTimestamps } from "./audio-sync-artifacts";
 import type { Section } from "./types";
 
 export {
@@ -831,32 +832,7 @@ function parseSpecHeading(content: string, componentId: string): string {
 }
 
 function loadWordTimestamps(projectDir: string, sectionId: string): WordTimestamp[] {
-  const timestampsPath = path.join(
-    projectDir,
-    "outputs",
-    "tts",
-    sectionId,
-    "word_timestamps.json"
-  );
-
-  if (!fs.existsSync(timestampsPath)) {
-    return [];
-  }
-
-  try {
-    const raw = fs.readFileSync(timestampsPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    const words = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.words) ? parsed.words : [];
-    return words.filter((word: unknown): word is WordTimestamp => {
-      return (
-        typeof (word as WordTimestamp | undefined)?.word === "string" &&
-        typeof (word as WordTimestamp | undefined)?.start === "number" &&
-        typeof (word as WordTimestamp | undefined)?.end === "number"
-      );
-    });
-  } catch {
-    return [];
-  }
+  return loadLatestWordTimestamps(projectDir, sectionId);
 }
 
 function extractKeyword(componentId: string, sectionId: string): {

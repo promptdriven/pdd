@@ -1,10 +1,12 @@
 import type { Section } from "./types";
+import {
+  groupScriptSectionsByProjectSection,
+  normalizeNarrativeHeading,
+  parseTimedNarrativeHeadings,
+} from "./narration-manifest";
 
-type SectionSummary = Pick<Section, "id" | "label">;
-
-type NarrationSection = {
-  heading: string;
-  narration: string[];
+type SectionSummary = Pick<Section, "id" | "label"> & {
+  scriptHeadings?: string[];
 };
 
 type GeneratedBlock = {
@@ -21,16 +23,6 @@ const BASE_INSTRUCTION =
 
 const cleanText = (value: string): string =>
   value.replace(/\s+/g, " ").trim();
-
-const normalizeHeading = (value: string): string =>
-  cleanText(
-    value
-      .replace(/\([^)]*\)/g, " ")
-      .replace(/([A-Za-z])(\d)/g, "$1 $2")
-      .replace(/(\d)([A-Za-z])/g, "$1 $2")
-      .replace(/[^A-Za-z0-9]+/g, " ")
-      .toLowerCase(),
-  );
 
 const titleFromId = (sectionId: string): string =>
   sectionId
@@ -138,87 +130,6 @@ const extractNarrationParagraphs = (body: string): string[] => {
   return paragraphs;
 };
 
-const extractNarrationSections = (mainScript: string): NarrationSection[] => {
-  const headingMatches = Array.from(mainScript.matchAll(/^##\s+(.+?)\s*$/gm));
-
-  return headingMatches
-    .map((match, index) => {
-      const heading = cleanText(match[1] ?? "");
-      const start = match.index ?? 0;
-      const bodyStart = start + match[0].length;
-      const bodyEnd = headingMatches[index + 1]?.index ?? mainScript.length;
-      const body = mainScript.slice(bodyStart, bodyEnd);
-      const narration = extractNarrationParagraphs(body);
-
-      return { heading, narration };
-    })
-    .filter((section) => section.heading.length > 0);
-};
-
-const scoreSectionHeadingMatch = (
-  candidateHeading: string,
-  desiredHeading: string,
-): number => {
-  const candidate = normalizeHeading(candidateHeading);
-  const desired = normalizeHeading(desiredHeading);
-
-  if (!candidate || !desired) {
-    return -1;
-  }
-
-  if (candidate === desired) {
-    return 1000;
-  }
-
-  if (candidate.startsWith(desired) || desired.startsWith(candidate)) {
-    return 900 - Math.abs(candidate.length - desired.length);
-  }
-
-  const candidateTokens = candidate.split(" ");
-  const desiredTokens = desired.split(" ");
-  const sharedTokenCount = desiredTokens.filter((token) =>
-    candidateTokens.includes(token),
-  ).length;
-
-  if (sharedTokenCount === 0) {
-    return -1;
-  }
-
-  const allDesiredTokensMatched = desiredTokens.every((token) =>
-    candidateTokens.includes(token),
-  );
-  if (allDesiredTokensMatched) {
-    return 800 + sharedTokenCount;
-  }
-
-  return Math.round(
-    (sharedTokenCount / Math.max(candidateTokens.length, desiredTokens.length)) *
-      100,
-  );
-};
-
-const resolveNarrationForSection = (
-  section: SectionSummary,
-  extractedSections: NarrationSection[],
-): string[] => {
-  const preferredHeading = section.label || titleFromId(section.id);
-  const headingCandidates = [preferredHeading, titleFromId(section.id)];
-
-  const bestMatch = extractedSections
-    .map((candidate) => ({
-      candidate,
-      score: Math.max(
-        ...headingCandidates.map((heading) =>
-          scoreSectionHeadingMatch(candidate.heading, heading),
-        ),
-      ),
-    }))
-    .filter(({ score }) => score >= 0)
-    .sort((left, right) => right.score - left.score)[0];
-
-  return bestMatch?.candidate.narration ?? [];
-};
-
 const parseGeneratedBlocks = (rawTtsScript: string): GeneratedBlock[] => {
   const blocks: GeneratedBlock[] = [];
   let currentTags: string[] = [];
@@ -245,8 +156,8 @@ const parseGeneratedBlocks = (rawTtsScript: string): GeneratedBlock[] => {
   for (const line of rawTtsScript.split(/\r?\n/)) {
     const trimmed = line.trim();
 
-    if (!trimmed || /^---+$/.test(trimmed) || /^#(?!#)/.test(trimmed) || /^##\s+/.test(trimmed)) {
-      if (!trimmed || /^---+$/.test(trimmed) || /^##\s+/.test(trimmed)) {
+    if (!trimmed || /^---+$/.test(trimmed) || /^#(?!#)/.test(trimmed) || /^#{2,3}\s+/.test(trimmed)) {
+      if (!trimmed || /^---+$/.test(trimmed) || /^#{2,3}\s+/.test(trimmed)) {
         flush();
       }
       continue;
@@ -283,12 +194,21 @@ const parseGeneratedBlocks = (rawTtsScript: string): GeneratedBlock[] => {
   return blocks;
 };
 
+const shouldRenderSubheading = (
+  sectionHeading: string,
+  canonicalHeading: string,
+  sectionIndex: number,
+): boolean =>
+  sectionIndex > 0 &&
+  normalizeNarrativeHeading(sectionHeading) !==
+    normalizeNarrativeHeading(canonicalHeading);
+
 export function buildCanonicalTtsScript(
   mainScript: string,
   rawTtsScript: string,
   sections: ReadonlyArray<SectionSummary>,
 ): string {
-  const extractedSections = extractNarrationSections(mainScript);
+  const extractedSections = parseTimedNarrativeHeadings(mainScript);
   const effectiveSections =
     sections.length > 0
       ? sections
@@ -299,39 +219,67 @@ export function buildCanonicalTtsScript(
             .replace(/^_+|_+$/g, ""),
           label: section.heading,
         }));
+  const groupedSections = groupScriptSectionsByProjectSection(
+    extractedSections,
+    effectiveSections,
+  );
   const generatedBlocks = parseGeneratedBlocks(rawTtsScript);
   let blockIndex = 0;
 
   const sectionBlocks = effectiveSections.map((section, sectionIndex) => {
     const heading = section.label || titleFromId(section.id);
-    const narrationBlocks = resolveNarrationForSection(section, extractedSections);
     const lines = [`## ${heading}`, ""];
+    const scriptSections = groupedSections.get(section.id) ?? [];
 
-    narrationBlocks.forEach((paragraph, paragraphIndex) => {
+    if (scriptSections.length === 0) {
       const generated = generatedBlocks[blockIndex];
       if (generated) {
         blockIndex += 1;
+        lines.push(...ensureInstructionTag(generated.tags.length ? generated.tags : [
+          "[TONE: explanatory]",
+          "[PACE: moderate]",
+          "[EMOTION: calm]",
+        ]));
+        lines.push(generated.speech);
+        if (generated.trailingPause) {
+          lines.push(generated.trailingPause);
+        }
+        lines.push("");
+      }
+    }
+
+    scriptSections.forEach((scriptSection, scriptSectionIndex) => {
+      if (shouldRenderSubheading(scriptSection.heading, heading, scriptSectionIndex)) {
+        lines.push(`### ${scriptSection.heading}`);
+        lines.push("");
       }
 
-      const tags =
-        generated?.tags.length
-          ? ensureInstructionTag(generated.tags)
-          : ensureInstructionTag([
-              "[TONE: explanatory]",
-              "[PACE: moderate]",
-              "[EMOTION: calm]",
-            ]);
-      const speech = generated?.speech || paragraph;
-      const pause =
-        generated?.trailingPause ??
-        (paragraphIndex < narrationBlocks.length - 1 ? "[PAUSE: 1.0s]" : null);
+      scriptSection.narration.forEach((paragraph, paragraphIndex) => {
+        const generated = generatedBlocks[blockIndex];
+        if (generated) {
+          blockIndex += 1;
+        }
 
-      lines.push(...tags);
-      lines.push(speech);
-      if (pause) {
-        lines.push(pause);
-      }
-      lines.push("");
+        const tags =
+          generated?.tags.length
+            ? ensureInstructionTag(generated.tags)
+            : ensureInstructionTag([
+                "[TONE: explanatory]",
+                "[PACE: moderate]",
+                "[EMOTION: calm]",
+              ]);
+        const speech = generated?.speech || paragraph;
+        const pause =
+          generated?.trailingPause ??
+          (paragraphIndex < scriptSection.narration.length - 1 ? "[PAUSE: 1.0s]" : null);
+
+        lines.push(...tags);
+        lines.push(speech);
+        if (pause) {
+          lines.push(pause);
+        }
+        lines.push("");
+      });
     });
 
     if (sectionIndex === effectiveSections.length - 1) {

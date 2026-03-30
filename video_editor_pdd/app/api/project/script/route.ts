@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 import { getProjectDir } from "@/lib/projects";
+import { loadProject } from "@/lib/project";
+import { groupScriptSectionsByProjectSection } from "@/lib/narration-manifest";
 import { normalizeSectionKey, parseScriptSections } from "@/lib/spec-script-context";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +44,34 @@ function extractSectionScriptContent(
   const scriptSections = parseScriptSections(content);
   if (scriptSections.length === 0) {
     return { sectionHeading: null, sectionContent: null };
+  }
+
+  try {
+    const project = loadProject();
+    const groupedSections = groupScriptSectionsByProjectSection(
+      scriptSections,
+      project.sections,
+    );
+    const groupedTarget = groupedSections.get(sectionId);
+
+    if (groupedTarget && groupedTarget.length > 0) {
+      const lines = content.split(/\r?\n/);
+      const startLine = groupedTarget[0].startLine;
+      const lastSection = groupedTarget[groupedTarget.length - 1];
+      const lastSectionIndex = scriptSections.findIndex(
+        (scriptSection) => scriptSection.startLine === lastSection.startLine,
+      );
+      const nextSection = scriptSections[lastSectionIndex + 1];
+      const endLine = nextSection ? nextSection.startLine - 1 : lines.length;
+      const sectionContent = lines.slice(startLine - 1, endLine).join("\n").trim();
+
+      return {
+        sectionHeading: groupedTarget[0].heading,
+        sectionContent: sectionContent || null,
+      };
+    }
+  } catch {
+    // Fall back to legacy direct heading matching when project metadata is unavailable.
   }
 
   const normalizedTarget = normalizeSectionKey(sectionId);

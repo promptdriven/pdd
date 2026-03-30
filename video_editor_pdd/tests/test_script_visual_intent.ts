@@ -91,4 +91,39 @@ This block includes cinematic footage.
       })
     ).toBeNull();
   });
+
+  it("includes folded timed demo headings when resolving visual intent for the owning canonical section", () => {
+    const foldedScript = `
+## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)
+**[VISUAL: Split screen with developer and grandmother.]**
+
+## THE THIRTY-SECOND DEMO (2:00 - 2:30)
+[veo: Clean terminal demo with generated code]
+**[VISUAL: Terminal fills with code.]**
+
+## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)
+**[VISUAL: Price chart animation.]**
+    `.trim();
+
+    const allSections = [
+      { id: "cold_open", label: "Cold Open" },
+      { id: "part1_economics", label: "Part 1: Economics of Darning" },
+    ];
+
+    expect(
+      resolveSectionHasVeoIntent(
+        foldedScript,
+        { id: "cold_open", label: "Cold Open" },
+        allSections,
+      ),
+    ).toBe(true);
+
+    expect(
+      resolveSectionVeoPromptFromScript(
+        foldedScript,
+        { id: "cold_open", label: "Cold Open" },
+        allSections,
+      ),
+    ).toBe("Clean terminal demo with generated code");
+  });
 });

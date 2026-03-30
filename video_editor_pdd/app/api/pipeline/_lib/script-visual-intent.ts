@@ -1,3 +1,5 @@
+import { groupScriptSectionsByProjectSection } from "@/lib/narration-manifest";
+
 export type ScriptSectionVisualIntent = {
   heading: string;
   normalizedHeading: string;
@@ -170,8 +172,23 @@ const tokenOverlapScore = (left: string, right: string): number => {
 
 export function findMatchingScriptSectionVisualIntent(
   sections: ScriptSectionVisualIntent[],
-  target: { id: string; label: string }
+  target: { id: string; label: string; scriptHeadings?: string[] },
+  allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>
 ): ScriptSectionVisualIntent | null {
+  if (allSections && allSections.length > 0) {
+    const grouped = groupScriptSectionsByProjectSection(sections, allSections);
+    const groupedMatches = grouped.get(target.id) ?? [];
+    if (groupedMatches.length > 0) {
+      return {
+        heading: groupedMatches[0].heading,
+        normalizedHeading: groupedMatches[0].normalizedHeading,
+        veoMarkers: groupedMatches.flatMap((section) => section.veoMarkers),
+        visualLines: groupedMatches.flatMap((section) => section.visualLines),
+        bodyLines: groupedMatches.flatMap((section) => section.bodyLines),
+      };
+    }
+  }
+
   const candidates = buildSectionCandidates(target);
   let bestSection: ScriptSectionVisualIntent | null = null;
   let bestScore = 0;
@@ -207,9 +224,10 @@ export function findMatchingScriptSectionVisualIntent(
 
 export function resolveSectionHasVeoIntent(
   content: string,
-  target: { id: string; label: string }
+  target: { id: string; label: string; scriptHeadings?: string[] },
+  allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>
 ): boolean | null {
-  const decision = resolveSectionVisualIntent(content, target);
+  const decision = resolveSectionVisualIntent(content, target, allSections);
   if (!decision) {
     return null;
   }
@@ -219,11 +237,13 @@ export function resolveSectionHasVeoIntent(
 
 export function resolveSectionVeoPromptFromScript(
   content: string,
-  target: { id: string; label: string }
+  target: { id: string; label: string; scriptHeadings?: string[] },
+  allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>
 ): string | null {
   const matchingSection = findMatchingScriptSectionVisualIntent(
     parseScriptSectionVisualIntent(content),
-    target
+    target,
+    allSections,
   );
 
   return matchingSection?.veoMarkers.find((marker) => marker.length > 0) ?? null;
@@ -246,11 +266,13 @@ function collectCueEvidence(lines: string[], cues: string[]): string[] {
 
 export function resolveSectionVisualIntent(
   content: string,
-  target: { id: string; label: string }
+  target: { id: string; label: string; scriptHeadings?: string[] },
+  allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>
 ): SectionVisualIntentDecision | null {
   const matchingSection = findMatchingScriptSectionVisualIntent(
     parseScriptSectionVisualIntent(content),
-    target
+    target,
+    allSections,
   );
 
   if (!matchingSection) {

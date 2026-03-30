@@ -200,6 +200,55 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("prefers newer failed audio sync timestamps when resolving untimed visuals", () => {
+    const specDir = path.join(tmpDir, "specs", "part1_economics");
+    const wordsDir = path.join(tmpDir, "outputs", "tts", "part1_economics");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(wordsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, "stat_callout_gitclear.md"),
+      "# GitClear callout\n\nNo explicit timestamp"
+    );
+
+    const acceptedPath = path.join(wordsDir, "word_timestamps.json");
+    const failedPath = path.join(wordsDir, "word_timestamps.failed.json");
+    fs.writeFileSync(
+      acceptedPath,
+      JSON.stringify([
+        { word: "done", start: 2.0, end: 2.2, segmentId: "part1_economics_001" },
+      ])
+    );
+    fs.writeFileSync(
+      failedPath,
+      JSON.stringify([
+        { word: "GitClear", start: 12.5, end: 13.0, segmentId: "part1_economics_001" },
+        { word: "done", start: 19.5, end: 20.0, segmentId: "part1_economics_002" },
+      ])
+    );
+    const now = new Date();
+    fs.utimesSync(acceptedPath, new Date(now.getTime() - 60_000), new Date(now.getTime() - 60_000));
+    fs.utimesSync(failedPath, now, now);
+
+    const timings = resolveSectionVisualTimings(
+      tmpDir,
+      {
+        id: "part1_economics",
+        specDir: "part1_economics",
+        durationSeconds: 20,
+      },
+      ["part1_economics_stat_callout_gitclear"]
+    );
+
+    expect(timings).toEqual([
+      expect.objectContaining({
+        id: "part1_economics_stat_callout_gitclear",
+        startSeconds: 11.5,
+        endSeconds: 20,
+        source: "audio-sync",
+      }),
+    ]);
+  });
+
   it("strips numeric prefixes before resolving audio-sync keywords", () => {
     const specDir = path.join(tmpDir, "specs", "animation_section");
     const wordsDir = path.join(tmpDir, "outputs", "tts", "animation_section");

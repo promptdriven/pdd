@@ -28,6 +28,7 @@ Spec requirements verified:
 
 import json
 import os
+import time
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -377,6 +378,36 @@ class TestGenerateRootTsx:
                 {"word": "hello", "start": 0.0, "end": 17.54},
             ])
         )
+
+        sections = [{"id": "intro", "durationSeconds": 0.363}]
+        root = generate_root_tsx(
+            sections,
+            fps=30,
+            remotion_dir=str(remotion_dir),
+            project_dir=str(tmp_path),
+        )
+
+        assert "durationInFrames={527}" in root
+
+    def test_duration_in_frames_prefers_newer_failed_word_timestamps(self, tmp_path):
+        remotion_dir = tmp_path / "remotion"
+        timestamps_dir = tmp_path / "outputs" / "tts" / "intro"
+        (remotion_dir / "src" / "remotion").mkdir(parents=True)
+        timestamps_dir.mkdir(parents=True)
+        accepted_path = timestamps_dir / "word_timestamps.json"
+        failed_path = timestamps_dir / "word_timestamps.failed.json"
+        accepted_path.write_text(
+            json.dumps([
+                {"word": "hello", "start": 0.0, "end": 0.5},
+            ])
+        )
+        failed_path.write_text(
+            json.dumps([
+                {"word": "hello", "start": 0.0, "end": 17.54},
+            ])
+        )
+        older = time.time() - 60
+        os.utime(accepted_path, (older, older))
 
         sections = [{"id": "intro", "durationSeconds": 0.363}]
         root = generate_root_tsx(

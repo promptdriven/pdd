@@ -287,6 +287,28 @@ def _section_heading_to_id(heading: str, section_map: Optional[Dict[str, str]] =
 
 # Pattern for section headings like ## COLD OPEN (0:00 - 2:00)
 SECTION_HEADING_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)
+SUBSECTION_HEADING_PATTERN = re.compile(r"^###\s+(.+)$", re.MULTILINE)
+
+
+def _split_section_body_by_subheadings(body: str) -> List[str]:
+    """Split a top-level section body into chunks separated by ### subheadings."""
+    subheadings = list(SUBSECTION_HEADING_PATTERN.finditer(body))
+    if not subheadings:
+        return [body] if body.strip() else []
+
+    chunks: List[str] = []
+    first_chunk = body[: subheadings[0].start()].strip()
+    if first_chunk:
+        chunks.append(first_chunk)
+
+    for idx, match in enumerate(subheadings):
+        start = match.end()
+        end = subheadings[idx + 1].start() if idx + 1 < len(subheadings) else len(body)
+        chunk = body[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+    return chunks
 
 
 def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
@@ -321,18 +343,20 @@ def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
         if not body:
             continue
 
-        # Split into sub-segments at major pauses (>= 1.0s) or double newlines
-        # with significant text between them
-        parts = re.split(r"\[PAUSE\s*:\s*(?:[1-9]\d*\.?\d*|0\.\d*[5-9]\d*)\s*s?\]", body)
-
         seg_counter = 0
-        for part in parts:
-            clean = _normalize_spoken_text(part)
-            if len(clean) < 10:
-                continue  # Skip trivially short fragments
-            seg_counter += 1
-            seg_id = f"{section_id}_{seg_counter:03d}"
-            segments.append(Segment(seg_id, part.strip()))
+        for body_chunk in _split_section_body_by_subheadings(body):
+            parts = re.split(
+                r"\[PAUSE\s*:\s*(?:[1-9]\d*\.?\d*|0\.\d*[5-9]\d*)\s*s?\]",
+                body_chunk,
+            )
+
+            for part in parts:
+                clean = _normalize_spoken_text(part)
+                if len(clean) < 10:
+                    continue  # Skip trivially short fragments
+                seg_counter += 1
+                seg_id = f"{section_id}_{seg_counter:03d}"
+                segments.append(Segment(seg_id, part.strip()))
 
         # If no sub-segments were created, use the whole section as one segment
         if seg_counter == 0:

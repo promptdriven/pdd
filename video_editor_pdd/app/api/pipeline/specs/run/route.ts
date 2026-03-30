@@ -16,6 +16,7 @@ import {
   resolveSectionVisualIntent,
 } from "@/app/api/pipeline/_lib/script-visual-intent";
 import { getProjectDir } from "@/lib/projects";
+import { loadLatestWordTimestamps } from "@/lib/audio-sync-artifacts";
 import { syncInferredVeoReferencesFromProjectSpecs } from "@/lib/veo-references";
 
 const BASE_SPECS_TIMEOUT_MS = 600_000;
@@ -201,37 +202,29 @@ registerExecutor("specs", (params, _send) => {
       if (fs.existsSync(specMdPath)) {
         try { specMdContent = fs.readFileSync(specMdPath, "utf-8"); } catch { /* ignore */ }
       }
-      const wordsPath = path.join(getProjectDir(), "outputs", "tts", sid, "word_timestamps.json");
       let hasWords = false;
       let wordSummary: SegmentSummary[] | null = null;
       let audioDurationSeconds: number | null = null;
-      if (fs.existsSync(wordsPath)) {
-        try {
-          const raw = JSON.parse(fs.readFileSync(wordsPath, "utf-8")) as
-            | Array<{ word?: string; start?: number; end?: number; segmentId?: string }>
-            | { words?: Array<{ word?: string; start?: number; end?: number; segmentId?: string }> };
-          const words = Array.isArray(raw) ? raw : raw.words ?? [];
-          if (words.length > 0) {
-            hasWords = true;
-            audioDurationSeconds = words.reduce((max, w) => Math.max(max, typeof w.end === "number" ? w.end : 0), 0);
-            const segmentMap = new Map<string, { start: number; end: number; wordList: string[] }>();
-            for (const w of words) {
-              const segId = w.segmentId ?? "unknown";
-              const entry = segmentMap.get(segId) ?? { start: Infinity, end: 0, wordList: [] };
-              if (typeof w.start === "number") entry.start = Math.min(entry.start, w.start);
-              if (typeof w.end === "number") entry.end = Math.max(entry.end, w.end);
-              if (w.word) entry.wordList.push(w.word);
-              segmentMap.set(segId, entry);
-            }
-            wordSummary = Array.from(segmentMap.entries()).map(([segId, data]) => ({
-              segmentId: segId,
-              startSeconds: data.start === Infinity ? 0 : data.start,
-              endSeconds: data.end,
-              wordCount: data.wordList.length,
-              previewText: data.wordList.slice(0, 5).join(" "),
-            }));
-          }
-        } catch { /* ignore parse errors */ }
+      const words = loadLatestWordTimestamps(getProjectDir(), sid);
+      if (words.length > 0) {
+        hasWords = true;
+        audioDurationSeconds = words.reduce((max, w) => Math.max(max, typeof w.end === "number" ? w.end : 0), 0);
+        const segmentMap = new Map<string, { start: number; end: number; wordList: string[] }>();
+        for (const w of words) {
+          const segId = w.segmentId ?? "unknown";
+          const entry = segmentMap.get(segId) ?? { start: Infinity, end: 0, wordList: [] };
+          if (typeof w.start === "number") entry.start = Math.min(entry.start, w.start);
+          if (typeof w.end === "number") entry.end = Math.max(entry.end, w.end);
+          if (w.word) entry.wordList.push(w.word);
+          segmentMap.set(segId, entry);
+        }
+        wordSummary = Array.from(segmentMap.entries()).map(([segId, data]) => ({
+          segmentId: segId,
+          startSeconds: data.start === Infinity ? 0 : data.start,
+          endSeconds: data.end,
+          wordCount: data.wordList.length,
+          previewText: data.wordList.slice(0, 5).join(" "),
+        }));
       }
       sectionContextMap.set(sid, {
         specMd: specMdContent,
@@ -285,14 +278,20 @@ registerExecutor("specs", (params, _send) => {
             ? findMatchingScriptSectionVisualIntent(scriptVisualIntentSections, {
                 id: section.id,
                 label: section.label,
-              })
+                scriptHeadings: Array.isArray(section.scriptHeadings)
+                  ? section.scriptHeadings
+                  : undefined,
+              }, cfg.sections)
             : null;
         const visualIntent =
           section && mainScriptContent
             ? resolveSectionVisualIntent(mainScriptContent, {
                 id: section.id,
                 label: section.label,
-              })
+                scriptHeadings: Array.isArray(section.scriptHeadings)
+                  ? section.scriptHeadings
+                  : undefined,
+              }, cfg.sections)
             : null;
         const timeoutMs = estimateSpecsTimeoutMs({
           specMd: ctx.specMd,

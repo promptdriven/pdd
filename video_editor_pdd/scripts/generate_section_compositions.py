@@ -2418,13 +2418,20 @@ def _read_section_duration_from_word_timestamps(
     if not project_dir:
         return None
 
-    timestamps_path = os.path.join(
-        project_dir,
-        'outputs',
-        'tts',
-        section_id,
-        'word_timestamps.json',
-    )
+    section_dir = os.path.join(project_dir, 'outputs', 'tts', section_id)
+    accepted_path = os.path.join(section_dir, 'word_timestamps.json')
+    failed_path = os.path.join(section_dir, 'word_timestamps.failed.json')
+    timestamps_path = accepted_path
+    if os.path.exists(failed_path):
+        if not os.path.exists(accepted_path):
+            timestamps_path = failed_path
+        else:
+            try:
+                if os.path.getmtime(failed_path) > os.path.getmtime(accepted_path):
+                    timestamps_path = failed_path
+            except OSError:
+                pass
+
     content = _read_text_if_exists(timestamps_path)
     if not content:
         return None

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 
 import { getProjectDir } from "@/lib/projects";
+import { loadLatestWordTimestamps } from "@/lib/audio-sync-artifacts";
 
 export type NarrationSegment = {
   id: string;
@@ -21,6 +22,32 @@ type WordTimestamp = {
   start: number;
   end: number;
   segmentId?: string;
+};
+
+export type NarrativeHeadingLike = {
+  heading: string;
+  [key: string]: unknown;
+};
+
+export type SectionHeadingOwner = {
+  id: string;
+  label: string;
+  scriptHeadings?: string[];
+};
+
+export type NarrativeHeadingAssignmentSource =
+  | "exact"
+  | "fuzzy"
+  | "explicit"
+  | "fold_previous"
+  | "fold_next"
+  | "unmatched";
+
+export type AssignedNarrativeHeading<T extends NarrativeHeadingLike> = T & {
+  normalizedHeading: string;
+  pipelineSectionId: string | null;
+  pipelineSectionLabel: string | null;
+  matchSource: NarrativeHeadingAssignmentSource;
 };
 
 /**
@@ -107,24 +134,333 @@ function loadWordTimestamps(
   projectDir: string,
   sectionId: string
 ): WordTimestamp[] | null {
-  const tsPath = path.join(
-    projectDir,
-    "outputs",
-    "tts",
-    sectionId,
-    "word_timestamps.json"
-  );
-  if (!fs.existsSync(tsPath)) {
+  const words = loadLatestWordTimestamps(projectDir, sectionId);
+  if (words.length === 0) {
     return null;
+  }
+  return words;
+}
+
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export function normalizeNarrativeHeading(value: string): string {
+  return collapseWhitespace(
+    value
+      .replace(/\([^)]*\)/g, " ")
+      .replace(/([A-Za-z])(\d)/g, "$1 $2")
+      .replace(/(\d)([A-Za-z])/g, "$1 $2")
+      .replace(/[_-]+/g, " ")
+      .replace(/[^A-Za-z0-9\s]/g, " ")
+      .toLowerCase(),
+  );
+}
+
+function titleFromId(sectionId: string): string {
+  return sectionId
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function tokenOverlapScore(left: string, right: string): number {
+  const leftTokens = left.split(" ").filter(Boolean);
+  const rightTokens = right.split(" ").filter(Boolean);
+
+  if (leftTokens.length === 0 || rightTokens.length === 0) {
+    return 0;
   }
 
-  try {
-    const parsed = JSON.parse(fs.readFileSync(tsPath, "utf-8"));
-    const words: WordTimestamp[] = Array.isArray(parsed)
-      ? parsed
-      : parsed.words ?? [];
-    return words;
-  } catch {
-    return null;
+  const rightSet = new Set(rightTokens);
+  const overlap = leftTokens.filter((token) => rightSet.has(token)).length;
+  return overlap / Math.max(leftTokens.length, rightTokens.length);
+}
+
+const HEADING_STOPWORDS = new Set(["the", "a", "an"]);
+
+function normalizeHeadingTokens(value: string): string[] {
+  return normalizeNarrativeHeading(value)
+    .split(" ")
+    .filter(Boolean)
+    .filter((token) => !HEADING_STOPWORDS.has(token));
+}
+
+function buildSectionHeadingCandidates(
+  section: Pick<SectionHeadingOwner, "id" | "label">,
+): string[] {
+  return Array.from(
+    new Set(
+      [section.label, section.id, titleFromId(section.id)]
+        .map(normalizeNarrativeHeading)
+        .filter(Boolean),
+    ),
+  );
+}
+
+function resolveExplicitOwner(
+  heading: string,
+  projectSections: ReadonlyArray<SectionHeadingOwner>,
+): Pick<AssignedNarrativeHeading<NarrativeHeadingLike>, "pipelineSectionId" | "pipelineSectionLabel" | "matchSource"> | null {
+  const normalizedHeading = normalizeNarrativeHeading(heading);
+
+  for (const section of projectSections) {
+    const explicitHeadings = Array.isArray(section.scriptHeadings)
+      ? section.scriptHeadings
+      : [];
+    if (
+      explicitHeadings.some(
+        (candidate) => normalizeNarrativeHeading(candidate) === normalizedHeading,
+      )
+    ) {
+      return {
+        pipelineSectionId: section.id,
+        pipelineSectionLabel: section.label,
+        matchSource: "explicit",
+      };
+    }
   }
+
+  return null;
+}
+
+function scoreHeadingAgainstSection(
+  heading: string,
+  section: Pick<SectionHeadingOwner, "id" | "label">,
+): number {
+  const normalizedHeading = normalizeNarrativeHeading(heading);
+  const headingTokens = normalizeHeadingTokens(heading);
+  const candidates = buildSectionHeadingCandidates(section);
+  let bestScore = 0;
+
+  candidates.forEach((candidate) => {
+    const condensedHeading = normalizedHeading.replace(/\s+/g, "");
+    const condensedCandidate = candidate.replace(/\s+/g, "");
+    const candidateTokens = normalizeHeadingTokens(candidate);
+
+    if (normalizedHeading === candidate) {
+      bestScore = Math.max(bestScore, 100);
+      return;
+    }
+
+    if (condensedHeading === condensedCandidate) {
+      bestScore = Math.max(bestScore, 95);
+      return;
+    }
+
+    if (
+      normalizedHeading.startsWith(candidate) ||
+      candidate.startsWith(normalizedHeading)
+    ) {
+      bestScore = Math.max(bestScore, 90);
+      return;
+    }
+
+    if (
+      normalizedHeading.includes(candidate) ||
+      candidate.includes(normalizedHeading)
+    ) {
+      bestScore = Math.max(bestScore, 80);
+      return;
+    }
+
+    if (
+      candidateTokens.length > 0 &&
+      candidateTokens.every((token) => headingTokens.includes(token))
+    ) {
+      bestScore = Math.max(bestScore, 78);
+      return;
+    }
+
+    if (
+      headingTokens.length > 0 &&
+      headingTokens.every((token) => candidateTokens.includes(token))
+    ) {
+      bestScore = Math.max(bestScore, 78);
+      return;
+    }
+
+    bestScore = Math.max(
+      bestScore,
+      Math.round(tokenOverlapScore(normalizedHeading, candidate) * 70),
+    );
+  });
+
+  return bestScore;
+}
+
+export function resolveNarrativeSectionAssignments<
+  T extends NarrativeHeadingLike,
+>(
+  headings: ReadonlyArray<T>,
+  projectSections: ReadonlyArray<SectionHeadingOwner>,
+): Array<AssignedNarrativeHeading<T>> {
+  const baseAssignments = headings.map((heading) => {
+    const explicitOwner = resolveExplicitOwner(heading.heading, projectSections);
+    if (explicitOwner) {
+      return {
+        ...heading,
+        normalizedHeading: normalizeNarrativeHeading(heading.heading),
+        ...explicitOwner,
+      };
+    }
+
+    let bestSection: SectionHeadingOwner | null = null;
+    let bestScore = 0;
+
+    projectSections.forEach((section) => {
+      const score = scoreHeadingAgainstSection(heading.heading, section);
+      if (score > bestScore) {
+        bestScore = score;
+        bestSection = section;
+      }
+    });
+
+    if (bestSection && bestScore >= 60) {
+      return {
+        ...heading,
+        normalizedHeading: normalizeNarrativeHeading(heading.heading),
+        pipelineSectionId: bestSection.id,
+        pipelineSectionLabel: bestSection.label,
+        matchSource: bestScore >= 95 ? "exact" : "fuzzy",
+      };
+    }
+
+    return {
+      ...heading,
+      normalizedHeading: normalizeNarrativeHeading(heading.heading),
+      pipelineSectionId: null,
+      pipelineSectionLabel: null,
+      matchSource: "unmatched" as const,
+    };
+  });
+
+  return baseAssignments.map((assignment, index) => {
+    if (assignment.pipelineSectionId) {
+      return assignment;
+    }
+
+    const previous = [...baseAssignments]
+      .slice(0, index)
+      .reverse()
+      .find((candidate) => candidate.pipelineSectionId);
+    if (previous?.pipelineSectionId) {
+      return {
+        ...assignment,
+        pipelineSectionId: previous.pipelineSectionId,
+        pipelineSectionLabel: previous.pipelineSectionLabel,
+        matchSource: "fold_previous" as const,
+      };
+    }
+
+    const next = baseAssignments
+      .slice(index + 1)
+      .find((candidate) => candidate.pipelineSectionId);
+    if (next?.pipelineSectionId) {
+      return {
+        ...assignment,
+        pipelineSectionId: next.pipelineSectionId,
+        pipelineSectionLabel: next.pipelineSectionLabel,
+        matchSource: "fold_next" as const,
+      };
+    }
+
+    return assignment;
+  });
+}
+
+function extractNarrationParagraphs(body: string): string[] {
+  const paragraphs: string[] = [];
+  let currentLines: string[] = [];
+  let narratorStarted = false;
+
+  const flush = () => {
+    const paragraph = collapseWhitespace(currentLines.join(" "));
+    if (paragraph) {
+      paragraphs.push(paragraph);
+    }
+    currentLines = [];
+  };
+
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+
+    if (/^\*{0,2}NARRATOR:\*{0,2}\s*$/i.test(trimmed)) {
+      flush();
+      narratorStarted = true;
+      continue;
+    }
+
+    if (!narratorStarted) {
+      continue;
+    }
+
+    if (!trimmed) {
+      flush();
+      continue;
+    }
+
+    if (/^##\s+/.test(trimmed) || /^---+$/.test(trimmed)) {
+      flush();
+      continue;
+    }
+
+    if (/^#{3,}\s+/.test(trimmed)) {
+      flush();
+      continue;
+    }
+
+    if (/^\*{0,2}\[VISUAL:/i.test(trimmed)) {
+      flush();
+      continue;
+    }
+
+    currentLines.push(trimmed.replace(/^\*{0,2}NARRATOR:\*{0,2}\s*/i, ""));
+  }
+
+  flush();
+  return paragraphs;
+}
+
+export function parseTimedNarrativeHeadings(mainScript: string): Array<{
+  heading: string;
+  narration: string[];
+}> {
+  const headingMatches = Array.from(mainScript.matchAll(/^##\s+(.+?)\s*$/gm));
+
+  return headingMatches
+    .map((match, index) => {
+      const heading = collapseWhitespace(match[1] ?? "");
+      const start = match.index ?? 0;
+      const bodyStart = start + match[0].length;
+      const bodyEnd = headingMatches[index + 1]?.index ?? mainScript.length;
+      const body = mainScript.slice(bodyStart, bodyEnd);
+      return {
+        heading,
+        narration: extractNarrationParagraphs(body),
+      };
+    })
+    .filter((section) => section.heading.length > 0);
+}
+
+export function groupScriptSectionsByProjectSection<
+  T extends NarrativeHeadingLike,
+>(
+  scriptSections: ReadonlyArray<T>,
+  projectSections: ReadonlyArray<SectionHeadingOwner>,
+): Map<string, Array<AssignedNarrativeHeading<T>>> {
+  const grouped = new Map<string, Array<AssignedNarrativeHeading<T>>>();
+  const assignments = resolveNarrativeSectionAssignments(scriptSections, projectSections);
+
+  assignments.forEach((assignment) => {
+    if (!assignment.pipelineSectionId) {
+      return;
+    }
+    const existing = grouped.get(assignment.pipelineSectionId) ?? [];
+    existing.push(assignment);
+    grouped.set(assignment.pipelineSectionId, existing);
+  });
+
+  return grouped;
 }

@@ -329,6 +329,89 @@ describe("parseSegmentsFromScript", () => {
     expect(result[0].id).toMatch(/intro/i);
   });
 
+  it("treats ### folded subheadings as additional segments under the same parent section", () => {
+    mockExistsSync.mockImplementation((p: string) => {
+      if (p.includes("tts_script.md")) return true;
+      if (p.includes("project.json")) return true;
+      if (p.includes("segments.json")) return false;
+      return false;
+    });
+    mockReaddirSync.mockReturnValue([]);
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (p.includes("project.json")) {
+        return JSON.stringify({
+          name: "demo",
+          outputResolution: { width: 1920, height: 1080 },
+          tts: {
+            engine: "qwen3-tts",
+            modelPath: "models/Qwen3-TTS",
+            tokenizerPath: "models/Qwen3-TTS",
+            speaker: "Aiden",
+            speakingRate: 1,
+            sampleRate: 24000,
+          },
+          sections: [
+            {
+              id: "cold_open",
+              label: "Cold Open",
+              videoFile: "cold_open.mp4",
+              specDir: "cold_open",
+              remotionDir: "S00-ColdOpen",
+              compositionId: "ColdOpenSection",
+              durationSeconds: 0,
+              offsetSeconds: 0,
+            },
+            {
+              id: "part1_economics",
+              label: "Part 1: Economics of Darning",
+              videoFile: "part1_economics.mp4",
+              specDir: "part1_economics",
+              remotionDir: "S01-Part1Economics",
+              compositionId: "Part1EconomicsSection",
+              durationSeconds: 0,
+              offsetSeconds: 0,
+            },
+          ],
+          audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+          veo: {
+            model: "veo-3.1-generate-preview",
+            defaultAspectRatio: "16:9",
+            maxConcurrentGenerations: 4,
+            references: [],
+            frameChains: [],
+          },
+          render: {
+            maxParallelRenders: 3,
+            useLambda: false,
+            lambdaRegion: "us-east-1",
+          },
+        });
+      }
+      return [
+        "## Cold Open",
+        "",
+        "Intro text that is definitely long enough to parse.",
+        "",
+        "### THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+        "",
+        "Watch this.",
+        "",
+        "## Part 1: Economics of Darning",
+        "",
+        "Part one opening text that is definitely long enough to parse.",
+      ].join("\n");
+    });
+
+    const result = parseSegmentsFromScript();
+
+    expect(result.map((segment) => segment.id)).toEqual([
+      "cold_open_001",
+      "cold_open_002",
+      "part1_economics_001",
+    ]);
+    expect(result[1].text).toContain("Watch this.");
+  });
+
   it("returns empty array when tts_script.md has no ## headings", () => {
     mockExistsSync.mockImplementation((p: string) => {
       if (p.includes("tts_script.md")) return true;

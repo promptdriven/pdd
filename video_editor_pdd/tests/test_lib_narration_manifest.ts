@@ -131,6 +131,44 @@ describe("lib/narration-manifest", () => {
     expect(result[1].endSeconds).toBe(1.5);
   });
 
+  it("resolveSegmentTimingForSection prefers newer failed timestamps over older accepted timestamps", () => {
+    writeManifest([
+      {
+        id: "demo_001",
+        sectionId: "demo",
+        text: "Hello world.",
+        cleanText: "Hello world.",
+      },
+    ]);
+
+    const dir = path.join(tmpDir, "outputs", "tts", "demo");
+    fs.mkdirSync(dir, { recursive: true });
+    const acceptedPath = path.join(dir, "word_timestamps.json");
+    const failedPath = path.join(dir, "word_timestamps.failed.json");
+    fs.writeFileSync(
+      acceptedPath,
+      JSON.stringify([
+        { word: "Hello", start: 0.0, end: 0.2, segmentId: "demo_001" },
+      ])
+    );
+    fs.writeFileSync(
+      failedPath,
+      JSON.stringify([
+        { word: "Hello", start: 1.0, end: 1.3, segmentId: "demo_001" },
+        { word: "world", start: 1.3, end: 1.7, segmentId: "demo_001" },
+      ])
+    );
+    const now = new Date();
+    fs.utimesSync(acceptedPath, new Date(now.getTime() - 60_000), new Date(now.getTime() - 60_000));
+    fs.utimesSync(failedPath, now, now);
+
+    const result = resolveSegmentTimingForSection("demo", tmpDir);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].startSeconds).toBe(1.0);
+    expect(result[0].endSeconds).toBe(1.7);
+  });
+
   it("loadNarrationManifest returns null when manifest is missing", () => {
     const result = loadNarrationManifest(tmpDir);
     expect(result).toBeNull();

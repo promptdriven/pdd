@@ -259,6 +259,90 @@ describe("GET /api/project/script", () => {
     expect(body.sectionContent).not.toContain("Everything changed.");
   });
 
+  it("returns folded timed demo headings with the owning section instead of the next top-level section", async () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (String(filePath).endsWith("project.json")) {
+        return JSON.stringify({
+          name: "demo",
+          outputResolution: { width: 1920, height: 1080 },
+          tts: {
+            engine: "qwen3-tts",
+            modelPath: "models/Qwen3-TTS",
+            tokenizerPath: "models/Qwen3-TTS",
+            speaker: "Aiden",
+            speakingRate: 1,
+            sampleRate: 24000,
+          },
+          sections: [
+            {
+              id: "cold_open",
+              label: "Cold Open",
+              videoFile: "cold_open.mp4",
+              specDir: "cold_open",
+              remotionDir: "S00-ColdOpen",
+              compositionId: "ColdOpenSection",
+              durationSeconds: 0,
+              offsetSeconds: 0,
+            },
+            {
+              id: "part1_economics",
+              label: "Part 1: Economics of Darning",
+              videoFile: "part1_economics.mp4",
+              specDir: "part1_economics",
+              remotionDir: "S01-Part1Economics",
+              compositionId: "Part1EconomicsSection",
+              durationSeconds: 0,
+              offsetSeconds: 0,
+            },
+          ],
+          audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+          veo: {
+            model: "veo-3.1-generate-preview",
+            defaultAspectRatio: "16:9",
+            maxConcurrentGenerations: 4,
+            references: [],
+            frameChains: [],
+          },
+          render: {
+            maxParallelRenders: 3,
+            useLambda: false,
+            lambdaRegion: "us-east-1",
+          },
+        });
+      }
+
+      return [
+        "# Main Script",
+        "",
+        "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+        "",
+        "**NARRATOR:**",
+        "If you use Cursor...",
+        "",
+        "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+        "",
+        "**NARRATOR:**",
+        "Watch this.",
+        "",
+        "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+        "",
+        "**NARRATOR:**",
+        "This isn't nostalgia.",
+      ].join("\n");
+    });
+
+    const response = await GET(makeGetSectionRequest("cold_open"));
+    const { status, body } = await parseResponse(response);
+
+    expect(status).toBe(200);
+    expect(body.sectionHeading).toBe("COLD OPEN: THE SOCK HOOK (0:00 - 2:00)");
+    expect(body.sectionContent).toContain("## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)");
+    expect(body.sectionContent).toContain("## THE THIRTY-SECOND DEMO (2:00 - 2:30)");
+    expect(body.sectionContent).toContain("Watch this.");
+    expect(body.sectionContent).not.toContain("This isn't nostalgia.");
+  });
+
   it("falls back to full content when section match is not found", async () => {
     const content = [
       "# Main Script",

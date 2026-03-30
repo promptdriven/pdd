@@ -64,6 +64,38 @@ describe("lib/deterministic-pipeline", () => {
     expect(output).toContain("This is the veo paragraph.");
   });
 
+  it("keeps folded timed demo headings under the owning canonical section in deterministic mode", () => {
+    const mainScript = [
+      "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "",
+      "**NARRATOR:**",
+      "If you use Cursor...",
+      "",
+      "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+      "",
+      "**NARRATOR:**",
+      "Watch this.",
+      "",
+      "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+      "",
+      "**NARRATOR:**",
+      "This isn't nostalgia.",
+      "",
+    ].join("\n");
+
+    const output = buildDeterministicTtsScript(mainScript, [
+      { id: "cold_open", label: "Cold Open" },
+      { id: "part1_economics", label: "Part 1: Economics of Darning" },
+    ]);
+
+    expect(output).toContain("## Cold Open");
+    expect(output).toContain("### THE THIRTY-SECOND DEMO (2:00 - 2:30)");
+    expect(output).toContain("Watch this.");
+
+    const part1Block = output.split("## Part 1: Economics of Darning")[1] ?? "";
+    expect(part1Block).not.toContain("Watch this.");
+  });
+
   it("writeDeterministicSpecsForSection creates remotion and veo spec files", () => {
     const files = writeDeterministicSpecsForSection(
       tmpDir,

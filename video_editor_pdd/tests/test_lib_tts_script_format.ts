@@ -215,6 +215,53 @@ describe("lib/tts-script-format", () => {
     expect(output.match(/\[TONE: measured\]/g)).toHaveLength(3);
   });
 
+  it("folds unmatched timed demo headings under the owning canonical section instead of shifting them to the next section", () => {
+    const mainScript = [
+      "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "",
+      "**NARRATOR:**",
+      "If you use Cursor, or Claude Code, or Copilot...",
+      "",
+      "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+      "",
+      "**NARRATOR:**",
+      "Watch this.",
+      "",
+      "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+      "",
+      "**NARRATOR:**",
+      "This isn't nostalgia. It's economics.",
+      "",
+    ].join("\n");
+
+    const rawTtsScript = [
+      "[TONE: warm]",
+      "If you use Cursor, or Claude Code, or Copilot...",
+      "[PAUSE: 0.8s]",
+      "",
+      "[TONE: energetic]",
+      "Watch this.",
+      "[PAUSE: 0.4s]",
+      "",
+      "[TONE: analytical]",
+      "This isn't nostalgia. It's economics.",
+      "",
+    ].join("\n");
+
+    const output = buildCanonicalTtsScript(mainScript, rawTtsScript, [
+      { id: "cold_open", label: "Cold Open" },
+      { id: "part1_economics", label: "Part 1: Economics of Darning" },
+    ]);
+
+    expect(output).toContain("## Cold Open");
+    expect(output).toContain("### THE THIRTY-SECOND DEMO (2:00 - 2:30)");
+    expect(output).toContain("Watch this.");
+    expect(output).toContain("## Part 1: Economics of Darning");
+
+    const part1Block = output.split("## Part 1: Economics of Darning")[1] ?? "";
+    expect(part1Block).not.toContain("Watch this.");
+  });
+
   it("falls back to default tags when Claude omits annotation markers", () => {
     const mainScript = [
       "## Main Section",

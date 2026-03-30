@@ -1281,6 +1281,58 @@ class TestMain:
         assert not (output_dir / "animation_section_001.wav").exists()
         assert manifest["segments"][1]["text"] == "Second sentence."
 
+    def test_manifest_only_splits_folded_subheadings_into_additional_parent_section_segments(self, tmp_path):
+        """Folded ### headings should advance the parent section segment counter instead of merging into the prior segment."""
+        narrative_dir = tmp_path / "narrative"
+        narrative_dir.mkdir()
+        (tmp_path / "project.json").write_text(
+            json.dumps(
+                {
+                    "sections": [
+                        {"id": "cold_open", "label": "Cold Open"},
+                        {"id": "part1_economics", "label": "Part 1: Economics of Darning"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (narrative_dir / "tts_script.md").write_text(
+            "# Demo\n\n"
+            "## Cold Open\n\n"
+            "[TONE: neutral] Intro text that is definitely long enough to parse.\n\n"
+            "### THE THIRTY-SECOND DEMO (2:00 - 2:30)\n\n"
+            "[TONE: neutral] Watch this.\n\n"
+            "## Part 1: Economics of Darning\n\n"
+            "[TONE: neutral] Part one opening text that is definitely long enough to parse.\n",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "outputs" / "tts"
+
+        with mock.patch(
+            "sys.argv",
+            [
+                "render_tts.py",
+                "--project-dir",
+                str(tmp_path),
+                "--output-dir",
+                str(output_dir),
+                "--manifest-only",
+            ],
+        ):
+            from render_tts import main
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+        manifest_path = output_dir / SEGMENTS_MANIFEST_FILENAME
+        manifest = json.loads(manifest_path.read_text())
+        assert [segment["id"] for segment in manifest["segments"]] == [
+            "cold_open_001",
+            "cold_open_002",
+            "part1_economics_001",
+        ]
+        assert manifest["segments"][1]["cleanText"] == "Watch this."
+
     def test_manifest_only_strips_markdown_narrator_markers_from_clean_text(self, tmp_path):
         """Section manifests should not preserve markdown narrator labels as spoken text."""
         narrative_dir = tmp_path / "narrative"

@@ -270,6 +270,50 @@ class TestLoadSectionGroups:
             ]
         }
 
+    def test_expands_stale_stored_range_to_full_current_manifest_section(self, tmp_path):
+        project = {
+            "sections": [
+                {
+                    "id": "cold_open",
+                    "specDir": "cold_open",
+                }
+            ],
+            "audioSync": {
+                "sectionGroups": {
+                    "cold_open": {
+                        "startSegment": "cold_open_001",
+                        "endSegment": "cold_open_006",
+                    }
+                }
+            },
+        }
+        (tmp_path / "project.json").write_text(json.dumps(project), encoding="utf-8")
+
+        output_dir = tmp_path / "outputs" / "tts"
+        output_dir.mkdir(parents=True)
+        segments = []
+        for i in range(1, 11):
+            segment_id = f"cold_open_{i:03d}"
+            segments.append(
+                {
+                    "id": segment_id,
+                    "sectionId": "cold_open",
+                    "cleanText": f"Cold open line {i}.",
+                }
+            )
+            _create_dummy_wav(str(output_dir / f"{segment_id}.wav"))
+
+        (output_dir / "segments.json").write_text(
+            json.dumps({"segments": segments}),
+            encoding="utf-8",
+        )
+
+        section_groups = load_section_groups(str(tmp_path), str(output_dir))
+
+        assert section_groups == {
+            "cold_open": [f"cold_open_{i:03d}" for i in range(1, 11)]
+        }
+
     def test_prunes_obsolete_section_groups_that_are_not_current_project_sections(self, tmp_path):
         project = {
             "sections": [

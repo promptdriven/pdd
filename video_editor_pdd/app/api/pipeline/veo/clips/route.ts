@@ -106,7 +106,10 @@ export async function GET(): Promise<NextResponse> {
         resolveSectionHasVeoIntent(mainScriptContent, {
           id: section.id,
           label: section.label,
-        }) !== false
+          scriptHeadings: Array.isArray(section.scriptHeadings)
+            ? section.scriptHeadings
+            : undefined,
+        }, sections) !== false
       );
     });
 

@@ -4,6 +4,7 @@ import { spawn } from "child_process";
 import { registerExecutor, runPipelineStage, runPipelineStageDirect } from "@/lib/jobs";
 import { resolvePythonRunSpec } from "@/app/api/pipeline/_lib/python-runtime";
 import { loadProject } from "@/lib/project";
+import { loadNarrationManifest } from "@/lib/narration-manifest";
 import type { SseSend } from "@/lib/types";
 import { getAppRemotionPublicDir, getAppScriptsDir, getProjectDir } from "@/lib/projects";
 
@@ -38,6 +39,73 @@ function createSseStream() {
   return { stream, send, done, error };
 }
 
+function resolveSectionGroupsForAudioSync(
+  project: ReturnType<typeof loadProject>,
+  requestedSections: string[],
+): Record<string, unknown> {
+  const configuredSectionIds = Array.isArray(project.sections)
+    ? project.sections
+        .map((section) => section?.id)
+        .filter((sectionId): sectionId is string => typeof sectionId === "string")
+    : [];
+  const configuredSectionIdSet = new Set(configuredSectionIds);
+  const rawSectionGroups = project.audioSync?.sectionGroups ?? {};
+  const allSectionGroups =
+    configuredSectionIdSet.size > 0
+      ? Object.fromEntries(
+          Object.entries(rawSectionGroups).filter(([sectionId]) =>
+            configuredSectionIdSet.has(sectionId)
+          )
+        )
+      : rawSectionGroups;
+
+  const targetSectionIds =
+    requestedSections.length > 0
+      ? requestedSections
+      : configuredSectionIds.length > 0
+        ? configuredSectionIds
+        : Object.keys(allSectionGroups);
+
+  const manifest = loadNarrationManifest(getProjectDir());
+  const manifestSectionGroups = new Map<string, string[]>();
+  for (const segment of manifest?.segments ?? []) {
+    if (
+      !segment ||
+      typeof segment.id !== "string" ||
+      typeof segment.sectionId !== "string"
+    ) {
+      continue;
+    }
+
+    if (
+      configuredSectionIdSet.size > 0 &&
+      !configuredSectionIdSet.has(segment.sectionId)
+    ) {
+      continue;
+    }
+
+    const sectionSegments = manifestSectionGroups.get(segment.sectionId) ?? [];
+    sectionSegments.push(segment.id);
+    manifestSectionGroups.set(segment.sectionId, sectionSegments);
+  }
+
+  const resolvedSectionGroups: Record<string, unknown> = {};
+  for (const sectionId of targetSectionIds) {
+    const manifestSegments = manifestSectionGroups.get(sectionId);
+    if (manifestSegments && manifestSegments.length > 0) {
+      resolvedSectionGroups[sectionId] = manifestSegments;
+      continue;
+    }
+
+    const rawGroup = allSectionGroups[sectionId];
+    if (rawGroup) {
+      resolvedSectionGroups[sectionId] = rawGroup;
+    }
+  }
+
+  return resolvedSectionGroups;
+}
+
 /**
  * Register executor for the audio-sync pipeline stage.
  * This spawns sync_audio_pipeline.py and emits SSE section events.
@@ -45,34 +113,11 @@ function createSseStream() {
 registerExecutor("audio-sync", (params, send: SseSend) => {
   return async (onLog) => {
     const project = loadProject();
-    const configuredSectionIds = new Set(
-      Array.isArray(project.sections)
-        ? project.sections
-            .map((section) => section?.id)
-            .filter((sectionId): sectionId is string => typeof sectionId === "string")
-        : []
-    );
-    const rawSectionGroups = project.audioSync?.sectionGroups ?? {};
-    const allSectionGroups =
-      configuredSectionIds.size > 0
-        ? Object.fromEntries(
-            Object.entries(rawSectionGroups).filter(([sectionId]) =>
-              configuredSectionIds.has(sectionId)
-            )
-          )
-        : rawSectionGroups;
     const requestedSections = Array.isArray(params.sections)
       ? params.sections.filter((sectionId): sectionId is string => typeof sectionId === "string")
       : [];
     const allowValidationFailures = params.allowValidationFailures === true;
-    const sectionGroups =
-      requestedSections.length > 0
-        ? Object.fromEntries(
-            Object.entries(allSectionGroups).filter(([sectionId]) =>
-              requestedSections.includes(sectionId)
-            )
-          )
-        : allSectionGroups;
+    const sectionGroups = resolveSectionGroupsForAudioSync(project, requestedSections);
 
     onLog(`[audio-sync] Loaded sectionGroups: ${JSON.stringify(sectionGroups)}`);
 

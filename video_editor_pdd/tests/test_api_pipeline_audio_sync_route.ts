@@ -52,9 +52,14 @@ jest.mock("child_process", () => ({
 
 // Mock loadProject
 const mockLoadProject = jest.fn();
+const mockLoadNarrationManifest = jest.fn();
 
 jest.mock("@/lib/project", () => ({
   loadProject: (...args: unknown[]) => mockLoadProject(...args),
+}));
+
+jest.mock("@/lib/narration-manifest", () => ({
+  loadNarrationManifest: (...args: unknown[]) => mockLoadNarrationManifest(...args),
 }));
 
 const mockResolvePythonRunSpec = jest.fn(() => ({
@@ -192,6 +197,7 @@ beforeEach(() => {
   mockRunPipelineStage.mockReset();
   mockRunPipelineStageDirect.mockReset();
   mockLoadProject.mockReset();
+  mockLoadNarrationManifest.mockReset();
   mockReadFile.mockReset();
   mockReaddir.mockReset();
   mockStat.mockReset();
@@ -212,6 +218,7 @@ beforeEach(() => {
       },
     },
   });
+  mockLoadNarrationManifest.mockReturnValue(null);
 
   // Default: runPipelineStage resolves with a job ID
   mockRunPipelineStage.mockResolvedValue("test-job-id-1234");
@@ -525,6 +532,61 @@ describe("audio-sync executor factory", () => {
     const [, , options] = mockSpawn.mock.calls[0];
     expect(options.env.SECTION_GROUPS).toBe(
       JSON.stringify({ outro: ["outro_001"] })
+    );
+  });
+
+  it("prefers current narration manifest segments over stale stored section ranges", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [{ id: "cold_open" }, { id: "part1_economics" }],
+      audioSync: {
+        sectionGroups: {
+          cold_open: {
+            startSegment: "cold_open_001",
+            endSegment: "cold_open_006",
+          },
+          part1_economics: {
+            startSegment: "part1_economics_001",
+            endSegment: "part1_economics_033",
+          },
+        },
+      },
+    });
+    mockLoadNarrationManifest.mockReturnValue({
+      segments: [
+        { id: "cold_open_001", sectionId: "cold_open" },
+        { id: "cold_open_002", sectionId: "cold_open" },
+        { id: "cold_open_003", sectionId: "cold_open" },
+        { id: "cold_open_004", sectionId: "cold_open" },
+        { id: "cold_open_005", sectionId: "cold_open" },
+        { id: "cold_open_006", sectionId: "cold_open" },
+        { id: "cold_open_007", sectionId: "cold_open" },
+        { id: "cold_open_008", sectionId: "cold_open" },
+        { id: "cold_open_009", sectionId: "cold_open" },
+        { id: "cold_open_010", sectionId: "cold_open" },
+        { id: "part1_economics_001", sectionId: "part1_economics" },
+      ],
+    });
+
+    const executor = registerCallArgs.factory({ sections: ["cold_open"] }, jest.fn());
+    await executor(jest.fn());
+    await flushPromises();
+
+    const [, , options] = mockSpawn.mock.calls[0];
+    expect(options.env.SECTION_GROUPS).toBe(
+      JSON.stringify({
+        cold_open: [
+          "cold_open_001",
+          "cold_open_002",
+          "cold_open_003",
+          "cold_open_004",
+          "cold_open_005",
+          "cold_open_006",
+          "cold_open_007",
+          "cold_open_008",
+          "cold_open_009",
+          "cold_open_010",
+        ],
+      })
     );
   });
 

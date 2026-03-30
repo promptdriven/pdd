@@ -263,13 +263,7 @@ def _resolve_section_groups_with_manifest(
         )
 
         if target_section_id and target_section_id in manifest_sections:
-            requested_set = set(requested_numbers)
-            mapped_segment_ids = [
-                segment_id
-                for segment_id in manifest_sections[target_section_id]
-                if not requested_set
-                or _parse_segment_index(segment_id) in requested_set
-            ]
+            mapped_segment_ids = manifest_sections[target_section_id]
             if mapped_segment_ids:
                 normalized[target_section_id] = mapped_segment_ids
                 continue

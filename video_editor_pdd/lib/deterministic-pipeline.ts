@@ -3,6 +3,11 @@ import path from "path";
 import { execFileSync } from "child_process";
 
 import { buildSectionConstantsSource } from "./composition-timing";
+import {
+  groupScriptSectionsByProjectSection,
+  normalizeNarrativeHeading,
+  parseTimedNarrativeHeadings,
+} from "./narration-manifest";
 import { getAppRemotionSrcDir } from "./projects";
 import type { Section } from "./types";
 
@@ -36,10 +41,6 @@ function collectFilesRecursively(rootDir: string, predicate: (filePath: string) 
   return results;
 }
 
-function cleanText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
 function toPascalCase(value: string): string {
   return value
     .split(/[_-]+/)
@@ -64,27 +65,6 @@ function defaultSectionNarration(section: Pick<SectionLike, "id" | "label">): st
   ];
 }
 
-function extractSectionsFromMainScript(mainScript: string): Array<{ heading: string; narration: string[] }> {
-  const headingMatches = Array.from(mainScript.matchAll(/^##\s+(.+?)\s*$/gm));
-
-  return headingMatches
-    .map((match, index) => {
-      const heading = cleanText(match[1] ?? "");
-      const start = match.index ?? 0;
-      const bodyStart = start + match[0].length;
-      const bodyEnd = headingMatches[index + 1]?.index ?? mainScript.length;
-      const body = mainScript.slice(bodyStart, bodyEnd);
-      const narration = Array.from(
-        body.matchAll(/\*\*NARRATOR:\*\*\s*([\s\S]*?)(?=\n\s*\*\*\[VISUAL:|\n\s*---|\n\s*\*\*NARRATOR:\*\*|\n##\s+|$)/g),
-      )
-        .map((narrationMatch) => cleanText(narrationMatch[1] ?? ""))
-        .filter(Boolean);
-
-      return { heading, narration };
-    })
-    .filter((section) => section.heading.length > 0);
-}
-
 export function isDeterministicPipelineMode(): boolean {
   return process.env.PDD_DETERMINISTIC_PIPELINE === "1";
 }
@@ -93,38 +73,52 @@ export function buildDeterministicTtsScript(
   mainScript: string,
   sections: ReadonlyArray<Pick<SectionLike, "id" | "label">>,
 ): string {
-  const extracted = extractSectionsFromMainScript(mainScript);
-  const byHeading = new Map<string, string[]>();
-
-  for (const section of extracted) {
-    byHeading.set(section.heading.toLowerCase(), section.narration);
-  }
+  const extracted = parseTimedNarrativeHeadings(mainScript);
+  const grouped = groupScriptSectionsByProjectSection(extracted, sections);
 
   const blocks = sections.map((section) => {
     const heading = section.label || titleFromId(section.id);
-    const directMatch = byHeading.get(heading.toLowerCase());
-    const inferredMatch = extracted.find(
-      (candidate) => candidate.heading.toLowerCase().includes(section.id.replace(/_/g, " ")),
-    )?.narration;
-    const narration =
-      (directMatch && directMatch.length > 0 ? directMatch : undefined) ??
-      (inferredMatch && inferredMatch.length > 0 ? inferredMatch : undefined) ??
-      defaultSectionNarration(section);
-
     const lines = [
       `## ${heading}`,
       "",
     ];
+    const scriptSections = grouped.get(section.id) ?? [];
 
-    narration.forEach((paragraph, index) => {
-      lines.push("[TONE: explanatory]");
-      lines.push("[PACE: moderate]");
-      lines.push("[EMOTION: calm]");
-      lines.push(paragraph);
-      if (index < narration.length - 1) {
-        lines.push("[PAUSE: 1.0s]");
+    if (scriptSections.length === 0) {
+      defaultSectionNarration(section).forEach((paragraph, index, arr) => {
+        lines.push("[TONE: explanatory]");
+        lines.push("[PACE: moderate]");
+        lines.push("[EMOTION: calm]");
+        lines.push(paragraph);
+        if (index < arr.length - 1) {
+          lines.push("[PAUSE: 1.0s]");
+        }
+        lines.push("");
+      });
+
+      return lines.join("\n").trimEnd();
+    }
+
+    scriptSections.forEach((scriptSection, scriptSectionIndex) => {
+      if (
+        scriptSectionIndex > 0 &&
+        normalizeNarrativeHeading(scriptSection.heading) !==
+          normalizeNarrativeHeading(heading)
+      ) {
+        lines.push(`### ${scriptSection.heading}`);
+        lines.push("");
       }
-      lines.push("");
+
+      scriptSection.narration.forEach((paragraph, index) => {
+        lines.push("[TONE: explanatory]");
+        lines.push("[PACE: moderate]");
+        lines.push("[EMOTION: calm]");
+        lines.push(paragraph);
+        if (index < scriptSection.narration.length - 1) {
+          lines.push("[PAUSE: 1.0s]");
+        }
+        lines.push("");
+      });
     });
 
     return lines.join("\n").trimEnd();

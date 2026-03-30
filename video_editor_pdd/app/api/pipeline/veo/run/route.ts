@@ -136,7 +136,8 @@ function isRetryableVeoGenerationError(error: unknown): boolean {
 /** Resolve a Veo prompt from specs on disk */
 function resolveVeoPrompt(
   section: { id: string; label: string; specDir?: string | null },
-  mainScriptContent: string | null
+  mainScriptContent: string | null,
+  allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>,
 ): string {
   const cwd = getProjectDir();
   const normalizedSpecDir = normalizeSpecDir(section.specDir ?? section.id);
@@ -186,7 +187,7 @@ function resolveVeoPrompt(
     const prompt = resolveSectionVeoPromptFromScript(mainScriptContent, {
       id: section.id,
       label: section.label,
-    });
+    }, allSections);
     if (prompt) return prompt;
   }
 
@@ -300,7 +301,8 @@ function listSectionMarkdownEntries(
 
 function resolveSectionClipJobs(
   section: { id: string; label: string; specDir?: string | null },
-  mainScriptContent: string | null
+  mainScriptContent: string | null,
+  allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>,
 ): ResolvedClipJob[] {
   const markdownEntries = listSectionMarkdownEntries(section);
   const resolvedSpecs = listResolvedVeoClipSpecs(markdownEntries);
@@ -320,7 +322,7 @@ function resolveSectionClipJobs(
     {
       id: section.id,
       sectionId: section.id,
-      prompt: resolveVeoPrompt(section, mainScriptContent),
+      prompt: resolveVeoPrompt(section, mainScriptContent, allSections),
     },
   ];
 }
@@ -368,13 +370,16 @@ registerExecutor('veo', (params, send: SseSend) => {
         ? resolveSectionHasVeoIntent(mainScriptContent, {
             id: s.id,
             label: s.label,
-          }) !== false
+            scriptHeadings: Array.isArray(s.scriptHeadings)
+              ? s.scriptHeadings
+              : undefined,
+          }, sections) !== false
         : true
     );
 
     const resolvedClipJobs = dedupeClipJobsById(
       orderedSections.flatMap((section) =>
-        resolveSectionClipJobs(section, mainScriptContent)
+        resolveSectionClipJobs(section, mainScriptContent, sections)
       )
     );
 

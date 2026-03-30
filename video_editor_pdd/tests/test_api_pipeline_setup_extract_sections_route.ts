@@ -300,6 +300,16 @@ describe("extraction prompt", () => {
     const prompt = mockRunClaudeExtract.mock.calls[0]?.[0] ?? "";
     expect(prompt).toContain("JSON array");
   });
+
+  it("preserves folded timed headings via scriptHeadings metadata instead of destructive merges", async () => {
+    await POST(makeRequest());
+    await flushPromises();
+
+    const prompt = mockRunClaudeExtract.mock.calls[0]?.[0] ?? "";
+    expect(prompt).toContain("scriptHeadings");
+    expect(prompt).toContain("Preserve every timed ## heading");
+    expect(prompt).not.toContain("merge into the parent");
+  });
 });
 
 // ---------------------------------------------------------------------------

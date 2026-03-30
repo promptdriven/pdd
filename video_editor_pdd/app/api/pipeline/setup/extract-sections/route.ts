@@ -19,8 +19,10 @@ Instructions:
    - Video sections typically have timestamps like (0:00 - 2:00)
    - EXCLUDE appendix/reference sections without timestamps
      (e.g., "VISUAL DESIGN NOTES", "RESEARCH CITATIONS")
-3. For sections that logically fold into a parent (e.g., a short demo
-   immediately after the cold open), merge into the parent.
+3. Preserve every timed ## heading explicitly.
+   - If a short timed heading logically folds into a parent pipeline section,
+     keep the parent section but record the folded heading in scriptHeadings.
+   - Do not destructively merge or drop timed headings from the narrative structure.
 4. Return a JSON array of section objects.
 
 For each section, generate:
@@ -32,6 +34,8 @@ For each section, generate:
 - compositionId: PascalCase (e.g., "ColdOpenSection", "Part1Economics")
 - durationSeconds: 0
 - offsetSeconds: 0
+- scriptHeadings: optional array of timed ## headings owned by this section when
+  multiple narrative headings fold into one pipeline section
 
 Return ONLY a JSON array.`;
 
