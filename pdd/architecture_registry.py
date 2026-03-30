@@ -9,6 +9,7 @@ entries with existing ones.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -204,20 +205,20 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     if root_arch.exists():
         results.append(root_arch)
 
-    # Scan immediate subdirectories
+    # Recursively scan all subdirectories
+    excluded = {"node_modules", "__pycache__", ".git"}
     try:
-        children = sorted(project_root.iterdir())
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".") and d not in excluded
+            )
+            if "architecture.json" in filenames:
+                arch_path = Path(dirpath) / "architecture.json"
+                if arch_path != root_arch:
+                    results.append(arch_path)
     except (OSError, IOError):
-        return results
-
-    for child in children:
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-        if child.name in ("node_modules", "__pycache__", ".git"):
-            continue
-        arch_file = child / "architecture.json"
-        if arch_file.exists():
-            results.append(arch_file)
+        pass
 
     return results
 
