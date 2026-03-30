@@ -20,7 +20,7 @@ from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 from .agentic_langtest import default_verify_cmd_for
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 # Moved import to top level to allow mocking in tests
 from .pytest_output import run_pytest_and_capture_output
 
@@ -109,7 +109,7 @@ def cloud_fix_errors(
             cloud_url,
             json=payload,
             headers=headers,
-            timeout=get_cloud_timeout()
+            timeout=get_cloud_request_timeout()
         )
         response.raise_for_status()
 
