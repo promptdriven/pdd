@@ -1,3 +1,24 @@
+## v0.0.192 (2026-03-29)
+
+### Feat
+
+- pdd update handles include-referenced docs + scope guard (#732)
+
+### Fix
+
+- harden remotion hook-order safety
+- add scope guard to agentic_update prompt, unit tests, fix PDD_PATH test
+- instruct research steps to use WebSearch/WebFetch tools (#1000)
+- add retry for cloud fix command in cloud_regression case_4
+- hide stage 9 empty state while loading
+- harden LLM-as-judge to prevent flaky contradictory verdicts
+
+### Refactor
+
+- overhaul Part 1 Economics video components by updating layouts, adding new visual elements, and removing deprecated modules.
+- update PDD explainer audit specifications and synchronize pipeline route and test configurations
+- update PDD explainer audit specifications and remotion constants for improved project consistency
+
 ## v0.0.191 (2026-03-28)
 
 ### Feat
