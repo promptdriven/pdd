@@ -527,7 +527,8 @@ def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_lan
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
-def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
+@patch('pdd.pddrc_initializer.ensure_pddrc_for_scan')
+def test_update_main_repo_mode_orchestration(mock_pddrc, mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
     """
     Test the main orchestration logic of update_main in --repo mode.
     """

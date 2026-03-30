@@ -26,6 +26,7 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
     - Detect changed files (created, modified, or deleted).
     - Re-discover test files after the run to catch any newly created tests.
 9. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
+10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common` where `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`. Import it alongside the other agentic_common imports. This prevents the agent from accidentally deleting or modifying unrelated files.
 
 % Dependencies
 <pdd.agentic_common>
