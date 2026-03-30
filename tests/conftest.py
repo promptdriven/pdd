@@ -19,6 +19,20 @@ _ORIGINAL_STDOUT = sys.stdout
 _ORIGINAL_STDERR = sys.stderr
 
 
+_ORIGINAL_GIT_WORK_TREE = os.environ.get('GIT_WORK_TREE')
+
+
+@pytest.fixture(autouse=True)
+def preserve_git_work_tree():
+    """Clear GIT_WORK_TREE during tests to avoid interfering with git init in temp dirs."""
+    os.environ.pop('GIT_WORK_TREE', None)
+    yield
+    if _ORIGINAL_GIT_WORK_TREE is not None:
+        os.environ['GIT_WORK_TREE'] = _ORIGINAL_GIT_WORK_TREE
+    else:
+        os.environ.pop('GIT_WORK_TREE', None)
+
+
 @pytest.fixture(autouse=True)
 def preserve_pdd_path():
     """Ensure PDD_PATH is restored after each test to prevent test pollution.
