@@ -34,29 +34,55 @@ class JudgmentResult(BaseModel):
     reasoning: str
 
 
+_CONTRADICTION_PHRASES = [
+    "criterion is met",
+    "criterion is clearly met",
+    "is satisfied",
+    "explicitly defines",
+    "the answer is yes",
+    "does meet",
+    "does satisfy",
+]
+
+
 def _judge(prompt_output: str, question: str) -> JudgmentResult:
-    """Use a cheap LLM to judge whether the output meets a criterion."""
-    result = llm_invoke(
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a strict test evaluator. Answer the question about "
-                    "the provided text. Set passed=true only if the criterion is "
-                    "clearly and unambiguously met. Be strict."
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"TEXT:\n{prompt_output}\n\nQUESTION:\n{question}",
-            },
-        ],
-        output_pydantic=JudgmentResult,
-        strength=0.0,
-        temperature=0.0,
-        verbose=False,
-    )
-    return result["result"]
+    """Use a cheap LLM to judge whether the output meets a criterion.
+
+    Retries once at higher strength if the reasoning contradicts the verdict.
+    """
+    for attempt, strength in enumerate([0.3, 0.5]):
+        result = llm_invoke(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a strict test evaluator. Answer the question about "
+                        "the provided text. Set passed=true only if the criterion is "
+                        "clearly and unambiguously met. Be strict. "
+                        "IMPORTANT: Your 'passed' boolean MUST be consistent with "
+                        "your reasoning. If your reasoning concludes the criterion "
+                        "is met, set passed=true."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"TEXT:\n{prompt_output}\n\nQUESTION:\n{question}",
+                },
+            ],
+            output_pydantic=JudgmentResult,
+            strength=strength,
+            temperature=0.0,
+            verbose=False,
+        )
+        judgment: JudgmentResult = result["result"]
+
+        # Detect reasoning/verdict contradiction and retry with stronger model
+        if not judgment.passed and attempt == 0:
+            reasoning_lower = judgment.reasoning.lower()
+            if any(phrase in reasoning_lower for phrase in _CONTRADICTION_PHRASES):
+                continue  # retry with higher strength
+        return judgment
+    return judgment
 
 
 # ---------------------------------------------------------------------------

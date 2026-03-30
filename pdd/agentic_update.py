@@ -18,7 +18,7 @@ import traceback
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES, _revert_out_of_scope_changes
 from .load_prompt_template import load_prompt_template
 
 # Optional globals from package root; ignore if not present.
@@ -346,6 +346,11 @@ def run_agentic_update(
             if verbose:
                 console.print(traceback.format_exc())
         return False, message, 0.0, "", []
+
+    # Scope guard: revert out-of-scope file changes
+    _allowed = {prompt_path.resolve(), code_path.resolve()}
+    _allowed.update(p.resolve() for p in selected_tests)
+    _revert_out_of_scope_changes(PROJECT_ROOT, _allowed)
 
     # After running the agent, re-discover tests to include any newly created ones
     after_tests = _discover_test_files(code_path)
