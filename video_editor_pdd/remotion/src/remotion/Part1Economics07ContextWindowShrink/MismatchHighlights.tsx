@@ -142,9 +142,7 @@ const HighlightBlock: React.FC<HighlightBlockProps> = ({
 export const MismatchHighlights: React.FC = () => {
   const frame = useCurrentFrame();
   const { gridSize, blockSize, originX, originY } = useGridGeometry();
-
-  // Don't render anything before the mismatch phase
-  if (frame < MISMATCH_START_FRAME) return null;
+  const isActive = frame >= MISMATCH_START_FRAME;
 
   // Context window bounds (screen coords)
   const cwLeft = GRID_CENTER_X - CTX_WINDOW_WIDTH / 2;
@@ -170,6 +168,10 @@ export const MismatchHighlights: React.FC = () => {
 
   // Red blocks: inside the context window (irrelevant code the AI grabbed)
   const redBlocks = React.useMemo(() => {
+    if (!isActive) {
+      return [];
+    }
+
     const candidates: Array<{ row: number; col: number }> = [];
 
     for (const idx of RED_BLOCK_INDICES) {
@@ -196,10 +198,14 @@ export const MismatchHighlights: React.FC = () => {
     }
 
     return candidates.slice(0, 4);
-  }, [gridSize, blockSize, originX, originY]);
+  }, [blockSize, gridSize, isActive, originX, originY]);
 
   // Green blocks: outside the context window (needed code that was missed)
   const greenBlocks = React.useMemo(() => {
+    if (!isActive) {
+      return [];
+    }
+
     const candidates: Array<{ row: number; col: number }> = [];
 
     for (const idx of GREEN_BLOCK_INDICES) {
@@ -227,7 +233,10 @@ export const MismatchHighlights: React.FC = () => {
     }
 
     return candidates.slice(0, 6);
-  }, [gridSize, blockSize, originX, originY]);
+  }, [blockSize, gridSize, isActive, originX, originY]);
+
+  // Don't render anything before the mismatch phase
+  if (!isActive) return null;
 
   return (
     <>

@@ -1,5 +1,139 @@
 import fs from "fs";
 import path from "path";
+import ts from "typescript";
+
+const isHookName = (name: string) => /^use[A-Z0-9]/.test(name);
+
+const statementReturnsNull = (statement: ts.Statement): boolean => {
+  if (
+    ts.isReturnStatement(statement) &&
+    statement.expression?.kind === ts.SyntaxKind.NullKeyword
+  ) {
+    return true;
+  }
+
+  if (
+    ts.isIfStatement(statement) &&
+    ts.isReturnStatement(statement.thenStatement) &&
+    statement.thenStatement.expression?.kind === ts.SyntaxKind.NullKeyword &&
+    !statement.elseStatement
+  ) {
+    return true;
+  }
+
+  if (
+    ts.isIfStatement(statement) &&
+    ts.isBlock(statement.thenStatement) &&
+    statement.thenStatement.statements.length === 1
+  ) {
+    const [inner] = statement.thenStatement.statements;
+    return (
+      ts.isReturnStatement(inner) &&
+      inner.expression?.kind === ts.SyntaxKind.NullKeyword &&
+      !statement.elseStatement
+    );
+  }
+
+  return false;
+};
+
+const statementContainsTopLevelHook = (statement: ts.Statement): boolean => {
+  let found = false;
+
+  const visit = (node: ts.Node) => {
+    if (found) {
+      return;
+    }
+
+    if (
+      (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)) &&
+      node !== statement
+    ) {
+      return;
+    }
+
+    if (ts.isCallExpression(node)) {
+      if (ts.isIdentifier(node.expression) && isHookName(node.expression.text)) {
+        found = true;
+        return;
+      }
+
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        isHookName(node.expression.name.text)
+      ) {
+        found = true;
+        return;
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(statement);
+  return found;
+};
+
+const collectTopLevelHookOrderViolations = (
+  filePath: string,
+  componentNameFilter?: Set<string>
+): string[] => {
+  const source = fs.readFileSync(filePath, "utf8");
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  const violations: string[] = [];
+
+  const inspectFunctionBody = (body: ts.Block, name: string) => {
+    if (componentNameFilter && !componentNameFilter.has(name)) {
+      return;
+    }
+
+    let seenEarlyReturn = false;
+
+    for (const statement of body.statements) {
+      if (statementReturnsNull(statement)) {
+        seenEarlyReturn = true;
+        continue;
+      }
+
+      if (seenEarlyReturn && statementContainsTopLevelHook(statement)) {
+        violations.push(`${path.relative(process.cwd(), filePath)}:${name}`);
+        break;
+      }
+    }
+  };
+
+  const visit = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name && /^[A-Z]/.test(node.name.text) && node.body) {
+      inspectFunctionBody(node.body, node.name.text);
+    }
+
+    if (ts.isVariableStatement(node)) {
+      for (const declaration of node.declarationList.declarations) {
+        if (
+          ts.isIdentifier(declaration.name) &&
+          /^[A-Z]/.test(declaration.name.text) &&
+          declaration.initializer &&
+          (ts.isArrowFunction(declaration.initializer) ||
+            ts.isFunctionExpression(declaration.initializer)) &&
+          ts.isBlock(declaration.initializer.body)
+        ) {
+          inspectFunctionBody(declaration.initializer.body, declaration.name.text);
+        }
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return violations;
+};
 
 describe("shared generated media renderer", () => {
   const generatedMediaVisualPath = path.join(
@@ -124,30 +258,53 @@ describe("shared generated media renderer", () => {
     const cases = [
       {
         file: "remotion/src/remotion/Part2ParadigmShift12VerilogSynthesis/GateStream.tsx",
-        returnSnippet: "if (frame < GATE_STREAM_START) return null;",
-        hookSnippet: "const gates = useMemo<GateSymbol[]>(() => {",
+        component: "GateStream",
       },
       {
         file: "remotion/src/remotion/Part2ParadigmShift18PromptMoldFinale/CodeFlow.tsx",
-        returnSnippet: "if (localFrame < 0) return null;",
-        hookSnippet: "const particles = useMemo(",
+        component: "CodeFlow",
       },
       {
         file: "remotion/src/remotion/09-ContextDegradationChart/TrendLine.tsx",
-        returnSnippet: "if (frame < startFrame) return null;",
-        hookSnippet: "const pathD = useMemo(() => {",
+        component: "TrendLine",
+      },
+      {
+        file: "remotion/src/remotion/Part1Economics07ContextWindowShrink/MismatchHighlights.tsx",
+        component: "MismatchHighlights",
       },
     ];
 
-    for (const { file, returnSnippet, hookSnippet } of cases) {
-      const source = fs.readFileSync(path.join(process.cwd(), file), "utf8");
-      const returnIndex = source.indexOf(returnSnippet);
-      const hookIndex = source.indexOf(hookSnippet);
-
-      expect(returnIndex).toBeGreaterThanOrEqual(0);
-      expect(hookIndex).toBeGreaterThanOrEqual(0);
-      expect(hookIndex).toBeLessThan(returnIndex);
+    for (const { file, component } of cases) {
+      const filePath = path.join(process.cwd(), file);
+      const violations = collectTopLevelHookOrderViolations(
+        filePath,
+        new Set([component])
+      );
+      expect(violations).toEqual([]);
     }
+  });
+
+  it("prevents top-level early return-null guards before later hook calls in Remotion components", () => {
+    const remotionRoot = path.join(process.cwd(), "remotion/src/remotion");
+    const violations: string[] = [];
+
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(entryPath);
+          continue;
+        }
+
+        if (entry.isFile() && entry.name.endsWith(".tsx")) {
+          violations.push(...collectTopLevelHookOrderViolations(entryPath));
+        }
+      }
+    };
+
+    walk(remotionRoot);
+
+    expect(violations).toEqual([]);
   });
 
   it("keeps gate netlist animation props aligned with generated scene callers", () => {

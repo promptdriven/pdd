@@ -37,7 +37,7 @@ export const GateStream: React.FC = () => {
   const frame = useCurrentFrame();
 
   const streamFrame = frame - GATE_STREAM_START;
-  if (streamFrame < 0) return null;
+  const isActive = streamFrame >= 0;
 
   const startX = CHIP_X + CHIP_WIDTH / 2 + 30;
   const endX = WIDTH + 40;
@@ -57,6 +57,8 @@ export const GateStream: React.FC = () => {
     }
     return result;
   }, []);
+
+  if (!isActive) return null;
 
   // Row Y positions centered around CHIP_Y
   const rowYs = [CHIP_Y - 30, CHIP_Y, CHIP_Y + 30];
