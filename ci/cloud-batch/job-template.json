@@ -13,7 +13,8 @@
                                 "VERTEX_PROJECT": "{{PROJECT_ID}}",
                                 "PDD_TEST_HEADLESS": "1",
                                 "GCS_BUCKET_NAME": "litellm_cache",
-                                "SKIP_INDEX": "54"
+                                "SKIP_INDEX": "54",
+                                "PDD_CLOUD_TIMEOUT": "300"
                             },
                             "secretVariables": {
                                 "GCS_HMAC_ACCESS_KEY_ID": "projects/{{PROJECT_ID}}/secrets/GCS_HMAC_ACCESS_KEY_ID/versions/latest",
