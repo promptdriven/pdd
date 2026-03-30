@@ -1,64 +1,62 @@
-// ── Colors ──
-export const BG_COLOR = "#0A0F1A";
-export const MAIN_TEXT_COLOR = "#E2E8F0";
-export const INSTRUCTION_COLOR = "#94A3B8";
-export const ACCENT_COLOR = "#4A90D9";
-export const NOISE_COLOR = "#FFFFFF";
+// constants.ts — Part1Economics20TryItYourself
+// Colors, dimensions, and animation timing for the handwritten challenge card.
 
-// ── Dimensions ──
+// ─── Canvas ───────────────────────────────────────────────────
 export const CANVAS_WIDTH = 1920;
 export const CANVAS_HEIGHT = 1080;
+export const BACKGROUND_COLOR = "#0A0F1A";
 
-// ── Typography ──
-export const MAIN_FONT_SIZE = 64;
-export const INSTRUCTION_FONT_SIZE = 16;
-export const INSTRUCTION_LINE_HEIGHT = 28;
+// ─── Colors ───────────────────────────────────────────────────
+export const CHALLENGE_TEXT_COLOR = "#E2E8F0";
+export const INSTRUCTION_DIM_COLOR = "#94A3B8";
+export const INSTRUCTION_BOLD_COLOR = "#E2E8F0";
+export const UNDERLINE_COLOR = "#4A90D9";
+export const NOISE_COLOR = "#FFFFFF";
 
-// ── Positions ──
-export const MAIN_TEXT_Y = 440;
-export const INSTRUCTION_START_Y = 560;
-
-// ── Animation Timing (frames) ──
-export const STROKE_WRITE_START = 0;
-export const STROKE_WRITE_END = 60;
-export const UNDERLINE_START = 60;
-export const UNDERLINE_DURATION = 30;
-export const INSTRUCTION_LINE1_START = 90;
-export const INSTRUCTION_LINE2_START = 110;
-export const INSTRUCTION_LINE3_START = 130;
-export const INSTRUCTION_FADE_DURATION = 20;
-export const TOTAL_DURATION = 240;
-
-// ── Main text rotation (degrees) ──
-export const MAIN_TEXT_ROTATION = -1.5;
-
-// ── Opacity values ──
+// ─── Opacity ──────────────────────────────────────────────────
 export const NOISE_OPACITY = 0.02;
 export const UNDERLINE_OPACITY = 0.4;
-export const INSTRUCTION_OPACITY = 0.6;
-export const EMPHASIS_OPACITY = 0.8;
+export const INSTRUCTION_DIM_OPACITY = 0.6;
+export const INSTRUCTION_BOLD_OPACITY = 0.8;
 
-// ── Instruction lines data ──
-export const INSTRUCTION_LINES = [
+// ─── Typography ───────────────────────────────────────────────
+export const CHALLENGE_FONT_SIZE = 64;
+export const CHALLENGE_FONT_FAMILY =
+  "'Caveat', 'Segoe Script', 'Comic Sans MS', cursive";
+export const INSTRUCTION_FONT_SIZE = 16;
+export const INSTRUCTION_FONT_FAMILY =
+  "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+export const INSTRUCTION_LINE_HEIGHT = 28; // px between instruction lines
+
+// ─── Positions ────────────────────────────────────────────────
+export const CHALLENGE_Y = 440;
+export const CHALLENGE_ROTATION_DEG = -1.5;
+export const INSTRUCTION_START_Y = 560;
+
+// ─── Animation Timing (frames @ 30fps) ───────────────────────
+export const FPS = 30;
+export const TOTAL_FRAMES = 240;
+
+// Stroke-reveal for "Try it yourself."
+export const STROKE_START = 0;
+export const STROKE_DURATION = 60;
+
+// Wavy underline draw
+export const UNDERLINE_START = 60;
+export const UNDERLINE_DURATION = 30;
+
+// Instruction lines fade-in
+export const LINE1_START = 90;
+export const LINE2_START = 110;
+export const LINE3_START = 130;
+export const LINE_FADE_DURATION = 20;
+
+// ─── Instruction text content ─────────────────────────────────
+export const INSTRUCTIONS: readonly { text: string; bold: boolean }[] = [
   {
     text: "Give your favorite LLM a hard coding problem as code,",
-    weight: 400,
-    color: INSTRUCTION_COLOR,
-    opacity: INSTRUCTION_OPACITY,
-    startFrame: INSTRUCTION_LINE1_START,
+    bold: false,
   },
-  {
-    text: "then as natural language.",
-    weight: 400,
-    color: INSTRUCTION_COLOR,
-    opacity: INSTRUCTION_OPACITY,
-    startFrame: INSTRUCTION_LINE2_START,
-  },
-  {
-    text: "The natural language version will win.",
-    weight: 600,
-    color: MAIN_TEXT_COLOR,
-    opacity: EMPHASIS_OPACITY,
-    startFrame: INSTRUCTION_LINE3_START,
-  },
+  { text: "then as natural language.", bold: false },
+  { text: "The natural language version will win.", bold: true },
 ] as const;

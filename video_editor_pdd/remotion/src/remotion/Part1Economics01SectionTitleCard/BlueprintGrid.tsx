@@ -1,64 +1,56 @@
-// BlueprintGrid.tsx — faint grid background
 import React from "react";
 import { AbsoluteFill } from "remotion";
+import {
+  WIDTH,
+  HEIGHT,
+  GRID_SPACING,
+  GRID_LINE_COLOR,
+  GRID_LINE_OPACITY,
+} from "./constants";
 
-interface BlueprintGridProps {
-  spacing: number;
-  color: string;
-  opacity: number;
-  width: number;
-  height: number;
-}
-
-export const BlueprintGrid: React.FC<BlueprintGridProps> = ({
-  spacing,
-  color,
-  opacity,
-  width,
-  height,
-}) => {
+/**
+ * Faint blueprint-style grid overlay.
+ */
+export const BlueprintGrid: React.FC<{ opacity: number }> = ({ opacity }) => {
   const verticalLines: React.ReactNode[] = [];
   const horizontalLines: React.ReactNode[] = [];
 
-  for (let x = 0; x <= width; x += spacing) {
+  for (let x = GRID_SPACING; x < WIDTH; x += GRID_SPACING) {
     verticalLines.push(
       <line
         key={`v-${x}`}
         x1={x}
         y1={0}
         x2={x}
-        y2={height}
-        stroke={color}
+        y2={HEIGHT}
+        stroke={GRID_LINE_COLOR}
         strokeWidth={1}
       />
     );
   }
 
-  for (let y = 0; y <= height; y += spacing) {
+  for (let y = GRID_SPACING; y < HEIGHT; y += GRID_SPACING) {
     horizontalLines.push(
       <line
         key={`h-${y}`}
         x1={0}
         y1={y}
-        x2={width}
+        x2={WIDTH}
         y2={y}
-        stroke={color}
+        stroke={GRID_LINE_COLOR}
         strokeWidth={1}
       />
     );
   }
 
   return (
-    <AbsoluteFill style={{ opacity }}>
-      <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
+    <AbsoluteFill style={{ opacity: opacity * GRID_LINE_OPACITY }}>
+      <svg width={WIDTH} height={HEIGHT}>
         {verticalLines}
         {horizontalLines}
       </svg>
     </AbsoluteFill>
   );
 };
+
+export default BlueprintGrid;

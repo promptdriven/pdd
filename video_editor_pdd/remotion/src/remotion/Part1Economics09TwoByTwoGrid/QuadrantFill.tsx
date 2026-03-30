@@ -1,50 +1,78 @@
 import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
+
+/**
+ * QuadrantFill — renders a single quadrant's fill, glow border, and typed-in label.
+ *
+ * Props:
+ *  - position: "top-left" | "top-right" | "bottom-left" | "bottom-right"
+ *  - color: hex string for the quadrant theme
+ *  - fillOpacity: target opacity for the background fill
+ *  - glowOpacity: target opacity for the border glow
+ *  - label: text to type in (e.g. "GitHub study: +55%")
+ *  - labelColor: color of the label text
+ *  - labelSize: font size of the label
+ *  - animStartFrame: the first frame of this quadrant's reveal (relative to the sequence)
+ */
+
+// ── Grid geometry (inlined) ──
+const GRID_SIZE = 600;
+const CELL_SIZE = 300;
+const GRID_CENTER_X = 960;
+const GRID_CENTER_Y = 480;
+const GRID_LEFT = GRID_CENTER_X - GRID_SIZE / 2;
+const GRID_TOP = GRID_CENTER_Y - GRID_SIZE / 2;
+
+const FILL_ANIM_FRAMES = 30;
+const CHARS_PER_FRAME = 0.5; // 2 frames per char
 
 interface QuadrantFillProps {
-  /** Pixel position of the quadrant's top-left corner */
-  quadrantLeft: number;
-  quadrantTop: number;
-  /** Size of each cell */
-  cellSize: number;
-  /** The accent color for the quadrant */
-  accentColor: string;
-  /** Background fill opacity target */
+  position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  color: string;
   fillOpacity: number;
-  /** Border glow opacity target */
   glowOpacity: number;
-  /** Label text displayed in the quadrant center */
-  labelText: string;
-  /** Label color */
+  label: string;
   labelColor: string;
-  /** Label font size */
   labelSize: number;
-  /** Frame at which this quadrant starts animating (relative to Sequence) */
-  animateInDuration: number;
-  /** Frames per character for type-in effect */
-  framesPerChar: number;
+  animStartFrame: number;
 }
 
-const QuadrantFill: React.FC<QuadrantFillProps> = ({
-  quadrantLeft,
-  quadrantTop,
-  cellSize,
-  accentColor,
+const positionToOffset = (
+  pos: QuadrantFillProps["position"]
+): { x: number; y: number } => {
+  switch (pos) {
+    case "top-left":
+      return { x: 0, y: 0 };
+    case "top-right":
+      return { x: CELL_SIZE, y: 0 };
+    case "bottom-left":
+      return { x: 0, y: CELL_SIZE };
+    case "bottom-right":
+      return { x: CELL_SIZE, y: CELL_SIZE };
+  }
+};
+
+export const QuadrantFill: React.FC<QuadrantFillProps> = ({
+  position,
+  color,
   fillOpacity,
   glowOpacity,
-  labelText,
+  label,
   labelColor,
   labelSize,
-  animateInDuration,
-  framesPerChar,
+  animStartFrame,
 }) => {
   const frame = useCurrentFrame();
 
-  // Fill opacity animation
-  const currentFillOpacity = interpolate(
+  const offset = positionToOffset(position);
+  const cellX = GRID_LEFT + offset.x;
+  const cellY = GRID_TOP + offset.y;
+
+  // Fill fade-in progress
+  const fillProgress = interpolate(
     frame,
-    [0, animateInDuration],
-    [0, fillOpacity],
+    [animStartFrame, animStartFrame + FILL_ANIM_FRAMES],
+    [0, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -52,92 +80,54 @@ const QuadrantFill: React.FC<QuadrantFillProps> = ({
     }
   );
 
-  // Glow opacity animation
-  const currentGlowOpacity = interpolate(
-    frame,
-    [0, animateInDuration],
-    [0, glowOpacity],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
+  // Number of chars revealed for type-in effect
+  const typeStartFrame = animStartFrame + 10; // slight delay after fill starts
+  const charsRevealed = Math.floor(
+    Math.max(0, (frame - typeStartFrame) * CHARS_PER_FRAME)
   );
+  const displayedLabel = label.slice(0, Math.min(charsRevealed, label.length));
 
-  // Type-in effect for label
-  const totalChars = labelText.length;
-  const typeStartFrame = animateInDuration * 0.5;
-  const charsVisible = Math.floor(
-    interpolate(
-      frame,
-      [typeStartFrame, typeStartFrame + totalChars * framesPerChar],
-      [0, totalChars],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-      }
-    )
-  );
-  const visibleText = labelText.slice(0, charsVisible);
-
-  // Pulsing glow effect (subtle, after fill-in completes)
-  const pulsePhase = interpolate(
-    frame,
-    [animateInDuration, animateInDuration + 120],
-    [0, Math.PI * 2],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "extend",
-    }
-  );
-  const pulseMultiplier =
-    frame > animateInDuration ? 1 + Math.sin(pulsePhase) * 0.1 : 1;
+  const currentFillOpacity = fillOpacity * fillProgress;
+  const currentGlowOpacity = glowOpacity * fillProgress;
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        left: quadrantLeft,
-        top: quadrantTop,
-        width: cellSize,
-        height: cellSize,
-      }}
-    >
+    <>
       {/* Background fill */}
       <div
         style={{
           position: "absolute",
-          left: 0,
-          top: 0,
-          width: cellSize,
-          height: cellSize,
-          backgroundColor: accentColor,
-          opacity: currentFillOpacity * pulseMultiplier,
+          left: cellX,
+          top: cellY,
+          width: CELL_SIZE,
+          height: CELL_SIZE,
+          backgroundColor: color,
+          opacity: currentFillOpacity,
         }}
       />
 
-      {/* Border glow */}
+      {/* Glow border */}
       <div
         style={{
           position: "absolute",
-          left: 0,
-          top: 0,
-          width: cellSize,
-          height: cellSize,
-          border: `2px solid ${accentColor}`,
-          opacity: currentGlowOpacity * pulseMultiplier,
-          boxShadow: `inset 0 0 30px ${accentColor}40, 0 0 20px ${accentColor}30`,
+          left: cellX,
+          top: cellY,
+          width: CELL_SIZE,
+          height: CELL_SIZE,
+          border: `2px solid ${color}`,
+          opacity: currentGlowOpacity,
+          boxShadow: `inset 0 0 30px ${color}40, 0 0 20px ${color}30`,
+          pointerEvents: "none",
         }}
       />
 
-      {/* Label text */}
+      {/* Label — centered in cell */}
       <div
         style={{
           position: "absolute",
-          left: 0,
-          top: 0,
-          width: cellSize,
-          height: cellSize,
+          left: cellX,
+          top: cellY,
+          width: CELL_SIZE,
+          height: CELL_SIZE,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -146,23 +136,25 @@ const QuadrantFill: React.FC<QuadrantFillProps> = ({
           fontWeight: 700,
           color: labelColor,
           textAlign: "center",
-          padding: 20,
+          padding: 16,
           lineHeight: 1.4,
         }}
       >
-        {visibleText}
-        {charsVisible < totalChars && charsVisible > 0 && (
+        {displayedLabel}
+        {/* Blinking cursor while typing */}
+        {charsRevealed < label.length && charsRevealed > 0 && (
           <span
             style={{
-              opacity: frame % 10 < 5 ? 1 : 0.3,
+              opacity: Math.sin(frame * 0.3) > 0 ? 0.8 : 0,
               marginLeft: 1,
+              fontWeight: 300,
             }}
           >
             |
           </span>
         )}
       </div>
-    </div>
+    </>
   );
 };
 

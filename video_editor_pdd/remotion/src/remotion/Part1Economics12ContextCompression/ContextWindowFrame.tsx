@@ -1,86 +1,128 @@
-// ContextWindowFrame.tsx — The fixed-size context window outline with glow and label
 import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
-
 import {
-  WINDOW_LEFT,
-  WINDOW_TOP,
-  WINDOW_WIDTH,
-  WINDOW_HEIGHT,
-  WINDOW_BORDER_RADIUS,
-  WINDOW_BORDER_WIDTH,
-  WINDOW_BORDER_COLOR,
-  WINDOW_GLOW_COLOR,
-  PHASE_WINDOW_DRAW_START,
-  PHASE_WINDOW_DRAW_END,
-  PHASE_LABEL_COLOR,
-} from "./constants";
+  AbsoluteFill,
+  interpolate,
+  useCurrentFrame,
+  Easing,
+} from "remotion";
 
-const ContextWindowFrame: React.FC = () => {
+/**
+ * ContextWindowFrame — the fixed-size rectangle representing the context window.
+ * Draws in from frame 0-60 with a border reveal animation.
+ */
+
+interface ContextWindowFrameProps {
+  windowLeft: number;
+  windowTop: number;
+  windowWidth: number;
+  windowHeight: number;
+  borderColor: string;
+  borderWidth: number;
+  borderRadius: number;
+  glowOpacity: number;
+  glowBlur: number;
+  drawStart: number;
+  drawEnd: number;
+}
+
+export const ContextWindowFrame: React.FC<ContextWindowFrameProps> = ({
+  windowLeft,
+  windowTop,
+  windowWidth,
+  windowHeight,
+  borderColor,
+  borderWidth,
+  borderRadius,
+  glowOpacity,
+  glowBlur,
+  drawStart,
+  drawEnd,
+}) => {
   const frame = useCurrentFrame();
-  const drawDuration = PHASE_WINDOW_DRAW_END - PHASE_WINDOW_DRAW_START;
 
-  // Animate the border drawing in (via opacity + scale)
-  const drawProgress = interpolate(frame, [0, drawDuration], [0, 1], {
+  const drawProgress = interpolate(frame, [drawStart, drawEnd], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),
   });
 
-  const borderOpacity = drawProgress;
-  const scaleY = interpolate(drawProgress, [0, 1], [0.9, 1], {
+  const opacity = interpolate(frame, [drawStart, drawStart + 15], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // Label fade-in slightly after frame draws
-  const labelOpacity = interpolate(frame, [30, 55], [0, 1], {
+  // Perimeter of the rectangle for dash-offset animation
+  const perimeter = 2 * (windowWidth + windowHeight);
+  const dashOffset = perimeter * (1 - drawProgress);
+
+  // Label fade
+  const labelOpacity = interpolate(frame, [drawEnd - 10, drawEnd + 10], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
   });
 
   return (
-    <>
-      {/* Window frame */}
+    <AbsoluteFill>
+      {/* Glow behind the frame */}
       <div
         style={{
           position: "absolute",
-          left: WINDOW_LEFT,
-          top: WINDOW_TOP,
-          width: WINDOW_WIDTH,
-          height: WINDOW_HEIGHT,
-          border: `${WINDOW_BORDER_WIDTH}px solid ${WINDOW_BORDER_COLOR}`,
-          borderRadius: WINDOW_BORDER_RADIUS,
-          boxShadow: `0 0 8px ${WINDOW_GLOW_COLOR}`,
-          opacity: borderOpacity,
-          transform: `scaleY(${scaleY})`,
-          transformOrigin: "top center",
-          overflow: "hidden",
+          left: windowLeft - glowBlur,
+          top: windowTop - glowBlur,
+          width: windowWidth + glowBlur * 2,
+          height: windowHeight + glowBlur * 2,
+          borderRadius: borderRadius + glowBlur,
+          boxShadow: `0 0 ${glowBlur * 2}px ${glowBlur}px ${borderColor}`,
+          opacity: glowOpacity * drawProgress,
         }}
       />
+
+      {/* SVG border with dash-offset reveal */}
+      <svg
+        style={{
+          position: "absolute",
+          left: windowLeft - borderWidth,
+          top: windowTop - borderWidth,
+          width: windowWidth + borderWidth * 2,
+          height: windowHeight + borderWidth * 2,
+          opacity,
+          overflow: "visible",
+        }}
+      >
+        <rect
+          x={borderWidth}
+          y={borderWidth}
+          width={windowWidth}
+          height={windowHeight}
+          rx={borderRadius}
+          ry={borderRadius}
+          fill="none"
+          stroke={borderColor}
+          strokeWidth={borderWidth}
+          strokeDasharray={perimeter}
+          strokeDashoffset={dashOffset}
+        />
+      </svg>
 
       {/* "Context Window" label above */}
       <div
         style={{
           position: "absolute",
-          left: WINDOW_LEFT,
-          top: WINDOW_TOP - 40,
-          width: WINDOW_WIDTH,
+          left: windowLeft,
+          top: windowTop - 38,
+          width: windowWidth,
           textAlign: "center",
           fontFamily: "Inter, sans-serif",
           fontSize: 16,
           fontWeight: 600,
-          color: PHASE_LABEL_COLOR,
+          color: borderColor,
           opacity: labelOpacity,
-          letterSpacing: 1,
+          letterSpacing: "0.05em",
           textTransform: "uppercase",
         }}
       >
         Context Window
       </div>
-    </>
+    </AbsoluteFill>
   );
 };
-
-export default ContextWindowFrame;

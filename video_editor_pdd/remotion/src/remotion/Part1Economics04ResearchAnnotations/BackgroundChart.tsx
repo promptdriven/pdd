@@ -1,214 +1,265 @@
-import React from "react";
-import {
-  CHART_LEFT,
-  CHART_TOP,
-  CHART_WIDTH,
-  CHART_HEIGHT,
-  CHART_BOTTOM,
-  AXIS_COLOR,
-  AXIS_LABEL_COLOR,
-  GRID_COLOR,
-  AMBER_LINE_COLOR,
-  AMBER_DASHED_COLOR,
-  FONT_FAMILY,
-  SOLID_LINE_POINTS,
-  DASHED_LINE_POINTS,
-  YEAR_MIN,
-  YEAR_MAX,
-  COST_MIN,
-  COST_MAX,
-  Y_AXIS_LABELS,
-} from "./constants";
+import React from 'react';
+import {interpolate, useCurrentFrame, Easing} from 'remotion';
 
-const mapX = (year: number): number =>
-  CHART_LEFT + ((year - YEAR_MIN) / (YEAR_MAX - YEAR_MIN)) * CHART_WIDTH;
+/**
+ * BackgroundChart renders the underlying "code cost" chart that the annotations
+ * overlay on top of. It includes:
+ *   - Y axis with cost labels
+ *   - X axis with year labels
+ *   - Horizontal grid lines
+ *   - Solid amber line (immediate patch cost – drops steeply)
+ *   - Dashed amber line (total cost with debt – nearly flat)
+ *   - A legend in the top-left area
+ */
 
-const mapY = (cost: number): number =>
-  CHART_TOP + CHART_HEIGHT - ((cost - COST_MIN) / (COST_MAX - COST_MIN)) * CHART_HEIGHT;
+// ── Local constants (not re-exported) ──────────────────────────────
+const CHART_LEFT = 160;
+const CHART_RIGHT = 1760;
+const CHART_TOP = 140;
+const CHART_BOTTOM = 860;
+const YEAR_START = 2019;
+const YEAR_END = 2026;
 
-const buildPath = (points: { x: number; y: number }[]): string =>
-  points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${mapX(p.x).toFixed(1)} ${mapY(p.y).toFixed(1)}`)
-    .join(" ");
+const AMBER = '#F59E0B';
+const GRID_COLOR = '#1E293B';
+const AXIS_COLOR = '#64748B';
+
+const SOLID_POINTS: [number, number][] = [
+  [2019, 0.95],
+  [2020, 0.90],
+  [2021, 0.80],
+  [2022, 0.65],
+  [2023, 0.40],
+  [2024, 0.28],
+  [2025, 0.20],
+  [2026, 0.15],
+];
+
+const DASHED_POINTS: [number, number][] = [
+  [2019, 0.95],
+  [2020, 0.93],
+  [2021, 0.92],
+  [2022, 0.90],
+  [2023, 0.88],
+  [2024, 0.87],
+  [2025, 0.86],
+  [2026, 0.85],
+];
+
+function yearToX(year: number): number {
+  return interpolate(year, [YEAR_START, YEAR_END], [CHART_LEFT, CHART_RIGHT]);
+}
+
+function valueToY(value: number): number {
+  return interpolate(value, [0, 1], [CHART_BOTTOM, CHART_TOP]);
+}
+
+function pointsToSvgPath(pts: [number, number][]): string {
+  return pts
+    .map(([year, val], i) => {
+      const x = yearToX(year);
+      const y = valueToY(val);
+      return `${i === 0 ? 'M' : 'L'}${x},${y}`;
+    })
+    .join(' ');
+}
+
+function pathLength(pts: [number, number][]): number {
+  let len = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = yearToX(pts[i][0]) - yearToX(pts[i - 1][0]);
+    const dy = valueToY(pts[i][1]) - valueToY(pts[i - 1][1]);
+    len += Math.sqrt(dx * dx + dy * dy);
+  }
+  return len;
+}
 
 const BackgroundChart: React.FC = () => {
-  const years = [2020, 2021, 2022, 2023, 2024, 2025, 2026];
+  const frame = useCurrentFrame();
+
+  // Draw-on animation for the two lines (first 60 frames)
+  const drawProgress = interpolate(frame, [0, 55], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.out(Easing.quad),
+  });
+
+  const solidLen = pathLength(SOLID_POINTS);
+  const dashedLen = pathLength(DASHED_POINTS);
+  const solidOffset = solidLen * (1 - drawProgress);
+  const dashedOffset = dashedLen * (1 - drawProgress);
+
+  // Grid rows (0%, 25%, 50%, 75%, 100%)
+  const gridValues = [0, 0.25, 0.5, 0.75, 1.0];
+
+  // Year labels
+  const years = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: 1920,
-        height: 1080,
-      }}
-    >
-      {/* Chart title */}
-      <div
-        style={{
-          position: "absolute",
-          top: 36,
-          left: CHART_LEFT,
-          fontFamily: FONT_FAMILY,
-          fontSize: 22,
-          fontWeight: 600,
-          color: "#E2E8F0",
-          opacity: 0.85,
-        }}
-      >
-        Code Cost: Generate vs. Maintain
-      </div>
-
-      {/* Legend */}
-      <div
-        style={{
-          position: "absolute",
-          top: 40,
-          right: 200,
-          display: "flex",
-          gap: 28,
-          fontFamily: FONT_FAMILY,
-          fontSize: 13,
-          color: AXIS_LABEL_COLOR,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div
-            style={{
-              width: 24,
-              height: 3,
-              backgroundColor: AMBER_LINE_COLOR,
-              borderRadius: 2,
-            }}
-          />
-          <span>Immediate task cost</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div
-            style={{
-              width: 24,
-              height: 3,
-              background: `repeating-linear-gradient(90deg, ${AMBER_DASHED_COLOR} 0px, ${AMBER_DASHED_COLOR} 5px, transparent 5px, transparent 10px)`,
-              borderRadius: 2,
-            }}
-          />
-          <span>Total cost (incl. debt)</span>
-        </div>
-      </div>
-
+    <div style={{position: 'absolute', inset: 0}}>
       <svg
         width={1920}
         height={1080}
         viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0 }}
+        style={{position: 'absolute', top: 0, left: 0}}
       >
         {/* Horizontal grid lines */}
-        {Y_AXIS_LABELS.map((_, i) => {
-          const y = CHART_TOP + (i / (Y_AXIS_LABELS.length - 1)) * CHART_HEIGHT;
-          return (
-            <line
-              key={`grid-h-${i}`}
-              x1={CHART_LEFT}
-              y1={y}
-              x2={CHART_LEFT + CHART_WIDTH}
-              y2={y}
-              stroke={GRID_COLOR}
-              strokeWidth={1}
-            />
-          );
-        })}
-
-        {/* Vertical grid lines */}
-        {years.map((year) => {
-          const x = mapX(year);
-          return (
-            <line
-              key={`grid-v-${year}`}
-              x1={x}
-              y1={CHART_TOP}
-              x2={x}
-              y2={CHART_BOTTOM}
-              stroke={GRID_COLOR}
-              strokeWidth={1}
-            />
-          );
-        })}
-
-        {/* Axes */}
-        <line
-          x1={CHART_LEFT}
-          y1={CHART_TOP}
-          x2={CHART_LEFT}
-          y2={CHART_BOTTOM}
-          stroke={AXIS_COLOR}
-          strokeWidth={1.5}
-        />
-        <line
-          x1={CHART_LEFT}
-          y1={CHART_BOTTOM}
-          x2={CHART_LEFT + CHART_WIDTH}
-          y2={CHART_BOTTOM}
-          stroke={AXIS_COLOR}
-          strokeWidth={1.5}
-        />
+        {gridValues.map((v) => (
+          <line
+            key={v}
+            x1={CHART_LEFT}
+            y1={valueToY(v)}
+            x2={CHART_RIGHT}
+            y2={valueToY(v)}
+            stroke={GRID_COLOR}
+            strokeWidth={1}
+          />
+        ))}
 
         {/* Y-axis labels */}
-        {Y_AXIS_LABELS.map((label, i) => {
-          const y =
-            CHART_TOP + CHART_HEIGHT - (i / (Y_AXIS_LABELS.length - 1)) * CHART_HEIGHT;
-          return (
-            <text
-              key={`y-label-${i}`}
-              x={CHART_LEFT - 14}
-              y={y + 4}
-              textAnchor="end"
-              fill={AXIS_LABEL_COLOR}
-              fontFamily={FONT_FAMILY}
-              fontSize={12}
-            >
-              {label}
-            </text>
-          );
-        })}
-
-        {/* X-axis labels */}
-        {years.map((year) => (
+        {gridValues.map((v) => (
           <text
-            key={`x-label-${year}`}
-            x={mapX(year)}
-            y={CHART_BOTTOM + 24}
-            textAnchor="middle"
-            fill={AXIS_LABEL_COLOR}
-            fontFamily={FONT_FAMILY}
-            fontSize={12}
+            key={`label-${v}`}
+            x={CHART_LEFT - 16}
+            y={valueToY(v) + 5}
+            textAnchor="end"
+            fill={AXIS_COLOR}
+            fontSize={13}
+            fontFamily="Inter, sans-serif"
           >
-            {year}
+            {`${Math.round(v * 100)}%`}
           </text>
         ))}
 
-        {/* Solid amber line — immediate task cost (dropping) */}
+        {/* X-axis labels */}
+        {years.map((yr) => (
+          <text
+            key={yr}
+            x={yearToX(yr)}
+            y={CHART_BOTTOM + 36}
+            textAnchor="middle"
+            fill={AXIS_COLOR}
+            fontSize={13}
+            fontFamily="Inter, sans-serif"
+          >
+            {yr}
+          </text>
+        ))}
+
+        {/* Y axis title */}
+        <text
+          x={50}
+          y={(CHART_TOP + CHART_BOTTOM) / 2}
+          textAnchor="middle"
+          fill={AXIS_COLOR}
+          fontSize={14}
+          fontFamily="Inter, sans-serif"
+          transform={`rotate(-90, 50, ${(CHART_TOP + CHART_BOTTOM) / 2})`}
+        >
+          Relative Cost
+        </text>
+
+        {/* Solid amber line — immediate patch cost */}
         <path
-          d={buildPath(SOLID_LINE_POINTS)}
+          d={pointsToSvgPath(SOLID_POINTS)}
           fill="none"
-          stroke={AMBER_LINE_COLOR}
+          stroke={AMBER}
           strokeWidth={2.5}
           strokeLinecap="round"
           strokeLinejoin="round"
+          strokeDasharray={solidLen}
+          strokeDashoffset={solidOffset}
         />
 
-        {/* Dashed amber line — total cost with debt (flat/rising) */}
+        {/* Dashed amber line — total cost with debt */}
         <path
-          d={buildPath(DASHED_LINE_POINTS)}
+          d={pointsToSvgPath(DASHED_POINTS)}
           fill="none"
-          stroke={AMBER_DASHED_COLOR}
+          stroke={AMBER}
           strokeWidth={2.5}
-          strokeDasharray="8 6"
           strokeLinecap="round"
           strokeLinejoin="round"
-          opacity={0.7}
+          strokeDasharray={`8 6`}
+          style={{
+            strokeDashoffset: dashedOffset,
+            opacity: drawProgress,
+          }}
         />
       </svg>
+
+      {/* Legend */}
+      <div
+        style={{
+          position: 'absolute',
+          top: CHART_TOP - 10,
+          left: CHART_LEFT + 40,
+          display: 'flex',
+          gap: 32,
+          opacity: interpolate(frame, [20, 50], [0, 1], {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+          }),
+        }}
+      >
+        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+          <div
+            style={{
+              width: 28,
+              height: 3,
+              backgroundColor: AMBER,
+              borderRadius: 2,
+            }}
+          />
+          <span
+            style={{
+              color: '#CBD5E1',
+              fontSize: 13,
+              fontFamily: 'Inter, sans-serif',
+            }}
+          >
+            Immediate patch cost
+          </span>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+          <div
+            style={{
+              width: 28,
+              height: 0,
+              borderTop: `3px dashed ${AMBER}`,
+            }}
+          />
+          <span
+            style={{
+              color: '#CBD5E1',
+              fontSize: 13,
+              fontFamily: 'Inter, sans-serif',
+            }}
+          >
+            Total cost (incl. debt)
+          </span>
+        </div>
+      </div>
+
+      {/* Chart title */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 50,
+          left: 0,
+          width: 1920,
+          textAlign: 'center',
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 26,
+          fontWeight: 700,
+          color: '#E2E8F0',
+          opacity: interpolate(frame, [0, 30], [0, 1], {
+            extrapolateLeft: 'clamp',
+            extrapolateRight: 'clamp',
+          }),
+        }}
+      >
+        Code Generation Cost vs. Long-Term Maintenance
+      </div>
     </div>
   );
 };

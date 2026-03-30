@@ -1,11 +1,13 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  TEXT_LIGHT,
-  ACCENT_AND,
-  CANVAS_W,
-  INSIGHT_TEXT_START,
-  INSIGHT_TEXT_END,
+  CANVAS_WIDTH,
+  INSIGHT_Y,
+  FONT_FAMILY,
+  COLOR_TEXT_PRIMARY,
+  COLOR_ACCENT_AND,
+  PHASE_TEXT_START,
+  PHASE_TEXT_END,
 } from "./constants";
 
 export const InsightText: React.FC = () => {
@@ -13,7 +15,7 @@ export const InsightText: React.FC = () => {
 
   const opacity = interpolate(
     frame,
-    [INSIGHT_TEXT_START, INSIGHT_TEXT_END],
+    [PHASE_TEXT_START, PHASE_TEXT_END],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -24,8 +26,8 @@ export const InsightText: React.FC = () => {
 
   const translateY = interpolate(
     frame,
-    [INSIGHT_TEXT_START, INSIGHT_TEXT_END],
-    [16, 0],
+    [PHASE_TEXT_START, PHASE_TEXT_END],
+    [12, 0],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -37,9 +39,9 @@ export const InsightText: React.FC = () => {
     <div
       style={{
         position: "absolute",
-        top: 900,
+        top: INSIGHT_Y,
         left: 0,
-        width: CANVAS_W,
+        width: CANVAS_WIDTH,
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
@@ -49,30 +51,30 @@ export const InsightText: React.FC = () => {
     >
       <span
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: FONT_FAMILY,
           fontSize: 28,
           fontWeight: 700,
-          color: TEXT_LIGHT,
+          color: COLOR_TEXT_PRIMARY,
         }}
       >
         Bigger window{" "}
       </span>
       <span
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: FONT_FAMILY,
           fontSize: 28,
           fontWeight: 700,
-          color: ACCENT_AND,
+          color: COLOR_ACCENT_AND,
         }}
       >
         AND
       </span>
       <span
         style={{
-          fontFamily: "Inter, sans-serif",
+          fontFamily: FONT_FAMILY,
           fontSize: 28,
           fontWeight: 700,
-          color: TEXT_LIGHT,
+          color: COLOR_TEXT_PRIMARY,
         }}
       >
         {" "}smarter model.
@@ -80,3 +82,5 @@ export const InsightText: React.FC = () => {
     </div>
   );
 };
+
+export default InsightText;

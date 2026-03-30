@@ -1202,7 +1202,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="Part1EconomicsSection"
         component={Part1EconomicsSection}
-        durationInFrames={13731}
+        durationInFrames={13741}
         fps={30}
         width={1920}
         height={1080}
@@ -1330,7 +1330,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics01-section-title-card"
         component={Part1Economics01SectionTitleCardPreview}
-        durationInFrames={700}
+        durationInFrames={682}
         fps={30}
         width={1920}
         height={1080}
@@ -1346,7 +1346,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics03-code-cost-chart"
         component={Part1Economics03CodeCostChartPreview}
-        durationInFrames={1623}
+        durationInFrames={1621}
         fps={30}
         width={1920}
         height={1080}
@@ -1354,7 +1354,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics04-research-annotations"
         component={Part1Economics04ResearchAnnotationsPreview}
-        durationInFrames={1213}
+        durationInFrames={1209}
         fps={30}
         width={1920}
         height={1080}
@@ -1362,7 +1362,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics05-code-churn-annotations"
         component={Part1Economics05CodeChurnAnnotationsPreview}
-        durationInFrames={803}
+        durationInFrames={805}
         fps={30}
         width={1920}
         height={1080}
@@ -1370,7 +1370,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics06-debt-layers-zoom"
         component={Part1Economics06DebtLayersZoomPreview}
-        durationInFrames={558}
+        durationInFrames={544}
         fps={30}
         width={1920}
         height={1080}
@@ -1402,7 +1402,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics10-fork-codebase-size"
         component={Part1Economics10ForkCodebaseSizePreview}
-        durationInFrames={1718}
+        durationInFrames={1688}
         fps={30}
         width={1920}
         height={1080}
@@ -1410,7 +1410,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics11-patching-vs-regeneration"
         component={Part1Economics11PatchingVsRegenerationPreview}
-        durationInFrames={1589}
+        durationInFrames={1609}
         fps={30}
         width={1920}
         height={1080}
@@ -1418,7 +1418,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics12-context-compression"
         component={Part1Economics12ContextCompressionPreview}
-        durationInFrames={1541}
+        durationInFrames={1559}
         fps={30}
         width={1920}
         height={1080}
@@ -1426,7 +1426,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics13-crossing-lines-moment"
         component={Part1Economics13CrossingLinesMomentPreview}
-        durationInFrames={306}
+        durationInFrames={324}
         fps={30}
         width={1920}
         height={1080}
@@ -1434,7 +1434,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics14-split-developer-grandma"
         component={Part1Economics14SplitDeveloperGrandmaPreview}
-        durationInFrames={427}
+        durationInFrames={392}
         fps={30}
         width={1920}
         height={1080}
@@ -1458,7 +1458,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part1-economics17-developer-codebase-zoomout"
         component={Part1Economics17DeveloperCodebaseZoomoutPreview}
-        durationInFrames={200}
+        durationInFrames={183}
         fps={30}
         width={1920}
         height={1080}
@@ -1538,7 +1538,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift07-split-craftsman-vs-mold"
         component={Part2ParadigmShift07SplitCraftsmanVsMoldPreview}
-        durationInFrames={780}
+        durationInFrames={767}
         fps={30}
         width={1920}
         height={1080}
@@ -1570,7 +1570,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift11-schematic-density-zoom"
         component={Part2ParadigmShift11SchematicDensityZoomPreview}
-        durationInFrames={673}
+        durationInFrames={676}
         fps={30}
         width={1920}
         height={1080}
@@ -1578,7 +1578,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift12-verilog-synthesis"
         component={Part2ParadigmShift12VerilogSynthesisPreview}
-        durationInFrames={673}
+        durationInFrames={676}
         fps={30}
         width={1920}
         height={1080}
@@ -1586,7 +1586,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift13-triple-synthesis-equivalence"
         component={Part2ParadigmShift13TripleSynthesisEquivalencePreview}
-        durationInFrames={1144}
+        durationInFrames={1143}
         fps={30}
         width={1920}
         height={1080}
@@ -1594,7 +1594,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift14-synopsys-pdd-equivalence"
         component={Part2ParadigmShift14SynopsysPddEquivalencePreview}
-        durationInFrames={358}
+        durationInFrames={341}
         fps={30}
         width={1920}
         height={1080}
@@ -1602,7 +1602,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift15-abstraction-staircase"
         component={Part2ParadigmShift15AbstractionStaircasePreview}
-        durationInFrames={765}
+        durationInFrames={771}
         fps={30}
         width={1920}
         height={1080}
@@ -1610,7 +1610,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift16-billion-gate-unreviewable"
         component={Part2ParadigmShift16BillionGateUnreviewablePreview}
-        durationInFrames={344}
+        durationInFrames={358}
         fps={30}
         width={1920}
         height={1080}
@@ -1618,7 +1618,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift17-review-spec-verify-output"
         component={Part2ParadigmShift17ReviewSpecVerifyOutputPreview}
-        durationInFrames={344}
+        durationInFrames={358}
         fps={30}
         width={1920}
         height={1080}
@@ -1626,7 +1626,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="part2-paradigm-shift18-prompt-mold-finale"
         component={Part2ParadigmShift18PromptMoldFinalePreview}
-        durationInFrames={344}
+        durationInFrames={358}
         fps={30}
         width={1920}
         height={1080}

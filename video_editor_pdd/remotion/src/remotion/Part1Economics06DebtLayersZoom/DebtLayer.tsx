@@ -1,122 +1,120 @@
-// DebtLayer.tsx — A single debt layer with fill, optional noise, and label
 import React from "react";
 import { interpolate, useCurrentFrame, Easing } from "remotion";
-import { NoiseTexture } from "./NoiseTexture";
 import {
   LABEL_FONT_SIZE,
   LABEL_FONT_WEIGHT,
   LABEL_FONT_FAMILY,
-  LABEL_MIN_OPACITY,
   LABEL_FADE_START,
   LABEL_FADE_END,
 } from "./constants";
 
 interface DebtLayerProps {
-  /** Absolute top position of this layer */
-  top: number;
-  /** Height of this layer */
-  layerHeight: number;
-  /** Left edge */
+  /** Absolute left position within the zoomed container */
   left: number;
-  /** Width of the layer */
-  layerWidth: number;
-  /** Fill color */
+  /** Absolute top position within the zoomed container */
+  top: number;
+  /** Width of the layer rectangle */
+  width: number;
+  /** Height of the layer rectangle */
+  height: number;
+  /** Fill color for the layer */
   fillColor: string;
-  /** Fill opacity */
+  /** Fill opacity for the layer */
   fillOpacity: number;
-  /** Label text */
+  /** Text label to display centered in the layer */
   label: string;
-  /** Label color */
+  /** Color for the label text */
   labelColor: string;
-  /** Whether to show noise texture overlay */
-  showNoise?: boolean;
-  /** Current opacity of the entire layer (for split animation) */
-  layerOpacity?: number;
+  /** Whether to show the label (controls fade-in animation) */
+  showLabel: boolean;
+  /** Optional children (e.g., noise overlay) */
+  children?: React.ReactNode;
 }
 
+/**
+ * A single debt layer rectangle with centered label.
+ * Used for both "Code Complexity" (lower) and "Context Rot" (upper) layers.
+ */
 export const DebtLayer: React.FC<DebtLayerProps> = ({
-  top,
-  layerHeight,
   left,
-  layerWidth,
+  top,
+  width,
+  height,
   fillColor,
   fillOpacity,
   label,
   labelColor,
-  showNoise = false,
-  layerOpacity = 1,
+  showLabel,
+  children,
 }) => {
   const frame = useCurrentFrame();
 
-  // Label fades in from frame 180-200
-  const labelOpacity = interpolate(
-    frame,
-    [LABEL_FADE_START, LABEL_FADE_END],
-    [0, LABEL_MIN_OPACITY],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
+  // Label fade-in animation
+  const labelOpacity = showLabel
+    ? interpolate(
+        frame,
+        [LABEL_FADE_START, LABEL_FADE_END],
+        [0, 0.95],
+        {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+          easing: Easing.out(Easing.quad),
+        }
+      )
+    : 0;
 
   return (
     <div
       style={{
         position: "absolute",
-        top,
         left,
-        width: layerWidth,
-        height: layerHeight,
-        opacity: layerOpacity,
+        top,
+        width,
+        height,
         overflow: "hidden",
+        borderRadius: 2,
       }}
     >
-      {/* Fill background */}
+      {/* Layer fill */}
       <div
         style={{
           position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
+          inset: 0,
           backgroundColor: fillColor,
           opacity: fillOpacity,
         }}
       />
 
-      {/* Optional noise overlay for Context Rot */}
-      {showNoise && (
-        <NoiseTexture width={layerWidth} height={layerHeight} />
-      )}
+      {/* Optional children (noise texture, etc.) */}
+      {children}
 
-      {/* Label centered within the layer */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          width: "100%",
-          height: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: labelOpacity,
-        }}
-      >
-        <span
+      {/* Centered label */}
+      {showLabel && (
+        <div
           style={{
-            fontFamily: LABEL_FONT_FAMILY,
-            fontSize: LABEL_FONT_SIZE,
-            fontWeight: LABEL_FONT_WEIGHT,
-            color: labelColor,
-            letterSpacing: "0.05em",
-            textTransform: "uppercase",
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            opacity: labelOpacity,
           }}
         >
-          {label}
-        </span>
-      </div>
+          <span
+            style={{
+              fontFamily: LABEL_FONT_FAMILY,
+              fontSize: LABEL_FONT_SIZE,
+              fontWeight: LABEL_FONT_WEIGHT,
+              color: labelColor,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              textShadow: `0 1px 4px rgba(0,0,0,0.6)`,
+            }}
+          >
+            {label}
+          </span>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,29 +1,40 @@
-// OverflowIndicator.tsx — Red dashed line + overflow count label
 import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
-
 import {
-  OVERFLOW_RED,
-  OVERFLOW_GLOW,
-  WINDOW_LEFT,
-  WINDOW_TOP,
-  WINDOW_WIDTH,
-  WINDOW_HEIGHT,
-  WINDOW_BORDER_WIDTH,
-  OVERFLOW_COUNT,
-  PHASE_OVERFLOW_HOLD_START,
-  PHASE_COMPRESS_START,
-} from "./constants";
+  AbsoluteFill,
+  interpolate,
+  useCurrentFrame,
+  Easing,
+} from "remotion";
 
-const DASHED_Y = WINDOW_TOP + WINDOW_HEIGHT;
+/**
+ * OverflowIndicator — Red dashed line + count label shown when
+ * code blocks overflow the context window.
+ */
 
-const OverflowIndicator: React.FC = () => {
+interface OverflowIndicatorProps {
+  windowLeft: number;
+  windowTop: number;
+  windowWidth: number;
+  windowHeight: number;
+  overflowCount: number;
+  color: string;
+  appearFrame: number;
+}
+
+export const OverflowIndicator: React.FC<OverflowIndicatorProps> = ({
+  windowLeft,
+  windowTop,
+  windowWidth,
+  windowHeight,
+  overflowCount,
+  color,
+  appearFrame,
+}) => {
   const frame = useCurrentFrame();
 
-  // Fade in at frame 300 over 20 frames
-  const fadeIn = interpolate(
+  const opacity = interpolate(
     frame,
-    [PHASE_OVERFLOW_HOLD_START, PHASE_OVERFLOW_HOLD_START + 20],
+    [appearFrame, appearFrame + 20],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -32,69 +43,60 @@ const OverflowIndicator: React.FC = () => {
     }
   );
 
-  // Fade out as compression begins
-  const fadeOut = interpolate(
-    frame,
-    [PHASE_COMPRESS_START, PHASE_COMPRESS_START + 40],
-    [1, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.in(Easing.quad),
-    }
-  );
-
-  const opacity = fadeIn * fadeOut;
-
-  if (opacity <= 0) return null;
+  const lineY = windowTop + windowHeight;
 
   return (
-    <>
-      {/* Red dashed line at window bottom */}
-      <div
+    <AbsoluteFill style={{ opacity }}>
+      {/* Red dashed line at bottom of window */}
+      <svg
         style={{
           position: "absolute",
-          left: WINDOW_LEFT + WINDOW_BORDER_WIDTH,
-          top: DASHED_Y - 2,
-          width: WINDOW_WIDTH - WINDOW_BORDER_WIDTH * 2,
-          height: 0,
-          borderTop: `1.5px dashed ${OVERFLOW_RED}`,
-          opacity,
+          left: windowLeft - 20,
+          top: lineY - 1,
+          width: windowWidth + 40,
+          height: 3,
+          overflow: "visible",
         }}
-      />
+      >
+        <line
+          x1={0}
+          y1={1.5}
+          x2={windowWidth + 40}
+          y2={1.5}
+          stroke={color}
+          strokeWidth={1.5}
+          strokeDasharray="6 4"
+        />
+      </svg>
 
-      {/* Red glow below window */}
+      {/* Red glow below */}
       <div
         style={{
           position: "absolute",
-          left: WINDOW_LEFT,
-          top: DASHED_Y,
-          width: WINDOW_WIDTH,
+          left: windowLeft,
+          top: lineY,
+          width: windowWidth,
           height: 40,
-          background: `linear-gradient(to bottom, ${OVERFLOW_GLOW}, transparent)`,
-          opacity,
+          background: `linear-gradient(to bottom, ${color}1A, transparent)`,
         }}
       />
 
-      {/* Count label */}
+      {/* Overflow count label */}
       <div
         style={{
           position: "absolute",
-          left: WINDOW_LEFT,
-          top: DASHED_Y + 12,
-          width: WINDOW_WIDTH,
+          left: windowLeft,
+          top: lineY + 12,
+          width: windowWidth,
           textAlign: "center",
           fontFamily: "Inter, sans-serif",
           fontSize: 14,
           fontWeight: 400,
-          color: OVERFLOW_RED,
-          opacity,
+          color,
         }}
       >
-        {OVERFLOW_COUNT} modules can&apos;t be seen
+        {overflowCount} modules can&apos;t be seen
       </div>
-    </>
+    </AbsoluteFill>
   );
 };
-
-export default OverflowIndicator;

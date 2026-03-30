@@ -1,119 +1,147 @@
-// AnimatedLine.tsx — Draws a polyline that progressively reveals via stroke-dashoffset
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+// AnimatedLine.tsx — Draws a polyline that progressively reveals along its path
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+import { yearToX, costToY } from './constants';
+
+interface DataPoint {
+  year: number;
+  cost: number;
+}
 
 interface AnimatedLineProps {
-  /** Array of [x, y] coordinate pairs */
-  points: Array<[number, number]>;
+  /** Array of { year, cost } data points */
+  data: DataPoint[];
   /** Stroke color */
   color: string;
-  /** Stroke width */
+  /** Stroke width in px */
   strokeWidth: number;
-  /** Whether the line should be dashed */
-  dashed?: boolean;
-  /** Frame at which drawing begins (absolute frame number) */
-  drawStartFrame: number;
-  /** Number of frames over which the line draws in */
+  /** Frame at which the draw animation starts */
+  drawStart: number;
+  /** Number of frames to animate the full draw */
   drawDuration: number;
-  /** Whether to use easeIn(quad) for drawing (default true) */
-  easeInDraw?: boolean;
-  /** If provided, only show this many points (for static partial display) */
-  staticPointCount?: number;
-}
-
-function pointsToPathD(pts: Array<[number, number]>): string {
-  if (pts.length === 0) return "";
-  return pts
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p[0]} ${p[1]}`)
-    .join(" ");
-}
-
-function computeTotalLength(pts: Array<[number, number]>): number {
-  let total = 0;
-  for (let i = 1; i < pts.length; i++) {
-    const dx = pts[i][0] - pts[i - 1][0];
-    const dy = pts[i][1] - pts[i - 1][1];
-    total += Math.sqrt(dx * dx + dy * dy);
-  }
-  return total;
+  /** Whether to use dashed stroke */
+  dashed?: boolean;
+  /** Whether to clip reveal to a specific data index range driven by progress */
+  revealFromIndex?: number;
+  /** Static render (no animation): draw full line from frame 0 */
+  isStatic?: boolean;
 }
 
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
-  points,
+  data,
   color,
   strokeWidth,
-  dashed = false,
-  drawStartFrame,
+  drawStart,
   drawDuration,
-  easeInDraw = true,
-  staticPointCount,
+  dashed = false,
+  revealFromIndex,
+  isStatic = false,
 }) => {
   const frame = useCurrentFrame();
 
-  const displayPoints =
-    staticPointCount !== undefined
-      ? points.slice(0, staticPointCount)
-      : points;
+  // Convert data to pixel coords
+  const pixelPoints = data.map((d) => ({
+    x: yearToX(d.year),
+    y: costToY(d.cost),
+  }));
 
-  if (displayPoints.length < 2) return null;
+  // Compute cumulative segment lengths
+  const segLengths: number[] = [0];
+  for (let i = 1; i < pixelPoints.length; i++) {
+    const dx = pixelPoints[i].x - pixelPoints[i - 1].x;
+    const dy = pixelPoints[i].y - pixelPoints[i - 1].y;
+    segLengths.push(segLengths[i - 1] + Math.sqrt(dx * dx + dy * dy));
+  }
+  const totalLength = segLengths[segLengths.length - 1];
 
-  const d = pointsToPathD(displayPoints);
-  const totalLength = computeTotalLength(displayPoints);
+  // Calculate how much of the line to reveal
+  let revealFraction: number;
+  if (isStatic) {
+    revealFraction = 1;
+  } else {
+    const startIdx = revealFromIndex ?? 0;
+    const startLength = segLengths[startIdx] ?? 0;
+    const animatableLength = totalLength - startLength;
 
-  // If staticPointCount is set and no animation, just render fully
-  if (staticPointCount !== undefined && drawDuration === 0) {
-    return (
-      <svg
-        width={1920}
-        height={1080}
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
-        <path
-          d={d}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray={dashed ? "12 8" : "none"}
-        />
-      </svg>
+    const progress = interpolate(
+      frame,
+      [drawStart, drawStart + drawDuration],
+      [0, 1],
+      {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.in(Easing.quad),
+      }
     );
+
+    revealFraction = (startLength + progress * animatableLength) / totalLength;
   }
 
-  // Animated draw-in progress
-  const progress = interpolate(
-    frame,
-    [drawStartFrame, drawStartFrame + drawDuration],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: easeInDraw ? Easing.in(Easing.quad) : Easing.linear,
-    }
-  );
+  // Build SVG path
+  const pathD = pixelPoints
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`)
+    .join(' ');
 
-  const dashOffset = totalLength * (1 - progress);
+  const dashOffset = totalLength * (1 - revealFraction);
 
   return (
     <svg
       width={1920}
       height={1080}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      viewBox="0 0 1920 1080"
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
       <path
-        d={d}
+        d={pathD}
         fill="none"
         stroke={color}
         strokeWidth={strokeWidth}
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeDasharray={
-          dashed ? `12 8` : `${totalLength}`
+        strokeDasharray={dashed ? `${totalLength}` : `${totalLength}`}
+        strokeDashoffset={dashOffset}
+        style={
+          dashed
+            ? {
+                strokeDasharray: `8 4`,
+                // We use clip to reveal instead for dashed lines
+              }
+            : undefined
         }
-        strokeDashoffset={dashed ? 0 : dashOffset}
-        opacity={progress > 0 || staticPointCount !== undefined ? 1 : 0}
       />
+      {/* For dashed lines, overlay with proper dash pattern using a clip */}
+      {dashed && (
+        <>
+          <defs>
+            <clipPath id={`clip-reveal-${color.replace('#', '')}`}>
+              <rect
+                x={0}
+                y={0}
+                width={
+                  pixelPoints.length > 0
+                    ? pixelPoints[0].x +
+                      revealFraction *
+                        (pixelPoints[pixelPoints.length - 1].x - pixelPoints[0].x)
+                    : 0
+                }
+                height={1080}
+              />
+            </clipPath>
+          </defs>
+          <path
+            d={pathD}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="8 4"
+            clipPath={`url(#clip-reveal-${color.replace('#', '')})`}
+          />
+        </>
+      )}
     </svg>
   );
 };
+
+export default AnimatedLine;

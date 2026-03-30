@@ -1,198 +1,197 @@
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 import {
-  TRACK_FILL,
-  TRACK_BORDER,
   METER_WIDTH,
   METER_HEIGHT,
-  METER_RADIUS,
-  METER_TOP_Y,
-  LABEL_DIM,
-  TEXT_LIGHT,
-  TITLES_START,
-  TITLES_END,
-  FILL_START,
-  FILL_END,
-  TOP_LABELS_START,
-  TOP_LABELS_END,
-  PULSE_START,
-  PULSE_END,
-  PULSE_CYCLE,
-  TRACK_DRAW_END,
+  METER_CORNER_RADIUS,
+  METER_TRACK_COLOR,
+  METER_TRACK_BORDER,
+  COLOR_LABEL_DIM,
+  COLOR_TEXT_PRIMARY,
+  FONT_FAMILY,
+  PHASE_TITLES_START,
+  PHASE_TITLES_END,
+  PHASE_FILL_START,
+  PHASE_FILL_END,
+  PHASE_TOP_LABELS_START,
+  PHASE_TOP_LABELS_END,
+  PHASE_PULSE_START,
+  PHASE_PULSE_END,
+  PULSE_CYCLE_FRAMES,
+  PULSE_SCALE_MIN,
+  PULSE_SCALE_MAX,
+  PHASE_BG_START,
+  PHASE_BG_END,
 } from "./constants";
 
 interface VerticalMeterProps {
   x: number;
-  title: string;
+  y: number;
   fillColor: string;
+  title: string;
   bottomLabel: string;
   topLabel: string;
-  bottomFontSize: number;
+  bottomLabelSize?: number;
 }
 
 export const VerticalMeter: React.FC<VerticalMeterProps> = ({
   x,
-  title,
+  y,
   fillColor,
+  title,
   bottomLabel,
   topLabel,
-  bottomFontSize,
+  bottomLabelSize = 18,
 }) => {
   const frame = useCurrentFrame();
 
   // Track draw-in (scale Y from 0 to 1)
-  const trackScale = interpolate(frame, [0, TRACK_DRAW_END], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  // Title fade in
-  const titleOpacity = interpolate(
+  const trackScale = interpolate(
     frame,
-    [TITLES_START, TITLES_END],
+    [PHASE_BG_START, PHASE_BG_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Bottom label fade in (same as titles)
-  const bottomLabelOpacity = titleOpacity;
+  // Title + bottom label fade
+  const titleOpacity = interpolate(
+    frame,
+    [PHASE_TITLES_START, PHASE_TITLES_END],
+    [0, 1],
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
 
   // Fill progress (0 to 1)
   const fillProgress = interpolate(
     frame,
-    [FILL_START, FILL_END],
+    [PHASE_FILL_START, PHASE_FILL_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.poly(3)) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.poly(3)),
+    }
   );
 
-  // Top label fade in
+  // Top label fade
   const topLabelOpacity = interpolate(
     frame,
-    [TOP_LABELS_START, TOP_LABELS_END],
+    [PHASE_TOP_LABELS_START, PHASE_TOP_LABELS_END],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.out(Easing.quad) }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
   );
 
-  // Pulse effect (scale oscillation)
-  const isPulsing = frame >= PULSE_START && frame <= PULSE_END;
-  let pulseScale = 1;
-  if (isPulsing) {
-    const pulseFrame = frame - PULSE_START;
-    const cyclePos = (pulseFrame % PULSE_CYCLE) / PULSE_CYCLE;
-    // sine wave: 0→1→0 over one cycle
-    pulseScale = 1 + 0.02 * Math.sin(cyclePos * Math.PI * 2);
+  // Pulse — synchronized sine cycle after PHASE_PULSE_START
+  let pulseScale = PULSE_SCALE_MIN;
+  if (frame >= PHASE_PULSE_START) {
+    const pulseFrame = (frame - PHASE_PULSE_START) % PULSE_CYCLE_FRAMES;
+    const pulseT = pulseFrame / PULSE_CYCLE_FRAMES;
+    // sine in-out: 0→1→0 within one cycle
+    const sineVal = Math.sin(pulseT * Math.PI * 2);
+    pulseScale = PULSE_SCALE_MIN + (PULSE_SCALE_MAX - PULSE_SCALE_MIN) * ((sineVal + 1) / 2);
   }
 
-  // Glow effect during pulse
-  const glowOpacity = isPulsing ? 0.4 : 0;
+  // Glow intensity during pulse phase
+  const glowOpacity =
+    frame >= PHASE_PULSE_START && frame <= PHASE_PULSE_END
+      ? interpolate(
+          frame,
+          [PHASE_PULSE_START, PHASE_PULSE_START + 15, PHASE_PULSE_END - 15, PHASE_PULSE_END],
+          [0, 0.6, 0.6, 0.3],
+          { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+        )
+      : frame > PHASE_PULSE_END
+        ? 0.3
+        : 0;
 
-  const fillHeight = METER_HEIGHT * fillProgress;
-  const centeredX = x - METER_WIDTH / 2;
+  const fillHeight = fillProgress * METER_HEIGHT;
+  const centerX = x;
 
   return (
     <div
       style={{
         position: "absolute",
-        left: centeredX,
-        top: METER_TOP_Y - 40,
+        left: centerX - METER_WIDTH / 2,
+        top: y,
         width: METER_WIDTH,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
+        transformOrigin: "center bottom",
         transform: `scale(${pulseScale})`,
-        transformOrigin: "center center",
       }}
     >
       {/* Title above meter */}
       <div
         style={{
-          opacity: titleOpacity,
-          fontFamily: "Inter, sans-serif",
+          position: "absolute",
+          top: -40,
+          left: "50%",
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
+          fontFamily: FONT_FAMILY,
           fontSize: 16,
           fontWeight: 600,
-          color: TEXT_LIGHT,
-          textAlign: "center",
-          width: 200,
-          marginBottom: 12,
-          whiteSpace: "nowrap",
+          color: COLOR_TEXT_PRIMARY,
+          opacity: titleOpacity,
         }}
       >
         {title}
       </div>
 
-      {/* Top label */}
-      <div
-        style={{
-          opacity: topLabelOpacity,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 24,
-          fontWeight: 700,
-          color: fillColor,
-          textAlign: "center",
-          marginBottom: 8,
-          height: 30,
-        }}
-      >
-        {topLabel}
-      </div>
-
-      {/* Meter track + fill */}
+      {/* Meter track */}
       <div
         style={{
           position: "relative",
           width: METER_WIDTH,
           height: METER_HEIGHT,
+          backgroundColor: METER_TRACK_COLOR,
+          border: `1px solid ${METER_TRACK_BORDER}`,
+          borderRadius: METER_CORNER_RADIUS,
+          overflow: "hidden",
           transform: `scaleY(${trackScale})`,
-          transformOrigin: "bottom center",
+          transformOrigin: "center bottom",
         }}
       >
-        {/* Track background */}
+        {/* Fill bar from bottom */}
         <div
           style={{
             position: "absolute",
-            top: 0,
+            bottom: 0,
             left: 0,
-            width: METER_WIDTH,
-            height: METER_HEIGHT,
-            backgroundColor: TRACK_FILL,
-            border: `1px solid ${TRACK_BORDER}`,
-            borderRadius: METER_RADIUS,
-            overflow: "hidden",
+            width: "100%",
+            height: fillHeight,
+            backgroundColor: fillColor,
+            opacity: 0.7,
+            borderRadius:
+              fillProgress >= 0.98
+                ? METER_CORNER_RADIUS
+                : `0 0 ${METER_CORNER_RADIUS}px ${METER_CORNER_RADIUS}px`,
+            transition: "border-radius 0.1s",
           }}
-        >
-          {/* Fill bar (grows from bottom) */}
+        />
+
+        {/* Glow overlay on the fill */}
+        {glowOpacity > 0 && (
           <div
             style={{
               position: "absolute",
               bottom: 0,
-              left: 0,
-              width: "100%",
-              height: fillHeight,
-              backgroundColor: fillColor,
-              opacity: 0.7,
-              borderRadius:
-                fillProgress >= 0.98
-                  ? METER_RADIUS
-                  : `0 0 ${METER_RADIUS}px ${METER_RADIUS}px`,
-              transition: "none",
-            }}
-          />
-        </div>
-
-        {/* Glow overlay during pulse */}
-        {isPulsing && (
-          <div
-            style={{
-              position: "absolute",
-              top: -6,
-              left: -6,
-              width: METER_WIDTH + 12,
-              height: METER_HEIGHT + 12,
-              borderRadius: METER_RADIUS + 4,
-              border: `2px solid ${fillColor}`,
-              opacity: glowOpacity,
+              left: -4,
+              width: METER_WIDTH + 8,
+              height: fillHeight + 8,
+              borderRadius: METER_CORNER_RADIUS + 4,
               boxShadow: `0 0 20px ${fillColor}, 0 0 40px ${fillColor}`,
+              opacity: glowOpacity,
               pointerEvents: "none",
             }}
           />
@@ -202,17 +201,40 @@ export const VerticalMeter: React.FC<VerticalMeterProps> = ({
       {/* Bottom label */}
       <div
         style={{
-          opacity: bottomLabelOpacity,
-          fontFamily: "Inter, sans-serif",
-          fontSize: bottomFontSize,
+          position: "absolute",
+          bottom: -30,
+          left: "50%",
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
+          fontFamily: FONT_FAMILY,
+          fontSize: bottomLabelSize,
           fontWeight: 400,
-          color: LABEL_DIM,
-          textAlign: "center",
-          marginTop: 10,
+          color: COLOR_LABEL_DIM,
+          opacity: titleOpacity,
         }}
       >
         {bottomLabel}
       </div>
+
+      {/* Top label */}
+      <div
+        style={{
+          position: "absolute",
+          top: -70,
+          left: "50%",
+          transform: "translateX(-50%)",
+          whiteSpace: "nowrap",
+          fontFamily: FONT_FAMILY,
+          fontSize: 24,
+          fontWeight: 700,
+          color: fillColor,
+          opacity: topLabelOpacity,
+        }}
+      >
+        {topLabel}
+      </div>
     </div>
   );
 };
+
+export default VerticalMeter;

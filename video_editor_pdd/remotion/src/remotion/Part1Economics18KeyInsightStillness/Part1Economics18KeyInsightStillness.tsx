@@ -1,59 +1,58 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
-import { BG_COLOR, CLEARING_START, CLEARING_END } from './constants';
+import { BG_NEAR_BLACK } from './constants';
 import { HorizontalLine } from './HorizontalLine';
 import { InsightText } from './InsightText';
 
-/**
- * Section 1.18 — Key Insight Stillness: "The 3B1B Beat"
- *
- * A deliberate moment of stillness — the palate cleanser between the
- * data-heavy economic argument and the synthesis that follows.
- * Near-black background, a barely-visible horizontal line, and quiet text.
- *
- * 360 frames @ 30fps = 12 seconds
- */
-
 export const defaultPart1Economics18KeyInsightStillnessProps = {};
 
+/**
+ * Section 1.18 — Key Insight Stillness
+ *
+ * A deliberate "3Blue1Brown beat": the screen clears to near-black,
+ * a thin horizontal line draws from center, and a quiet text appears
+ * before fading out. The stillness *is* the content.
+ *
+ * 360 frames @ 30 fps (12 s)
+ *
+ * Timeline:
+ *   0–60    Background darken / clearing overlay fades out
+ *  60–90    Line draws from center outward
+ *  90–150   Text fades in
+ * 150–300   Hold — deliberate stillness
+ * 300–330   Text fades out
+ * 330–360   Line holds, transition beat
+ */
 export const Part1Economics18KeyInsightStillness: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Initial clearing overlay: simulates previous content fading to black.
-  // A semi-transparent overlay fades from visible to gone over frames 0–60,
-  // revealing the near-black background beneath.
-  const clearingOverlayOpacity = interpolate(
-    frame,
-    [CLEARING_START, CLEARING_END],
-    [0.6, 0],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.in(Easing.cubic),
-    },
-  );
+  // Clearing overlay: starts opaque (simulating previous scene remnant),
+  // fades to 0 over first 60 frames so the near-black background is revealed.
+  const clearingOpacity = interpolate(frame, [0, 60], [1, 0], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.in(Easing.cubic),
+  });
 
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
+        backgroundColor: BG_NEAR_BLACK,
         overflow: 'hidden',
       }}
     >
-      {/* Clearing overlay — fades out to reveal the near-black canvas */}
-      {clearingOverlayOpacity > 0.001 && (
-        <AbsoluteFill
-          style={{
-            backgroundColor: '#0A0F1A',
-            opacity: clearingOverlayOpacity,
-          }}
-        />
-      )}
+      {/* Clearing overlay — fades from a slightly lighter dark to nothing */}
+      <AbsoluteFill
+        style={{
+          backgroundColor: '#0A0F1A',
+          opacity: clearingOpacity,
+        }}
+      />
 
-      {/* Horizontal line — draws from center outward starting at frame 60 */}
+      {/* Horizontal center line (draws 60–90) */}
       <HorizontalLine />
 
-      {/* Insight text — fades in at frame 90, holds, fades out at frame 300 */}
+      {/* Insight text (fades in 90–150, holds, fades out 300–330) */}
       <InsightText />
     </AbsoluteFill>
   );

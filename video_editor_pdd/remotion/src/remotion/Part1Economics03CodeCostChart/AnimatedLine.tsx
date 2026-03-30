@@ -1,12 +1,11 @@
 import React, { useMemo } from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
-  CHART_LEFT,
-  CHART_RIGHT,
-  CHART_TOP,
-  CHART_BOTTOM,
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
   DataPoint,
-  buildPathD,
+  mapX,
+  mapY,
 } from "./constants";
 
 interface AnimatedLineProps {
@@ -15,11 +14,10 @@ interface AnimatedLineProps {
   strokeWidth: number;
   startFrame: number;
   drawDuration: number;
-  dashArray?: string;
-  glowActive?: boolean;
-  glowStartFrame?: number;
-  glowEndFrame?: number;
   easing?: (t: number) => number;
+  dashArray?: string;
+  glowRadius?: number;
+  glowOpacity?: number;
 }
 
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
@@ -28,19 +26,39 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   strokeWidth,
   startFrame,
   drawDuration,
-  dashArray,
-  glowActive = false,
-  glowStartFrame = 0,
-  glowEndFrame = 0,
   easing = Easing.inOut(Easing.cubic),
+  dashArray,
+  glowRadius = 0,
+  glowOpacity = 0,
 }) => {
   const frame = useCurrentFrame();
 
-  const pathD = useMemo(() => buildPathD(data), [data]);
+  // Build the SVG path and compute total length
+  const { pathD, segments } = useMemo(() => {
+    const pts = data.map((pt) => ({ sx: mapX(pt.x), sy: mapY(pt.y) }));
+    let d = "";
+    const segs: number[] = [];
+    let totalLen = 0;
+    for (let i = 0; i < pts.length; i++) {
+      if (i === 0) {
+        d += `M ${pts[i].sx} ${pts[i].sy}`;
+        segs.push(0);
+      } else {
+        d += ` L ${pts[i].sx} ${pts[i].sy}`;
+        const dx = pts[i].sx - pts[i - 1].sx;
+        const dy = pts[i].sy - pts[i - 1].sy;
+        totalLen += Math.sqrt(dx * dx + dy * dy);
+        segs.push(totalLen);
+      }
+    }
+    return { pathD: d, segments: segs, totalLength: totalLen };
+  }, [data]);
+
+  const totalLength = segments[segments.length - 1] || 1;
 
   const drawProgress = interpolate(
-    frame - startFrame,
-    [0, drawDuration],
+    frame,
+    [startFrame, startFrame + drawDuration],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -49,80 +67,67 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
     }
   );
 
-  // Glow effect for the pulse phase
-  let glowOpacity = 0;
-  if (glowActive && frame >= glowStartFrame && frame <= glowEndFrame) {
-    // Pulsing glow: sine wave over 30-frame cycles
-    const cycleFrame = (frame - glowStartFrame) % 30;
-    glowOpacity = interpolate(cycleFrame, [0, 15, 30], [0, 0.6, 0], {
+  const visibleLength = drawProgress * totalLength;
+  const hiddenLength = totalLength - visibleLength;
+
+  // Fade in from 0 to full over first 10 frames
+  const opacity = interpolate(
+    frame,
+    [startFrame, Math.min(startFrame + 10, startFrame + drawDuration)],
+    [0, 1],
+    {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.sin),
-    });
-  }
+    }
+  );
 
-  // Don't render before start
   if (frame < startFrame) return null;
 
-  // Sanitize color for use in SVG ID (remove # and special chars)
-  const safeColor = color.replace(/[^a-zA-Z0-9]/g, "");
-  const clipId = `clip-${safeColor}-${startFrame}`;
+  const filterId = `glow-${color.replace("#", "")}-${startFrame}`;
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: 1920,
-        height: 1080,
-      }}
+    <svg
+      width={CANVAS_WIDTH}
+      height={CANVAS_HEIGHT}
+      style={{ position: "absolute", top: 0, left: 0 }}
     >
-      <svg
-        width={1920}
-        height={1080}
-        viewBox="0 0 1920 1080"
-        style={{ position: "absolute", left: 0, top: 0 }}
-      >
+      {glowRadius > 0 && (
         <defs>
-          {/* Clip path for the progressive draw */}
-          <clipPath id={clipId}>
-            <rect
-              x={CHART_LEFT}
-              y={CHART_TOP - 20}
-              width={(CHART_RIGHT - CHART_LEFT) * drawProgress}
-              height={CHART_BOTTOM - CHART_TOP + 40}
-            />
-          </clipPath>
+          <filter id={filterId} x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation={glowRadius} result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
-
-        {/* Glow layer */}
-        {glowActive && glowOpacity > 0 && (
-          <path
-            d={pathD}
-            fill="none"
-            stroke={color}
-            strokeWidth={strokeWidth + 8}
-            strokeDasharray={dashArray || "none"}
-            opacity={glowOpacity}
-            clipPath={`url(#${clipId})`}
-            style={{ filter: "blur(6px)" }}
-          />
-        )}
-
-        {/* Main line */}
-        <path
-          d={pathD}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeDasharray={dashArray || "none"}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          clipPath={`url(#${clipId})`}
-        />
-      </svg>
-    </div>
+      )}
+      <path
+        d={pathD}
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeDasharray={
+          dashArray || `${totalLength}`
+        }
+        strokeDashoffset={dashArray ? undefined : hiddenLength}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={opacity}
+        style={
+          dashArray
+            ? {
+                clipPath: `inset(0 ${((1 - drawProgress) * 100).toFixed(1)}% 0 0)`,
+              }
+            : undefined
+        }
+        filter={
+          glowRadius > 0 && glowOpacity > 0
+            ? `url(#${filterId})`
+            : undefined
+        }
+      />
+    </svg>
   );
 };
 

@@ -1,31 +1,28 @@
 import React from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
-  CANVAS_WIDTH,
+  LINE_COLOR,
+  LINE_OPACITY,
   LINE_Y,
   LINE_X_START,
   LINE_X_END,
-  LINE_COLOR,
-  LINE_OPACITY,
-  LINE_WIDTH,
+  LINE_CENTER_X,
+  LINE_WIDTH_PX,
   LINE_DRAW_START,
-  LINE_DRAW_END,
+  LINE_DRAW_DURATION,
 } from './constants';
 
 /**
- * A horizontal line that draws from center outward.
- * Appears starting at LINE_DRAW_START frame.
+ * A thin horizontal line that draws outward from center.
+ * Appears at LINE_DRAW_START and persists for the rest of the composition.
  */
 export const HorizontalLine: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const lineLength = LINE_X_END - LINE_X_START;
-  const centerX = (LINE_X_START + LINE_X_END) / 2;
-
-  // Line draws from center outward over LINE_DRAW_START..LINE_DRAW_END
+  // Progress of the draw animation (0 → 1)
   const drawProgress = interpolate(
     frame,
-    [LINE_DRAW_START, LINE_DRAW_END],
+    [LINE_DRAW_START, LINE_DRAW_START + LINE_DRAW_DURATION],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -34,32 +31,25 @@ export const HorizontalLine: React.FC = () => {
     },
   );
 
-  const halfDrawn = (lineLength / 2) * drawProgress;
-  const currentX1 = centerX - halfDrawn;
-  const currentX2 = centerX + halfDrawn;
+  // Half-width grows from 0 to full extent
+  const halfSpan = ((LINE_X_END - LINE_X_START) / 2) * drawProgress;
+  const currentLeft = LINE_CENTER_X - halfSpan;
+  const currentWidth = halfSpan * 2;
 
   if (drawProgress <= 0) return null;
 
   return (
-    <svg
-      width={CANVAS_WIDTH}
-      height={LINE_Y + 2}
+    <div
       style={{
         position: 'absolute',
-        top: 0,
-        left: 0,
+        top: LINE_Y,
+        left: currentLeft,
+        width: currentWidth,
+        height: LINE_WIDTH_PX,
+        backgroundColor: LINE_COLOR,
+        opacity: LINE_OPACITY,
       }}
-    >
-      <line
-        x1={currentX1}
-        y1={LINE_Y}
-        x2={currentX2}
-        y2={LINE_Y}
-        stroke={LINE_COLOR}
-        strokeWidth={LINE_WIDTH}
-        opacity={LINE_OPACITY}
-      />
-    </svg>
+    />
   );
 };
 

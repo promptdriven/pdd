@@ -1,80 +1,101 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
+
+const FONT_FAMILY = 'Inter, system-ui, sans-serif';
+const COLOR_SLATE_DARK = '#1E293B';
+const COLOR_SLATE = '#94A3B8';
+
+const CONNECTOR_DRAW_DURATION = 30;
+const CALLOUT_SCALE_DURATION = 20;
+const TEXT_TYPE_DURATION = 30;
+const CALLOUT_WIDTH = 380;
+const CALLOUT_BORDER_RADIUS = 8;
+const CALLOUT_BORDER_WIDTH = 1.5;
 
 interface AnnotationCalloutProps {
-  /** Frame at which this annotation begins materializing */
-  appearFrame: number;
-  /** Border / accent color for the callout */
-  borderColor: string;
-  /** Primary stat text, e.g. "Code churn: +44%" */
+  /** Frame at which this annotation begins animating in */
+  startFrame: number;
+  /** Accent / border color */
+  accentColor: string;
+  /** Primary bold text, e.g. "Code churn: +44%" */
   mainText: string;
-  /** Source line, e.g. "(GitClear, 2025, 211M lines analyzed)" */
+  /** Source line beneath the main text */
   sourceText: string;
-  /** Top-left position of the callout box */
-  posX: number;
-  posY: number;
-  /** Connector line end-point (the target in the chart area) */
+  /** Position of callout box (top-left) */
+  boxX: number;
+  boxY: number;
+  /** Target point for the connector line (where it points into the chart) */
   connectorTargetX: number;
   connectorTargetY: number;
 }
 
-const CALLOUT_WIDTH = 340;
-const CONNECTOR_DRAW_DUR = 30;
-const SCALE_DUR = 20;
-const TYPE_DUR = 18;
-
 export const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
-  appearFrame,
-  borderColor,
+  startFrame,
+  accentColor,
   mainText,
   sourceText,
-  posX,
-  posY,
+  boxX,
+  boxY,
   connectorTargetX,
   connectorTargetY,
 }) => {
   const frame = useCurrentFrame();
-  const rel = frame - appearFrame; // relative frame since appear
+  const localFrame = frame - startFrame;
 
-  if (rel < 0) return null;
+  if (localFrame < 0) return null;
 
-  // 1. Connector line draws in over CONNECTOR_DRAW_DUR frames
-  const connectorProgress = interpolate(rel, [0, CONNECTOR_DRAW_DUR], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  // 2. Callout box scales in (starts after connector is 60% drawn)
-  const scaleStart = Math.round(CONNECTOR_DRAW_DUR * 0.6);
-  const scale = interpolate(rel, [scaleStart, scaleStart + SCALE_DUR], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.back(1.4)),
-  });
-
-  // 3. Text types in (starts when box is mostly scaled)
-  const typeStart = scaleStart + Math.round(SCALE_DUR * 0.5);
-  const textReveal = interpolate(rel, [typeStart, typeStart + TYPE_DUR], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-  const visibleMainChars = Math.round(textReveal * mainText.length);
-  const visibleSourceChars = Math.round(
-    interpolate(rel, [typeStart + 6, typeStart + TYPE_DUR + 6], [0, 1], {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+  // ── Connector draw progress (0→1) ───────────────────────────────
+  const connectorProgress = interpolate(
+    localFrame,
+    [0, CONNECTOR_DRAW_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }) * sourceText.length
+    },
   );
 
-  // Connector line geometry: from left-center of callout box toward target
-  const calloutCenterY = posY + 36;
-  const lineStartX = posX;
-  const lineStartY = calloutCenterY;
-  const currentEndX = lineStartX + (connectorTargetX - lineStartX) * connectorProgress;
-  const currentEndY = lineStartY + (connectorTargetY - lineStartY) * connectorProgress;
+  // ── Callout scale (0→1, with overshoot via back easing) ─────────
+  const scaleStart = CONNECTOR_DRAW_DURATION * 0.5;
+  const calloutScale = interpolate(
+    localFrame,
+    [scaleStart, scaleStart + CALLOUT_SCALE_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.back(1.4)),
+    },
+  );
+
+  // ── Text reveal (character count) ───────────────────────────────
+  const textStart = scaleStart + CALLOUT_SCALE_DURATION * 0.5;
+  const textProgress = interpolate(
+    localFrame,
+    [textStart, textStart + TEXT_TYPE_DURATION],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+  const visibleMainChars = Math.floor(textProgress * mainText.length);
+  const visibleSourceChars = Math.floor(
+    interpolate(textProgress, [0.4, 1], [0, sourceText.length], {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    }),
+  );
+
+  // Connector line origin: left-center of callout
+  const connectorOriginX = boxX;
+  const connectorOriginY = boxY + 40;
+  const currentConnectorX =
+    connectorOriginX + (connectorTargetX - connectorOriginX) * connectorProgress;
+  const currentConnectorY =
+    connectorOriginY + (connectorTargetY - connectorOriginY) * connectorProgress;
 
   return (
     <>
@@ -83,66 +104,83 @@ export const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
         width={1920}
         height={1080}
         viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
       >
         <line
-          x1={lineStartX}
-          y1={lineStartY}
-          x2={currentEndX}
-          y2={currentEndY}
-          stroke={borderColor}
+          x1={connectorOriginX}
+          y1={connectorOriginY}
+          x2={currentConnectorX}
+          y2={currentConnectorY}
+          stroke={accentColor}
           strokeWidth={1}
           opacity={0.5}
         />
-        {/* Small dot at the end of connector */}
+        {/* Small dot at the end of the connector */}
         {connectorProgress > 0.9 && (
-          <circle cx={currentEndX} cy={currentEndY} r={3} fill={borderColor} opacity={0.7} />
+          <circle
+            cx={connectorTargetX}
+            cy={connectorTargetY}
+            r={3}
+            fill={accentColor}
+            opacity={connectorProgress}
+          />
         )}
       </svg>
 
       {/* Callout box */}
       <div
         style={{
-          position: "absolute",
-          left: posX,
-          top: posY,
+          position: 'absolute',
+          left: boxX,
+          top: boxY,
           width: CALLOUT_WIDTH,
-          background: "#1E293B",
-          border: `1.5px solid ${borderColor}`,
-          borderRadius: 8,
-          padding: "14px 18px",
-          transform: `scale(${scale})`,
-          transformOrigin: "left center",
-          opacity: scale > 0.01 ? 1 : 0,
+          background: COLOR_SLATE_DARK,
+          border: `${CALLOUT_BORDER_WIDTH}px solid ${accentColor}`,
+          borderRadius: CALLOUT_BORDER_RADIUS,
+          padding: '14px 20px',
+          transform: `scale(${calloutScale})`,
+          transformOrigin: 'left center',
+          opacity: calloutScale,
         }}
       >
-        {/* Main stat text */}
+        {/* Main text */}
         <div
           style={{
-            fontFamily: "Inter, sans-serif",
+            fontFamily: FONT_FAMILY,
             fontSize: 18,
             fontWeight: 700,
-            color: borderColor,
+            color: accentColor,
             lineHeight: 1.3,
             minHeight: 24,
+            opacity: 0.95,
           }}
         >
           {mainText.slice(0, visibleMainChars)}
           {visibleMainChars < mainText.length && (
-            <span style={{ opacity: 0.5 }}>|</span>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 2,
+                height: 18,
+                background: accentColor,
+                marginLeft: 1,
+                verticalAlign: 'text-bottom',
+                opacity: frame % 16 < 8 ? 1 : 0,
+              }}
+            />
           )}
         </div>
 
-        {/* Source / fine print */}
+        {/* Source text */}
         <div
           style={{
-            fontFamily: "Inter, sans-serif",
+            fontFamily: FONT_FAMILY,
             fontSize: 12,
             fontWeight: 400,
-            color: "#94A3B8",
+            color: COLOR_SLATE,
             marginTop: 4,
-            lineHeight: 1.3,
             minHeight: 16,
+            opacity: 0.85,
           }}
         >
           {sourceText.slice(0, visibleSourceChars)}

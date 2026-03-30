@@ -1,3 +1,4 @@
+// index.ts — barrel export
 export {
   Part1Economics20TryItYourself,
   defaultPart1Economics20TryItYourselfProps,

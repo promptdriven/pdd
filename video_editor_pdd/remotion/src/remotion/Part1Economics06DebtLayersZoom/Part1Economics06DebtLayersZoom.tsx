@@ -1,208 +1,68 @@
-// Part1Economics06DebtLayersZoom.tsx — Main component
-// Camera zooms into the debt area from a cost chart, then the monolithic amber
-// area separates into two layers: Code Complexity (lower) and Context Rot (upper).
 import React from "react";
 import {
   AbsoluteFill,
   useCurrentFrame,
   interpolate,
   Easing,
-  Sequence,
 } from "remotion";
-import { DebtLayer } from "./DebtLayer";
 import {
-  BACKGROUND_COLOR,
+  BG_COLOR,
   CANVAS_WIDTH,
   CANVAS_HEIGHT,
   // Zoom
-  ZOOM_START,
-  ZOOM_END,
   ZOOM_ORIGIN_X,
   ZOOM_ORIGIN_Y,
-  ZOOM_SCALE_FROM,
-  ZOOM_SCALE_TO,
+  ZOOM_FACTOR,
+  ZOOM_START,
+  ZOOM_END,
   // Split
   SPLIT_START,
   SPLIT_END,
-  // Layers
-  CODE_COMPLEXITY_COLOR,
-  CODE_COMPLEXITY_FILL_OPACITY,
-  CONTEXT_ROT_COLOR,
-  CONTEXT_ROT_FILL_OPACITY,
+  // Debt area geometry
+  DEBT_AREA_TOP,
+  DEBT_AREA_BOTTOM,
+  DEBT_AREA_LEFT,
+  DEBT_AREA_RIGHT,
   DEBT_AREA_COLOR,
   DEBT_AREA_OPACITY,
-  // Layout
+  SPLIT_Y,
   LAYER_GAP,
-  LAYER_AREA_TOP,
-  LAYER_AREA_BOTTOM,
-  LAYER_AREA_LEFT,
-  LAYER_AREA_RIGHT,
-  LAYER_MIDPOINT_RATIO,
-  // Chart
-  CHART_GRID_COLOR,
-  CHART_GRID_OPACITY,
-  CHART_AXIS_COLOR,
-  CHART_AXIS_OPACITY,
-  CHART_LINE_COLOR,
+  // Layer colors
+  CODE_COMPLEXITY_COLOR,
+  CODE_COMPLEXITY_OPACITY,
+  CONTEXT_ROT_COLOR,
+  CONTEXT_ROT_OPACITY,
+  // Labels
+  LABEL_FADE_START,
+  // Grid
+  GRID_COLOR,
+  GRID_OPACITY,
   YEAR_LABELS,
-  // Typography
   LABEL_FONT_FAMILY,
 } from "./constants";
+import { DebtLayer } from "./DebtLayer";
+import { NoiseTexture } from "./NoiseTexture";
 
-// === Default props (required by spec) ===
+// Default props (empty — component is self-contained)
 export const defaultPart1Economics06DebtLayersZoomProps = {};
 
-// === Simplified cost chart background (pre-zoom view) ===
-const ChartBackground: React.FC = () => {
-  // Simplified representation of the code cost chart that we're zooming into
-  const chartLeft = 160;
-  const chartRight = 1760;
-  const chartTop = 120;
-  const chartBottom = 860;
-  const chartWidth = chartRight - chartLeft;
-  const chartHeight = chartBottom - chartTop;
-
-  // Generate cost curve points (generate vs patch with debt area)
-  const generateCurve: string[] = [];
-  const patchCurve: string[] = [];
-  const numPoints = 100;
-
-  for (let i = 0; i <= numPoints; i++) {
-    const t = i / numPoints;
-    const x = chartLeft + t * chartWidth;
-
-    // Generate cost: starts low, rises steeply after 2023
-    const genY =
-      chartBottom - chartHeight * (0.15 + 0.05 * t + 0.6 * Math.pow(t, 3));
-    generateCurve.push(`${x},${genY}`);
-
-    // Patch cost: starts very low, rises even more steeply
-    const patchY =
-      chartBottom -
-      chartHeight * (0.08 + 0.02 * t + 0.75 * Math.pow(t, 3.5));
-    patchCurve.push(`${x},${patchY}`);
-  }
-
-  // Debt area: region between the two curves (right portion)
-  const debtAreaPoints: string[] = [];
-  for (let i = 40; i <= numPoints; i++) {
-    debtAreaPoints.push(generateCurve[i]);
-  }
-  for (let i = numPoints; i >= 40; i--) {
-    debtAreaPoints.push(patchCurve[i]);
-  }
-
-  return (
-    <svg
-      width={CANVAS_WIDTH}
-      height={CANVAS_HEIGHT}
-      style={{ position: "absolute", top: 0, left: 0 }}
-    >
-      {/* Grid lines */}
-      {[0.2, 0.4, 0.6, 0.8].map((frac) => (
-        <line
-          key={`h-${frac}`}
-          x1={chartLeft}
-          y1={chartTop + frac * chartHeight}
-          x2={chartRight}
-          y2={chartTop + frac * chartHeight}
-          stroke={CHART_GRID_COLOR}
-          strokeOpacity={CHART_GRID_OPACITY}
-          strokeWidth={1}
-        />
-      ))}
-      {YEAR_LABELS.map((_, idx) => {
-        const x = chartLeft + ((idx + 0.5) / YEAR_LABELS.length) * chartWidth;
-        return (
-          <line
-            key={`v-${idx}`}
-            x1={x}
-            y1={chartTop}
-            x2={x}
-            y2={chartBottom}
-            stroke={CHART_GRID_COLOR}
-            strokeOpacity={CHART_GRID_OPACITY}
-            strokeWidth={1}
-          />
-        );
-      })}
-
-      {/* Axes */}
-      <line
-        x1={chartLeft}
-        y1={chartBottom}
-        x2={chartRight}
-        y2={chartBottom}
-        stroke={CHART_AXIS_COLOR}
-        strokeOpacity={CHART_AXIS_OPACITY}
-        strokeWidth={2}
-      />
-      <line
-        x1={chartLeft}
-        y1={chartTop}
-        x2={chartLeft}
-        y2={chartBottom}
-        stroke={CHART_AXIS_COLOR}
-        strokeOpacity={CHART_AXIS_OPACITY}
-        strokeWidth={2}
-      />
-
-      {/* Year labels */}
-      {YEAR_LABELS.map((year, idx) => {
-        const x = chartLeft + ((idx + 0.5) / YEAR_LABELS.length) * chartWidth;
-        return (
-          <text
-            key={year}
-            x={x}
-            y={chartBottom + 30}
-            fill={CHART_AXIS_COLOR}
-            fillOpacity={0.5}
-            fontSize={14}
-            fontFamily={LABEL_FONT_FAMILY}
-            textAnchor="middle"
-          >
-            {year}
-          </text>
-        );
-      })}
-
-      {/* Debt area (shaded region between curves) */}
-      <polygon
-        points={debtAreaPoints.join(" ")}
-        fill={DEBT_AREA_COLOR}
-        fillOpacity={DEBT_AREA_OPACITY}
-      />
-
-      {/* Generate cost curve */}
-      <polyline
-        points={generateCurve.join(" ")}
-        fill="none"
-        stroke={CHART_LINE_COLOR}
-        strokeWidth={2.5}
-        strokeOpacity={0.8}
-      />
-
-      {/* Patch cost curve */}
-      <polyline
-        points={patchCurve.join(" ")}
-        fill="none"
-        stroke="#22C55E"
-        strokeWidth={2.5}
-        strokeOpacity={0.8}
-      />
-    </svg>
-  );
-};
-
-// === Main Component ===
+/**
+ * Part1Economics06DebtLayersZoom
+ *
+ * Zooms into the debt area of a cost chart, then splits the monolithic amber
+ * region into two distinct layers: "Code Complexity" (lower, darker amber)
+ * and "Context Rot" (upper, lighter amber with noise texture).
+ *
+ * 540 frames @ 30fps = 18 seconds
+ */
 export const Part1Economics06DebtLayersZoom: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // --- Phase 1: Camera zoom (frame 0-90) ---
+  // ── Zoom animation (frames 0-90) ──────────────────────────────────
   const zoomScale = interpolate(
     frame,
     [ZOOM_START, ZOOM_END],
-    [ZOOM_SCALE_FROM, ZOOM_SCALE_TO],
+    [1.0, ZOOM_FACTOR],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -210,15 +70,15 @@ export const Part1Economics06DebtLayersZoom: React.FC = () => {
     }
   );
 
-  // Translate so zoom centers on ZOOM_ORIGIN
+  // Translate so the zoom origin stays centered
   const translateX = -(ZOOM_ORIGIN_X * (zoomScale - 1));
   const translateY = -(ZOOM_ORIGIN_Y * (zoomScale - 1));
 
-  // Chart periphery fades as we zoom in
-  const chartPeripheryOpacity = interpolate(
+  // Fade out chart periphery during zoom
+  const peripheryOpacity = interpolate(
     frame,
     [ZOOM_START, ZOOM_END],
-    [1, 0],
+    [1.0, 0.0],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -226,12 +86,7 @@ export const Part1Economics06DebtLayersZoom: React.FC = () => {
     }
   );
 
-  // --- Phase 2: Layer separation (frame 90-180) ---
-  const totalAreaHeight = LAYER_AREA_BOTTOM - LAYER_AREA_TOP;
-  const lowerHeight = totalAreaHeight * LAYER_MIDPOINT_RATIO;
-  const upperHeight = totalAreaHeight * (1 - LAYER_MIDPOINT_RATIO);
-
-  // Split progress: 0 = merged, 1 = fully separated
+  // ── Layer separation animation (frames 90-180) ────────────────────
   const splitProgress = interpolate(
     frame,
     [SPLIT_START, SPLIT_END],
@@ -243,163 +98,291 @@ export const Part1Economics06DebtLayersZoom: React.FC = () => {
     }
   );
 
-  // When merged: both layers occupy the full area as one block
-  // When split: lower layer moves down, upper layer moves up, gap appears
-  const halfGap = (LAYER_GAP / 2) * splitProgress;
-  const splitOffset = splitProgress * 20; // extra separation for visual clarity
-
-  // Lower layer: starts at LAYER_AREA_TOP, ends at mid-gap
-  const lowerLayerTop =
-    LAYER_AREA_TOP +
-    interpolate(splitProgress, [0, 1], [upperHeight, 0]) +
-    halfGap;
-  const lowerLayerHeight = interpolate(
-    splitProgress,
-    [0, 1],
-    [totalAreaHeight, lowerHeight]
-  );
-
-  // Upper layer: starts at LAYER_AREA_TOP
-  const upperLayerTop = LAYER_AREA_TOP - splitOffset;
-  const upperLayerHeight = interpolate(
-    splitProgress,
-    [0, 1],
-    [totalAreaHeight, upperHeight]
-  );
-
-  // Layer opacity transitions: merged = debt area opacity, split = individual opacities
-  const lowerFillOpacity = interpolate(
-    splitProgress,
-    [0, 1],
-    [DEBT_AREA_OPACITY, CODE_COMPLEXITY_FILL_OPACITY]
-  );
-  const upperFillOpacity = interpolate(
-    splitProgress,
-    [0, 1],
-    [DEBT_AREA_OPACITY, CONTEXT_ROT_FILL_OPACITY]
-  );
-
-  // Upper layer color transitions from debt amber to context rot amber
-  const showNoise = splitProgress > 0.3;
-
-  const layerWidth = LAYER_AREA_RIGHT - LAYER_AREA_LEFT;
-
-  // Monolithic pre-split opacity (fades as split begins)
-  const monolithicOpacity = interpolate(
-    splitProgress,
-    [0, 0.15],
+  // Monolithic area opacity — fades out as layers separate
+  const monolithOpacity = interpolate(
+    frame,
+    [SPLIT_START, SPLIT_START + 30],
     [1, 0],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
   );
 
-  // Split layers fade in
-  const splitLayerOpacity = interpolate(
-    splitProgress,
-    [0, 0.2],
+  // Layer visibility — fades in as split begins
+  const layerVisibility = interpolate(
+    frame,
+    [SPLIT_START, SPLIT_START + 30],
     [0, 1],
-    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+    {
+      extrapolateLeft: "clamp",
+      extrapolateRight: "clamp",
+    }
   );
 
-  // --- Context Rot pulse effect during hold (frame 270+) ---
-  const pulseOpacity =
+  // Compute layer positions with separation gap
+  const debtAreaWidth = DEBT_AREA_RIGHT - DEBT_AREA_LEFT;
+  const totalHeight = DEBT_AREA_BOTTOM - DEBT_AREA_TOP;
+  const upperHeight = SPLIT_Y - DEBT_AREA_TOP; // Context Rot (upper)
+  const lowerHeight = DEBT_AREA_BOTTOM - SPLIT_Y; // Code Complexity (lower)
+
+  // Gap expands during split
+  const currentGap = splitProgress * LAYER_GAP;
+
+  // Upper layer moves up, lower layer moves down during split
+  const upperShift = -splitProgress * (LAYER_GAP / 2 + 8);
+  const lowerShift = splitProgress * (LAYER_GAP / 2 + 8);
+
+  const upperTop = DEBT_AREA_TOP + upperShift;
+  const lowerTop = SPLIT_Y + currentGap + lowerShift;
+
+  // Show labels after frame 180
+  const showLabels = frame >= LABEL_FADE_START;
+
+  // ── Context Rot pulse (frames 270+) ───────────────────────────────
+  const contextRotPulse =
     frame >= 270
-      ? CONTEXT_ROT_FILL_OPACITY +
-        0.02 * Math.sin((frame - 270) * 0.05)
-      : upperFillOpacity;
+      ? 1 + 0.02 * Math.sin((frame - 270) * 0.05)
+      : 1;
+
+  // ── Simulated chart elements (visible before zoom completes) ──────
+  // These represent the chart from which we're zooming — simple lines/shapes
 
   return (
-    <AbsoluteFill style={{ backgroundColor: BACKGROUND_COLOR }}>
-      {/* Zooming container */}
+    <AbsoluteFill style={{ backgroundColor: BG_COLOR }}>
+      {/* Zoomed container */}
       <div
         style={{
           position: "absolute",
-          top: 0,
-          left: 0,
           width: CANVAS_WIDTH,
           height: CANVAS_HEIGHT,
           transform: `translate(${translateX}px, ${translateY}px) scale(${zoomScale})`,
           transformOrigin: "0 0",
         }}
       >
-        {/* Chart background (fades as we zoom) */}
-        <div style={{ opacity: chartPeripheryOpacity }}>
-          <ChartBackground />
+        {/* ── Chart background elements (fade with periphery) ────── */}
+        <div style={{ opacity: peripheryOpacity }}>
+          {/* Simulated chart axes */}
+          <ChartAxes />
+          {/* Year labels along bottom */}
+          <YearLabels />
+          {/* Chart title area */}
+          <div
+            style={{
+              position: "absolute",
+              top: 40,
+              left: 100,
+              fontFamily: LABEL_FONT_FAMILY,
+              fontSize: 14,
+              color: "#FFFFFF",
+              opacity: 0.5,
+              letterSpacing: "0.03em",
+            }}
+          >
+            Code Cost: Generate vs. Patch
+          </div>
         </div>
 
-        {/* Monolithic debt area (visible before split) */}
-        {monolithicOpacity > 0 && (
+        {/* ── Grid lines (subtle, persist through zoom) ────────── */}
+        <GridLines opacity={Math.max(0.02, peripheryOpacity * GRID_OPACITY)} />
+
+        {/* ── Monolithic debt area (pre-split) ─────────────────── */}
+        {monolithOpacity > 0 && (
           <div
             style={{
               position: "absolute",
-              top: LAYER_AREA_TOP,
-              left: LAYER_AREA_LEFT,
-              width: layerWidth,
-              height: totalAreaHeight,
+              left: DEBT_AREA_LEFT,
+              top: DEBT_AREA_TOP,
+              width: debtAreaWidth,
+              height: totalHeight,
               backgroundColor: DEBT_AREA_COLOR,
-              opacity: DEBT_AREA_OPACITY * monolithicOpacity,
-              borderRadius: 4,
+              opacity: DEBT_AREA_OPACITY * monolithOpacity,
+              borderRadius: 2,
             }}
           />
         )}
 
-        {/* Split layers */}
-        <Sequence from={SPLIT_START}>
-          {/* Lower layer — Code Complexity */}
-          <DebtLayer
-            top={lowerLayerTop}
-            layerHeight={Math.max(lowerLayerHeight, 0)}
-            left={LAYER_AREA_LEFT}
-            layerWidth={layerWidth}
-            fillColor={CODE_COMPLEXITY_COLOR}
-            fillOpacity={lowerFillOpacity}
-            label="Code Complexity"
-            labelColor={CODE_COMPLEXITY_COLOR}
-            layerOpacity={splitLayerOpacity}
-          />
+        {/* ── Split layers ─────────────────────────────────────── */}
+        {layerVisibility > 0 && (
+          <div style={{ opacity: layerVisibility }}>
+            {/* Upper layer — Context Rot */}
+            <DebtLayer
+              left={DEBT_AREA_LEFT}
+              top={upperTop}
+              width={debtAreaWidth}
+              height={upperHeight}
+              fillColor={CONTEXT_ROT_COLOR}
+              fillOpacity={CONTEXT_ROT_OPACITY * contextRotPulse}
+              label="Context Rot"
+              labelColor={CONTEXT_ROT_COLOR}
+              showLabel={showLabels}
+            >
+              <NoiseTexture
+                width={debtAreaWidth}
+                height={upperHeight}
+              />
+            </DebtLayer>
 
-          {/* Upper layer — Context Rot */}
-          <DebtLayer
-            top={upperLayerTop}
-            layerHeight={Math.max(upperLayerHeight, 0)}
-            left={LAYER_AREA_LEFT}
-            layerWidth={layerWidth}
-            fillColor={CONTEXT_ROT_COLOR}
-            fillOpacity={frame >= 270 ? pulseOpacity : upperFillOpacity}
-            label="Context Rot"
-            labelColor={CONTEXT_ROT_COLOR}
-            showNoise={showNoise}
-            layerOpacity={splitLayerOpacity}
-          />
-        </Sequence>
+            {/* Lower layer — Code Complexity */}
+            <DebtLayer
+              left={DEBT_AREA_LEFT}
+              top={lowerTop}
+              width={debtAreaWidth}
+              height={lowerHeight}
+              fillColor={CODE_COMPLEXITY_COLOR}
+              fillOpacity={CODE_COMPLEXITY_OPACITY}
+              label="Code Complexity"
+              labelColor={CODE_COMPLEXITY_COLOR}
+              showLabel={showLabels}
+            />
+          </div>
+        )}
 
-        {/* Hairline gap indicator between layers (visible after split) */}
-        {splitProgress > 0.5 && (
+        {/* ── Hairline crack between layers ─────────────────── */}
+        {splitProgress > 0.1 && (
           <div
             style={{
               position: "absolute",
-              top:
-                upperLayerTop +
-                upperLayerHeight -
-                1,
-              left: LAYER_AREA_LEFT,
-              width: layerWidth,
-              height: LAYER_GAP,
-              backgroundColor: BACKGROUND_COLOR,
-              opacity: interpolate(
-                splitProgress,
-                [0.5, 0.8],
-                [0, 1],
-                {
-                  extrapolateLeft: "clamp",
-                  extrapolateRight: "clamp",
-                }
-              ),
+              left: DEBT_AREA_LEFT,
+              top: SPLIT_Y + upperShift + upperHeight - 1,
+              width: debtAreaWidth,
+              height: currentGap + Math.abs(upperShift) + Math.abs(lowerShift),
+              backgroundColor: BG_COLOR,
+              opacity: interpolate(splitProgress, [0.1, 0.5], [0, 1], {
+                extrapolateLeft: "clamp",
+                extrapolateRight: "clamp",
+              }),
             }}
           />
         )}
+
+        {/* ── Simulated cost curves (fade with periphery) ────── */}
+        <div style={{ opacity: peripheryOpacity }}>
+          <CostCurves />
+        </div>
       </div>
     </AbsoluteFill>
   );
 };
+
+// ── Sub-components (chart scaffolding) ──────────────────────────────────
+
+/** Simple chart axes: Y-axis left, X-axis bottom */
+const ChartAxes: React.FC = () => (
+  <>
+    {/* Y-axis */}
+    <div
+      style={{
+        position: "absolute",
+        left: 180,
+        top: 80,
+        width: 2,
+        height: 620,
+        backgroundColor: GRID_COLOR,
+        opacity: 0.15,
+      }}
+    />
+    {/* X-axis */}
+    <div
+      style={{
+        position: "absolute",
+        left: 180,
+        top: 700,
+        width: 1560,
+        height: 2,
+        backgroundColor: GRID_COLOR,
+        opacity: 0.15,
+      }}
+    />
+  </>
+);
+
+/** Year labels along the X-axis */
+const YearLabels: React.FC = () => (
+  <>
+    {YEAR_LABELS.map((year, i) => (
+      <div
+        key={year}
+        style={{
+          position: "absolute",
+          left: 240 + i * 320,
+          top: 715,
+          fontFamily: LABEL_FONT_FAMILY,
+          fontSize: 12,
+          color: "#FFFFFF",
+          opacity: 0.35,
+        }}
+      >
+        {year}
+      </div>
+    ))}
+  </>
+);
+
+/** Subtle grid lines */
+const GridLines: React.FC<{ opacity: number }> = ({ opacity }) => (
+  <>
+    {[0, 1, 2, 3, 4].map((i) => (
+      <div
+        key={`hgrid-${i}`}
+        style={{
+          position: "absolute",
+          left: 182,
+          top: 200 + i * 120,
+          width: 1556,
+          height: 1,
+          backgroundColor: GRID_COLOR,
+          opacity,
+        }}
+      />
+    ))}
+    {[0, 1, 2, 3, 4].map((i) => (
+      <div
+        key={`vgrid-${i}`}
+        style={{
+          position: "absolute",
+          left: 240 + i * 320,
+          top: 80,
+          width: 1,
+          height: 620,
+          backgroundColor: GRID_COLOR,
+          opacity,
+        }}
+      />
+    ))}
+  </>
+);
+
+/** Simulated cost curves as simple SVG paths */
+const CostCurves: React.FC = () => (
+  <svg
+    width={1920}
+    height={1080}
+    style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+  >
+    {/* "Generate" cost curve — starts low, rises */}
+    <path
+      d="M 240,650 C 500,640 800,580 1100,480 C 1300,420 1500,300 1740,200"
+      fill="none"
+      stroke="#3B82F6"
+      strokeWidth={2.5}
+      opacity={0.6}
+    />
+    {/* "Patch" cost curve — starts high, drops, then rises */}
+    <path
+      d="M 240,300 C 500,350 700,500 900,520 C 1100,540 1300,560 1740,600"
+      fill="none"
+      stroke="#22C55E"
+      strokeWidth={2.5}
+      opacity={0.6}
+    />
+    {/* Debt area fill (amber, under the curves) — visible as context before zoom */}
+    <path
+      d="M 700,520 C 900,530 1100,500 1300,460 L 1740,350 L 1740,600 C 1500,570 1300,550 1100,540 C 900,530 800,525 700,520 Z"
+      fill={DEBT_AREA_COLOR}
+      opacity={0.08}
+    />
+  </svg>
+);
 
 export default Part1Economics06DebtLayersZoom;

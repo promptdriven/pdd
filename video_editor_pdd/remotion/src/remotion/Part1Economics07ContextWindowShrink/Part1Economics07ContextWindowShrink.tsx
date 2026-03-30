@@ -1,179 +1,168 @@
-import React from "react";
-import {
-  AbsoluteFill,
-  useCurrentFrame,
-  interpolate,
-  Easing,
-} from "remotion";
-import {
-  BG_COLOR,
-  GROWTH_STAGES,
-} from "./constants";
-import CodeBlockGrid from "./CodeBlockGrid";
-import ContextWindowOverlay from "./ContextWindowOverlay";
-import CoverageCounter from "./CoverageCounter";
-import MismatchHighlights from "./MismatchHighlights";
+// Part1Economics07ContextWindowShrink.tsx
+// Main component: Context Window Shrink — Codebase Growth vs. Fixed Window
+// Duration: 1560 frames @ 30fps (~52s)
+//
+// Visualizes how a fixed-size AI context window becomes increasingly inadequate
+// as a codebase grows from 4×4 → 8×8 → 16×16 → 32×32 blocks.
+
+import React from 'react';
+import { AbsoluteFill, useCurrentFrame, interpolate, Easing } from 'remotion';
+import { BACKGROUND_COLOR, MISMATCH_START_FRAME } from './constants';
+import { CodeBlockGrid } from './CodeBlockGrid';
+import { ContextWindow } from './ContextWindow';
+import { CoverageCounter } from './CoverageCounter';
+import { MismatchHighlights } from './MismatchHighlights';
 
 export const defaultPart1Economics07ContextWindowShrinkProps = {};
 
-/**
- * Section 1.7: Context Window Shrink
- *
- * Demonstrates how a fixed-size context window covers less and less
- * of a growing codebase, from 80% at 4×4 down to 2% at 32×32.
- *
- * Duration: 1560 frames (52s @ 30fps)
- */
-
-/**
- * Determines the current growth stage and transition progress.
- */
-function useGridStage(frame: number) {
-  // Find which stage we're currently in or transitioning to
-  let currentStageIndex = 0;
-  let transitionProgress = 1; // 1 = fully in current stage
-  let previousGridSize = GROWTH_STAGES[0].gridSize;
-
-  for (let i = GROWTH_STAGES.length - 1; i >= 0; i--) {
-    const stage = GROWTH_STAGES[i];
-    if (frame >= stage.startFrame) {
-      currentStageIndex = i;
-
-      // Calculate transition progress within this stage's transition period
-      const framesIntoStage = frame - stage.startFrame;
-      if (framesIntoStage < stage.transitionFrames) {
-        transitionProgress = interpolate(
-          framesIntoStage,
-          [0, stage.transitionFrames],
-          [0, 1],
-          {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-            easing: Easing.inOut(Easing.cubic),
-          }
-        );
-      } else {
-        transitionProgress = 1;
-      }
-
-      previousGridSize =
-        i > 0 ? GROWTH_STAGES[i - 1].gridSize : GROWTH_STAGES[0].gridSize;
-      break;
-    }
-  }
-
-  return {
-    currentStageIndex,
-    currentGridSize: GROWTH_STAGES[currentStageIndex].gridSize,
-    previousGridSize,
-    transitionProgress,
-  };
-}
-
 export const Part1Economics07ContextWindowShrink: React.FC = () => {
-  const frame = useCurrentFrame();
-
-  const { currentStageIndex, currentGridSize, previousGridSize, transitionProgress } =
-    useGridStage(frame);
-
-  // Title text that fades in early and out after a few seconds
-  const titleOpacity = interpolate(frame, [0, 20, 120, 160], [0.8, 0.9, 0.9, 0], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
-        overflow: "hidden",
+        backgroundColor: BACKGROUND_COLOR,
+        overflow: 'hidden',
       }}
     >
-      {/* Section title */}
-      <div
-        style={{
-          position: "absolute",
-          top: 40,
-          left: 0,
-          width: "100%",
-          textAlign: "center",
-          opacity: titleOpacity,
-          zIndex: 30,
-        }}
-      >
-        <span
-          style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 28,
-            fontWeight: 600,
-            color: "#E2E8F0",
-            letterSpacing: 1,
-          }}
-        >
-          Codebase Growth vs. Fixed Context Window
-        </span>
-      </div>
+      {/* Title label — top-left */}
+      <TitleLabel />
 
-      {/* Growing code block grid */}
-      <CodeBlockGrid
-        currentGridSize={currentGridSize}
-        previousGridSize={previousGridSize}
-        transitionProgress={transitionProgress}
-      />
+      {/* Growing code grid — uses global frame via useCurrentFrame */}
+      <CodeBlockGrid />
 
       {/* Fixed-size context window overlay */}
-      <ContextWindowOverlay />
+      <ContextWindow />
 
-      {/* Coverage percentage counter */}
-      <CoverageCounter
-        currentStageIndex={currentStageIndex}
-        transitionProgress={transitionProgress}
-      />
+      {/* Coverage counter (top-right) */}
+      <CoverageCounter />
 
-      {/* Red/green mismatch highlights (Phase 3, from frame 720) */}
+      {/* Mismatch highlights — Phase 3 (uses global frame internally) */}
       <MismatchHighlights />
 
-      {/* Grid size label at bottom */}
-      <GridSizeLabel currentGridSize={currentGridSize} />
+      {/* Legend for red/green highlights */}
+      <MismatchLegend />
     </AbsoluteFill>
   );
 };
 
-/**
- * Shows the current grid dimensions (e.g., "32×32 blocks") at the bottom.
- */
-const GridSizeLabel: React.FC<{
-  currentGridSize: number;
-}> = ({ currentGridSize }) => {
+/** Small title in the top-left corner */
+const TitleLabel: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const opacity = interpolate(frame, [0, 20], [0.6, 0.85], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  const opacity = interpolate(frame, [0, 30], [0.85, 0.85], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
   });
 
   return (
     <div
       style={{
-        position: "absolute",
-        bottom: 50,
-        left: 0,
-        width: "100%",
-        textAlign: "center",
+        position: 'absolute',
+        left: 60,
+        top: 48,
+        zIndex: 20,
+        opacity,
+      }}
+    >
+      <div
+        style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 20,
+          fontWeight: 600,
+          color: '#E2E8F0',
+          letterSpacing: '-0.01em',
+        }}
+      >
+        Codebase Growth vs. Fixed Context Window
+      </div>
+      <div
+        style={{
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 14,
+          fontWeight: 400,
+          color: '#94A3B8',
+          opacity: 0.82,
+          marginTop: 4,
+        }}
+      >
+        The AI can only see what fits in its context window
+      </div>
+    </div>
+  );
+};
+
+/** Legend that appears during the mismatch phase */
+const MismatchLegend: React.FC = () => {
+  const frame = useCurrentFrame();
+
+  // Don't render before mismatch phase
+  if (frame < MISMATCH_START_FRAME) return null;
+
+  const opacity = interpolate(
+    frame,
+    [MISMATCH_START_FRAME, MISMATCH_START_FRAME + 30],
+    [0, 0.9],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: 60,
+        bottom: 80,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
         opacity,
         zIndex: 20,
       }}
     >
-      <span
-        style={{
-          fontFamily: "Inter, sans-serif",
-          fontSize: 18,
-          fontWeight: 500,
-          color: "#94A3B8",
-        }}
-      >
-        {currentGridSize}×{currentGridSize} code blocks
-      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div
+          style={{
+            width: 14,
+            height: 14,
+            borderRadius: 2,
+            backgroundColor: '#EF4444',
+            opacity: 0.5,
+          }}
+        />
+        <span
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 13,
+            color: '#EF4444',
+            opacity: 0.78,
+          }}
+        >
+          Irrelevant code grabbed by AI
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div
+          style={{
+            width: 14,
+            height: 14,
+            borderRadius: 2,
+            backgroundColor: '#5AAA6E',
+            opacity: 0.5,
+          }}
+        />
+        <span
+          style={{
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 13,
+            color: '#5AAA6E',
+            opacity: 0.78,
+          }}
+        >
+          Needed code outside the window
+        </span>
+      </div>
     </div>
   );
 };

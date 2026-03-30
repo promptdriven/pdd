@@ -1,113 +1,155 @@
 import React, { useMemo } from 'react';
 import { useCurrentFrame, interpolate, Easing } from 'remotion';
-import {
-  TOKEN_ROWS,
-  TOKEN_COLS,
-  TOKEN_BLOCK_GAP,
-  BLOCK_RED,
-  BLOCK_GREEN_RELEVANT,
-  BLOCK_GRAY,
-  DISTRIBUTION,
-  LEFT_FILL_START,
-} from './constants';
 
-// Deterministic seeded random for consistent block colors
+/**
+ * Generates a deterministic pseudo-random number from a seed.
+ */
 function seededRandom(seed: number): number {
   const x = Math.sin(seed * 9301 + 49297) * 49297;
   return x - Math.floor(x);
 }
 
+type TokenType = 'irrelevant' | 'relevant' | 'neutral';
+
 interface TokenBlockGridProps {
-  panelWidth: number;
-  panelHeight: number;
+  rows: number;
+  cols: number;
+  blockWidth: number;
+  blockHeight: number;
+  gap: number;
+  padding: number;
+  irrelevantColor: string;
+  relevantColor: string;
+  neutralColor: string;
+  irrelevantRatio: number;
+  relevantRatio: number;
+  fillStartFrame: number;
+  fillEndFrame: number;
+  staggerPerRow: number;
 }
 
 const TokenBlockGrid: React.FC<TokenBlockGridProps> = ({
-  panelWidth,
-  panelHeight,
+  rows,
+  cols,
+  blockWidth,
+  blockHeight,
+  gap,
+  padding,
+  irrelevantColor,
+  relevantColor,
+  neutralColor,
+  irrelevantRatio,
+  relevantRatio,
+  fillStartFrame,
+  fillEndFrame,
+  staggerPerRow,
 }) => {
   const frame = useCurrentFrame();
 
-  const innerPadding = 12;
-  const availableW = panelWidth - innerPadding * 2;
-  const availableH = panelHeight - innerPadding * 2;
-  const blockW =
-    (availableW - (TOKEN_COLS - 1) * TOKEN_BLOCK_GAP) / TOKEN_COLS;
-  const blockH =
-    (availableH - (TOKEN_ROWS - 1) * TOKEN_BLOCK_GAP) / TOKEN_ROWS;
-
-  // Pre-compute the color assignment for each cell
-  const blockColors = useMemo(() => {
-    const colors: string[] = [];
-    for (let row = 0; row < TOKEN_ROWS; row++) {
-      for (let col = 0; col < TOKEN_COLS; col++) {
-        const idx = row * TOKEN_COLS + col;
-        const r = seededRandom(idx + 42);
-        if (r < DISTRIBUTION.irrelevant) {
-          colors.push(BLOCK_RED);
-        } else if (r < DISTRIBUTION.irrelevant + DISTRIBUTION.relevant) {
-          colors.push(BLOCK_GREEN_RELEVANT);
+  // Build a deterministic grid of token types
+  const grid = useMemo(() => {
+    const cells: TokenType[][] = [];
+    for (let r = 0; r < rows; r++) {
+      const row: TokenType[] = [];
+      for (let c = 0; c < cols; c++) {
+        const rand = seededRandom(r * cols + c + 42);
+        if (rand < irrelevantRatio) {
+          row.push('irrelevant');
+        } else if (rand < irrelevantRatio + relevantRatio) {
+          row.push('relevant');
         } else {
-          colors.push(BLOCK_GRAY);
+          row.push('neutral');
         }
       }
+      cells.push(row);
     }
-    return colors;
-  }, []);
+    return cells;
+  }, [rows, cols, irrelevantRatio, relevantRatio]);
+
+  const colorMap: Record<TokenType, string> = {
+    irrelevant: irrelevantColor,
+    relevant: relevantColor,
+    neutral: neutralColor,
+  };
+
+  const opacityMap: Record<TokenType, number> = {
+    irrelevant: 0.25,
+    relevant: 0.3,
+    neutral: 0.15,
+  };
+
+  const totalFillDuration = fillEndFrame - fillStartFrame;
+  const rowDuration = Math.max(
+    6,
+    (totalFillDuration - staggerPerRow * (rows - 1)) / rows
+  );
 
   return (
     <div
       style={{
         position: 'absolute',
-        top: innerPadding,
-        left: innerPadding,
-        width: availableW,
-        height: availableH,
+        top: padding,
+        left: padding,
+        width: cols * (blockWidth + gap) - gap,
+        height: rows * (blockHeight + gap) - gap,
       }}
     >
-      {Array.from({ length: TOKEN_ROWS }).map((_, row) => {
-        // Stagger: each row starts 3 frames after the previous
-        const rowStart = LEFT_FILL_START + row * 3;
-        const rowProgress = interpolate(frame, [rowStart, rowStart + 20], [0, 1], {
-          extrapolateLeft: 'clamp',
-          extrapolateRight: 'clamp',
-          easing: Easing.out(Easing.quad),
-        });
+      {grid.map((row, r) =>
+        row.map((type, c) => {
+          const rowStartFrame = fillStartFrame + r * staggerPerRow;
+          const rowEndFrame = rowStartFrame + rowDuration;
 
-        return Array.from({ length: TOKEN_COLS }).map((_, col) => {
-          const idx = row * TOKEN_COLS + col;
-          const color = blockColors[idx];
+          // Each block within a row also has a tiny stagger
+          const blockDelay = c * 0.3;
+          const effectiveStart = rowStartFrame + blockDelay;
+          const effectiveEnd = Math.min(
+            effectiveStart + rowDuration,
+            rowEndFrame + blockDelay
+          );
 
-          // Opacity based on color type
-          let baseOpacity: number;
-          if (color === BLOCK_RED) {
-            baseOpacity = 0.25;
-          } else if (color === BLOCK_GREEN_RELEVANT) {
-            baseOpacity = 0.3;
-          } else {
-            baseOpacity = 0.15;
-          }
+          const clampedStart = Math.max(0, effectiveStart);
+          const clampedEnd = Math.max(clampedStart + 0.001, effectiveEnd);
 
-          const x = col * (blockW + TOKEN_BLOCK_GAP);
-          const y = row * (blockH + TOKEN_BLOCK_GAP);
+          const opacity = interpolate(
+            frame,
+            [clampedStart, clampedEnd],
+            [0, opacityMap[type]],
+            {
+              extrapolateLeft: 'clamp',
+              extrapolateRight: 'clamp',
+              easing: Easing.out(Easing.quad),
+            }
+          );
+
+          const scale = interpolate(
+            frame,
+            [clampedStart, clampedEnd],
+            [0.3, 1],
+            {
+              extrapolateLeft: 'clamp',
+              extrapolateRight: 'clamp',
+              easing: Easing.out(Easing.quad),
+            }
+          );
 
           return (
             <div
-              key={`${row}-${col}`}
+              key={`${r}-${c}`}
               style={{
                 position: 'absolute',
-                left: x,
-                top: y,
-                width: blockW,
-                height: blockH,
-                backgroundColor: color,
-                opacity: baseOpacity * rowProgress,
-                borderRadius: 2,
+                left: c * (blockWidth + gap),
+                top: r * (blockHeight + gap),
+                width: blockWidth,
+                height: blockHeight,
+                backgroundColor: colorMap[type],
+                borderRadius: 3,
+                opacity,
+                transform: `scale(${scale})`,
               }}
             />
           );
-        });
-      })}
+        })
+      )}
     </div>
   );
 };

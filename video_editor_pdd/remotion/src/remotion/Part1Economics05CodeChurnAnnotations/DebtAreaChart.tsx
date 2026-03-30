@@ -1,242 +1,265 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 
-// ── Local constants (mirrors constants.ts but self-contained) ───
-const CHART_LEFT = 140;
-const CHART_TOP = 120;
-const CHART_WIDTH = 1100;
-const CHART_HEIGHT = 600;
+// ─── Chart constants (inlined to avoid cross-file imports) ─────────
+const CHART_LEFT = 120;
+const CHART_RIGHT = 1300;
+const CHART_TOP = 160;
+const CHART_BOTTOM = 820;
+const CHART_WIDTH = CHART_RIGHT - CHART_LEFT;
+const CHART_HEIGHT = CHART_BOTTOM - CHART_TOP;
+const CHART_YEARS = [2020, 2021, 2022, 2023, 2024, 2025] as const;
 
-const YEAR_START = 2019;
-const YEAR_END = 2025;
+const COLOR_LINE_SOLID = '#3B82F6';
+const COLOR_LINE_DASHED = '#F59E0B';
+const COLOR_DEBT_FILL = '#F59E0B';
+const COLOR_SLATE = '#94A3B8';
+const COLOR_WHITE = '#FFFFFF';
+const BG_COLOR = '#0A0F1A';
 
-const COLOR_AXIS_LINE = "#334155";
-const COLOR_AXIS_LABEL = "#64748B";
-const COLOR_CHART_SOLID = "#F59E0B";
-const COLOR_CHART_DASHED = "#F59E0B";
-const COLOR_CHART_DEBT_FILL = "#F59E0B";
+const FONT_FAMILY = 'Inter, system-ui, sans-serif';
+const FONT_AXIS_SIZE = 13;
+const FONT_TITLE_SIZE = 22;
 
-const DEBT_PULSE_START = 60;
-const DEBT_PULSE_CYCLE = 45;
-const DEBT_PULSE_MIN = 0.12;
-const DEBT_PULSE_MAX = 0.20;
+const PULSE_START = 60;
+const PULSE_MIN_OPACITY = 0.12;
+const PULSE_MAX_OPACITY = 0.20;
+const PULSE_CYCLE_FRAMES = 45;
 
-const SOLID_LINE_POINTS: [number, number][] = [
-  [2019, 0.18],
-  [2020, 0.22],
-  [2021, 0.30],
-  [2022, 0.38],
-  [2023, 0.55],
-  [2024, 0.75],
-  [2025, 0.90],
-];
+// ─── Synthetic chart data ──────────────────────────────────────────
+// Solid line = actual code cost (rising sharply after 2023)
+const solidLineY = [0.65, 0.60, 0.55, 0.42, 0.28, 0.18]; // fraction from top (lower = higher cost)
+// Dashed line = expected/ideal trajectory
+const dashedLineY = [0.65, 0.62, 0.58, 0.52, 0.48, 0.44];
 
-const DASHED_LINE_POINTS: [number, number][] = [
-  [2019, 0.16],
-  [2020, 0.19],
-  [2021, 0.24],
-  [2022, 0.28],
-  [2023, 0.30],
-  [2024, 0.32],
-  [2025, 0.34],
-];
-
-// ── Helpers ─────────────────────────────────────────────────────
-function yearToX(year: number): number {
-  return CHART_LEFT + ((year - YEAR_START) / (YEAR_END - YEAR_START)) * CHART_WIDTH;
+function yearToX(index: number): number {
+  return CHART_LEFT + (index / (CHART_YEARS.length - 1)) * CHART_WIDTH;
 }
 
-function valToY(v: number): number {
-  return CHART_TOP + CHART_HEIGHT - v * CHART_HEIGHT;
+function fractionToY(f: number): number {
+  return CHART_TOP + f * CHART_HEIGHT;
 }
 
-function pointsToSvgPath(pts: [number, number][]): string {
-  return pts
-    .map(([year, val], i) => `${i === 0 ? "M" : "L"} ${yearToX(year)} ${valToY(val)}`)
-    .join(" ");
+function buildPolylinePoints(yFractions: number[]): string {
+  return yFractions.map((f, i) => `${yearToX(i)},${fractionToY(f)}`).join(' ');
 }
 
-function buildDebtAreaPath(
-  solidPts: [number, number][],
-  dashedPts: [number, number][]
-): string {
-  // Forward along solid line, then back along dashed line (reversed)
-  const forward = solidPts.map(([y, v]) => `${yearToX(y)},${valToY(v)}`);
-  const backward = [...dashedPts].reverse().map(([y, v]) => `${yearToX(y)},${valToY(v)}`);
-  return `M ${forward.join(" L ")} L ${backward.join(" L ")} Z`;
+function buildDebtAreaPath(solidY: number[], dashedY: number[]): string {
+  // Area between dashed (top/ideal) and solid (bottom/actual) from year 2022 onward (index 2)
+  const startIdx = 2;
+  const forwardPoints = solidY
+    .slice(startIdx)
+    .map((f, i) => `${yearToX(i + startIdx)},${fractionToY(f)}`)
+    .join(' L');
+  const backwardPoints = dashedY
+    .slice(startIdx)
+    .reverse()
+    .map((f, i) => {
+      const yearIdx = dashedY.length - 1 - i;
+      if (yearIdx < startIdx) return null;
+      return `${yearToX(yearIdx)},${fractionToY(f)}`;
+    })
+    .filter(Boolean)
+    .join(' L');
+  return `M${forwardPoints} L${backwardPoints} Z`;
 }
 
-// ── Component ───────────────────────────────────────────────────
 export const DebtAreaChart: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Debt area pulsing opacity
-  const pulsing = frame >= DEBT_PULSE_START;
-  let debtOpacity = DEBT_PULSE_MIN;
-  if (pulsing) {
-    const cycleFrame = (frame - DEBT_PULSE_START) % DEBT_PULSE_CYCLE;
-    const halfCycle = DEBT_PULSE_CYCLE / 2;
-    if (cycleFrame <= halfCycle) {
-      debtOpacity = interpolate(cycleFrame, [0, halfCycle], [DEBT_PULSE_MIN, DEBT_PULSE_MAX], {
-        easing: Easing.inOut(Easing.sin),
-      });
-    } else {
-      debtOpacity = interpolate(
-        cycleFrame,
-        [halfCycle, DEBT_PULSE_CYCLE],
-        [DEBT_PULSE_MAX, DEBT_PULSE_MIN],
-        { easing: Easing.inOut(Easing.sin) }
-      );
-    }
-  }
+  // Debt area pulse
+  const pulseFrame = Math.max(0, frame - PULSE_START);
+  const cyclePosition = (pulseFrame % PULSE_CYCLE_FRAMES) / PULSE_CYCLE_FRAMES;
+  const pulseOpacity =
+    frame < PULSE_START
+      ? PULSE_MIN_OPACITY
+      : interpolate(
+          Math.sin(cyclePosition * Math.PI * 2),
+          [-1, 1],
+          [PULSE_MIN_OPACITY, PULSE_MAX_OPACITY],
+        );
 
-  const solidPath = pointsToSvgPath(SOLID_LINE_POINTS);
-  const dashedPath = pointsToSvgPath(DASHED_LINE_POINTS);
-  const debtArea = buildDebtAreaPath(SOLID_LINE_POINTS, DASHED_LINE_POINTS);
-
-  const years = [2019, 2020, 2021, 2022, 2023, 2024, 2025];
+  const solidPoints = buildPolylinePoints(solidLineY);
+  const dashedPoints = buildPolylinePoints(dashedLineY);
+  const debtPath = buildDebtAreaPath(solidLineY, dashedLineY);
 
   return (
-    <svg
-      width={1920}
-      height={1080}
-      viewBox="0 0 1920 1080"
-      style={{ position: "absolute", top: 0, left: 0 }}
+    <div
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: 1920,
+        height: 1080,
+      }}
     >
-      {/* Y-axis */}
-      <line
-        x1={CHART_LEFT}
-        y1={CHART_TOP}
-        x2={CHART_LEFT}
-        y2={CHART_TOP + CHART_HEIGHT}
-        stroke={COLOR_AXIS_LINE}
-        strokeWidth={2}
-      />
-      {/* X-axis */}
-      <line
-        x1={CHART_LEFT}
-        y1={CHART_TOP + CHART_HEIGHT}
-        x2={CHART_LEFT + CHART_WIDTH}
-        y2={CHART_TOP + CHART_HEIGHT}
-        stroke={COLOR_AXIS_LINE}
-        strokeWidth={2}
-      />
-
-      {/* X-axis year labels */}
-      {years.map((yr) => (
+      <svg
+        width={1920}
+        height={1080}
+        viewBox="0 0 1920 1080"
+        style={{ position: 'absolute', left: 0, top: 0 }}
+      >
+        {/* Chart title */}
         <text
-          key={yr}
-          x={yearToX(yr)}
-          y={CHART_TOP + CHART_HEIGHT + 30}
-          textAnchor="middle"
-          fill={COLOR_AXIS_LABEL}
-          fontSize={14}
-          fontFamily="Inter, sans-serif"
+          x={CHART_LEFT}
+          y={CHART_TOP - 40}
+          fill={COLOR_WHITE}
+          fontFamily={FONT_FAMILY}
+          fontSize={FONT_TITLE_SIZE}
+          fontWeight={700}
         >
-          {yr}
+          Code Generation vs. Maintenance Cost
         </text>
-      ))}
 
-      {/* Y-axis label */}
-      <text
-        x={CHART_LEFT - 60}
-        y={CHART_TOP + CHART_HEIGHT / 2}
-        textAnchor="middle"
-        fill={COLOR_AXIS_LABEL}
-        fontSize={13}
-        fontFamily="Inter, sans-serif"
-        transform={`rotate(-90, ${CHART_LEFT - 60}, ${CHART_TOP + CHART_HEIGHT / 2})`}
-      >
-        Relative Code Cost
-      </text>
+        {/* Grid lines */}
+        {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+          <line
+            key={f}
+            x1={CHART_LEFT}
+            y1={fractionToY(f)}
+            x2={CHART_RIGHT}
+            y2={fractionToY(f)}
+            stroke={COLOR_SLATE}
+            strokeOpacity={0.15}
+            strokeWidth={1}
+          />
+        ))}
 
-      {/* Chart title */}
-      <text
-        x={CHART_LEFT + CHART_WIDTH / 2}
-        y={CHART_TOP - 40}
-        textAnchor="middle"
-        fill="#E2E8F0"
-        fontSize={20}
-        fontWeight={600}
-        fontFamily="Inter, sans-serif"
-      >
-        Code Generation vs. Maintenance Cost
-      </text>
+        {/* Vertical grid lines at each year */}
+        {CHART_YEARS.map((_, i) => (
+          <line
+            key={i}
+            x1={yearToX(i)}
+            y1={CHART_TOP}
+            x2={yearToX(i)}
+            y2={CHART_BOTTOM}
+            stroke={COLOR_SLATE}
+            strokeOpacity={0.1}
+            strokeWidth={1}
+          />
+        ))}
 
-      {/* Debt shaded area */}
-      <path d={debtArea} fill={COLOR_CHART_DEBT_FILL} opacity={debtOpacity} />
+        {/* Year labels */}
+        {CHART_YEARS.map((year, i) => (
+          <text
+            key={year}
+            x={yearToX(i)}
+            y={CHART_BOTTOM + 30}
+            fill={COLOR_SLATE}
+            fontFamily={FONT_FAMILY}
+            fontSize={FONT_AXIS_SIZE}
+            textAnchor="middle"
+          >
+            {year}
+          </text>
+        ))}
 
-      {/* Solid line (generation cost) */}
-      <path
-        d={solidPath}
-        fill="none"
-        stroke={COLOR_CHART_SOLID}
-        strokeWidth={2.5}
-        opacity={0.9}
-      />
+        {/* Y-axis labels */}
+        {['High', 'Med', 'Low'].map((label, i) => (
+          <text
+            key={label}
+            x={CHART_LEFT - 16}
+            y={fractionToY(i * 0.5) + 4}
+            fill={COLOR_SLATE}
+            fontFamily={FONT_FAMILY}
+            fontSize={FONT_AXIS_SIZE}
+            textAnchor="end"
+          >
+            {label}
+          </text>
+        ))}
 
-      {/* Dashed line (maintenance cost) */}
-      <path
-        d={dashedPath}
-        fill="none"
-        stroke={COLOR_CHART_DASHED}
-        strokeWidth={2}
-        strokeDasharray="8 4"
-        opacity={0.7}
-      />
+        {/* AI assistant arrival marker */}
+        <line
+          x1={yearToX(3)}
+          y1={CHART_TOP}
+          x2={yearToX(3)}
+          y2={CHART_BOTTOM}
+          stroke={COLOR_WHITE}
+          strokeOpacity={0.25}
+          strokeWidth={1}
+          strokeDasharray="6,4"
+        />
+        <text
+          x={yearToX(3)}
+          y={CHART_TOP - 10}
+          fill={COLOR_SLATE}
+          fontFamily={FONT_FAMILY}
+          fontSize={11}
+          textAnchor="middle"
+        >
+          AI assistants arrive
+        </text>
 
-      {/* Legend */}
-      <line
-        x1={CHART_LEFT + 20}
-        y1={CHART_TOP + 20}
-        x2={CHART_LEFT + 50}
-        y2={CHART_TOP + 20}
-        stroke={COLOR_CHART_SOLID}
-        strokeWidth={2.5}
-      />
-      <text
-        x={CHART_LEFT + 58}
-        y={CHART_TOP + 25}
-        fill="#CBD5E1"
-        fontSize={13}
-        fontFamily="Inter, sans-serif"
-      >
-        Generated code volume
-      </text>
+        {/* Debt shaded area (between the two lines) */}
+        <path
+          d={debtPath}
+          fill={COLOR_DEBT_FILL}
+          opacity={pulseOpacity}
+        />
 
-      <line
-        x1={CHART_LEFT + 20}
-        y1={CHART_TOP + 44}
-        x2={CHART_LEFT + 50}
-        y2={CHART_TOP + 44}
-        stroke={COLOR_CHART_DASHED}
-        strokeWidth={2}
-        strokeDasharray="8 4"
-      />
-      <text
-        x={CHART_LEFT + 58}
-        y={CHART_TOP + 49}
-        fill="#CBD5E1"
-        fontSize={13}
-        fontFamily="Inter, sans-serif"
-      >
-        Maintained / patched code
-      </text>
+        {/* Dashed line (expected/ideal) */}
+        <polyline
+          points={dashedPoints}
+          fill="none"
+          stroke={COLOR_LINE_DASHED}
+          strokeWidth={2.5}
+          strokeDasharray="8,5"
+          opacity={0.8}
+        />
 
-      {/* "Debt" label inside the shaded area */}
-      <text
-        x={yearToX(2023.5)}
-        y={valToY(0.42)}
-        textAnchor="middle"
-        fill="#FCD34D"
-        fontSize={15}
-        fontWeight={600}
-        fontFamily="Inter, sans-serif"
-        opacity={0.65}
-      >
-        Technical Debt
-      </text>
-    </svg>
+        {/* Solid line (actual cost) */}
+        <polyline
+          points={solidPoints}
+          fill="none"
+          stroke={COLOR_LINE_SOLID}
+          strokeWidth={2.5}
+          opacity={0.9}
+        />
+
+        {/* Data points on solid line */}
+        {solidLineY.map((f, i) => (
+          <circle
+            key={`s-${i}`}
+            cx={yearToX(i)}
+            cy={fractionToY(f)}
+            r={4}
+            fill={COLOR_LINE_SOLID}
+            stroke={BG_COLOR}
+            strokeWidth={2}
+          />
+        ))}
+
+        {/* Data points on dashed line */}
+        {dashedLineY.map((f, i) => (
+          <circle
+            key={`d-${i}`}
+            cx={yearToX(i)}
+            cy={fractionToY(f)}
+            r={4}
+            fill={COLOR_LINE_DASHED}
+            stroke={BG_COLOR}
+            strokeWidth={2}
+          />
+        ))}
+
+        {/* Legend */}
+        <line x1={CHART_LEFT} y1={CHART_BOTTOM + 56} x2={CHART_LEFT + 30} y2={CHART_BOTTOM + 56} stroke={COLOR_LINE_SOLID} strokeWidth={2.5} />
+        <text x={CHART_LEFT + 38} y={CHART_BOTTOM + 60} fill={COLOR_SLATE} fontFamily={FONT_FAMILY} fontSize={12}>
+          Actual cost trajectory
+        </text>
+
+        <line x1={CHART_LEFT + 240} y1={CHART_BOTTOM + 56} x2={CHART_LEFT + 270} y2={CHART_BOTTOM + 56} stroke={COLOR_LINE_DASHED} strokeWidth={2.5} strokeDasharray="8,5" />
+        <text x={CHART_LEFT + 278} y={CHART_BOTTOM + 60} fill={COLOR_SLATE} fontFamily={FONT_FAMILY} fontSize={12}>
+          Expected trajectory
+        </text>
+
+        <rect x={CHART_LEFT + 480} y={CHART_BOTTOM + 48} width={16} height={16} fill={COLOR_DEBT_FILL} opacity={0.16} rx={2} />
+        <text x={CHART_LEFT + 504} y={CHART_BOTTOM + 60} fill={COLOR_SLATE} fontFamily={FONT_FAMILY} fontSize={12}>
+          Technical debt area
+        </text>
+      </svg>
+    </div>
   );
 };
 

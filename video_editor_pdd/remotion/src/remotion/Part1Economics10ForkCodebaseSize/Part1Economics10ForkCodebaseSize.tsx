@@ -1,6 +1,6 @@
 import React from "react";
 import { AbsoluteFill, Sequence } from "remotion";
-import { BG_COLOR, TOTAL_FRAMES } from "./constants";
+import { BG_COLOR, TOTAL_FRAMES, FONT_FAMILY } from "./constants";
 import { ChartAxes } from "./ChartAxes";
 import { ForkingLines } from "./ForkingLines";
 import { Annotations } from "./Annotations";
@@ -12,12 +12,8 @@ export const defaultPart1Economics10ForkCodebaseSizeProps = {};
  * Section 1.10: Fork by Codebase Size — The Trap
  *
  * The patch cost line forks at ~2020 into two diverging paths:
- * - Small codebase: AI patching is transformative (plunges down)
- * - Large codebase: experienced devs are actually slower with AI (stays flat)
- *
- * Annotations reveal the METR 2025 finding and the perception gap.
- * A curved arrow shows the trap: every patch adds code, pushing you
- * from the world where AI helps into the world where it doesn't.
+ * - Small codebase (green): AI patching is transformative
+ * - Large codebase (red): experienced devs are actually 19% slower
  *
  * Duration: ~46s (1380 frames @ 30fps)
  */
@@ -26,28 +22,39 @@ export const Part1Economics10ForkCodebaseSize: React.FC = () => {
     <AbsoluteFill
       style={{
         backgroundColor: BG_COLOR,
-        overflow: "hidden",
+        fontFamily: FONT_FAMILY,
       }}
     >
-      {/* Base chart: axes, grid, labels — visible from frame 0 */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <ChartAxes />
-      </Sequence>
+      {/* Title */}
+      <div
+        style={{
+          position: "absolute",
+          top: 36,
+          left: 0,
+          right: 0,
+          textAlign: "center",
+          color: "#E2E8F0",
+          fontSize: 22,
+          fontWeight: 600,
+          fontFamily: FONT_FAMILY,
+          letterSpacing: "0.02em",
+          opacity: 0.9,
+        }}
+      >
+        Code Cost per Feature: Generate vs. Patch
+      </div>
 
-      {/* Chart lines: generate line, patch line, forking lines */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <ForkingLines />
-      </Sequence>
+      {/* Chart axes & grid — visible from frame 0 */}
+      <ChartAxes />
 
-      {/* Annotations: context label, METR citation, belief gap */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <Annotations />
-      </Sequence>
+      {/* Lines: generate baseline, patch, and forking paths */}
+      <ForkingLines />
 
-      {/* Trap arrow: curved dashed arrow + "Every patch adds code." */}
-      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
-        <TrapArrow />
-      </Sequence>
+      {/* Annotations: context label, METR stats, perception gap */}
+      <Annotations />
+
+      {/* Trap arrow: "Every patch adds code." */}
+      <TrapArrow />
     </AbsoluteFill>
   );
 };

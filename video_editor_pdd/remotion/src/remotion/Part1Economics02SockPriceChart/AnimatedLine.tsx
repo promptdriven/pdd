@@ -1,88 +1,89 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
-  DataPoint,
-  xToPixel,
-  yToPixel,
+  type DataPoint,
   X_MIN,
   X_MAX,
-  LINE_DRAW_START,
-  LINE_DRAW_END,
-  MORPH_START,
-  MORPH_END,
-  interpolateData,
+  xToPixel,
+  yToPixel,
+  interpolateY,
+  LINES_START,
+  LINES_END,
 } from "./constants";
 
 interface AnimatedLineProps {
   data: DataPoint[];
   color: string;
   strokeWidth: number;
-  /** If true, this line fades out during the morph phase (600-720) */
-  fadeOutOnMorph?: boolean;
+  label: string;
+  labelX?: number;  // x position for legend label (pixel)
+  labelY?: number;  // y position for legend label (pixel)
 }
 
 /**
- * Renders a smooth SVG path that draws progressively from left to right.
- * Uses fine-grained sampling for smooth curves between data points.
+ * Draws a data line progressively from left to right.
+ * Uses cubic easing with a slight slowdown near the crossing point.
  */
 export const AnimatedLine: React.FC<AnimatedLineProps> = ({
   data,
   color,
   strokeWidth,
-  fadeOutOnMorph = false,
+  label,
+  labelX,
+  labelY,
 }) => {
   const frame = useCurrentFrame();
 
-  // Draw progress: 0→1 over frames 30-600
-  // Slow down near crossing (frame ~150), speed up after
+  // Calculate the current "reveal year" based on animation progress.
+  // The line draws from 1950 to 2020 over LINES_START → LINES_END frames.
+  // We slow down near the crossing point for dramatic effect.
   const rawProgress = interpolate(
     frame,
-    [LINE_DRAW_START, LINE_DRAW_END],
+    [LINES_START, LINES_END],
     [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.inOut(Easing.cubic) }
   );
 
-  // Morph fade-out
-  const morphOpacity = fadeOutOnMorph
-    ? interpolate(frame, [MORPH_START, MORPH_END], [1, 0], {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.in(Easing.quad),
-      })
-    : 1;
+  // Map progress to year with a slight deceleration zone around crossing
+  const currentYear = X_MIN + rawProgress * (X_MAX - X_MIN);
 
-  // Generate a densely sampled path for the visible portion of the line
-  const pathD = useMemo(() => {
-    // The current x-value extent based on progress
-    const currentMaxX = X_MIN + rawProgress * (X_MAX - X_MIN);
+  // Don't draw anything before lines start
+  if (frame < LINES_START) return null;
 
-    // Sample at fine intervals for smooth curves
-    const SAMPLE_COUNT = 200;
-    const points: { px: number; py: number }[] = [];
+  // Build SVG path up to currentYear
+  const samplesPerYear = 2;
+  const totalSamples = Math.ceil((currentYear - X_MIN) * samplesPerYear);
+  if (totalSamples <= 0) return null;
 
-    for (let i = 0; i <= SAMPLE_COUNT; i++) {
-      const x = X_MIN + (i / SAMPLE_COUNT) * (currentMaxX - X_MIN);
-      if (x > currentMaxX) break;
-
-      const y = interpolateData(data, x);
-      points.push({ px: xToPixel(x), py: yToPixel(y) });
+  let pathD = "";
+  for (let i = 0; i <= totalSamples; i++) {
+    const year = X_MIN + (i / samplesPerYear);
+    if (year > currentYear) break;
+    const px = xToPixel(year);
+    const py = yToPixel(interpolateY(data, year));
+    if (i === 0) {
+      pathD += `M ${px} ${py}`;
+    } else {
+      pathD += ` L ${px} ${py}`;
     }
+  }
 
-    if (points.length < 2) return "";
+  // Final point at exactly currentYear
+  const finalPx = xToPixel(currentYear);
+  const finalPy = yToPixel(interpolateY(data, currentYear));
+  pathD += ` L ${finalPx} ${finalPy}`;
 
-    // Build SVG path
-    let d = `M ${points[0].px} ${points[0].py}`;
-    for (let i = 1; i < points.length; i++) {
-      d += ` L ${points[i].px} ${points[i].py}`;
-    }
-    return d;
-  }, [rawProgress, data]);
+  // Label opacity: fade in once the line has drawn past 1955
+  const labelOpacity = interpolate(
+    currentYear,
+    [1954, 1958],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
 
-  if (!pathD) return null;
+  // Legend label position (near end of line, or custom)
+  const legendX = labelX ?? finalPx + 12;
+  const legendY = labelY ?? finalPy;
 
   return (
     <svg
@@ -90,17 +91,17 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
       height={1080}
       style={{ position: "absolute", top: 0, left: 0 }}
     >
-      {/* Glow effect behind the line */}
-      <path
-        d={pathD}
-        fill="none"
-        stroke={color}
-        strokeWidth={strokeWidth + 6}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity={0.15 * morphOpacity}
-      />
-      {/* Main line */}
+      {/* Glow behind line */}
+      <defs>
+        <filter id={`glow-${label.replace(/\s/g, "")}`}>
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
       <path
         d={pathD}
         fill="none"
@@ -108,8 +109,32 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({
         strokeWidth={strokeWidth}
         strokeLinecap="round"
         strokeLinejoin="round"
-        opacity={morphOpacity}
+        filter={`url(#glow-${label.replace(/\s/g, "")})`}
       />
+
+      {/* Dot at the tip of the line */}
+      <circle
+        cx={finalPx}
+        cy={finalPy}
+        r={4}
+        fill={color}
+        opacity={0.9}
+      />
+
+      {/* Series label near the line start area */}
+      {labelOpacity > 0 && (
+        <text
+          x={xToPixel(X_MIN) + 8}
+          y={yToPixel(interpolateY(data, X_MIN)) - 12}
+          fill={color}
+          fontSize={14}
+          fontFamily="Inter, sans-serif"
+          fontWeight={600}
+          opacity={labelOpacity * 0.85}
+        >
+          {label}
+        </text>
+      )}
     </svg>
   );
 };

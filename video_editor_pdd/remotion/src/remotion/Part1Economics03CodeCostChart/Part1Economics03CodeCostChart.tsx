@@ -1,52 +1,55 @@
 import React from "react";
 import {
   AbsoluteFill,
-  useCurrentFrame,
   interpolate,
+  useCurrentFrame,
   Easing,
 } from "remotion";
 import {
   BG_COLOR,
-  BLUE_LINE_COLOR,
-  AMBER_LINE_COLOR,
+  CANVAS_WIDTH,
+  CANVAS_HEIGHT,
   GENERATE_COST_DATA,
   IMMEDIATE_PATCH_DATA,
   TOTAL_COST_DEBT_DATA,
+  GENERATE_LINE_COLOR,
+  PATCH_LINE_COLOR,
   BLUE_LINE_START,
   BLUE_LINE_END,
   AMBER_SOLID_START,
   AMBER_SOLID_END,
-  PULSE_START,
-  PULSE_END,
-  DASHED_START,
-  DASHED_END,
+  DASHED_LINE_START,
+  DASHED_LINE_END,
   PULLBACK_START,
   PULLBACK_END,
-  PULLBACK_SCALE_FROM,
-  PULLBACK_SCALE_TO,
 } from "./constants";
 import { ChartAxes } from "./ChartAxes";
 import { AnimatedLine } from "./AnimatedLine";
-import { DateMarkersOverlay } from "./DateMarkers";
-import { ShadedDebtArea } from "./ShadedDebtArea";
-import { ChartLegend } from "./Legend";
+import { DateMarkers } from "./DateMarkers";
+import { DebtArea } from "./DebtArea";
+import { PulseLine } from "./PulseLine";
+import { Legend } from "./Legend";
 
 export const defaultPart1Economics03CodeCostChartProps = {};
 
 export const Part1Economics03CodeCostChart: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Camera pullback scale
+  // Camera pullback: scale from 1.0 to 0.85 between PULLBACK_START and PULLBACK_END
   const scale = interpolate(
     frame,
     [PULLBACK_START, PULLBACK_END],
-    [PULLBACK_SCALE_FROM, PULLBACK_SCALE_TO],
+    [1.0, 0.85],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.inOut(Easing.cubic),
     }
   );
+
+  // During pullback, translate to keep chart centered
+  const translateX = ((1 - scale) * CANVAS_WIDTH) / 2;
+  const translateY = ((1 - scale) * CANVAS_HEIGHT) / 2;
 
   return (
     <AbsoluteFill
@@ -55,59 +58,63 @@ export const Part1Economics03CodeCostChart: React.FC = () => {
         overflow: "hidden",
       }}
     >
-      {/* Scaled chart container for camera pullback */}
-      <AbsoluteFill
+      <div
         style={{
-          transform: `scale(${scale})`,
-          transformOrigin: "center center",
+          width: CANVAS_WIDTH,
+          height: CANVAS_HEIGHT,
+          position: "absolute",
+          top: 0,
+          left: 0,
+          transform: `translate(${translateX}px, ${translateY}px) scale(${scale})`,
+          transformOrigin: "top left",
         }}
       >
-        {/* Phase 1: Axes draw from frame 0 */}
+        {/* Grid + Axes */}
         <ChartAxes />
 
-        {/* Phase 2-3: Blue "Cost to generate" line (frames 45-300) */}
+        {/* Blue "Cost to generate" line */}
         <AnimatedLine
           data={GENERATE_COST_DATA}
-          color={BLUE_LINE_COLOR}
+          color={GENERATE_LINE_COLOR}
           strokeWidth={3}
           startFrame={BLUE_LINE_START}
           drawDuration={BLUE_LINE_END - BLUE_LINE_START}
           easing={Easing.inOut(Easing.cubic)}
         />
 
-        {/* Date markers appear as blue line passes each year */}
-        <DateMarkersOverlay />
+        {/* Date markers on blue line */}
+        <DateMarkers />
 
-        {/* Phase 4: Amber solid "Immediate patch cost" (frames 300-450) */}
+        {/* Amber solid "Immediate patch cost" line */}
         <AnimatedLine
           data={IMMEDIATE_PATCH_DATA}
-          color={AMBER_LINE_COLOR}
+          color={PATCH_LINE_COLOR}
           strokeWidth={3}
           startFrame={AMBER_SOLID_START}
           drawDuration={AMBER_SOLID_END - AMBER_SOLID_START}
-          glowActive
-          glowStartFrame={PULSE_START}
-          glowEndFrame={PULSE_END}
           easing={Easing.inOut(Easing.cubic)}
         />
 
-        {/* Phase 5-6: Amber dashed "Total cost with debt" (frames 540-600) */}
+        {/* Validation pulse on amber solid line */}
+        <PulseLine />
+
+        {/* Amber dashed "Total cost with debt" line */}
         <AnimatedLine
           data={TOTAL_COST_DEBT_DATA}
-          color={AMBER_LINE_COLOR}
+          color={PATCH_LINE_COLOR}
           strokeWidth={2.5}
-          startFrame={DASHED_START}
-          drawDuration={DASHED_END - DASHED_START}
-          dashArray="8 6"
+          startFrame={DASHED_LINE_START}
+          drawDuration={DASHED_LINE_END - DASHED_LINE_START}
           easing={Easing.out(Easing.quad)}
+          dashArray="8 6"
         />
 
-        {/* Shaded debt area between amber lines */}
-        <ShadedDebtArea />
+        {/* Shaded debt area between dashed and solid amber lines */}
+        <DebtArea />
 
         {/* Legend */}
-        <ChartLegend />
-      </AbsoluteFill>
+        <Legend />
+      </div>
     </AbsoluteFill>
   );
 };

@@ -1,64 +1,104 @@
 import React from "react";
 import { interpolate, useCurrentFrame, Easing } from "remotion";
 import {
-  GENERATE_LINE_COLOR,
-  PATCH_LINE_COLOR,
-  SMALL_CODEBASE_COLOR,
-  LARGE_CODEBASE_COLOR,
+  BLUE_LINE_COLOR,
+  AMBER_LINE_COLOR,
+  GREEN_LINE_COLOR,
+  RED_LINE_COLOR,
   DEBT_AREA_COLOR,
+  FONT_FAMILY,
   GENERATE_LINE_DATA,
   PATCH_LINE_DATA,
   SMALL_CODEBASE_DATA,
   LARGE_CODEBASE_DATA,
-  FORK_POINT,
   FORK_START,
-  FORK_DIVERGE_END,
-  FORK_EXTEND_END,
-  CHART_APPEAR_END,
-  mapX,
-  mapY,
-  dataToCurvePath,
+  FORK_ANIM_DURATION,
+  dataToSmoothPath,
+  xToPixel,
+  yToPixel,
+  CHART_BOTTOM,
+  DataPoint,
 } from "./constants";
 
-/** Interpolate along a path data array, returning a partial data array up to progress [0..1]. */
-function partialData(
-  data: { x: number; y: number }[],
-  progress: number
-): { x: number; y: number }[] {
-  if (progress <= 0) return [data[0]];
-  if (progress >= 1) return data;
+/** Partially reveal an SVG path using stroke-dashoffset */
+const AnimatedPath: React.FC<{
+  d: string;
+  color: string;
+  strokeWidth: number;
+  progress: number;
+  dashed?: boolean;
+}> = ({ d, color, strokeWidth, progress, dashed }) => {
+  const totalLength = 4000; // generous upper-bound
+  return (
+    <path
+      d={d}
+      fill="none"
+      stroke={color}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeDasharray={dashed ? "8 4" : totalLength}
+      strokeDashoffset={dashed ? 0 : totalLength * (1 - progress)}
+    />
+  );
+};
 
-  const totalSegments = data.length - 1;
-  const exactSegment = progress * totalSegments;
-  const segIndex = Math.floor(exactSegment);
-  const segProgress = exactSegment - segIndex;
+/** Debt-fill area between generate and patch lines */
+const DebtArea: React.FC<{ opacity: number }> = ({ opacity }) => {
+  const gen = GENERATE_LINE_DATA;
+  const patch = PATCH_LINE_DATA;
+  // Build polygon between generate (top, lower cost) and patch (bottom, higher cost)
+  // Actually generate is lower cost → lower y-pixel → higher on screen
+  const topPoints = gen
+    .filter((p) => p.x <= 2020)
+    .map((p) => `${xToPixel(p.x)},${yToPixel(p.y)}`);
+  const bottomPoints = [...patch]
+    .reverse()
+    .map((p) => `${xToPixel(p.x)},${yToPixel(p.y)}`);
+  const points = [...topPoints, ...bottomPoints].join(" ");
 
-  const result = data.slice(0, segIndex + 1);
-  if (segIndex < totalSegments) {
-    const from = data[segIndex];
-    const to = data[segIndex + 1];
-    result.push({
-      x: from.x + (to.x - from.x) * segProgress,
-      y: from.y + (to.y - from.y) * segProgress,
-    });
-  }
-  return result;
-}
+  return <polygon points={points} fill={DEBT_AREA_COLOR} opacity={opacity} />;
+};
+
+/** Fork label positioned near the end of a fork line */
+const ForkLabel: React.FC<{
+  data: DataPoint[];
+  label: string;
+  color: string;
+  opacity: number;
+}> = ({ data, label, color, opacity }) => {
+  const last = data[data.length - 1];
+  const px = xToPixel(last.x) + 12;
+  const py = yToPixel(last.y) + 5;
+  return (
+    <text
+      x={px}
+      y={py}
+      fill={color}
+      fontSize={14}
+      fontFamily={FONT_FAMILY}
+      fontWeight={600}
+      opacity={opacity}
+    >
+      {label}
+    </text>
+  );
+};
 
 export const ForkingLines: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Generate line draws in during chart appear phase
-  const generateProgress = interpolate(frame, [0, CHART_APPEAR_END], [0, 1], {
+  // Base lines draw in over frames 0–90
+  const baseProgress = interpolate(frame, [0, 80], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.cubic),
   });
 
-  // Patch line (pre-fork amber) draws in during chart appear phase
-  const patchProgress = interpolate(
+  // Fork progress: starts at FORK_START, animates over FORK_ANIM_DURATION
+  const forkProgress = interpolate(
     frame,
-    [10, CHART_APPEAR_END],
+    [FORK_START, FORK_START + FORK_ANIM_DURATION],
     [0, 1],
     {
       extrapolateLeft: "clamp",
@@ -67,132 +107,64 @@ export const ForkingLines: React.FC = () => {
     }
   );
 
-  // Fork progress: from FORK_START, lines begin to diverge
-  // Phase 1 diverge (90-210): initial fork
-  const forkPhase1 = interpolate(
+  // Fork label fade
+  const forkLabelOpacity = interpolate(
     frame,
-    [FORK_START, FORK_DIVERGE_END],
-    [0, 0.5],
+    [FORK_START + FORK_ANIM_DURATION - 30, FORK_START + FORK_ANIM_DURATION],
+    [0, 1],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
     }
   );
 
-  // Phase 2 extend (210-420): fork extends fully
-  const forkPhase2 = interpolate(
-    frame,
-    [FORK_DIVERGE_END, FORK_EXTEND_END],
-    [0.5, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.cubic),
-    }
-  );
-
-  const forkProgress = frame < FORK_START ? 0 : frame < FORK_DIVERGE_END ? forkPhase1 : forkPhase2;
-
-  // Fork visibility
-  const forkOpacity = interpolate(frame, [FORK_START, FORK_START + 15], [0, 1], {
+  // Debt area opacity
+  const debtOpacity = interpolate(frame, [20, 60], [0, 0.6], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-  // Compute partial data for fork lines
-  const smallPartial = partialData(SMALL_CODEBASE_DATA, forkProgress);
-  const largePartial = partialData(LARGE_CODEBASE_DATA, forkProgress);
-
-  // Generate line partial
-  const genPartial = partialData(GENERATE_LINE_DATA, generateProgress);
-
-  // Patch line partial
-  const patchPartial = partialData(PATCH_LINE_DATA, patchProgress);
-
-  // Debt area: area between generate line and patch line
-  const debtAreaOpacity = interpolate(frame, [30, 60], [0, 0.6], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  // Build debt area path (between patch line top and generate line bottom)
-  const debtAreaPath = React.useMemo(() => {
-    if (PATCH_LINE_DATA.length < 2 || GENERATE_LINE_DATA.length < 2) return "";
-    // Find overlapping x-range
-    const xStart = Math.max(PATCH_LINE_DATA[0].x, GENERATE_LINE_DATA[0].x);
-    const xEnd = 2020; // Up to fork point
-
-    // Sample points
-    const steps = 20;
-    const topPoints: string[] = [];
-    const bottomPoints: string[] = [];
-
-    for (let i = 0; i <= steps; i++) {
-      const x = xStart + (xEnd - xStart) * (i / steps);
-      // Interpolate patch line (lower on chart = higher y pixel)
-      const patchY = interpolateDataAtX(PATCH_LINE_DATA, x);
-      // Interpolate generate line (higher on chart = lower y pixel)
-      const genY = interpolateDataAtX(GENERATE_LINE_DATA, x);
-
-      if (patchY !== null && genY !== null && genY > patchY) {
-        topPoints.push(`${mapX(x)},${mapY(genY)}`);
-        bottomPoints.push(`${mapX(x)},${mapY(patchY)}`);
-      }
-    }
-
-    if (topPoints.length < 2) return "";
-    return `M ${topPoints.join(" L ")} L ${bottomPoints.reverse().join(" L ")} Z`;
-  }, []);
-
-  // Fork label positions
-  const smallLabelPos = smallPartial.length > 0
-    ? smallPartial[smallPartial.length - 1]
-    : FORK_POINT;
-  const largeLabelPos = largePartial.length > 0
-    ? largePartial[largePartial.length - 1]
-    : FORK_POINT;
-
-  const labelOpacity = interpolate(frame, [FORK_START + 30, FORK_START + 50], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
+  const generatePath = dataToSmoothPath(GENERATE_LINE_DATA);
+  const patchPath = dataToSmoothPath(PATCH_LINE_DATA);
+  const smallPath = dataToSmoothPath(SMALL_CODEBASE_DATA);
+  const largePath = dataToSmoothPath(LARGE_CODEBASE_DATA);
 
   return (
     <svg
       width={1920}
       height={1080}
+      viewBox="0 0 1920 1080"
       style={{ position: "absolute", top: 0, left: 0 }}
     >
       {/* Debt area fill */}
-      {debtAreaPath && (
-        <path
-          d={debtAreaPath}
-          fill={DEBT_AREA_COLOR}
-          opacity={debtAreaOpacity}
-        />
-      )}
+      <DebtArea opacity={debtOpacity} />
 
-      {/* Generate line (blue) */}
-      <path
-        d={dataToCurvePath(genPartial)}
-        fill="none"
-        stroke={GENERATE_LINE_COLOR}
+      {/* Generate line (blue, background context) */}
+      <AnimatedPath
+        d={generatePath}
+        color={BLUE_LINE_COLOR}
+        strokeWidth={2.5}
+        progress={baseProgress}
+      />
+
+      {/* Patch line up to fork point (amber) */}
+      <AnimatedPath
+        d={patchPath}
+        color={AMBER_LINE_COLOR}
         strokeWidth={3}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        progress={baseProgress}
       />
 
       {/* Generate line label */}
-      {generateProgress > 0.8 && (
+      {baseProgress > 0.8 && (
         <text
-          x={mapX(GENERATE_LINE_DATA[GENERATE_LINE_DATA.length - 1].x) + 10}
-          y={mapY(GENERATE_LINE_DATA[GENERATE_LINE_DATA.length - 1].y) - 8}
-          fill={GENERATE_LINE_COLOR}
+          x={xToPixel(2026) + 12}
+          y={yToPixel(0.03) + 5}
+          fill={BLUE_LINE_COLOR}
           fontSize={13}
-          fontFamily="Inter, sans-serif"
-          fontWeight={600}
-          opacity={interpolate(frame, [60, 80], [0, 0.9], {
+          fontFamily={FONT_FAMILY}
+          fontWeight={500}
+          opacity={interpolate(baseProgress, [0.8, 1], [0, 0.85], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
           })}
@@ -201,26 +173,16 @@ export const ForkingLines: React.FC = () => {
         </text>
       )}
 
-      {/* Patch line (amber, pre-fork) */}
-      <path
-        d={dataToCurvePath(patchPartial)}
-        fill="none"
-        stroke={PATCH_LINE_COLOR}
-        strokeWidth={3}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-
       {/* Patch line label */}
-      {patchProgress > 0.7 && (
+      {baseProgress > 0.8 && forkProgress < 0.1 && (
         <text
-          x={mapX(2017)}
-          y={mapY(0.28) - 12}
-          fill={PATCH_LINE_COLOR}
+          x={xToPixel(2020) + 12}
+          y={yToPixel(0.48) - 12}
+          fill={AMBER_LINE_COLOR}
           fontSize={13}
-          fontFamily="Inter, sans-serif"
-          fontWeight={600}
-          opacity={interpolate(frame, [50, 70], [0, 0.9], {
+          fontFamily={FONT_FAMILY}
+          fontWeight={500}
+          opacity={interpolate(baseProgress, [0.8, 1], [0, 0.85], {
             extrapolateLeft: "clamp",
             extrapolateRight: "clamp",
           })}
@@ -231,88 +193,55 @@ export const ForkingLines: React.FC = () => {
 
       {/* Small codebase fork (green) */}
       {forkProgress > 0 && (
-        <path
-          d={dataToCurvePath(smallPartial)}
-          fill="none"
-          stroke={SMALL_CODEBASE_COLOR}
-          strokeWidth={3}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity={forkOpacity}
-        />
+        <>
+          <AnimatedPath
+            d={smallPath}
+            color={GREEN_LINE_COLOR}
+            strokeWidth={3}
+            progress={forkProgress}
+          />
+          <ForkLabel
+            data={SMALL_CODEBASE_DATA}
+            label="Small codebase"
+            color={GREEN_LINE_COLOR}
+            opacity={forkLabelOpacity}
+          />
+        </>
       )}
 
       {/* Large codebase fork (red) */}
       {forkProgress > 0 && (
-        <path
-          d={dataToCurvePath(largePartial)}
-          fill="none"
-          stroke={LARGE_CODEBASE_COLOR}
-          strokeWidth={3}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          opacity={forkOpacity}
-        />
+        <>
+          <AnimatedPath
+            d={largePath}
+            color={RED_LINE_COLOR}
+            strokeWidth={3}
+            progress={forkProgress}
+          />
+          <ForkLabel
+            data={LARGE_CODEBASE_DATA}
+            label="Large codebase"
+            color={RED_LINE_COLOR}
+            opacity={forkLabelOpacity}
+          />
+        </>
       )}
 
-      {/* Fork point indicator */}
+      {/* Fork point dot */}
       {forkProgress > 0 && (
         <circle
-          cx={mapX(FORK_POINT.x)}
-          cy={mapY(FORK_POINT.y)}
+          cx={xToPixel(2020)}
+          cy={yToPixel(0.48)}
           r={5}
-          fill={PATCH_LINE_COLOR}
-          stroke="#0A0F1A"
-          strokeWidth={2}
-          opacity={forkOpacity}
+          fill={AMBER_LINE_COLOR}
+          opacity={interpolate(forkProgress, [0, 0.15], [0, 1], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          })}
         />
-      )}
-
-      {/* Small codebase label */}
-      {forkProgress > 0.15 && (
-        <text
-          x={mapX(smallLabelPos.x) + 12}
-          y={mapY(smallLabelPos.y) + 5}
-          fill={SMALL_CODEBASE_COLOR}
-          fontSize={14}
-          fontFamily="Inter, sans-serif"
-          fontWeight={600}
-          opacity={labelOpacity}
-        >
-          Small codebase
-        </text>
-      )}
-
-      {/* Large codebase label */}
-      {forkProgress > 0.15 && (
-        <text
-          x={mapX(largeLabelPos.x) + 12}
-          y={mapY(largeLabelPos.y) - 10}
-          fill={LARGE_CODEBASE_COLOR}
-          fontSize={14}
-          fontFamily="Inter, sans-serif"
-          fontWeight={600}
-          opacity={labelOpacity}
-        >
-          Large codebase
-        </text>
       )}
     </svg>
   );
 };
-
-/** Helper: linearly interpolate a data series at a given x value. */
-function interpolateDataAtX(
-  data: { x: number; y: number }[],
-  x: number
-): number | null {
-  for (let i = 0; i < data.length - 1; i++) {
-    if (x >= data[i].x && x <= data[i + 1].x) {
-      const t = (x - data[i].x) / (data[i + 1].x - data[i].x);
-      return data[i].y + (data[i + 1].y - data[i].y) * t;
-    }
-  }
-  return null;
-}
 
 export default ForkingLines;

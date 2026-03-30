@@ -1,49 +1,39 @@
-import React, { useMemo } from "react";
-import { AbsoluteFill, random } from "remotion";
+// NoiseTexture.tsx — subtle paper-grain overlay via SVG feTurbulence
+import React from "react";
+import { AbsoluteFill } from "remotion";
 
 interface NoiseTextureProps {
   color: string;
   opacity: number;
-  seed?: number;
 }
 
-/**
- * Generates a subtle noise/grain texture overlay using small SVG rects.
- * Static — does not animate per-frame.
- */
-export const NoiseTexture: React.FC<NoiseTextureProps> = ({
-  color,
-  opacity,
-  seed = 42,
-}) => {
-  const dots = useMemo(() => {
-    const result: { x: number; y: number; o: number }[] = [];
-    const step = 12;
-    for (let x = 0; x < 1920; x += step) {
-      for (let y = 0; y < 1080; y += step) {
-        const r = random(`noise-${seed}-${x}-${y}`);
-        if (r > 0.6) {
-          result.push({ x, y, o: r * opacity });
-        }
-      }
-    }
-    return result;
-  }, [seed, opacity]);
-
+const NoiseTexture: React.FC<NoiseTextureProps> = ({ color, opacity }) => {
   return (
-    <AbsoluteFill style={{ pointerEvents: "none" }}>
-      <svg width={1920} height={1080} viewBox="0 0 1920 1080">
-        {dots.map((d, i) => (
-          <rect
-            key={i}
-            x={d.x}
-            y={d.y}
-            width={2}
-            height={2}
-            fill={color}
-            opacity={d.o}
+    <AbsoluteFill style={{ opacity, mixBlendMode: "overlay" }}>
+      <svg
+        width="100%"
+        height="100%"
+        xmlns="http://www.w3.org/2000/svg"
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <filter id="noiseFilter">
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.65"
+            numOctaves={3}
+            stitchTiles="stitch"
           />
-        ))}
+          <feColorMatrix
+            type="saturate"
+            values="0"
+          />
+        </filter>
+        <rect
+          width="100%"
+          height="100%"
+          filter="url(#noiseFilter)"
+          fill={color}
+        />
       </svg>
     </AbsoluteFill>
   );

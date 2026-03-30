@@ -1,115 +1,109 @@
-import React from "react";
-import { interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
+  INSET_X,
+  INSET_Y,
   INSET_WIDTH,
   INSET_HEIGHT,
   INSET_BG_COLOR,
   INSET_BORDER_COLOR,
   INSET_BORDER_RADIUS,
   TITLE_COLOR,
-  AXIS_LABEL_COLOR,
   DEGRADATION_LABEL_COLOR,
-  CHART_LEFT,
-  CHART_TOP,
-  CHART_RIGHT,
-  CHART_BOTTOM,
-  CHART_PLOT_WIDTH,
-  CHART_PLOT_HEIGHT,
-  PERFORMANCE_DATA,
-  Y_TICKS,
-  PHASE_INSET_FILL_START,
-  PHASE_INSET_FILL_END,
-  PHASE_LINE_DRAW_START,
+  SOURCE_LABEL_COLOR,
+  PHASE_GRID_DIM_START,
+  PHASE_GRID_DIM_END,
+  PHASE_INSET_BG_START,
+  PHASE_INSET_BG_END,
   PHASE_LABELS_START,
-} from "./constants";
+  PHASE_LABELS_FADE_DURATION,
+  PHASE_INSET_FADE_START,
+  PHASE_INSET_FADE_END,
+} from './constants';
+import { ChartAxes } from './ChartAxes';
+import { AnimatedLine } from './AnimatedLine';
 
 /**
- * The inset performance-vs-context chart.
- * Includes border draw-in, background fill, title, axes, and labels.
- * The animated line is rendered by AnimatedLine (composed externally).
+ * The inset chart container: border draw-in, background fill, title, axes, line, labels.
+ * Visible from frame 0 to ~720, then fades out.
  */
+export const InsetChart: React.FC = () => {
+  const frame = useCurrentFrame();
 
-interface InsetChartProps {
-  /** Offset frame within the inset's local timeline */
-  localFrame: number;
-  children?: React.ReactNode;
-}
+  // ── Border draw-in (perimeter clip via dashoffset) ──
+  const borderPerimeter = 2 * (INSET_WIDTH + INSET_HEIGHT);
+  const borderDrawProgress = interpolate(
+    frame,
+    [PHASE_GRID_DIM_START, PHASE_GRID_DIM_END],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.out(Easing.quad),
+    },
+  );
 
-export const InsetChart: React.FC<InsetChartProps> = ({
-  localFrame,
-  children,
-}) => {
-  // ── Border draw-in (0 → 60 frames, easeOut quad) ──────────────────
-  const borderProgress = interpolate(localFrame, [0, 60], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  // ── Background fill (60 → 90 frames) ──────────────────────────────
+  // ── Background fill-in ──
   const bgOpacity = interpolate(
-    localFrame,
-    [PHASE_INSET_FILL_START, PHASE_INSET_FILL_END],
+    frame,
+    [PHASE_INSET_BG_START, PHASE_INSET_BG_END],
     [0, 0.95],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
-  // ── Title type-in (60 → 90 frames) ────────────────────────────────
-  const titleText = "Performance vs. Context Length";
-  const titleProgress = interpolate(
-    localFrame,
-    [PHASE_INSET_FILL_START, PHASE_INSET_FILL_END],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
+  // ── Title type-in ──
+  const titleText = 'Performance vs. Context Length';
+  const titleChars = interpolate(
+    frame,
+    [PHASE_INSET_BG_START, PHASE_INSET_BG_END],
+    [0, titleText.length],
+    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
-  const visibleChars = Math.floor(titleProgress * titleText.length);
+  const displayTitle = titleText.slice(0, Math.round(titleChars));
 
-  // ── Axes draw-in (90 → 120 frames) ────────────────────────────────
-  const axesProgress = interpolate(
-    localFrame,
-    [PHASE_LINE_DRAW_START, PHASE_LINE_DRAW_START + 30],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
-  );
-
-  // ── Labels fade-in (210 → 230 frames) ─────────────────────────────
+  // ── Labels fade-in ──
   const labelsOpacity = interpolate(
-    localFrame,
-    [PHASE_LABELS_START, PHASE_LABELS_START + 20],
+    frame,
+    [PHASE_LABELS_START, PHASE_LABELS_START + PHASE_LABELS_FADE_DURATION],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
-  // Border perimeter for the drawing effect
-  const perimeterLength = 2 * (INSET_WIDTH + INSET_HEIGHT);
+  // ── Inset fade-out ──
+  const insetFadeOut = interpolate(
+    frame,
+    [PHASE_INSET_FADE_START, PHASE_INSET_FADE_END],
+    [1, 0],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.in(Easing.quad),
+    },
+  );
+
+  // Don't render once fully faded
+  if (insetFadeOut <= 0) return null;
 
   return (
     <div
       style={{
-        position: "relative",
+        position: 'absolute',
+        left: INSET_X,
+        top: INSET_Y,
         width: INSET_WIDTH,
         height: INSET_HEIGHT,
+        opacity: insetFadeOut,
       }}
     >
-      {/* Border draw-in via SVG */}
+      {/* Border drawn as SVG rect with dash animation */}
       <svg
         width={INSET_WIDTH}
         height={INSET_HEIGHT}
-        style={{ position: "absolute", top: 0, left: 0 }}
+        style={{ position: 'absolute', top: 0, left: 0, zIndex: 2 }}
       >
         <rect
           x={0.5}
@@ -121,198 +115,100 @@ export const InsetChart: React.FC<InsetChartProps> = ({
           fill="none"
           stroke={INSET_BORDER_COLOR}
           strokeWidth={1}
-          strokeDasharray={perimeterLength}
-          strokeDashoffset={perimeterLength * (1 - borderProgress)}
+          strokeDasharray={borderPerimeter}
+          strokeDashoffset={borderPerimeter * (1 - borderDrawProgress)}
         />
       </svg>
 
       {/* Background fill */}
       <div
         style={{
-          position: "absolute",
+          position: 'absolute',
           top: 1,
           left: 1,
           width: INSET_WIDTH - 2,
           height: INSET_HEIGHT - 2,
           backgroundColor: INSET_BG_COLOR,
-          opacity: bgOpacity,
           borderRadius: INSET_BORDER_RADIUS - 1,
+          opacity: bgOpacity,
+          zIndex: 1,
         }}
       />
 
-      {/* Title */}
+      {/* Content layer */}
       <div
         style={{
-          position: "absolute",
-          top: 12,
-          left: 16,
-          fontFamily: "Inter, sans-serif",
-          fontSize: 14,
-          fontWeight: 600,
-          color: TITLE_COLOR,
-          opacity: titleProgress,
-          whiteSpace: "nowrap",
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: INSET_WIDTH,
+          height: INSET_HEIGHT,
+          zIndex: 3,
         }}
       >
-        {titleText.slice(0, visibleChars)}
-        {visibleChars < titleText.length && (
-          <span style={{ opacity: 0.5 }}>|</span>
-        )}
-      </div>
-
-      {/* Axes */}
-      <svg
-        width={INSET_WIDTH}
-        height={INSET_HEIGHT}
-        style={{ position: "absolute", top: 0, left: 0 }}
-      >
-        {/* Y-axis */}
-        <line
-          x1={CHART_LEFT}
-          y1={CHART_TOP}
-          x2={CHART_LEFT}
-          y2={CHART_TOP + CHART_PLOT_HEIGHT * axesProgress}
-          stroke={AXIS_LABEL_COLOR}
-          strokeWidth={1}
-          opacity={0.5}
-        />
-        {/* X-axis */}
-        <line
-          x1={CHART_LEFT}
-          y1={CHART_BOTTOM}
-          x2={CHART_LEFT + CHART_PLOT_WIDTH * axesProgress}
-          y2={CHART_BOTTOM}
-          stroke={AXIS_LABEL_COLOR}
-          strokeWidth={1}
-          opacity={0.5}
-        />
-
-        {/* Y-axis ticks */}
-        {Y_TICKS.map((tick) => {
-          const tickY = CHART_BOTTOM - tick.value * CHART_PLOT_HEIGHT;
-          return (
-            <g key={tick.label} opacity={axesProgress}>
-              <line
-                x1={CHART_LEFT - 4}
-                y1={tickY}
-                x2={CHART_LEFT}
-                y2={tickY}
-                stroke={AXIS_LABEL_COLOR}
-                strokeWidth={1}
-                opacity={0.4}
-              />
-              {/* Grid line */}
-              <line
-                x1={CHART_LEFT}
-                y1={tickY}
-                x2={CHART_RIGHT}
-                y2={tickY}
-                stroke={AXIS_LABEL_COLOR}
-                strokeWidth={0.5}
-                opacity={0.15}
-                strokeDasharray="4 4"
-              />
-              <text
-                x={CHART_LEFT - 8}
-                y={tickY + 3}
-                textAnchor="end"
-                fontFamily="Inter, sans-serif"
-                fontSize={10}
-                fill={AXIS_LABEL_COLOR}
-                opacity={0.7}
-              >
-                {tick.label}
-              </text>
-            </g>
-          );
-        })}
-
-        {/* X-axis labels */}
-        {PERFORMANCE_DATA.map((dp) => {
-          const tickX = CHART_LEFT + dp.x * CHART_PLOT_WIDTH;
-          return (
-            <g key={dp.label} opacity={axesProgress}>
-              <line
-                x1={tickX}
-                y1={CHART_BOTTOM}
-                x2={tickX}
-                y2={CHART_BOTTOM + 4}
-                stroke={AXIS_LABEL_COLOR}
-                strokeWidth={1}
-                opacity={0.4}
-              />
-              <text
-                x={tickX}
-                y={CHART_BOTTOM + 16}
-                textAnchor="middle"
-                fontFamily="Inter, sans-serif"
-                fontSize={11}
-                fill={AXIS_LABEL_COLOR}
-              >
-                {dp.label}
-              </text>
-            </g>
-          );
-        })}
-
-        {/* Axis titles */}
-        <text
-          x={CHART_LEFT + CHART_PLOT_WIDTH / 2}
-          y={CHART_BOTTOM + 32}
-          textAnchor="middle"
-          fontFamily="Inter, sans-serif"
-          fontSize={11}
-          fill={AXIS_LABEL_COLOR}
-          opacity={axesProgress * 0.8}
-        >
-          Context length (tokens)
-        </text>
-        <text
-          x={12}
-          y={CHART_TOP + CHART_PLOT_HEIGHT / 2}
-          textAnchor="middle"
-          fontFamily="Inter, sans-serif"
-          fontSize={11}
-          fill={AXIS_LABEL_COLOR}
-          opacity={axesProgress * 0.8}
-          transform={`rotate(-90, 12, ${CHART_TOP + CHART_PLOT_HEIGHT / 2})`}
-        >
-          Model Performance
-        </text>
-      </svg>
-
-      {/* Animated line (passed as children) */}
-      {children}
-
-      {/* Degradation labels */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 48,
-          right: 20,
-          opacity: labelsOpacity,
-          textAlign: "right",
-        }}
-      >
+        {/* Title */}
         <div
           style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 12,
-            color: DEGRADATION_LABEL_COLOR,
-            opacity: 0.85,
+            position: 'absolute',
+            top: 12,
+            left: 16,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 14,
+            fontWeight: 600,
+            color: TITLE_COLOR,
+            whiteSpace: 'nowrap',
+            opacity: bgOpacity > 0 ? 1 : 0,
           }}
         >
-          14-85% degradation
+          {displayTitle}
+          <span
+            style={{
+              opacity: frame % 20 < 10 && frame < PHASE_INSET_BG_END + 30 ? 1 : 0,
+              color: TITLE_COLOR,
+            }}
+          >
+            |
+          </span>
         </div>
+
+        {/* Chart axes */}
+        <ChartAxes chartWidth={INSET_WIDTH} chartHeight={INSET_HEIGHT} />
+
+        {/* Animated performance line */}
+        <AnimatedLine chartWidth={INSET_WIDTH} chartHeight={INSET_HEIGHT} />
+
+        {/* Degradation label + source */}
         <div
           style={{
-            fontFamily: "Inter, sans-serif",
-            fontSize: 11,
-            color: AXIS_LABEL_COLOR,
-            marginTop: 2,
+            position: 'absolute',
+            bottom: 48,
+            right: 24,
+            textAlign: 'right',
+            opacity: labelsOpacity,
           }}
         >
-          (EMNLP, 2025)
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 12,
+              fontWeight: 400,
+              color: DEGRADATION_LABEL_COLOR,
+              opacity: 0.8,
+            }}
+          >
+            14-85% degradation
+          </div>
+          <div
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: 11,
+              fontWeight: 400,
+              color: SOURCE_LABEL_COLOR,
+              marginTop: 2,
+            }}
+          >
+            (EMNLP, 2025)
+          </div>
         </div>
       </div>
     </div>

@@ -1,224 +1,259 @@
 import React from "react";
-import { interpolate, useCurrentFrame, Easing } from "remotion";
+import { useCurrentFrame, interpolate, Easing } from "remotion";
 
-interface GridLinesProps {
-  gridLeft: number;
-  gridTop: number;
-  gridSize: number;
-  lineColor: string;
-  lineWidth: number;
-  axisLabelColor: string;
-  axisLabelSize: number;
-  drawDuration: number;
-}
+/**
+ * GridLines draws the 2×2 grid outline (border + center cross),
+ * axis labels, and subtle gradient arrows.
+ * Lines animate from 0-length to full-length during GRID_DRAW_START..GRID_DRAW_END.
+ * Axis labels fade in during the same window.
+ */
 
-const GridLines: React.FC<GridLinesProps> = ({
-  gridLeft,
-  gridTop,
-  gridSize,
-  lineColor,
-  lineWidth,
-  axisLabelColor,
-  axisLabelSize,
-  drawDuration,
-}) => {
+// ── Inline constants (avoid cross-file imports per requirement) ──
+const GRID_SIZE = 600;
+const GRID_CENTER_X = 960;
+const GRID_CENTER_Y = 480;
+const GRID_LEFT = GRID_CENTER_X - GRID_SIZE / 2;
+const GRID_TOP = GRID_CENTER_Y - GRID_SIZE / 2;
+const GRID_RIGHT = GRID_LEFT + GRID_SIZE;
+const GRID_BOTTOM = GRID_TOP + GRID_SIZE;
+const MID_X = GRID_CENTER_X;
+const MID_Y = GRID_CENTER_Y;
+
+const DIVIDER_COLOR = "#334155";
+const DIVIDER_WIDTH = 2;
+const AXIS_LABEL_COLOR = "#94A3B8";
+const AXIS_LABEL_SIZE = 16;
+
+const DRAW_START = 0;
+const DRAW_END = 45;
+
+const X_LABELS = ["Greenfield", "Brownfield"];
+const Y_LABELS = ["In-Distribution", "Out-of-Distribution"];
+
+export const GridLines: React.FC = () => {
   const frame = useCurrentFrame();
-  const half = gridSize / 2;
 
-  // Grid draw progress: 0 → 1 over drawDuration frames
-  const drawProgress = interpolate(frame, [0, drawDuration], [0, 1], {
+  // progress 0→1 over draw window
+  const drawProgress = interpolate(frame, [DRAW_START, DRAW_END], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
     easing: Easing.out(Easing.quad),
   });
 
-  // Label fade-in (starts at ~frame 20, ends at drawDuration)
-  const labelOpacity = interpolate(frame, [20, drawDuration], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-    easing: Easing.out(Easing.quad),
-  });
-
-  // Outer box line lengths
-  const perimeterLength = gridSize * 4;
-  const perimeterDrawn = perimeterLength * drawProgress;
-
-  // Center cross lines
-  const crossProgress = interpolate(
+  // Label opacity fades in over draw window
+  const labelOpacity = interpolate(
     frame,
-    [drawDuration * 0.3, drawDuration],
+    [DRAW_START, DRAW_END],
     [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
 
-  // Arrow SVG for axis directions
-  const arrowSize = 8;
+  // Helpers for line drawing from center outward
+  const hHalf = (GRID_SIZE / 2) * drawProgress;
+  const vHalf = (GRID_SIZE / 2) * drawProgress;
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: 1920,
-        height: 1080,
-      }}
-    >
+    <>
+      {/* ── SVG grid lines ── */}
       <svg
         width={1920}
         height={1080}
-        style={{ position: "absolute", left: 0, top: 0 }}
+        style={{ position: "absolute", top: 0, left: 0 }}
       >
-        {/* Outer rectangle */}
-        <rect
-          x={gridLeft}
-          y={gridTop}
-          width={gridSize}
-          height={gridSize}
-          fill="none"
-          stroke={lineColor}
-          strokeWidth={lineWidth}
-          strokeDasharray={perimeterLength}
-          strokeDashoffset={perimeterLength - perimeterDrawn}
-        />
-
-        {/* Vertical center line */}
+        {/* Outer border — drawn from center of each edge outward */}
+        {/* Top edge */}
         <line
-          x1={gridLeft + half}
-          y1={gridTop}
-          x2={gridLeft + half}
-          y2={gridTop + gridSize * crossProgress}
-          stroke={lineColor}
-          strokeWidth={lineWidth}
+          x1={MID_X - hHalf}
+          y1={GRID_TOP}
+          x2={MID_X + hHalf}
+          y2={GRID_TOP}
+          stroke={DIVIDER_COLOR}
+          strokeWidth={DIVIDER_WIDTH}
         />
-
-        {/* Horizontal center line */}
+        {/* Bottom edge */}
         <line
-          x1={gridLeft}
-          y1={gridTop + half}
-          x2={gridLeft + gridSize * crossProgress}
-          y2={gridTop + half}
-          stroke={lineColor}
-          strokeWidth={lineWidth}
+          x1={MID_X - hHalf}
+          y1={GRID_BOTTOM}
+          x2={MID_X + hHalf}
+          y2={GRID_BOTTOM}
+          stroke={DIVIDER_COLOR}
+          strokeWidth={DIVIDER_WIDTH}
+        />
+        {/* Left edge */}
+        <line
+          x1={GRID_LEFT}
+          y1={MID_Y - vHalf}
+          x2={GRID_LEFT}
+          y2={MID_Y + vHalf}
+          stroke={DIVIDER_COLOR}
+          strokeWidth={DIVIDER_WIDTH}
+        />
+        {/* Right edge */}
+        <line
+          x1={GRID_RIGHT}
+          y1={MID_Y - vHalf}
+          x2={GRID_RIGHT}
+          y2={MID_Y + vHalf}
+          stroke={DIVIDER_COLOR}
+          strokeWidth={DIVIDER_WIDTH}
         />
 
-        {/* X-axis arrow (bottom, pointing right) */}
-        <g opacity={labelOpacity}>
-          <line
-            x1={gridLeft}
-            y1={gridTop + gridSize + 40}
-            x2={gridLeft + gridSize}
-            y2={gridTop + gridSize + 40}
-            stroke={axisLabelColor}
-            strokeWidth={1}
-            strokeOpacity={0.4}
-          />
-          <polygon
-            points={`${gridLeft + gridSize},${gridTop + gridSize + 40} ${gridLeft + gridSize - arrowSize},${gridTop + gridSize + 40 - arrowSize / 2} ${gridLeft + gridSize - arrowSize},${gridTop + gridSize + 40 + arrowSize / 2}`}
-            fill={axisLabelColor}
-            fillOpacity={0.4}
-          />
-        </g>
+        {/* Horizontal center divider */}
+        <line
+          x1={MID_X - hHalf}
+          y1={MID_Y}
+          x2={MID_X + hHalf}
+          y2={MID_Y}
+          stroke={DIVIDER_COLOR}
+          strokeWidth={DIVIDER_WIDTH}
+        />
+        {/* Vertical center divider */}
+        <line
+          x1={MID_X}
+          y1={MID_Y - vHalf}
+          x2={MID_X}
+          y2={MID_Y + vHalf}
+          stroke={DIVIDER_COLOR}
+          strokeWidth={DIVIDER_WIDTH}
+        />
 
-        {/* Y-axis arrow (left, pointing down) */}
-        <g opacity={labelOpacity}>
-          <line
-            x1={gridLeft - 40}
-            y1={gridTop}
-            x2={gridLeft - 40}
-            y2={gridTop + gridSize}
-            stroke={axisLabelColor}
-            strokeWidth={1}
-            strokeOpacity={0.4}
-          />
-          <polygon
-            points={`${gridLeft - 40},${gridTop + gridSize} ${gridLeft - 40 - arrowSize / 2},${gridTop + gridSize - arrowSize} ${gridLeft - 40 + arrowSize / 2},${gridTop + gridSize - arrowSize}`}
-            fill={axisLabelColor}
-            fillOpacity={0.4}
-          />
-        </g>
+        {/* ── Axis arrows (subtle gradient) ── */}
+        <defs>
+          <linearGradient id="arrowGradH" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor={AXIS_LABEL_COLOR} stopOpacity={0} />
+            <stop offset="100%" stopColor={AXIS_LABEL_COLOR} stopOpacity={0.5} />
+          </linearGradient>
+          <linearGradient id="arrowGradV" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor={AXIS_LABEL_COLOR} stopOpacity={0} />
+            <stop offset="100%" stopColor={AXIS_LABEL_COLOR} stopOpacity={0.5} />
+          </linearGradient>
+          <marker
+            id="arrowHeadH"
+            markerWidth="8"
+            markerHeight="6"
+            refX="8"
+            refY="3"
+            orient="auto"
+          >
+            <path d="M0,0 L8,3 L0,6" fill={AXIS_LABEL_COLOR} opacity={0.4} />
+          </marker>
+          <marker
+            id="arrowHeadV"
+            markerWidth="8"
+            markerHeight="6"
+            refX="8"
+            refY="3"
+            orient="auto"
+          >
+            <path d="M0,0 L8,3 L0,6" fill={AXIS_LABEL_COLOR} opacity={0.4} />
+          </marker>
+        </defs>
+
+        {/* Horizontal axis arrow (below grid) */}
+        <line
+          x1={GRID_LEFT}
+          y1={GRID_BOTTOM + 30}
+          x2={GRID_RIGHT}
+          y2={GRID_BOTTOM + 30}
+          stroke="url(#arrowGradH)"
+          strokeWidth={1.5}
+          markerEnd="url(#arrowHeadH)"
+          opacity={labelOpacity}
+        />
+
+        {/* Vertical axis arrow (left of grid) */}
+        <line
+          x1={GRID_LEFT - 30}
+          y1={GRID_TOP}
+          x2={GRID_LEFT - 30}
+          y2={GRID_BOTTOM}
+          stroke="url(#arrowGradV)"
+          strokeWidth={1.5}
+          markerEnd="url(#arrowHeadV)"
+          opacity={labelOpacity}
+        />
       </svg>
 
-      {/* X-axis labels */}
+      {/* ── X-axis labels ── */}
+      {/* "Greenfield" — left side */}
       <div
         style={{
           position: "absolute",
-          left: gridLeft,
-          top: gridTop + gridSize + 50,
-          width: half,
+          left: GRID_LEFT,
+          top: GRID_BOTTOM + 42,
+          width: GRID_SIZE / 2,
           textAlign: "center",
           fontFamily: "Inter, sans-serif",
-          fontSize: axisLabelSize,
+          fontSize: AXIS_LABEL_SIZE,
           fontWeight: 400,
-          color: axisLabelColor,
+          color: AXIS_LABEL_COLOR,
           opacity: labelOpacity,
         }}
       >
-        Greenfield
+        {X_LABELS[0]}
       </div>
+      {/* "Brownfield" — right side */}
       <div
         style={{
           position: "absolute",
-          left: gridLeft + half,
-          top: gridTop + gridSize + 50,
-          width: half,
+          left: MID_X,
+          top: GRID_BOTTOM + 42,
+          width: GRID_SIZE / 2,
           textAlign: "center",
           fontFamily: "Inter, sans-serif",
-          fontSize: axisLabelSize,
+          fontSize: AXIS_LABEL_SIZE,
           fontWeight: 400,
-          color: axisLabelColor,
+          color: AXIS_LABEL_COLOR,
           opacity: labelOpacity,
         }}
       >
-        Brownfield
+        {X_LABELS[1]}
       </div>
 
-      {/* Y-axis labels */}
+      {/* ── Y-axis labels ── */}
+      {/* "In-Distribution" — top */}
       <div
         style={{
           position: "absolute",
-          left: gridLeft - 180,
-          top: gridTop,
-          width: 160,
-          height: half,
+          right: 1920 - GRID_LEFT + 16,
+          top: GRID_TOP,
+          height: GRID_SIZE / 2,
           display: "flex",
           alignItems: "center",
-          justifyContent: "flex-end",
           fontFamily: "Inter, sans-serif",
-          fontSize: axisLabelSize,
+          fontSize: AXIS_LABEL_SIZE,
           fontWeight: 400,
-          color: axisLabelColor,
+          color: AXIS_LABEL_COLOR,
           opacity: labelOpacity,
-          textAlign: "right",
+          writingMode: "vertical-rl",
+          textOrientation: "mixed",
+          transform: "rotate(180deg)",
         }}
       >
-        In-Distribution
+        {Y_LABELS[0]}
       </div>
+      {/* "Out-of-Distribution" — bottom */}
       <div
         style={{
           position: "absolute",
-          left: gridLeft - 180,
-          top: gridTop + half,
-          width: 160,
-          height: half,
+          right: 1920 - GRID_LEFT + 16,
+          top: MID_Y,
+          height: GRID_SIZE / 2,
           display: "flex",
           alignItems: "center",
-          justifyContent: "flex-end",
           fontFamily: "Inter, sans-serif",
-          fontSize: axisLabelSize,
+          fontSize: AXIS_LABEL_SIZE,
           fontWeight: 400,
-          color: axisLabelColor,
+          color: AXIS_LABEL_COLOR,
           opacity: labelOpacity,
-          textAlign: "right",
+          writingMode: "vertical-rl",
+          textOrientation: "mixed",
+          transform: "rotate(180deg)",
         }}
       >
-        Out-of-Distribution
+        {Y_LABELS[1]}
       </div>
-    </div>
+    </>
   );
 };
 

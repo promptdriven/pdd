@@ -1,44 +1,36 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  CALLOUT_FILL,
-  CALLOUT_RADIUS,
-  CALLOUT_BORDER_WIDTH,
-  FONT_FAMILY,
-  MAIN_TEXT_SIZE,
-  SOURCE_TEXT_SIZE,
-  FINE_PRINT_SIZE,
-  SOURCE_COLOR,
-  FINE_PRINT_COLOR,
-  FINE_PRINT_OPACITY,
-} from "./constants";
+import React from 'react';
+import {interpolate, useCurrentFrame, Easing} from 'remotion';
 
 export interface AnnotationCalloutProps {
-  /** Frame at which this annotation starts animating in (relative to parent Sequence) */
-  startFrame: number;
-  /** Accent / border color */
-  accentColor: string;
-  /** Primary stat text */
+  /** Frame offset within the parent Sequence (already handled by Sequence from=) */
+  borderColor: string;
   mainText: string;
-  /** Source label e.g. "(GitHub, 2022)" */
   source: string;
-  /** Fine-print description */
   finePrint: string;
-  /** Position of the callout box */
+  /** Position of the callout box top-left corner */
   boxX: number;
   boxY: number;
-  /** Target point on the chart line where the connector ends */
+  /** Position of the connector target (on the chart line) */
   targetX: number;
   targetY: number;
 }
 
-const CONNECTOR_DRAW_FRAMES = 30;
-const BOX_SCALE_FRAMES = 20;
-const TYPE_FRAMES_PER_CHAR = 2;
+const CALLOUT_FILL = '#1E293B';
+const CALLOUT_BORDER_WIDTH = 1.5;
+const CALLOUT_RADIUS = 8;
+const CALLOUT_PADDING = 16;
+const CALLOUT_WIDTH = 340;
+
+const CONNECTOR_DRAW_DURATION = 30;
+const BOX_SCALE_DURATION = 20;
+const TEXT_FRAMES_PER_CHAR = 2;
+
+const SOURCE_COLOR = '#94A3B8';
+const FINEPRINT_COLOR = '#64748B';
+const FINEPRINT_OPACITY = 0.78;
 
 const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
-  startFrame,
-  accentColor,
+  borderColor,
   mainText,
   source,
   finePrint,
@@ -48,126 +40,117 @@ const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
   targetY,
 }) => {
   const frame = useCurrentFrame();
-  const localFrame = frame - startFrame;
 
-  if (localFrame < 0) return null;
-
-  // Phase 1: Connector line draws from callout toward target
+  // ── Phase 1: connector line draws (0 → 30 frames) ───────────────
   const connectorProgress = interpolate(
-    localFrame,
-    [0, CONNECTOR_DRAW_FRAMES],
+    frame,
+    [0, CONNECTOR_DRAW_DURATION],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
-  // Phase 2: Callout box scales in (with overshoot via back easing)
-  const boxScaleStart = CONNECTOR_DRAW_FRAMES;
+  // Connector: from box edge to target point on chart line
+  const connectorStartX = boxX;
+  const connectorStartY = boxY + 30; // roughly middle-left of callout box
+  const currentEndX =
+    connectorStartX + (targetX - connectorStartX) * connectorProgress;
+  const currentEndY =
+    connectorStartY + (targetY - connectorStartY) * connectorProgress;
+
+  // ── Phase 2: callout box scales in (frames 20 → 40, with overlap) ──
+  const boxScaleStart = CONNECTOR_DRAW_DURATION - 10;
   const boxScale = interpolate(
-    localFrame,
-    [boxScaleStart, boxScaleStart + BOX_SCALE_FRAMES],
+    frame,
+    [boxScaleStart, boxScaleStart + BOX_SCALE_DURATION],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.back(1.4)),
-    }
+    },
   );
-
   const boxOpacity = interpolate(
-    localFrame,
+    frame,
     [boxScaleStart, boxScaleStart + 10],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+    },
   );
 
-  // Phase 3: Text types in character by character
-  const textStart = boxScaleStart + BOX_SCALE_FRAMES;
-  const totalMainChars = mainText.length;
-  const mainTextVisible = Math.floor(
+  // ── Phase 3: text type-in (starts after box is mostly visible) ───
+  const textStart = boxScaleStart + BOX_SCALE_DURATION - 5;
+  const mainTextChars = Math.floor(
     interpolate(
-      localFrame,
-      [textStart, textStart + totalMainChars * TYPE_FRAMES_PER_CHAR],
-      [0, totalMainChars],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.out(Easing.quad),
-      }
-    )
+      frame,
+      [textStart, textStart + mainText.length * TEXT_FRAMES_PER_CHAR],
+      [0, mainText.length],
+      {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+    ),
   );
-
-  const sourceStart = textStart + totalMainChars * TYPE_FRAMES_PER_CHAR;
-  const totalSourceChars = source.length;
-  const sourceVisible = Math.floor(
+  const sourceDelay = textStart + mainText.length * TEXT_FRAMES_PER_CHAR + 4;
+  const sourceChars = Math.floor(
     interpolate(
-      localFrame,
-      [sourceStart, sourceStart + totalSourceChars * TYPE_FRAMES_PER_CHAR],
-      [0, totalSourceChars],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.out(Easing.quad),
-      }
-    )
+      frame,
+      [sourceDelay, sourceDelay + source.length * TEXT_FRAMES_PER_CHAR],
+      [0, source.length],
+      {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+    ),
   );
-
-  const finePrintStart = sourceStart + totalSourceChars * TYPE_FRAMES_PER_CHAR;
-  const totalFinePrintChars = finePrint.length;
-  const finePrintVisible = Math.floor(
+  const finePrintDelay = sourceDelay + source.length * TEXT_FRAMES_PER_CHAR + 4;
+  const finePrintChars = Math.floor(
     interpolate(
-      localFrame,
-      [finePrintStart, finePrintStart + totalFinePrintChars * TYPE_FRAMES_PER_CHAR],
-      [0, totalFinePrintChars],
-      {
-        extrapolateLeft: "clamp",
-        extrapolateRight: "clamp",
-        easing: Easing.out(Easing.quad),
-      }
-    )
+      frame,
+      [
+        finePrintDelay,
+        finePrintDelay + finePrint.length * TEXT_FRAMES_PER_CHAR,
+      ],
+      [0, finePrint.length],
+      {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+    ),
   );
 
-  // Connector line: from left edge of callout box to target on chart
-  const connectorFromX = boxX;
-  const connectorFromY = boxY + 30; // mid-height of box roughly
-  const currentEndX = connectorFromX + (targetX - connectorFromX) * connectorProgress;
-  const currentEndY = connectorFromY + (targetY - connectorFromY) * connectorProgress;
-
-  const calloutWidth = 320;
-  const calloutHeight = 90;
+  // Small pulsing dot at the connector target
+  const dotPulse = interpolate(
+    frame,
+    [CONNECTOR_DRAW_DURATION, CONNECTOR_DRAW_DURATION + 20],
+    [0, 1],
+    {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'},
+  );
 
   return (
-    <>
-      {/* Connector line */}
+    <div style={{position: 'absolute', inset: 0, pointerEvents: 'none'}}>
+      {/* Connector line (SVG) */}
       <svg
         width={1920}
         height={1080}
         viewBox="0 0 1920 1080"
-        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+        style={{position: 'absolute', top: 0, left: 0}}
       >
-        <line
-          x1={connectorFromX}
-          y1={connectorFromY}
-          x2={currentEndX}
-          y2={currentEndY}
-          stroke={accentColor}
-          strokeWidth={1}
-          opacity={0.5}
-        />
-        {/* Small circle at the target end */}
-        {connectorProgress > 0.9 && (
+        {connectorProgress > 0 && (
+          <line
+            x1={connectorStartX}
+            y1={connectorStartY}
+            x2={currentEndX}
+            y2={currentEndY}
+            stroke={borderColor}
+            strokeWidth={1}
+            opacity={0.65}
+          />
+        )}
+        {/* Target dot */}
+        {dotPulse > 0 && (
           <circle
-            cx={currentEndX}
-            cy={currentEndY}
-            r={4}
-            fill={accentColor}
-            opacity={0.6 * connectorProgress}
+            cx={targetX}
+            cy={targetY}
+            r={4 * dotPulse}
+            fill={borderColor}
+            opacity={0.7 * dotPulse}
           />
         )}
       </svg>
@@ -175,77 +158,77 @@ const AnnotationCallout: React.FC<AnnotationCalloutProps> = ({
       {/* Callout box */}
       <div
         style={{
-          position: "absolute",
+          position: 'absolute',
           left: boxX,
           top: boxY,
-          width: calloutWidth,
-          height: calloutHeight,
+          width: CALLOUT_WIDTH,
+          padding: CALLOUT_PADDING,
           backgroundColor: CALLOUT_FILL,
-          border: `${CALLOUT_BORDER_WIDTH}px solid ${accentColor}`,
+          border: `${CALLOUT_BORDER_WIDTH}px solid ${borderColor}`,
           borderRadius: CALLOUT_RADIUS,
-          padding: "12px 16px",
           transform: `scale(${boxScale})`,
-          transformOrigin: "left center",
+          transformOrigin: 'left center',
           opacity: boxOpacity,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "center",
-          gap: 4,
         }}
       >
         {/* Main text */}
         <div
           style={{
-            fontFamily: FONT_FAMILY,
-            fontSize: MAIN_TEXT_SIZE,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 18,
             fontWeight: 700,
-            color: accentColor,
-            lineHeight: 1.3,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
+            color: borderColor,
+            minHeight: 24,
             opacity: 0.95,
           }}
         >
-          {mainText.slice(0, mainTextVisible)}
-          {mainTextVisible < totalMainChars && (
-            <span style={{ opacity: frame % 6 < 3 ? 1 : 0 }}>|</span>
+          {mainText.slice(0, mainTextChars)}
+          {mainTextChars < mainText.length && (
+            <span
+              style={{
+                display: 'inline-block',
+                width: 2,
+                height: 18,
+                backgroundColor: borderColor,
+                marginLeft: 1,
+                verticalAlign: 'text-bottom',
+                opacity: frame % 10 < 5 ? 1 : 0.8,
+              }}
+            />
           )}
         </div>
 
         {/* Source */}
         <div
           style={{
-            fontFamily: FONT_FAMILY,
-            fontSize: SOURCE_TEXT_SIZE,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 14,
             fontWeight: 400,
             color: SOURCE_COLOR,
-            lineHeight: 1.3,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
+            marginTop: 4,
+            minHeight: 18,
             opacity: 0.85,
           }}
         >
-          {source.slice(0, sourceVisible)}
+          {source.slice(0, sourceChars)}
         </div>
 
         {/* Fine print */}
         <div
           style={{
-            fontFamily: FONT_FAMILY,
-            fontSize: FINE_PRINT_SIZE,
-            fontWeight: 400,
-            fontStyle: "italic",
-            color: FINE_PRINT_COLOR,
-            lineHeight: 1.3,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            opacity: FINE_PRINT_OPACITY,
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 13,
+            fontStyle: 'italic',
+            color: FINEPRINT_COLOR,
+            marginTop: 6,
+            minHeight: 16,
+            opacity: FINEPRINT_OPACITY,
           }}
         >
-          {finePrint.slice(0, finePrintVisible)}
+          {finePrint.slice(0, finePrintChars)}
         </div>
       </div>
-    </>
+    </div>
   );
 };
 

@@ -1,115 +1,84 @@
 import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import { interpolate, useCurrentFrame } from "remotion";
 import {
-  BLUE_LINE_COLOR,
-  AMBER_LINE_COLOR,
+  LEGEND_ITEMS,
   BLUE_LINE_START,
   AMBER_SOLID_START,
-  DASHED_START,
+  DASHED_LINE_START,
 } from "./constants";
 
-interface LegendItemProps {
-  label: string;
-  color: string;
-  dashed?: boolean;
-  opacity: number;
-}
+const LEGEND_X = 1400;
+const LEGEND_Y = 60;
+const LEGEND_ITEM_HEIGHT = 30;
+const LEGEND_SWATCH_WIDTH = 32;
 
-const LegendItem: React.FC<LegendItemProps> = ({
-  label,
-  color,
-  dashed = false,
-  opacity,
-}) => (
-  <div
-    style={{
-      display: "flex",
-      alignItems: "center",
-      gap: 10,
-      opacity,
-    }}
-  >
-    <svg width={30} height={4}>
-      <line
-        x1={0}
-        y1={2}
-        x2={30}
-        y2={2}
-        stroke={color}
-        strokeWidth={3}
-        strokeDasharray={dashed ? "8 6" : "none"}
-      />
-    </svg>
-    <span
-      style={{
-        color,
-        fontFamily: "Inter, sans-serif",
-        fontSize: 14,
-        fontWeight: 600,
-      }}
-    >
-      {label}
-    </span>
-  </div>
-);
-
-export const ChartLegend: React.FC = () => {
+export const Legend: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const blueOpacity = interpolate(frame, [BLUE_LINE_START, BLUE_LINE_START + 30], [0, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  const amberSolidOpacity = interpolate(
-    frame,
-    [AMBER_SOLID_START, AMBER_SOLID_START + 30],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
-
-  const amberDashedOpacity = interpolate(
-    frame,
-    [DASHED_START, DASHED_START + 30],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    }
-  );
+  // Each legend item appears when its corresponding line starts drawing
+  const appearFrames = [BLUE_LINE_START, AMBER_SOLID_START, DASHED_LINE_START];
 
   return (
     <div
       style={{
         position: "absolute",
-        right: 80,
-        top: 40,
+        top: LEGEND_Y,
+        left: LEGEND_X,
         display: "flex",
         flexDirection: "column",
         gap: 8,
       }}
     >
-      <LegendItem
-        label="Cost to generate"
-        color={BLUE_LINE_COLOR}
-        opacity={blueOpacity}
-      />
-      <LegendItem
-        label="Immediate patch cost"
-        color={AMBER_LINE_COLOR}
-        opacity={amberSolidOpacity}
-      />
-      <LegendItem
-        label="Total cost (with debt)"
-        color={AMBER_LINE_COLOR}
-        dashed
-        opacity={amberDashedOpacity}
-      />
+      {LEGEND_ITEMS.map((item, idx) => {
+        const opacity = interpolate(
+          frame,
+          [appearFrames[idx], appearFrames[idx] + 20],
+          [0, 1],
+          {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          }
+        );
+
+        return (
+          <div
+            key={item.label}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              opacity,
+              height: LEGEND_ITEM_HEIGHT,
+            }}
+          >
+            {/* Swatch line */}
+            <svg width={LEGEND_SWATCH_WIDTH} height={4}>
+              <line
+                x1={0}
+                y1={2}
+                x2={LEGEND_SWATCH_WIDTH}
+                y2={2}
+                stroke={item.color}
+                strokeWidth={3}
+                strokeDasharray={item.dashed ? "8 6" : "none"}
+              />
+            </svg>
+            <span
+              style={{
+                fontFamily: "Inter, sans-serif",
+                fontSize: 14,
+                fontWeight: 600,
+                color: item.color,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {item.label}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 };
 
-export default ChartLegend;
+export default Legend;

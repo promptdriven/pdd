@@ -4,25 +4,27 @@ import {
   INSIGHT_TEXT,
   TEXT_COLOR,
   TEXT_OPACITY,
+  TEXT_Y,
   TEXT_FONT_SIZE,
   TEXT_FONT_WEIGHT,
-  TEXT_Y,
+  TEXT_FONT_FAMILY,
+  CANVAS_WIDTH,
   TEXT_FADE_IN_START,
-  TEXT_FADE_IN_END,
+  TEXT_FADE_IN_DURATION,
   TEXT_FADE_OUT_START,
-  TEXT_FADE_OUT_END,
+  TEXT_FADE_OUT_DURATION,
 } from './constants';
 
 /**
- * The insight text that fades in slowly, holds, then fades out.
+ * The quiet insight text that fades in, holds, then fades out.
  */
 export const InsightText: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Fade in: TEXT_FADE_IN_START..TEXT_FADE_IN_END with easeOut(quad)
+  // Fade in: 90 → 150
   const fadeIn = interpolate(
     frame,
-    [TEXT_FADE_IN_START, TEXT_FADE_IN_END],
+    [TEXT_FADE_IN_START, TEXT_FADE_IN_START + TEXT_FADE_IN_DURATION],
     [0, 1],
     {
       extrapolateLeft: 'clamp',
@@ -31,10 +33,10 @@ export const InsightText: React.FC = () => {
     },
   );
 
-  // Fade out: TEXT_FADE_OUT_START..TEXT_FADE_OUT_END with easeIn(quad)
+  // Fade out: 300 → 330
   const fadeOut = interpolate(
     frame,
-    [TEXT_FADE_OUT_START, TEXT_FADE_OUT_END],
+    [TEXT_FADE_OUT_START, TEXT_FADE_OUT_START + TEXT_FADE_OUT_DURATION],
     [1, 0],
     {
       extrapolateLeft: 'clamp',
@@ -45,7 +47,7 @@ export const InsightText: React.FC = () => {
 
   const opacity = fadeIn * fadeOut * TEXT_OPACITY;
 
-  if (frame < TEXT_FADE_IN_START) return null;
+  if (opacity <= 0) return null;
 
   return (
     <div
@@ -53,22 +55,21 @@ export const InsightText: React.FC = () => {
         position: 'absolute',
         top: TEXT_Y,
         left: 0,
-        width: '100%',
+        width: CANVAS_WIDTH,
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        transform: 'translateY(-50%)',
       }}
     >
       <span
         style={{
-          fontFamily: 'Inter, sans-serif',
+          fontFamily: TEXT_FONT_FAMILY,
           fontSize: TEXT_FONT_SIZE,
           fontWeight: TEXT_FONT_WEIGHT,
           color: TEXT_COLOR,
           opacity,
-          letterSpacing: '0.02em',
           textAlign: 'center',
+          lineHeight: 1.5,
         }}
       >
         {INSIGHT_TEXT}

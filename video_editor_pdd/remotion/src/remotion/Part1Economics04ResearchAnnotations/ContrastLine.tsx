@@ -1,57 +1,54 @@
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
-import {
-  CONTRAST_LINE_COLOR,
-  CONTRAST_LINE_OPACITY,
-  CONTRAST_LINE_START,
-  CONTRAST_LINE_DRAW,
-  GITHUB_CALLOUT_X,
-  GITHUB_CALLOUT_Y,
-  UPLEVEL_CALLOUT_X,
-  UPLEVEL_CALLOUT_Y,
-} from "./constants";
+import React from 'react';
+import {interpolate, useCurrentFrame, Easing} from 'remotion';
 
-/** Dashed vertical line connecting the two annotation callout boxes. */
-const ContrastLine: React.FC = () => {
+export interface ContrastLineProps {
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  color: string;
+  lineOpacity: number;
+  drawDuration: number;
+}
+
+const ContrastLine: React.FC<ContrastLineProps> = ({
+  fromX,
+  fromY,
+  toX,
+  toY,
+  color,
+  lineOpacity,
+  drawDuration,
+}) => {
   const frame = useCurrentFrame();
-  const localFrame = frame - CONTRAST_LINE_START;
 
-  if (localFrame < 0) return null;
+  const progress = interpolate(frame, [0, drawDuration], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+    easing: Easing.inOut(Easing.quad),
+  });
 
-  const drawProgress = interpolate(
-    localFrame,
-    [0, CONTRAST_LINE_DRAW],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.quad),
-    }
-  );
+  const currentToX = fromX + (toX - fromX) * progress;
+  const currentToY = fromY + (toY - fromY) * progress;
 
-  // Line runs vertically between the two callout box positions
-  // From bottom of Uplevel callout to top of GitHub callout
-  const lineX = GITHUB_CALLOUT_X + 160; // center of 320px-wide callout
-  const fromY = UPLEVEL_CALLOUT_Y + 90; // bottom of upper box
-  const toY = GITHUB_CALLOUT_Y; // top of lower box
-  const currentToY = fromY + (toY - fromY) * drawProgress;
+  if (progress <= 0) return null;
 
   return (
     <svg
       width={1920}
       height={1080}
       viewBox="0 0 1920 1080"
-      style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+      style={{position: 'absolute', top: 0, left: 0, pointerEvents: 'none'}}
     >
       <line
-        x1={lineX}
+        x1={fromX}
         y1={fromY}
-        x2={lineX}
+        x2={currentToX}
         y2={currentToY}
-        stroke={CONTRAST_LINE_COLOR}
+        stroke={color}
         strokeWidth={1}
         strokeDasharray="4 4"
-        opacity={CONTRAST_LINE_OPACITY * drawProgress}
+        opacity={lineOpacity}
       />
     </svg>
   );

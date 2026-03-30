@@ -1,112 +1,112 @@
-import React, { useMemo } from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+// CoverageCounter.tsx — Displays "Context coverage:" label + animated percentage.
+// Color shifts from green → amber → red → dark-red as coverage drops.
+
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
+  GROWTH_STAGES,
+  TRANSITION_DURATION,
   COUNTER_X,
   COUNTER_Y,
-  LABEL_COLOR,
-  GROWTH_STAGES,
-} from "./constants";
+  COUNTER_LABEL_COLOR,
+  COUNTER_LABEL_SIZE,
+  COUNTER_VALUE_SIZE,
+} from './constants';
 
-/**
- * Top-right coverage counter showing "Context coverage: XX%"
- * with color transitions and spring-animated number changes.
- */
-
-interface CoverageCounterProps {
-  currentStageIndex: number;
-  transitionProgress: number;
+/** Lerp between two hex colors. */
+function lerpColor(a: string, b: string, t: number): string {
+  const parseHex = (hex: string) => {
+    const h = hex.replace('#', '');
+    return [
+      parseInt(h.substring(0, 2), 16),
+      parseInt(h.substring(2, 4), 16),
+      parseInt(h.substring(4, 6), 16),
+    ];
+  };
+  const ca = parseHex(a);
+  const cb = parseHex(b);
+  const r = Math.round(ca[0] + (cb[0] - ca[0]) * t);
+  const g = Math.round(ca[1] + (cb[1] - ca[1]) * t);
+  const bl = Math.round(ca[2] + (cb[2] - ca[2]) * t);
+  return `rgb(${r},${g},${bl})`;
 }
 
-const CoverageCounter: React.FC<CoverageCounterProps> = ({
-  currentStageIndex,
-  transitionProgress,
-}) => {
+export const CoverageCounter: React.FC = () => {
   const frame = useCurrentFrame();
 
-  const stage = GROWTH_STAGES[currentStageIndex];
-  const prevStage =
-    currentStageIndex > 0
-      ? GROWTH_STAGES[currentStageIndex - 1]
-      : GROWTH_STAGES[0];
+  // Determine current and target coverage/color based on frame
+  let displayPercent = GROWTH_STAGES[0].coveragePercent;
+  let displayColor = GROWTH_STAGES[0].coverageColor;
 
-  // Interpolate coverage number during transitions
-  const displayCoverage = useMemo(() => {
-    if (transitionProgress >= 1 || currentStageIndex === 0) {
-      return stage.coverage;
+  for (let i = 1; i < GROWTH_STAGES.length; i++) {
+    const stage = GROWTH_STAGES[i];
+    const prevStage = GROWTH_STAGES[i - 1];
+    const tStart = stage.startFrame;
+    const tEnd = tStart + TRANSITION_DURATION;
+
+    if (frame >= tStart) {
+      const t = interpolate(frame, [tStart, tEnd], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.out(Easing.quad),
+      });
+      displayPercent = Math.round(
+        prevStage.coveragePercent +
+          (stage.coveragePercent - prevStage.coveragePercent) * t,
+      );
+      // Color transition over 30 frames (slightly faster than number)
+      const colorT = interpolate(frame, [tStart, tStart + 30], [0, 1], {
+        extrapolateLeft: 'clamp',
+        extrapolateRight: 'clamp',
+        easing: Easing.out(Easing.quad),
+      });
+      displayColor = lerpColor(prevStage.coverageColor, stage.coverageColor, colorT);
     }
-    return Math.round(
-      prevStage.coverage +
-        (stage.coverage - prevStage.coverage) * transitionProgress
-    );
-  }, [stage, prevStage, transitionProgress, currentStageIndex]);
+  }
 
-  // Interpolate color
-  const coverageColor = useMemo(() => {
-    if (transitionProgress >= 1 || currentStageIndex === 0) {
-      return stage.coverageColor;
-    }
-    // Parse hex colors and lerp
-    const from = hexToRgb(prevStage.coverageColor);
-    const to = hexToRgb(stage.coverageColor);
-    const t = transitionProgress;
-    const r = Math.round(from.r + (to.r - from.r) * t);
-    const g = Math.round(from.g + (to.g - from.g) * t);
-    const b = Math.round(from.b + (to.b - from.b) * t);
-    return `rgb(${r}, ${g}, ${b})`;
-  }, [stage, prevStage, transitionProgress, currentStageIndex]);
-
-  // Visible from frame 0, fully bright by frame 20
-  const opacity = interpolate(frame, [0, 20], [0.7, 1], {
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
+  // Fade in with the grid
+  const opacity = interpolate(frame, [30, 60], [0, 1], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
   });
 
   return (
     <div
       style={{
-        position: "absolute",
+        position: 'absolute',
         left: COUNTER_X,
         top: COUNTER_Y,
+        transform: 'translateX(-50%)',
+        textAlign: 'center',
         opacity,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "flex-end",
         zIndex: 20,
       }}
     >
-      <span
+      <div
         style={{
-          fontFamily: "Inter, sans-serif",
-          fontSize: 14,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: COUNTER_LABEL_SIZE,
           fontWeight: 400,
-          color: LABEL_COLOR,
-          marginBottom: 4,
+          color: COUNTER_LABEL_COLOR,
+          marginBottom: 6,
+          letterSpacing: '0.02em',
         }}
       >
         Context coverage:
-      </span>
-      <span
+      </div>
+      <div
         style={{
-          fontFamily: "Inter, sans-serif",
-          fontSize: 36,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: COUNTER_VALUE_SIZE,
           fontWeight: 700,
-          color: coverageColor,
+          color: displayColor,
           lineHeight: 1,
         }}
       >
-        {displayCoverage}%
-      </span>
+        {displayPercent}%
+      </div>
     </div>
   );
 };
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const h = hex.replace("#", "");
-  return {
-    r: parseInt(h.substring(0, 2), 16),
-    g: parseInt(h.substring(2, 4), 16),
-    b: parseInt(h.substring(4, 6), 16),
-  };
-}
 
 export default CoverageCounter;

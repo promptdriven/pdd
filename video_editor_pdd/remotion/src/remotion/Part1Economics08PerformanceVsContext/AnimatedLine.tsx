@@ -1,100 +1,91 @@
-import React from "react";
-import { interpolate, Easing } from "remotion";
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
   LINE_COLOR,
-  CHART_LEFT,
-  CHART_TOP,
-  CHART_BOTTOM,
-  CHART_PLOT_WIDTH,
-  CHART_PLOT_HEIGHT,
   PERFORMANCE_DATA,
-  INSET_WIDTH,
-  INSET_HEIGHT,
   PHASE_LINE_DRAW_START,
-} from "./constants";
+  PHASE_LINE_DRAW_END,
+  CHART_PADDING_LEFT,
+  CHART_PADDING_RIGHT,
+  CHART_PADDING_TOP,
+  CHART_PADDING_BOTTOM,
+} from './constants';
 
 interface AnimatedLineProps {
-  localFrame: number;
+  chartWidth: number;
+  chartHeight: number;
 }
 
 /**
- * SVG animated declining line for the performance chart.
- * Draws from left to right over 120 frames starting at PHASE_LINE_DRAW_START.
- * Also renders a gradient fill under the line and animated data points.
+ * Draws the declining performance line with animated stroke-dashoffset.
+ * Also renders data-point circles that appear as the line reaches them.
  */
-export const AnimatedLine: React.FC<AnimatedLineProps> = ({ localFrame }) => {
-  // Line draw progress (90 → 210 frames, 120-frame duration)
-  const drawProgress = interpolate(
-    localFrame,
-    [PHASE_LINE_DRAW_START, PHASE_LINE_DRAW_START + 120],
-    [0, 1],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.inOut(Easing.cubic),
-    }
-  );
+export const AnimatedLine: React.FC<AnimatedLineProps> = ({
+  chartWidth,
+  chartHeight,
+}) => {
+  const frame = useCurrentFrame();
 
-  // Convert data points to pixel coordinates
-  const points = PERFORMANCE_DATA.map((dp) => ({
-    px: CHART_LEFT + dp.x * CHART_PLOT_WIDTH,
-    py: CHART_BOTTOM - dp.y * CHART_PLOT_HEIGHT,
-    label: dp.label,
-    value: dp.y,
+  const plotLeft = CHART_PADDING_LEFT;
+  const plotRight = chartWidth - CHART_PADDING_RIGHT;
+  const plotTop = CHART_PADDING_TOP;
+  const plotBottom = chartHeight - CHART_PADDING_BOTTOM;
+  const plotW = plotRight - plotLeft;
+  const plotH = plotBottom - plotTop;
+
+  // Map data to chart coordinates
+  const points = PERFORMANCE_DATA.map((d, i) => ({
+    x: plotLeft + (i / (PERFORMANCE_DATA.length - 1)) * plotW,
+    y: plotTop + (1 - d.value) * plotH,
+    label: d.label,
+    value: d.value,
   }));
 
   // Build SVG path
   const pathD = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.px} ${p.py}`)
-    .join(" ");
-
-  // Build area fill path (line + close to bottom)
-  const areaD =
-    pathD +
-    ` L ${points[points.length - 1].px} ${CHART_BOTTOM}` +
-    ` L ${points[0].px} ${CHART_BOTTOM} Z`;
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`)
+    .join(' ');
 
   // Approximate total path length for dash animation
   let totalLength = 0;
   for (let i = 1; i < points.length; i++) {
-    const dx = points[i].px - points[i - 1].px;
-    const dy = points[i].py - points[i - 1].py;
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
     totalLength += Math.sqrt(dx * dx + dy * dy);
   }
 
-  const gradientId = "line-gradient-fill";
+  // Draw progress: 0 → 1
+  const drawProgress = interpolate(
+    frame,
+    [PHASE_LINE_DRAW_START, PHASE_LINE_DRAW_END],
+    [0, 1],
+    {
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
+      easing: Easing.inOut(Easing.cubic),
+    },
+  );
+
+  const dashOffset = totalLength * (1 - drawProgress);
 
   return (
     <svg
-      width={INSET_WIDTH}
-      height={INSET_HEIGHT}
-      style={{ position: "absolute", top: 0, left: 0 }}
+      width={chartWidth}
+      height={chartHeight}
+      style={{ position: 'absolute', top: 0, left: 0 }}
     >
+      {/* Gradient glow behind the line */}
       <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={LINE_COLOR} stopOpacity={0.25} />
-          <stop offset="100%" stopColor={LINE_COLOR} stopOpacity={0.02} />
-        </linearGradient>
-        {/* Clip the area fill to the drawn portion */}
-        <clipPath id="line-clip">
-          <rect
-            x={CHART_LEFT}
-            y={CHART_TOP}
-            width={CHART_PLOT_WIDTH * drawProgress}
-            height={CHART_PLOT_HEIGHT + (CHART_BOTTOM - CHART_TOP - CHART_PLOT_HEIGHT) + 10}
-          />
-        </clipPath>
+        <filter id="lineGlow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
 
-      {/* Gradient fill under line */}
-      <path
-        d={areaD}
-        fill={`url(#${gradientId})`}
-        clipPath="url(#line-clip)"
-        opacity={drawProgress > 0 ? 0.6 : 0}
-      />
-
-      {/* Animated line */}
+      {/* The animated line */}
       <path
         d={pathD}
         fill="none"
@@ -103,44 +94,39 @@ export const AnimatedLine: React.FC<AnimatedLineProps> = ({ localFrame }) => {
         strokeLinecap="round"
         strokeLinejoin="round"
         strokeDasharray={totalLength}
-        strokeDashoffset={totalLength * (1 - drawProgress)}
+        strokeDashoffset={dashOffset}
+        filter="url(#lineGlow)"
       />
 
-      {/* Data point dots */}
+      {/* Data-point circles — appear as line reaches them */}
       {points.map((p, i) => {
         // Each point appears when the line reaches it
-        const pointThreshold = i / (points.length - 1);
-        const pointOpacity =
-          drawProgress >= pointThreshold
-            ? interpolate(
-                drawProgress,
-                [
-                  Math.max(0, pointThreshold - 0.05),
-                  Math.min(1, pointThreshold + 0.05),
-                ],
-                [0, 1],
-                { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-              )
-            : 0;
+        const pointFraction = i / (points.length - 1);
+        const pointOpacity = interpolate(
+          drawProgress,
+          [Math.max(0, pointFraction - 0.05), pointFraction + 0.05],
+          [0, 1],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
+        );
 
         return (
-          <g key={p.label} opacity={pointOpacity}>
-            {/* Outer glow */}
-            <circle cx={p.px} cy={p.py} r={6} fill={LINE_COLOR} opacity={0.2} />
-            {/* Inner dot */}
-            <circle cx={p.px} cy={p.py} r={3} fill={LINE_COLOR} />
-            {/* Value label */}
-            <text
-              x={p.px}
-              y={p.py - 10}
-              textAnchor="middle"
-              fontFamily="Inter, sans-serif"
-              fontSize={10}
+          <g key={i}>
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r={4}
               fill={LINE_COLOR}
-              opacity={0.9}
-            >
-              {Math.round(p.value * 100)}%
-            </text>
+              opacity={pointOpacity}
+            />
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r={7}
+              fill="none"
+              stroke={LINE_COLOR}
+              strokeWidth={1.5}
+              opacity={pointOpacity * 0.4}
+            />
           </g>
         );
       })}

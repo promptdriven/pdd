@@ -1,3 +1,5 @@
+// Part1Economics20TryItYourself.tsx
+// Handwritten challenge card: "Try it yourself." with instruction text.
 import React from "react";
 import {
   AbsoluteFill,
@@ -6,94 +8,86 @@ import {
   interpolate,
   Easing,
 } from "remotion";
-import { NoiseTexture } from "./NoiseTexture";
-import { HandwrittenText } from "./HandwrittenText";
-import { WavyUnderline } from "./WavyUnderline";
+
+import NoiseTexture from "./NoiseTexture";
+import StrokeRevealText from "./StrokeRevealText";
+import WavyUnderline from "./WavyUnderline";
 import {
-  BG_COLOR,
-  MAIN_TEXT_COLOR,
-  ACCENT_COLOR,
+  BACKGROUND_COLOR,
   NOISE_COLOR,
   NOISE_OPACITY,
-  MAIN_FONT_SIZE,
+  CHALLENGE_TEXT_COLOR,
+  CHALLENGE_FONT_SIZE,
+  CHALLENGE_FONT_FAMILY,
+  CHALLENGE_Y,
+  CHALLENGE_ROTATION_DEG,
+  UNDERLINE_COLOR,
+  UNDERLINE_OPACITY,
+  INSTRUCTION_DIM_COLOR,
+  INSTRUCTION_BOLD_COLOR,
+  INSTRUCTION_DIM_OPACITY,
+  INSTRUCTION_BOLD_OPACITY,
   INSTRUCTION_FONT_SIZE,
+  INSTRUCTION_FONT_FAMILY,
   INSTRUCTION_LINE_HEIGHT,
-  MAIN_TEXT_Y,
   INSTRUCTION_START_Y,
-  MAIN_TEXT_ROTATION,
-  STROKE_WRITE_START,
-  STROKE_WRITE_END,
+  CANVAS_WIDTH,
+  STROKE_START,
+  STROKE_DURATION,
   UNDERLINE_START,
   UNDERLINE_DURATION,
-  UNDERLINE_OPACITY,
-  INSTRUCTION_FADE_DURATION,
-  INSTRUCTION_LINES,
-  TOTAL_DURATION,
+  LINE1_START,
+  LINE2_START,
+  LINE3_START,
+  LINE_FADE_DURATION,
+  INSTRUCTIONS,
+  TOTAL_FRAMES,
 } from "./constants";
 
-// ── Default props (empty — this is a self-contained title card) ──
-export const defaultPart1Economics20TryItYourselfProps = {};
+// ─── Instruction Line ─────────────────────────────────────────
 
-// ── Instruction Line Sub-Component ──
 interface InstructionLineProps {
   text: string;
-  weight: number;
-  color: string;
-  opacity: number;
+  bold: boolean;
+  y: number;
   startFrame: number;
   fadeDuration: number;
-  yPosition: number;
 }
 
 const InstructionLine: React.FC<InstructionLineProps> = ({
   text,
-  weight,
-  color,
-  opacity,
+  bold,
+  y,
   startFrame,
   fadeDuration,
-  yPosition,
 }) => {
   const frame = useCurrentFrame();
 
-  const lineOpacity = interpolate(
+  const opacity = interpolate(
     frame,
     [startFrame, startFrame + fadeDuration],
-    [0, opacity],
+    [0, bold ? INSTRUCTION_BOLD_OPACITY : INSTRUCTION_DIM_OPACITY],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.out(Easing.quad),
-    }
-  );
-
-  const translateY = interpolate(
-    frame,
-    [startFrame, startFrame + fadeDuration],
-    [8, 0],
-    {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
   return (
     <div
       style={{
         position: "absolute",
-        top: yPosition,
+        top: y,
         left: 0,
-        width: 1920,
+        width: CANVAS_WIDTH,
         textAlign: "center",
-        opacity: lineOpacity,
-        transform: `translateY(${translateY}px)`,
-        fontFamily: "'Inter', 'Helvetica Neue', Arial, sans-serif",
+        fontFamily: INSTRUCTION_FONT_FAMILY,
         fontSize: INSTRUCTION_FONT_SIZE,
-        fontWeight: weight,
-        color,
-        lineHeight: `${INSTRUCTION_LINE_HEIGHT}px`,
-        pointerEvents: "none",
+        fontWeight: bold ? 600 : 400,
+        color: bold ? INSTRUCTION_BOLD_COLOR : INSTRUCTION_DIM_COLOR,
+        opacity,
+        lineHeight: 1,
       }}
     >
       {text}
@@ -101,39 +95,45 @@ const InstructionLine: React.FC<InstructionLineProps> = ({
   );
 };
 
-// ── Main Component ──
+// ─── Main Component ───────────────────────────────────────────
+
+export const defaultPart1Economics20TryItYourselfProps = {};
+
 export const Part1Economics20TryItYourself: React.FC = () => {
+  const lineStarts = [LINE1_START, LINE2_START, LINE3_START];
+
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BG_COLOR,
+        backgroundColor: BACKGROUND_COLOR,
         overflow: "hidden",
       }}
     >
-      {/* Paper texture noise grain */}
+      {/* Subtle paper-grain noise overlay */}
       <NoiseTexture color={NOISE_COLOR} opacity={NOISE_OPACITY} />
 
-      {/* Handwritten "Try it yourself." with stroke-reveal animation */}
-      <Sequence from={STROKE_WRITE_START} durationInFrames={TOTAL_DURATION}>
-        <HandwrittenText
+      {/* "Try it yourself." — stroke-reveal handwritten text */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        <StrokeRevealText
           text="Try it yourself."
-          fontSize={MAIN_FONT_SIZE}
-          color={MAIN_TEXT_COLOR}
-          centerX={960}
-          centerY={MAIN_TEXT_Y}
-          rotation={MAIN_TEXT_ROTATION}
-          strokeWriteStart={STROKE_WRITE_START}
-          strokeWriteEnd={STROKE_WRITE_END}
+          fontFamily={CHALLENGE_FONT_FAMILY}
+          fontSize={CHALLENGE_FONT_SIZE}
+          color={CHALLENGE_TEXT_COLOR}
+          centerX={CANVAS_WIDTH / 2}
+          centerY={CHALLENGE_Y}
+          rotationDeg={CHALLENGE_ROTATION_DEG}
+          startFrame={STROKE_START}
+          duration={STROKE_DURATION}
         />
       </Sequence>
 
-      {/* Wavy underline */}
-      <Sequence from={0} durationInFrames={TOTAL_DURATION}>
+      {/* Hand-drawn wavy underline */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <WavyUnderline
-          centerX={960}
-          y={MAIN_TEXT_Y + 30}
+          centerX={CANVAS_WIDTH / 2}
+          y={CHALLENGE_Y + 28}
           width={420}
-          color={ACCENT_COLOR}
+          color={UNDERLINE_COLOR}
           opacity={UNDERLINE_OPACITY}
           strokeWidth={2}
           startFrame={UNDERLINE_START}
@@ -141,18 +141,16 @@ export const Part1Economics20TryItYourself: React.FC = () => {
         />
       </Sequence>
 
-      {/* Instruction text lines — fade in sequentially */}
-      <Sequence from={0} durationInFrames={TOTAL_DURATION}>
-        {INSTRUCTION_LINES.map((line, i) => (
+      {/* Instruction lines — fade in sequentially */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
+        {INSTRUCTIONS.map((line, i) => (
           <InstructionLine
             key={i}
             text={line.text}
-            weight={line.weight}
-            color={line.color}
-            opacity={line.opacity}
-            startFrame={line.startFrame}
-            fadeDuration={INSTRUCTION_FADE_DURATION}
-            yPosition={INSTRUCTION_START_Y + i * INSTRUCTION_LINE_HEIGHT}
+            bold={line.bold}
+            y={INSTRUCTION_START_Y + i * INSTRUCTION_LINE_HEIGHT}
+            startFrame={lineStarts[i]}
+            fadeDuration={LINE_FADE_DURATION}
           />
         ))}
       </Sequence>

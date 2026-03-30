@@ -1,98 +1,224 @@
-import React from 'react';
+import React from "react";
 import {
   AbsoluteFill,
   useCurrentFrame,
   interpolate,
   Easing,
-} from 'remotion';
-import { useVisualMediaAssetSrc } from '../_shared/visual-runtime';
-import { SplitPanel } from './SplitPanel';
-import {
-  CANVAS_WIDTH,
-  CANVAS_HEIGHT,
-  BACKGROUND_COLOR,
-  DIVIDER_COLOR,
-  DIVIDER_OPACITY,
-  DIVIDER_WIDTH,
-  DIVIDER_FADE_FRAMES,
-  DIVIDER_GAP,
-  PANEL_WIDTH,
-  LEFT_LABEL,
-  RIGHT_LABEL,
-} from './constants';
+  OffthreadVideo,
+  staticFile,
+} from "remotion";
+
+// ─── Constants ───────────────────────────────────────────────────────────
+const DURATION_FRAMES = 510;
+const FPS = 30;
+const WIDTH = 1920;
+const HEIGHT = 1080;
+const PANEL_WIDTH = 940;
+const DIVIDER_GAP = 40;
+const DIVIDER_THICKNESS = 2;
+const BACKGROUND_COLOR = "#000000";
+const DIVIDER_COLOR = "#FFFFFF";
+const DIVIDER_OPACITY = 0.6;
+const LABEL_COLOR = "#FFFFFF";
+const LABEL_FONT_SIZE = 20;
+const LABEL_OPACITY = 0.78;
+const LABEL_PADDING_BOTTOM = 32;
+const PANEL_FADE_DURATION = 30;
+const DIVIDER_FADE_DURATION = 15;
+
+// Fallback gradients when video is unavailable
+const LEFT_FALLBACK_GRADIENT =
+  "linear-gradient(135deg, #0B1A2E 0%, #1A3A5C 50%, #0D2240 100%)";
+const RIGHT_FALLBACK_GRADIENT =
+  "linear-gradient(135deg, #3D2B1F 0%, #5C3D2E 50%, #2C1A0E 100%)";
+
+// ─── Props ───────────────────────────────────────────────────────────────
 
 export const defaultPart1Economics14SplitDeveloperGrandmaProps = {};
+
+// ─── Sub-component: Divider ──────────────────────────────────────────────
+
+const SplitDivider: React.FC<{ frame: number }> = ({ frame }) => {
+  const opacity = interpolate(
+    frame,
+    [0, DIVIDER_FADE_DURATION],
+    [0, DIVIDER_OPACITY],
+    {
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const drawProgress = interpolate(
+    frame,
+    [0, DIVIDER_FADE_DURATION],
+    [0, 1],
+    {
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const lineHeight = HEIGHT * drawProgress;
+  const yOffset = (HEIGHT - lineHeight) / 2;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: 0,
+        width: DIVIDER_GAP,
+        height: HEIGHT,
+        transform: "translateX(-50%)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 10,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: yOffset,
+          width: DIVIDER_THICKNESS,
+          height: lineHeight,
+          backgroundColor: DIVIDER_COLOR,
+          opacity,
+          borderRadius: 1,
+        }}
+      />
+    </div>
+  );
+};
+
+// ─── Sub-component: Video Panel ──────────────────────────────────────────
+
+interface VideoPanelProps {
+  src: string;
+  side: "left" | "right";
+  label: string;
+  fallbackGradient: string;
+  frame: number;
+}
+
+const VideoPanel: React.FC<VideoPanelProps> = ({
+  src,
+  side,
+  label,
+  fallbackGradient,
+  frame,
+}) => {
+  const panelOpacity = interpolate(
+    frame,
+    [0, PANEL_FADE_DURATION],
+    [0, 1],
+    {
+      extrapolateRight: "clamp",
+      easing: Easing.out(Easing.quad),
+    }
+  );
+
+  const left = side === "left" ? 0 : PANEL_WIDTH + DIVIDER_GAP;
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top: 0,
+        width: PANEL_WIDTH,
+        height: HEIGHT,
+        overflow: "hidden",
+        opacity: panelOpacity,
+      }}
+    >
+      {/* Video layer */}
+      <OffthreadVideo
+        src={src}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          width: PANEL_WIDTH,
+          height: HEIGHT,
+          objectFit: "cover",
+        }}
+        muted
+      />
+
+      {/* Bottom label with gradient scrim for readability */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: 0,
+          left: 0,
+          width: PANEL_WIDTH,
+          height: 120,
+          background:
+            "linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0) 100%)",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          paddingBottom: LABEL_PADDING_BOTTOM,
+          zIndex: 5,
+        }}
+      >
+        <span
+          style={{
+            color: LABEL_COLOR,
+            fontSize: LABEL_FONT_SIZE,
+            fontFamily: "Inter, Helvetica, Arial, sans-serif",
+            fontWeight: 500,
+            opacity: LABEL_OPACITY,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase" as const,
+          }}
+        >
+          {label}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// ─── Main Component ──────────────────────────────────────────────────────
 
 export const Part1Economics14SplitDeveloperGrandma: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Resolve video sources via the visual media runtime
-  const leftSrc = useVisualMediaAssetSrc('leftSrc');
-  const rightSrc = useVisualMediaAssetSrc('rightSrc');
-
-  // Divider fade-in: easeOut(quad) over 15 frames
-  const dividerOpacity = interpolate(
-    frame,
-    [0, DIVIDER_FADE_FRAMES],
-    [0, DIVIDER_OPACITY],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    },
-  );
-
-  // Divider vertical draw-in: extends from center outward
-  const dividerHeight = interpolate(
-    frame,
-    [0, DIVIDER_FADE_FRAMES],
-    [0, CANVAS_HEIGHT],
-    {
-      extrapolateLeft: 'clamp',
-      extrapolateRight: 'clamp',
-      easing: Easing.out(Easing.quad),
-    },
-  );
-
-  // Center x position for divider
-  const dividerX = PANEL_WIDTH + DIVIDER_GAP / 2 - DIVIDER_WIDTH / 2;
+  // Resolve video sources — use staticFile for the known Veo assets
+  const leftSrc = staticFile("veo/developer_cursor_p1.mp4");
+  const rightSrc = staticFile("veo/grandmother_darning_p1.mp4");
 
   return (
     <AbsoluteFill
       style={{
         backgroundColor: BACKGROUND_COLOR,
-        width: CANVAS_WIDTH,
-        height: CANVAS_HEIGHT,
+        width: WIDTH,
+        height: HEIGHT,
       }}
     >
-      {/* Left panel — Developer with Cursor */}
-      <SplitPanel
+      {/* Left panel: Developer with Cursor */}
+      <VideoPanel
+        src={leftSrc}
         side="left"
-        videoSrc={leftSrc}
-        label={LEFT_LABEL}
-        fallbackGradient="linear-gradient(135deg, #0A1628 0%, #1E3A5F 50%, #2563EB 100%)"
+        label="Developer with Cursor"
+        fallbackGradient={LEFT_FALLBACK_GRADIENT}
+        frame={frame}
+      />
+
+      {/* Right panel: Grandmother darning */}
+      <VideoPanel
+        src={rightSrc}
+        side="right"
+        label="Grandmother darning"
+        fallbackGradient={RIGHT_FALLBACK_GRADIENT}
+        frame={frame}
       />
 
       {/* Center divider */}
-      <div
-        style={{
-          position: 'absolute',
-          left: dividerX,
-          top: (CANVAS_HEIGHT - dividerHeight) / 2,
-          width: DIVIDER_WIDTH,
-          height: dividerHeight,
-          backgroundColor: DIVIDER_COLOR,
-          opacity: dividerOpacity,
-        }}
-      />
-
-      {/* Right panel — Grandmother darning */}
-      <SplitPanel
-        side="right"
-        videoSrc={rightSrc}
-        label={RIGHT_LABEL}
-        fallbackGradient="linear-gradient(135deg, #3D2B1F 0%, #78593A 50%, #D4A76A 100%)"
-      />
+      <SplitDivider frame={frame} />
     </AbsoluteFill>
   );
 };

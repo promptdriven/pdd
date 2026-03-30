@@ -1,31 +1,28 @@
-import React from "react";
-import { AbsoluteFill, Sequence } from "remotion";
-import "../_shared/load-inter-font";
-import BackgroundChart from "./BackgroundChart";
-import AnnotationCallout from "./AnnotationCallout";
-import ContrastLine from "./ContrastLine";
+import React from 'react';
+import {AbsoluteFill, Sequence} from 'remotion';
+import BackgroundChart from './BackgroundChart';
+import AnnotationCallout from './AnnotationCallout';
+import ContrastLine from './ContrastLine';
 import {
-  BACKGROUND_COLOR,
-  DURATION_FRAMES,
+  BG_COLOR,
+  TOTAL_FRAMES,
   ANNOTATION1_START,
+  ANNOTATION1_BOX_X,
+  ANNOTATION1_BOX_Y,
+  ANNOTATION1_TARGET_X,
+  ANNOTATION1_TARGET_Y,
   ANNOTATION2_START,
-  GITHUB_ACCENT,
-  GITHUB_MAIN_TEXT,
-  GITHUB_SOURCE,
-  GITHUB_FINE_PRINT,
-  GITHUB_CALLOUT_X,
-  GITHUB_CALLOUT_Y,
-  GITHUB_CONNECTOR_TARGET_X,
-  GITHUB_CONNECTOR_TARGET_Y,
-  UPLEVEL_ACCENT,
-  UPLEVEL_MAIN_TEXT,
-  UPLEVEL_SOURCE,
-  UPLEVEL_FINE_PRINT,
-  UPLEVEL_CALLOUT_X,
-  UPLEVEL_CALLOUT_Y,
-  UPLEVEL_CONNECTOR_TARGET_X,
-  UPLEVEL_CONNECTOR_TARGET_Y,
-} from "./constants";
+  ANNOTATION2_BOX_X,
+  ANNOTATION2_BOX_Y,
+  ANNOTATION2_TARGET_X,
+  ANNOTATION2_TARGET_Y,
+  BLUE_ACCENT,
+  RED_ACCENT,
+  CONTRAST_LINE_START,
+  CONTRAST_LINE_DURATION,
+  CONTRAST_LINE_COLOR,
+  CONTRAST_LINE_OPACITY,
+} from './constants';
 
 export const defaultPart1Economics04ResearchAnnotationsProps = {};
 
@@ -33,50 +30,63 @@ export const Part1Economics04ResearchAnnotations: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: BACKGROUND_COLOR,
-        width: 1920,
-        height: 1080,
-        overflow: "hidden",
+        backgroundColor: BG_COLOR,
+        fontFamily: 'Inter, sans-serif',
       }}
     >
-      {/* Underlying chart from spec 03 holds throughout */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+      {/* Underlying chart – visible from frame 0 */}
+      <Sequence from={0} durationInFrames={TOTAL_FRAMES}>
         <BackgroundChart />
       </Sequence>
 
-      {/* Annotation 1: GitHub study — materializes at frame 60 */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+      {/* ── Annotation 1: GitHub Study ────────────────────────────── */}
+      <Sequence
+        from={ANNOTATION1_START}
+        durationInFrames={TOTAL_FRAMES - ANNOTATION1_START}
+      >
         <AnnotationCallout
-          startFrame={ANNOTATION1_START}
-          accentColor={GITHUB_ACCENT}
-          mainText={GITHUB_MAIN_TEXT}
-          source={GITHUB_SOURCE}
-          finePrint={GITHUB_FINE_PRINT}
-          boxX={GITHUB_CALLOUT_X}
-          boxY={GITHUB_CALLOUT_Y}
-          targetX={GITHUB_CONNECTOR_TARGET_X}
-          targetY={GITHUB_CONNECTOR_TARGET_Y}
+          borderColor={BLUE_ACCENT}
+          mainText="Individual task: −55%"
+          source="(GitHub, 2022)"
+          finePrint="95 developers, one greenfield task"
+          boxX={ANNOTATION1_BOX_X}
+          boxY={ANNOTATION1_BOX_Y}
+          targetX={ANNOTATION1_TARGET_X}
+          targetY={ANNOTATION1_TARGET_Y}
         />
       </Sequence>
 
-      {/* Annotation 2: Uplevel study — materializes at frame 300 */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
+      {/* ── Annotation 2: Uplevel Study ───────────────────────────── */}
+      <Sequence
+        from={ANNOTATION2_START}
+        durationInFrames={TOTAL_FRAMES - ANNOTATION2_START}
+      >
         <AnnotationCallout
-          startFrame={ANNOTATION2_START}
-          accentColor={UPLEVEL_ACCENT}
-          mainText={UPLEVEL_MAIN_TEXT}
-          source={UPLEVEL_SOURCE}
-          finePrint={UPLEVEL_FINE_PRINT}
-          boxX={UPLEVEL_CALLOUT_X}
-          boxY={UPLEVEL_CALLOUT_Y}
-          targetX={UPLEVEL_CONNECTOR_TARGET_X}
-          targetY={UPLEVEL_CONNECTOR_TARGET_Y}
+          borderColor={RED_ACCENT}
+          mainText="Overall throughput: ~0%"
+          source="(Uplevel, 2024)"
+          finePrint="785 developers, one year"
+          boxX={ANNOTATION2_BOX_X}
+          boxY={ANNOTATION2_BOX_Y}
+          targetX={ANNOTATION2_TARGET_X}
+          targetY={ANNOTATION2_TARGET_Y}
         />
       </Sequence>
 
-      {/* Contrast connector dashed line between annotation boxes — frame 390 */}
-      <Sequence from={0} durationInFrames={DURATION_FRAMES}>
-        <ContrastLine />
+      {/* ── Contrast connector between the two callout boxes ──────── */}
+      <Sequence
+        from={CONTRAST_LINE_START}
+        durationInFrames={TOTAL_FRAMES - CONTRAST_LINE_START}
+      >
+        <ContrastLine
+          fromX={ANNOTATION1_BOX_X + 170}
+          fromY={ANNOTATION1_BOX_Y}
+          toX={ANNOTATION2_BOX_X + 170}
+          toY={ANNOTATION2_BOX_Y + 110}
+          color={CONTRAST_LINE_COLOR}
+          lineOpacity={CONTRAST_LINE_OPACITY}
+          drawDuration={CONTRAST_LINE_DURATION}
+        />
       </Sequence>
     </AbsoluteFill>
   );

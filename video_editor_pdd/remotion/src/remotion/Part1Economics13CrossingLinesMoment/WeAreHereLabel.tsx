@@ -1,108 +1,140 @@
-// WeAreHereLabel.tsx — "We are here." annotation label with connector and pulse
-import React from "react";
-import { useCurrentFrame, interpolate, Easing } from "remotion";
+// WeAreHereLabel.tsx — "We are here." annotation with connector and pulsing glow
+import React from 'react';
+import { useCurrentFrame, interpolate, Easing } from 'remotion';
 import {
+  FONT_FAMILY,
+  LABEL_FONT_SIZE,
+  LABEL_FONT_WEIGHT,
   LABEL_TEXT_COLOR,
   LABEL_GLOW_COLOR,
   CONNECTOR_COLOR,
-  FONT_FAMILY,
-  ANNOTATION_SIZE,
-  LABEL_X,
-  LABEL_Y,
-  CROSSING_2_X,
-  CROSSING_2_Y,
-  PHASE_LABEL_START,
-  PHASE_LABEL_FADE_DURATION,
-  LABEL_PULSE_PERIOD,
-} from "./constants";
+} from './constants';
 
-export const WeAreHereLabel: React.FC = () => {
+interface WeAreHereLabelProps {
+  /** X position of the crossing point to annotate */
+  targetX: number;
+  /** Y position of the crossing point to annotate */
+  targetY: number;
+  /** Frame when fade-in begins */
+  fadeInStart: number;
+  /** Duration of fade-in in frames */
+  fadeInDuration: number;
+}
+
+export const WeAreHereLabel: React.FC<WeAreHereLabelProps> = ({
+  targetX,
+  targetY,
+  fadeInStart,
+  fadeInDuration,
+}) => {
   const frame = useCurrentFrame();
 
-  if (frame < PHASE_LABEL_START) return null;
+  // Label position: offset to lower-right of target point
+  const labelX = targetX + 40;
+  const labelY = targetY + 55;
 
-  const localFrame = frame - PHASE_LABEL_START;
-
-  // Fade in over PHASE_LABEL_FADE_DURATION frames
-  const fadeIn = interpolate(
-    localFrame,
-    [0, PHASE_LABEL_FADE_DURATION],
+  // Fade in opacity
+  const baseOpacity = interpolate(
+    frame,
+    [fadeInStart, fadeInStart + fadeInDuration],
     [0, 1],
     {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
+      extrapolateLeft: 'clamp',
+      extrapolateRight: 'clamp',
       easing: Easing.out(Easing.quad),
     }
   );
 
-  // Pulsing opacity between 0.8 and 1.0 after fade-in completes
-  const pulsePhase = Math.max(0, localFrame - PHASE_LABEL_FADE_DURATION);
-  const pulseT =
-    (Math.sin((pulsePhase / LABEL_PULSE_PERIOD) * Math.PI * 2 - Math.PI / 2) +
-      1) /
-    2;
-  const pulseOpacity = 0.8 + 0.2 * pulseT;
-  const finalOpacity = fadeIn * pulseOpacity;
+  // Pulsing glow — 60-frame cycle, opacity 0.8 to 1.0
+  const pulsePhase = ((frame - fadeInStart) % 60) / 60;
+  const pulseOpacity = interpolate(
+    Math.sin(pulsePhase * Math.PI * 2),
+    [-1, 1],
+    [0.8, 1.0]
+  );
+
+  const combinedOpacity = baseOpacity * pulseOpacity;
+
+  if (frame < fadeInStart) {
+    return null;
+  }
 
   return (
     <svg
       width={1920}
       height={1080}
-      style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+      viewBox="0 0 1920 1080"
+      style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
     >
       {/* Connector line from label to crossing point */}
       <line
-        x1={LABEL_X}
-        y1={LABEL_Y - 8}
-        x2={CROSSING_2_X}
-        y2={CROSSING_2_Y}
+        x1={labelX}
+        y1={labelY - 12}
+        x2={targetX}
+        y2={targetY}
         stroke={CONNECTOR_COLOR}
         strokeWidth={1.5}
-        opacity={fadeIn * 0.3}
-      />
-      {/* Small dot at crossing point */}
-      <circle
-        cx={CROSSING_2_X}
-        cy={CROSSING_2_Y}
-        r={5}
-        fill={CONNECTOR_COLOR}
-        opacity={fadeIn * 0.5}
+        opacity={baseOpacity * 0.3}
       />
 
-      {/* Glow behind text */}
+      {/* Small circle at the crossing point */}
+      <circle
+        cx={targetX}
+        cy={targetY}
+        r={5}
+        fill="none"
+        stroke={CONNECTOR_COLOR}
+        strokeWidth={1.5}
+        opacity={baseOpacity * 0.5}
+      />
+
+      {/* Glow behind the text */}
       <rect
-        x={LABEL_X - 16}
-        y={LABEL_Y - 6}
-        width={220}
-        height={44}
+        x={labelX - 12}
+        y={labelY - 20}
+        width={180}
+        height={36}
         rx={6}
         fill={LABEL_GLOW_COLOR}
-        opacity={finalOpacity * 0.1}
+        opacity={combinedOpacity * 0.1}
       />
 
-      {/* Background pill for readability */}
-      <rect
-        x={LABEL_X - 16}
-        y={LABEL_Y - 6}
-        width={220}
-        height={44}
-        rx={6}
-        fill="#0A0F1A"
-        opacity={finalOpacity * 0.7}
-      />
-
-      {/* Label text */}
+      {/* "We are here." text */}
       <text
-        x={LABEL_X}
-        y={LABEL_Y + 24}
+        x={labelX}
+        y={labelY}
         fill={LABEL_TEXT_COLOR}
         fontFamily={FONT_FAMILY}
-        fontSize={ANNOTATION_SIZE}
-        fontWeight={700}
-        opacity={finalOpacity}
+        fontSize={LABEL_FONT_SIZE}
+        fontWeight={LABEL_FONT_WEIGHT}
+        opacity={combinedOpacity}
       >
         We are here.
       </text>
+
+      {/* Text shadow/glow layer */}
+      <text
+        x={labelX}
+        y={labelY}
+        fill={LABEL_GLOW_COLOR}
+        fontFamily={FONT_FAMILY}
+        fontSize={LABEL_FONT_SIZE}
+        fontWeight={LABEL_FONT_WEIGHT}
+        opacity={combinedOpacity * 0.15}
+        filter="url(#text-glow)"
+      />
+
+      <defs>
+        <filter id="text-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="4" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
     </svg>
   );
 };
+
+export default WeAreHereLabel;

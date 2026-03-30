@@ -1,21 +1,29 @@
+// WavyUnderline.tsx — hand-drawn wavy underline via SVG path stroke animation
 import React from "react";
 import { useCurrentFrame, interpolate, Easing } from "remotion";
 
 interface WavyUnderlineProps {
+  /** Center X of the underline */
   centerX: number;
+  /** Y position of the underline */
   y: number;
+  /** Approximate width in px */
   width: number;
   color: string;
   opacity: number;
   strokeWidth: number;
+  /** Frame at which drawing begins (absolute, not relative to Sequence) */
   startFrame: number;
+  /** Duration in frames to draw the line */
   duration: number;
 }
 
 /**
- * A hand-drawn style wavy underline, drawn via SVG stroke-dashoffset animation.
+ * Builds an SVG cubic-bezier path that has a gentle wave — imitating a
+ * hand-drawn underline. The path is revealed left-to-right via
+ * stroke-dashoffset.
  */
-export const WavyUnderline: React.FC<WavyUnderlineProps> = ({
+const WavyUnderline: React.FC<WavyUnderlineProps> = ({
   centerX,
   y,
   width,
@@ -27,6 +35,24 @@ export const WavyUnderline: React.FC<WavyUnderlineProps> = ({
 }) => {
   const frame = useCurrentFrame();
 
+  const halfW = width / 2;
+  const x0 = centerX - halfW;
+  const x1 = centerX + halfW;
+
+  // Build a gently wavy cubic path with 4 segments
+  const segW = width / 4;
+  const wave = 3; // amplitude in px — subtle
+  const d = [
+    `M ${x0} ${y}`,
+    `C ${x0 + segW * 0.5} ${y - wave}, ${x0 + segW * 0.5} ${y + wave}, ${x0 + segW} ${y + 1}`,
+    `C ${x0 + segW * 1.5} ${y - wave}, ${x0 + segW * 1.5} ${y + wave}, ${x0 + segW * 2} ${y - 1}`,
+    `C ${x0 + segW * 2.5} ${y + wave}, ${x0 + segW * 2.5} ${y - wave}, ${x0 + segW * 3} ${y + 1}`,
+    `C ${x0 + segW * 3.5} ${y - wave}, ${x0 + segW * 3.5} ${y + wave}, ${x1} ${y}`,
+  ].join(" ");
+
+  // Total path length (rough overestimate is fine for dasharray)
+  const pathLen = width * 1.2;
+
   const progress = interpolate(
     frame,
     [startFrame, startFrame + duration],
@@ -35,35 +61,17 @@ export const WavyUnderline: React.FC<WavyUnderlineProps> = ({
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
       easing: Easing.out(Easing.quad),
-    }
+    },
   );
 
-  // Build a wavy path centered horizontally
-  const halfWidth = width / 2;
-  const startX = centerX - halfWidth;
-  const endX = centerX + halfWidth;
-  const waveAmplitude = 3;
-  const waveFrequency = 16; // px per wave segment
-
-  let d = `M ${startX} ${y}`;
-  for (let x = startX; x < endX; x += waveFrequency) {
-    const nextX = Math.min(x + waveFrequency, endX);
-    const midX = (x + nextX) / 2;
-    // Alternate wave direction
-    const dir = Math.floor((x - startX) / waveFrequency) % 2 === 0 ? -1 : 1;
-    d += ` Q ${midX} ${y + waveAmplitude * dir}, ${nextX} ${y}`;
-  }
-
-  // Approximate path length
-  const pathLength = width * 1.1;
-  const dashOffset = pathLength * (1 - progress);
+  const dashOffset = pathLen * (1 - progress);
 
   return (
     <svg
       width={1920}
       height={1080}
       viewBox="0 0 1920 1080"
-      style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+      style={{ position: "absolute", top: 0, left: 0 }}
     >
       <path
         d={d}
@@ -71,9 +79,9 @@ export const WavyUnderline: React.FC<WavyUnderlineProps> = ({
         stroke={color}
         strokeWidth={strokeWidth}
         strokeLinecap="round"
-        opacity={opacity}
-        strokeDasharray={pathLength}
+        strokeDasharray={pathLen}
         strokeDashoffset={dashOffset}
+        opacity={opacity}
       />
     </svg>
   );

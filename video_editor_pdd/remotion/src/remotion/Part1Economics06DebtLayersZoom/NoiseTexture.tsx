@@ -1,4 +1,3 @@
-// NoiseTexture.tsx — Animated noise/static overlay for the Context Rot layer
 import React, { useMemo } from "react";
 import { useCurrentFrame } from "remotion";
 import {
@@ -11,42 +10,30 @@ import {
 interface NoiseTextureProps {
   width: number;
   height: number;
+  opacity?: number;
+  grainSize?: number;
+  driftSpeed?: number;
 }
 
 /**
- * Generates a canvas-based noise texture that drifts laterally.
- * Uses an SVG filter for the grain effect to avoid canvas dependency.
+ * Generates a subtle animated noise/static overlay using SVG filters.
+ * Drifts laterally to create a "living static" effect on the Context Rot layer.
  */
-export const NoiseTexture: React.FC<NoiseTextureProps> = ({ width, height }) => {
+export const NoiseTexture: React.FC<NoiseTextureProps> = ({
+  width,
+  height,
+  opacity = NOISE_OPACITY,
+  grainSize = NOISE_GRAIN_SIZE,
+  driftSpeed = NOISE_DRIFT_PX_PER_FRAME,
+}) => {
   const frame = useCurrentFrame();
 
-  // Lateral drift: 0.5px per frame
-  const offsetX = frame * NOISE_DRIFT_PX_PER_FRAME;
+  // Lateral drift offset
+  const driftX = frame * driftSpeed;
 
-  // Generate a deterministic set of noise dots using useMemo
-  // We create a grid of semi-random dots that tile
-  const noiseDots = useMemo(() => {
-    const dots: Array<{ x: number; y: number; opacity: number }> = [];
-    const cols = Math.ceil(width / NOISE_GRAIN_SIZE) + 40; // extra for drift
-    const rows = Math.ceil(height / NOISE_GRAIN_SIZE);
-
-    // Simple pseudo-random based on position
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        // Use a hash-like function for pseudo-randomness
-        const seed = (r * 997 + c * 131 + 7919) % 1000;
-        if (seed < 300) {
-          // ~30% density
-          dots.push({
-            x: c * NOISE_GRAIN_SIZE,
-            y: r * NOISE_GRAIN_SIZE,
-            opacity: ((seed % 5) + 1) / 5, // varying opacity 0.2-1.0
-          });
-        }
-      }
-    }
-    return dots;
-  }, [width, height]);
+  // Generate a pseudo-random seed based on frame for animation
+  // We use multiple overlapping noise layers offset by frame
+  const filterId = useMemo(() => `noise-filter-${Math.random().toString(36).slice(2, 8)}`, []);
 
   return (
     <div
@@ -61,25 +48,38 @@ export const NoiseTexture: React.FC<NoiseTextureProps> = ({ width, height }) => 
       }}
     >
       <svg
-        width={width + 80}
+        width={width + 100}
         height={height}
         style={{
           position: "absolute",
           top: 0,
-          left: -(offsetX % (NOISE_GRAIN_SIZE * 40)),
+          left: -50 + (driftX % 100) - 50,
         }}
       >
-        {noiseDots.map((dot, i) => (
-          <rect
-            key={i}
-            x={dot.x}
-            y={dot.y}
-            width={NOISE_GRAIN_SIZE}
-            height={NOISE_GRAIN_SIZE}
-            fill={NOISE_COLOR}
-            opacity={NOISE_OPACITY * dot.opacity}
-          />
-        ))}
+        <defs>
+          <filter id={filterId}>
+            <feTurbulence
+              type="fractalNoise"
+              baseFrequency={`${0.5 / grainSize} ${0.5 / grainSize}`}
+              numOctaves={3}
+              seed={Math.floor(frame / 3)}
+              stitchTiles="stitch"
+            />
+            <feColorMatrix
+              type="saturate"
+              values="0"
+            />
+          </filter>
+        </defs>
+        <rect
+          x={0}
+          y={0}
+          width={width + 100}
+          height={height}
+          filter={`url(#${filterId})`}
+          fill={NOISE_COLOR}
+          opacity={opacity}
+        />
       </svg>
     </div>
   );
