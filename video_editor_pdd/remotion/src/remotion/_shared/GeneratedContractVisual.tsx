@@ -4,13 +4,13 @@ import {
   OffthreadVideo,
   interpolate,
   spring,
-  useCurrentFrame,
   useVideoConfig,
 } from "remotion";
 
 import {
   useVisualContractData,
   useVisualDurationInFrames,
+  useVisualFrame,
   useVisualMediaAssetSrc,
 } from "./visual-runtime";
 import {
@@ -875,6 +875,59 @@ const GhostElements: React.FC<{
     );
   }
 
+  if (ghostShapes.includes("module_grid")) {
+    const gridGhost = ghosts.find((ghost) => asString(ghost.shape) === "module_grid");
+    const rows = Math.max(1, asNumber(gridGhost?.rows) ?? 4);
+    const cols = Math.max(1, asNumber(gridGhost?.cols) ?? 6);
+    const highlightCell = Array.isArray(gridGhost?.highlightCell)
+      ? gridGhost?.highlightCell
+      : null;
+    const highlightRow =
+      highlightCell && typeof highlightCell[0] === "number"
+        ? Math.max(0, Math.min(rows - 1, highlightCell[0]))
+        : null;
+    const highlightCol =
+      highlightCell && typeof highlightCell[1] === "number"
+        ? Math.max(0, Math.min(cols - 1, highlightCell[1]))
+        : null;
+    const gridWidth = width * 0.54;
+    const gridHeight = height * 0.34;
+    const cellWidth = gridWidth / cols;
+    const cellHeight = gridHeight / rows;
+    const originX = width * 0.23;
+    const originY = height * 0.23;
+    const accent = asString(gridGhost?.color) ?? "#5AAA6E";
+
+    return (
+      <svg
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ position: "absolute", inset: 0, opacity: 0.92 }}
+      >
+        {Array.from({ length: rows }).flatMap((_, rowIndex) =>
+          Array.from({ length: cols }).map((_, colIndex) => {
+            const isHighlight = rowIndex === highlightRow && colIndex === highlightCol;
+            return (
+              <rect
+                key={`module-grid-${rowIndex}-${colIndex}`}
+                x={originX + colIndex * cellWidth}
+                y={originY + rowIndex * cellHeight}
+                width={cellWidth - 14}
+                height={cellHeight - 16}
+                rx={8}
+                fill={isHighlight ? `${accent}14` : "none"}
+                stroke={isHighlight ? accent : "rgba(148, 163, 184, 0.14)"}
+                strokeWidth={isHighlight ? 1.5 : 1}
+                opacity={isHighlight ? 0.5 : 0.28}
+              />
+            );
+          })
+        )}
+      </svg>
+    );
+  }
+
   if (hasCodebaseTree) {
     const treeGhost = ghosts.find((ghost) => asString(ghost.shape) === "codebase_tree");
     const treeColor = asString(treeGhost?.color) ?? "#334155";
@@ -1506,7 +1559,7 @@ const QuoteCardVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) 
 };
 
 const TransitionVisual: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
-  const frame = useCurrentFrame();
+  const frame = useVisualFrame();
   const accent = resolveAccentColor(data);
   const echoes = Array.isArray(data.echoes)
     ? data.echoes.map((entry) => asRecord(entry)).filter((entry): entry is Record<string, unknown> => Boolean(entry))
@@ -1553,8 +1606,8 @@ const ChartVisual: React.FC<{
   data: Record<string, unknown>;
   width: number;
   height: number;
-  frame: number;
-}> = ({ data, width, height, frame }) => {
+}> = ({ data, width, height }) => {
+  const frame = useVisualFrame();
   const accent = resolveAccentColor(data);
   const title = resolveTitle(data);
   const durationInFrames = useVisualDurationInFrames();
@@ -1845,6 +1898,10 @@ const ChartVisual: React.FC<{
         ? `${formatCompactMetric(endValue)}+`
         : `${formatCompactMetric(currentValue)}`;
     const finalScale = asNumber(zoom?.endScale) ?? 0.1;
+    const schematicColumns = 36;
+    const schematicCells = 2304;
+    const endScale = Math.max(2.1, (1 / Math.max(finalScale, 0.1)) * 0.24);
+    const startScale = Math.max(7.2, endScale * 3.2);
 
     return (
       <AbsoluteFill style={{ padding: "82px 88px 78px" }}>
@@ -1872,26 +1929,34 @@ const ChartVisual: React.FC<{
               position: "absolute",
               inset: "72px 110px 92px 72px",
               display: "grid",
-              gridTemplateColumns: "repeat(20, minmax(0, 1fr))",
-              gap: 2,
-              transform: `scale(${interpolate(zoomProgress, [0, 1], [3.2, Math.max(0.45, 1 / finalScale) * 0.06], {
+              gridTemplateColumns: `repeat(${schematicColumns}, minmax(0, 1fr))`,
+              gap: 1,
+              transform: `scale(${interpolate(zoomProgress, [0, 1], [startScale, endScale], {
                 extrapolateLeft: "clamp",
                 extrapolateRight: "clamp",
               })})`,
               transformOrigin: "center center",
             }}
           >
-            {Array.from({ length: 640 }).map((_, index) => {
+            {Array.from({ length: schematicCells }).map((_, index) => {
               const wobble = ((index % 5) - 2) * 1.6;
+              const lineOpacity = Math.min(
+                0.78,
+                interpolate(zoomProgress, [0, 1], [0.18, 0.48], {
+                  extrapolateLeft: "clamp",
+                  extrapolateRight: "clamp",
+                }) +
+                  (index % 7) * 0.025
+              );
               return (
                 <svg
                   key={`schematic-cell-${index}`}
                   viewBox="0 0 82 56"
                   style={{
                     width: "100%",
-                    minHeight: 24,
+                    minHeight: 14,
                     overflow: "visible",
-                    opacity: 0.22 + (index % 9) * 0.05,
+                    opacity: lineOpacity,
                   }}
                 >
                   <line x1="8" y1="28" x2="28" y2="28" stroke="#4A5568" strokeWidth="1" />
@@ -1965,7 +2030,8 @@ const ChartVisual: React.FC<{
       "    else count <= count + 1;",
       "endmodule",
     ].join("\n");
-    const codeLines = codeSample.split("\n");
+    const normalizedCodeSample = codeSample.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+    const codeLines = normalizedCodeSample.split("\n");
 
     return (
       <AbsoluteFill style={{ padding: "84px 86px 78px" }}>
@@ -1983,9 +2049,10 @@ const ChartVisual: React.FC<{
           <div
             style={{
               position: "absolute",
-              left: 96,
+              left: "50%",
               top: 86,
-              width: 620,
+              width: 800,
+              transform: "translateX(-50%)",
               borderRadius: 28,
               backgroundColor: "rgba(15, 23, 42, 0.9)",
               border: "1px solid rgba(96, 165, 250, 0.28)",
@@ -3311,7 +3378,7 @@ const SplitVisual: React.FC<{
   width: number;
   height: number;
 }> = ({ data, width, height }) => {
-  const frame = useCurrentFrame();
+  const frame = useVisualFrame();
   const durationInFrames = useVisualDurationInFrames();
   const splitVisualId = React.useId().replace(/:/g, "");
   const divider = asRecord(data.divider);
@@ -3947,6 +4014,15 @@ const SplitVisual: React.FC<{
     const codeComments = asStringArray(panel.codeComments);
     const aura = asRecord(panel.aura);
     const auraTarget = asString(aura?.target)?.toLowerCase() ?? null;
+    const auraColor = asString(aura?.color) ?? panelAccent;
+    const auraBuildStart = Math.max(12, Math.floor(durationInFrames * 0.2));
+    const auraBuildEnd = Math.max(auraBuildStart + 30, Math.floor(durationInFrames * 0.55));
+    const auraProgress = aura
+      ? interpolate(frame, [auraBuildStart, auraBuildEnd], [0, 1], {
+          extrapolateLeft: "clamp",
+          extrapolateRight: "clamp",
+        })
+      : 0;
     const revealHint = asString(panel.zoomOutReveals);
     const panelScale = revealHint
       ? interpolate(frame, [0, 180], [1.14, 0.88], {
@@ -4052,32 +4128,62 @@ const SplitVisual: React.FC<{
           }}
         />
         {aura ? (
-          <div
-            style={{
-              position: "absolute",
-              left:
-                auraTarget === "object" || auraTarget === "chair"
-                  ? "42%"
-                  : auraTarget === "mold"
-                    ? "58%"
-                    : "50%",
-              top:
-                auraTarget === "object" || auraTarget === "chair"
-                  ? "60%"
-                  : auraTarget === "mold"
-                    ? "48%"
-                    : "50%",
-              width: auraTarget ? 320 : 260,
-              height: auraTarget ? 320 : 260,
-              borderRadius: 999,
-              transform: "translate(-50%, -50%)",
-              background: `radial-gradient(circle, ${asString(aura.color) ?? panelAccent}36 0%, rgba(2, 6, 23, 0) 72%)`,
-              boxShadow: `0 0 160px ${asString(aura.color) ?? panelAccent}88`,
-              border: `2px solid ${asString(aura.color) ?? panelAccent}66`,
-              opacity: auraTarget ? 0.72 : 0.42,
-              pointerEvents: "none",
-            }}
-          />
+          <>
+            <div
+              style={{
+                position: "absolute",
+                left:
+                  auraTarget === "object" || auraTarget === "chair"
+                    ? "47%"
+                    : auraTarget === "mold"
+                      ? "54%"
+                      : "50%",
+                top:
+                  auraTarget === "object" || auraTarget === "chair"
+                    ? "63%"
+                    : auraTarget === "mold"
+                      ? "45%"
+                      : "50%",
+                width: auraTarget ? 420 : 320,
+                height: auraTarget === "mold" ? 300 : auraTarget ? 360 : 280,
+                borderRadius: 999,
+                transform: `translate(-50%, -50%) scale(${0.88 + auraProgress * 0.18})`,
+                background: `radial-gradient(circle, ${auraColor}44 0%, ${auraColor}1A 35%, rgba(2, 6, 23, 0) 72%)`,
+                boxShadow: `0 0 200px ${auraColor}AA`,
+                filter: "blur(6px)",
+                mixBlendMode: "screen",
+                opacity: (auraTarget ? 0.82 : 0.5) * auraProgress,
+                pointerEvents: "none",
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                left:
+                  auraTarget === "object" || auraTarget === "chair"
+                    ? "47%"
+                    : auraTarget === "mold"
+                      ? "54%"
+                      : "50%",
+                top:
+                  auraTarget === "object" || auraTarget === "chair"
+                    ? "63%"
+                    : auraTarget === "mold"
+                      ? "45%"
+                      : "50%",
+                width: auraTarget ? 280 : 220,
+                height: auraTarget === "mold" ? 220 : auraTarget ? 250 : 200,
+                borderRadius: 999,
+                transform: `translate(-50%, -50%) scale(${0.92 + auraProgress * 0.12})`,
+                background: `radial-gradient(circle, ${auraColor}30 0%, rgba(2, 6, 23, 0) 68%)`,
+                boxShadow: `0 0 110px ${auraColor}CC`,
+                border: `2px solid ${auraColor}88`,
+                mixBlendMode: "screen",
+                opacity: (auraTarget ? 0.95 : 0.6) * auraProgress,
+                pointerEvents: "none",
+              }}
+            />
+          </>
         ) : null}
         {header ? (
           <div
@@ -4728,6 +4834,253 @@ const CodeVisual: React.FC<{
       fileNames.length > 0
         ? fileNames
         : Array.from({ length: panels }, (_, index) => `module_${index + 1}.py`);
+    const warningCommentTexts =
+      warningComments.length > 0
+        ? warningComments.map((comment) => comment.replace(/^#\s?/, "// "))
+        : [
+            "// don't touch",
+            "// here be dragons",
+            "// TODO: fix this (2019)",
+            "// nobody knows why this works",
+          ];
+
+    if (prefersDenseEditor) {
+      const denseEditorColumns = [
+        ...panelNames.slice(0, 4),
+        ...Array.from(
+          { length: Math.max(0, 4 - panelNames.length) },
+          (_, index) => `legacy_module_${index + 1}.py`
+        ),
+      ].slice(0, 4);
+      const denseEditorLineNumbers = Array.from({ length: 28 }, (_, index) => index + 1);
+      const denseEditorGutterWidth = 56;
+      const denseEditorTabHeight = 62;
+      const denseEditorDivider = "rgba(51, 65, 85, 0.78)";
+      const denseEditorBaseLines = [
+        "from auth import AuthRequest",
+        "from payments import PaymentProcessor",
+        "from legacy_utils import maybe_decode",
+        "from config import load_runtime_flags",
+        "",
+        "class LegacyHandler:",
+        "    def process(self, request, env, cache):",
+        "        payload = maybe_decode(request.raw_body)",
+        "        if payload is None:",
+        "            return self._try_backup_path(request, env)",
+        "        user = self._lookup_user(payload, cache)",
+        "        if user is None:",
+        "            return self._fallback_to_payment_queue(payload)",
+        "        return PaymentProcessor.forward(user, env)",
+        "",
+        "def reconcile_config(flags, env):",
+        "    runtime = load_runtime_flags(flags, env)",
+        "    if runtime.use_legacy_adapter:",
+        "        return maybe_decode(runtime.adapter_payload)",
+        "    return runtime",
+      ];
+      const denseEditorCommentLines = new Map<number, string>([
+        [4, warningCommentTexts[0] ?? "// don't touch"],
+        [11, warningCommentTexts[1] ?? "// here be dragons"],
+        [18, warningCommentTexts[2] ?? "// TODO: fix this (2019)"],
+        [24, warningCommentTexts[3] ?? "// nobody knows why this works"],
+      ]);
+      const buildDenseEditorLine = (columnIndex: number, lineNumber: number): string => {
+        const overrideComment = denseEditorCommentLines.get(lineNumber);
+        if (overrideComment) {
+          return overrideComment;
+        }
+
+        const template =
+          denseEditorBaseLines[(lineNumber - 1 + columnIndex * 3) % denseEditorBaseLines.length] ??
+          "    return runtime";
+        if (columnIndex === 0) {
+          return template;
+        }
+        if (columnIndex === 1) {
+          return template.replace("runtime", "session").replace("payload", "parsed");
+        }
+        if (columnIndex === 2) {
+          return template.replace("PaymentProcessor", "LegacyBilling").replace("env", "config");
+        }
+        return template.replace("request", "event").replace("cache", "store");
+      };
+
+      return (
+        <AbsoluteFill style={{ padding: "86px 88px 76px" }}>
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background:
+                "radial-gradient(circle at 48% 18%, rgba(59, 130, 246, 0.08) 0%, rgba(10, 15, 26, 0) 54%)",
+            }}
+          />
+          <div
+            style={{
+              position: "relative",
+              width,
+              height,
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: 92,
+                right: 92,
+                top: 28,
+                bottom: 28,
+                borderRadius: 28,
+                backgroundColor: "rgba(2, 6, 23, 0.94)",
+                border: "1px solid rgba(71, 85, 105, 0.62)",
+                boxShadow: "0 28px 80px rgba(2, 6, 23, 0.4)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: denseEditorTabHeight,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 14,
+                  padding: "0 20px",
+                  backgroundColor: "rgba(15, 23, 42, 0.96)",
+                  borderBottom: `1px solid ${denseEditorDivider}`,
+                }}
+              >
+                <div style={{ display: "flex", gap: 8, marginRight: 12 }}>
+                  {["#F87171", "#FBBF24", "#34D399"].map((color) => (
+                    <div
+                      key={color}
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        backgroundColor: color,
+                      }}
+                    />
+                  ))}
+                </div>
+                {denseEditorColumns.map((name, index) => (
+                  <div
+                    key={`${name}-${index}`}
+                    style={{
+                      padding: "10px 14px",
+                      borderRadius: "10px 10px 0 0",
+                      backgroundColor:
+                        index === 0 ? "rgba(30, 41, 59, 0.96)" : "rgba(15, 23, 42, 0.72)",
+                      border: `1px solid ${denseEditorDivider}`,
+                      borderBottomColor: index === 0 ? "rgba(30, 41, 59, 0.96)" : denseEditorDivider,
+                      color: index === 0 ? "#F8FAFC" : "#94A3B8",
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: 14,
+                      fontWeight: 600,
+                      maxWidth: 300,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {name}
+                  </div>
+                ))}
+              </div>
+              <div
+                style={{
+                  position: "absolute",
+                  inset: `${denseEditorTabHeight}px 0 0`,
+                  display: "grid",
+                  gridTemplateColumns: `${denseEditorGutterWidth}px repeat(${denseEditorColumns.length}, minmax(0, 1fr))`,
+                }}
+              >
+                <div
+                  style={{
+                    borderRight: `1px solid ${denseEditorDivider}`,
+                    backgroundColor: "rgba(15, 23, 42, 0.56)",
+                    padding: "18px 8px 20px 0",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                    alignItems: "flex-end",
+                  }}
+                >
+                  {denseEditorLineNumbers.map((lineNumber) => (
+                    <div
+                      key={`line-${lineNumber}`}
+                      style={{
+                        color: "rgba(148, 163, 184, 0.52)",
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontSize: 12,
+                        lineHeight: "15px",
+                      }}
+                    >
+                      {lineNumber}
+                    </div>
+                  ))}
+                </div>
+                {denseEditorColumns.map((name, columnIndex) => {
+                  const highlightColumn = columnIndex === 2;
+                  return (
+                    <div
+                      key={`dense-column-${name}-${columnIndex}`}
+                      style={{
+                        position: "relative",
+                        padding: "18px 18px 20px",
+                        borderRight:
+                          columnIndex < denseEditorColumns.length - 1
+                            ? `1px solid ${denseEditorDivider}`
+                            : undefined,
+                        backgroundColor:
+                          highlightColumn
+                            ? "rgba(15, 23, 42, 0.84)"
+                            : "rgba(2, 6, 23, 0.78)",
+                        boxShadow: highlightColumn
+                          ? "inset 0 0 0 1px rgba(74, 222, 128, 0.22), inset 0 0 48px rgba(74, 222, 128, 0.08)"
+                          : undefined,
+                      }}
+                    >
+                      {highlightColumn ? (
+                        <div
+                          style={{
+                            position: "absolute",
+                            inset: "12px 14px auto",
+                            height: 180,
+                            borderRadius: 18,
+                            border: "1px solid rgba(74, 222, 128, 0.24)",
+                            boxShadow: "0 0 24px rgba(74, 222, 128, 0.12)",
+                            pointerEvents: "none",
+                          }}
+                        />
+                      ) : null}
+                      {denseEditorLineNumbers.map((lineNumber) => {
+                        const lineText = buildDenseEditorLine(columnIndex, lineNumber);
+                        const isWarningComment = lineText.trim().startsWith("//");
+                        return (
+                          <div
+                            key={`dense-line-${columnIndex}-${lineNumber}`}
+                            style={{
+                              color: isWarningComment ? "#D9944A" : "#94A3B8",
+                              fontFamily: "'JetBrains Mono', monospace",
+                              fontSize: 12,
+                              lineHeight: "15px",
+                              whiteSpace: "pre",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              opacity: isWarningComment ? 0.96 : 0.9,
+                            }}
+                          >
+                            {lineText || " "}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </AbsoluteFill>
+      );
+    }
 
     return (
       <AbsoluteFill style={{ padding: "92px 96px 80px" }}>
@@ -4787,7 +5140,7 @@ const CodeVisual: React.FC<{
               >
                 {Array.from({ length: 16 }).map((_, lineIndex) => {
                   const comment =
-                    warningComments[(lineIndex + index) % Math.max(1, warningComments.length)];
+                    warningCommentTexts[(lineIndex + index) % Math.max(1, warningCommentTexts.length)];
                   const showComment = Boolean(comment) && [2, 6, 11, 14].includes(lineIndex);
                   const fallbackLine = prefersDenseEditor
                     ? lineIndex % 5 === 0
@@ -5616,7 +5969,7 @@ const AnnotationVisual: React.FC<{
   width: number;
   height: number;
 }> = ({ data, width, height }) => {
-  const frame = useCurrentFrame();
+  const frame = useVisualFrame();
   const title = resolveTitle(data);
   const accent = resolveAccentColor(data);
   const chartId = resolveContractChartId(data);
@@ -5651,39 +6004,77 @@ const AnnotationVisual: React.FC<{
   const comparison = asRecord(data.comparison);
   const parentSpec = asString(data.parentSpec);
   const emphasisLine = asString(data.emphasisLine);
+  const chartPanelWidth = width - 144;
   const chartPanelHeight = Math.max(470, height * 0.42);
+  const annotationCardWidth = 260;
+  const annotationCardHeight = 118;
   const annotationPositions: Record<
     string,
     { left: number; top: number; targetX: number; targetY: number; anchor: "left" | "right" }
   > = {
     immediate_patch_line: {
-      left: width * 0.72,
-      top: height * 0.47,
-      targetX: width * 0.67,
-      targetY: height * 0.58,
+      left: chartPanelWidth * 0.72,
+      top: chartPanelHeight * 0.56,
+      targetX: chartPanelWidth * 0.67,
+      targetY: chartPanelHeight * 0.58,
       anchor: "left",
     },
     total_cost_line: {
-      left: width * 0.72,
-      top: height * 0.2,
-      targetX: width * 0.66,
-      targetY: height * 0.4,
+      left: chartPanelWidth * 0.72,
+      top: chartPanelHeight * 0.14,
+      targetX: chartPanelWidth * 0.66,
+      targetY: chartPanelHeight * 0.4,
       anchor: "left",
     },
     debt_shading: {
-      left: width * 0.72,
-      top: height * 0.34,
-      targetX: width * 0.58,
-      targetY: height * 0.48,
+      left: chartPanelWidth * 0.72,
+      top: chartPanelHeight * 0.32,
+      targetX: chartPanelWidth * 0.58,
+      targetY: chartPanelHeight * 0.48,
       anchor: "left",
     },
     debt_gap: {
-      left: width * 0.12,
-      top: height * 0.34,
-      targetX: width * 0.5,
-      targetY: height * 0.48,
+      left: chartPanelWidth * 0.12,
+      top: chartPanelHeight * 0.34,
+      targetX: chartPanelWidth * 0.5,
+      targetY: chartPanelHeight * 0.48,
       anchor: "right",
     },
+  };
+  const resolveAnnotationTarget = (annotation: Record<string, unknown>, index: number): string => {
+    const rawTarget =
+      asString(annotation.target) ??
+      asString(annotation.targetLine) ??
+      `annotation-${index}`;
+    switch (rawTarget) {
+      case "immediate_patch":
+        return "immediate_patch_line";
+      case "total_cost_debt":
+        return "total_cost_line";
+      default:
+        return rawTarget;
+    }
+  };
+  const resolveAnnotationAccent = (
+    annotation: Record<string, unknown>,
+    fallback = "#60A5FA"
+  ): string => {
+    return (
+      asString(annotation.color) ??
+      asString(annotation.accentColor) ??
+      fallback
+    );
+  };
+  const resolveAnnotationHeadline = (
+    annotation: Record<string, unknown>
+  ): string => {
+    return (
+      asString(annotation.header) ??
+      asString(annotation.mainText) ??
+      asString(annotation.stat) ??
+      asString(annotation.text) ??
+      "Callout"
+    );
   };
 
   if (diagramId === "research_annotations") {
@@ -5923,7 +6314,7 @@ const AnnotationVisual: React.FC<{
                 stroke="none"
               />
               {annotations.slice(0, 4).map((annotation, index) => {
-                const target = asString(annotation.target) ?? `annotation-${index}`;
+                const target = resolveAnnotationTarget(annotation, index);
                 const position =
                   annotationPositions[target] ??
                   ({
@@ -5932,11 +6323,21 @@ const AnnotationVisual: React.FC<{
                     targetX: width * 0.64,
                     targetY: height * 0.34 + index * 36,
                     anchor: "left",
-                  } as const);
-                const color = asString(annotation.color) ?? "#60A5FA";
+                      } as const);
+                const color = resolveAnnotationAccent(annotation);
+                const clampedLeft = Math.max(
+                  24,
+                  Math.min(position.left, chartPanelWidth - annotationCardWidth - 24)
+                );
+                const clampedTop = Math.max(
+                  24,
+                  Math.min(position.top, chartPanelHeight - annotationCardHeight - 24)
+                );
                 const startX =
-                  position.anchor === "left" ? position.left - 24 : position.left + 260;
-                const startY = position.top + 58;
+                  position.anchor === "left"
+                    ? clampedLeft - 24
+                    : clampedLeft + annotationCardWidth;
+                const startY = clampedTop + annotationCardHeight / 2;
                 return (
                   <g key={`callout-${index}`}>
                     <line
@@ -5953,28 +6354,36 @@ const AnnotationVisual: React.FC<{
               })}
             </svg>
             {annotations.slice(0, 4).map((annotation, index) => {
-              const target = asString(annotation.target) ?? `annotation-${index}`;
-              const position =
-                annotationPositions[target] ??
-                ({
-                  left: width * 0.68,
-                  top: height * 0.28 + index * 82,
+              const target = resolveAnnotationTarget(annotation, index);
+                const position =
+                  annotationPositions[target] ??
+                  ({
+                      left: width * 0.68,
+                      top: height * 0.28 + index * 82,
                   targetX: width * 0.64,
                   targetY: height * 0.34 + index * 36,
-                  anchor: "left",
-                } as const);
-              const color = asString(annotation.color) ?? "#60A5FA";
-              return (
-                <div
-                  key={`annotation-${index}`}
-                  style={{
-                    position: "absolute",
-                    left: position.left,
-                    top: position.top,
-                    width: 260,
-                    padding: "18px 18px 16px",
-                    borderRadius: 18,
-                    backgroundColor: "rgba(15, 23, 42, 0.86)",
+                        anchor: "left",
+                      } as const);
+                const color = resolveAnnotationAccent(annotation);
+                const clampedLeft = Math.max(
+                  24,
+                  Math.min(position.left, chartPanelWidth - annotationCardWidth - 24)
+                );
+                const clampedTop = Math.max(
+                  24,
+                  Math.min(position.top, chartPanelHeight - annotationCardHeight - 24)
+                );
+                return (
+                  <div
+                    key={`annotation-${index}`}
+                    style={{
+                      position: "absolute",
+                      left: clampedLeft,
+                      top: clampedTop,
+                      width: annotationCardWidth,
+                      padding: "18px 18px 16px",
+                      borderRadius: 18,
+                      backgroundColor: "rgba(15, 23, 42, 0.86)",
                     border: `1px solid ${color}44`,
                     display: "flex",
                     flexDirection: "column",
@@ -5983,7 +6392,7 @@ const AnnotationVisual: React.FC<{
                   }}
                 >
                   <div style={{ color, fontSize: 18, fontWeight: 700 }}>
-                    {asString(annotation.header) ?? asString(annotation.stat) ?? "Callout"}
+                    {resolveAnnotationHeadline(annotation)}
                   </div>
                   <div style={{ color: "#94A3B8", fontSize: 12 }}>
                     {asString(annotation.source) ?? ""}
@@ -6106,7 +6515,7 @@ const AnnotationVisual: React.FC<{
             }}
           >
             {annotations.slice(0, 4).map((annotation, index) => {
-              const color = asString(annotation.color) ?? "#60A5FA";
+              const color = resolveAnnotationAccent(annotation);
               return (
                 <div
                   key={`annotation-${index}`}
@@ -6124,12 +6533,12 @@ const AnnotationVisual: React.FC<{
                     style={{
                       color,
                       fontFamily: "'Inter', sans-serif",
-                      fontSize: 18,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {asString(annotation.header) ?? asString(annotation.stat) ?? asString(annotation.text) ?? "Callout"}
-                  </div>
+                    fontSize: 18,
+                    fontWeight: 700,
+                  }}
+                >
+                  {resolveAnnotationHeadline(annotation)}
+                </div>
                   <div
                     style={{
                       color: "#F8FAFC",
@@ -9352,7 +9761,7 @@ const RemotionAnimationVisual: React.FC<{
 
 export const GeneratedContractVisual: React.FC = () => {
   const data = useVisualContractData<Record<string, unknown>>() ?? {};
-  const frame = useCurrentFrame();
+  const frame = useVisualFrame();
   const { width, height } = useVideoConfig();
   const backgroundColor = resolveBackgroundColor(data);
   const visualType = asString(data.type) ?? "generated_visual";
@@ -9372,7 +9781,7 @@ export const GeneratedContractVisual: React.FC = () => {
     visualType === "synthesis_animation" ||
     visualType === "equivalence_demo"
   ) {
-    body = <ChartVisual data={data} width={width} height={height} frame={frame} />;
+    body = <ChartVisual data={data} width={width} height={height} />;
   } else if (visualType === "split_screen") {
     body = <SplitVisual data={data} width={width} height={height} />;
   } else if (visualType === "comparison_table") {

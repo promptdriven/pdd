@@ -3,12 +3,13 @@ import {
   AbsoluteFill,
   OffthreadVideo,
   interpolate,
-  useCurrentFrame,
   useVideoConfig,
 } from "remotion";
 
 import {
   useVisualContractData,
+  useVisualDurationInFrames,
+  useVisualFrame,
   useVisualMediaAssetSrc,
 } from "./visual-runtime";
 
@@ -21,6 +22,11 @@ type PanelMetadata = {
   costSubLabel: string | null;
   terminalSnippet: string | null;
   crossedOutIcon: string | null;
+};
+
+type FloatingComment = {
+  text: string;
+  color: string;
 };
 
 const lowerThirdLayout = (width: number, height: number) => {
@@ -57,15 +63,33 @@ function resolveCounterValue(contract: Record<string, unknown> | null): number |
   return values.length > 0 ? values[values.length - 1] : null;
 }
 
+function resolveFloatingComments(contract: Record<string, unknown> | null): FloatingComment[] {
+  const overlays = Array.isArray(contract?.overlays) ? contract.overlays : [];
+
+  return overlays
+    .map((entry) => asRecord(entry))
+    .filter((overlayRecord): overlayRecord is Record<string, unknown> => Boolean(overlayRecord))
+    .filter(
+      (overlayRecord) =>
+        asString(overlayRecord.type)?.toLowerCase() === "floating_comment" &&
+        Boolean(asString(overlayRecord.text))
+    )
+    .map((overlayRecord) => ({
+      text: asString(overlayRecord.text)!,
+      color: asString(overlayRecord.color) ?? "#F59E0B",
+    }));
+}
+
 export const GeneratedMediaVisual: React.FC<{
   config?: GeneratedMediaVisualConfig | null;
 }> = ({ config }) => {
-  const frame = useCurrentFrame();
+  const frame = useVisualFrame();
   const src = useVisualMediaAssetSrc("defaultSrc");
   const leftSrc = useVisualMediaAssetSrc("leftSrc");
   const rightSrc = useVisualMediaAssetSrc("rightSrc");
   const contract = useVisualContractData<Record<string, unknown>>();
-  const { width, height, durationInFrames } = useVideoConfig();
+  const { width, height } = useVideoConfig();
+  const durationInFrames = useVisualDurationInFrames();
   const layout = lowerThirdLayout(width, height);
   const gradientOverlay = config?.gradientOverlay;
   const lowerThirdText =
@@ -88,6 +112,7 @@ export const GeneratedMediaVisual: React.FC<{
   const splitLabelFontSize = Math.max(18, 22 * Math.min(width / 1920, height / 1080));
   const splitMetaFontSize = Math.max(18, 20 * Math.min(width / 1920, height / 1080));
   const counterValue = resolveCounterValue(contract);
+  const floatingComments = resolveFloatingComments(contract);
 
   const resolvePanelData = (side: "left" | "right"): Record<string, unknown> | null => {
     const directKey = side === "left" ? "left" : "right";
@@ -135,6 +160,20 @@ export const GeneratedMediaVisual: React.FC<{
     objectFit: "cover" as const,
     opacity: mediaOpacity,
   };
+  const floatingCommentStartFrame = Math.floor(durationInFrames * 0.45);
+  const floatingCommentFadeFrames = Math.max(12, Math.floor(durationInFrames * 0.12));
+  const floatingCommentOpacity =
+    floatingComments.length > 0
+      ? interpolate(
+          frame,
+          [floatingCommentStartFrame, floatingCommentStartFrame + floatingCommentFadeFrames],
+          [0, 1],
+          {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          }
+        ) * mediaOpacity
+      : 0;
 
   const renderSplitMetadata = (
     side: "left" | "right",
@@ -350,6 +389,44 @@ export const GeneratedMediaVisual: React.FC<{
           }}
         />
       ) : null}
+
+      {floatingComments.map((comment, index) => {
+        const anchorPositions = [
+          { left: "16%", top: "18%", rotate: -4 },
+          { left: "70%", top: "32%", rotate: 3 },
+          { left: "42%", top: "60%", rotate: -2 },
+        ];
+        const anchor = anchorPositions[index] ?? {
+          left: `${18 + index * 10}%`,
+          top: `${22 + index * 12}%`,
+          rotate: index % 2 === 0 ? -2 : 2,
+        };
+
+        return (
+          <div
+            key={`${comment.text}-${index}`}
+            style={{
+              position: "absolute",
+              left: anchor.left,
+              top: anchor.top,
+              transform: `rotate(${anchor.rotate}deg)`,
+              color: comment.color,
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: Math.max(20, 24 * Math.min(width / 1920, height / 1080)),
+              fontWeight: 600,
+              letterSpacing: 0.4,
+              textShadow: `0 0 18px ${comment.color}55`,
+              backgroundColor: "rgba(2, 6, 23, 0.24)",
+              border: `1px solid ${comment.color}33`,
+              borderRadius: 12,
+              padding: "8px 12px",
+              opacity: floatingCommentOpacity,
+            }}
+          >
+            {comment.text}
+          </div>
+        );
+      })}
 
       {lowerThirdText ? (
         <div

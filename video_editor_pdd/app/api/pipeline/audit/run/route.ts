@@ -940,6 +940,7 @@ Rules:
 - Fail only for visible mismatches in the sampled frame.
 - Treat spatial requirements semantically rather than as exact pixel arithmetic.
 - The spec snapshot below has been rewritten into relative layout language for your review.
+- If the snapshot includes a "Structured Visual Contract (authoritative)" section, treat that structured contract as the source of truth over conflicting prose.
 
 - Audit spec name: ${path.basename(specPath)}
 - Audit render source: ${renderSource.kind}

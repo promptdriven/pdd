@@ -59,6 +59,7 @@ from generate_section_compositions import (
     update_root_tsx,
     _merge_root_tsx,
     _extract_visual_overlay_config,
+    _resolve_generated_spec_basename_video,
     _should_prefer_generated_contract_renderer,
     resolve_section_component_records,
     emit_progress,
@@ -6012,6 +6013,128 @@ class TestVisualContractManifestNewFields:
         assert visual["mediaAliases"]["rightBaseSrc"] == "veo/grandmother_darning.mp4"
         assert visual["mediaAliases"]["rightRevealSrc"] == "veo/grandmother_drawer_zoomout.mp4"
 
+    def test_build_visual_contract_manifest_preserves_ordered_split_panel_aliases_from_companion_child_specs(
+        self, tmp_path
+    ):
+        project_dir = tmp_path / "project"
+        spec_dir = project_dir / "specs" / "cold_open"
+        remotion_public = project_dir / "remotion-public"
+        (remotion_public / "veo").mkdir(parents=True)
+        spec_dir.mkdir(parents=True)
+
+        for clip_id in (
+            "developer_cursor_edit",
+            "developer_codebase_zoomout",
+            "grandmother_darning",
+            "grandmother_drawer_zoomout",
+        ):
+            (remotion_public / "veo" / f"{clip_id}.mp4").write_text("stub", encoding="utf-8")
+
+        (spec_dir / "01_split_developer_grandmother.md").write_text(
+            "\n".join(
+                [
+                    "[split:]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "split_screen",
+                            "panels": {
+                                "left": {
+                                    "clips": [
+                                        "developer_cursor_edit_co",
+                                        "developer_codebase_zoomout_co",
+                                    ]
+                                },
+                                "right": {
+                                    "clips": [
+                                        "grandmother_darning_co",
+                                        "grandmother_drawer_zoomout_co",
+                                    ]
+                                },
+                            },
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        child_specs = {
+            "02_veo_developer_cursor_edit.md": {
+                "clipId": "developer_cursor_edit_co",
+                "usedIn": "01_split_developer_grandmother (left panel)",
+            },
+            "03_veo_grandmother_darning.md": {
+                "clipId": "grandmother_darning_co",
+                "usedIn": "01_split_developer_grandmother (right panel)",
+            },
+            "04_veo_developer_codebase_zoomout.md": {
+                "clipId": "developer_codebase_zoomout_co",
+                "usedIn": "01_split_developer_grandmother (left panel)",
+            },
+            "05_veo_grandmother_drawer_zoomout.md": {
+                "clipId": "grandmother_drawer_zoomout_co",
+                "usedIn": "01_split_developer_grandmother (right panel)",
+            },
+        }
+
+        for filename, payload in child_specs.items():
+            (spec_dir / filename).write_text(
+                "\n".join(
+                    [
+                        "[veo:]",
+                        "",
+                        "## Data Points JSON",
+                        "```json",
+                        json.dumps({"type": "veo_clip", **payload}),
+                        "```",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 14,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": ["01_split_developer_grandmother"],
+        }
+
+        manifest = build_visual_contract_manifest(
+            [section],
+            str(project_dir),
+            str(remotion_public),
+        )
+        visuals_by_id = {
+            visual["id"]: visual for visual in manifest["sections"][0]["visuals"]
+        }
+        visual = visuals_by_id["01_split_developer_grandmother"]
+
+        assert visual["mediaAliases"]["leftSrc"] == "veo/developer_cursor_edit.mp4"
+        assert visual["mediaAliases"]["leftBaseSrc"] == "veo/developer_cursor_edit.mp4"
+        assert visual["mediaAliases"]["leftRevealSrc"] == "veo/developer_codebase_zoomout.mp4"
+        assert visual["mediaAliases"]["rightSrc"] == "veo/grandmother_darning.mp4"
+        assert visual["mediaAliases"]["rightBaseSrc"] == "veo/grandmother_darning.mp4"
+        assert visual["mediaAliases"]["rightRevealSrc"] == "veo/grandmother_drawer_zoomout.mp4"
+
+    def test_resolve_generated_spec_basename_video_strips_number_and_tool_prefixes(
+        self, tmp_path
+    ):
+        remotion_public = tmp_path / "remotion-public"
+        (remotion_public / "veo").mkdir(parents=True)
+        (remotion_public / "veo" / "grandmother_darning.mp4").write_text("stub", encoding="utf-8")
+
+        assert _resolve_generated_spec_basename_video(
+            "03_veo_grandmother_darning",
+            str(remotion_public),
+        ) == "veo/grandmother_darning.mp4"
+
 
 class TestContractFirstVisualResolution:
     def test_prefers_generated_contract_for_structured_title_cards(self):
@@ -6195,8 +6318,8 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
-    def test_keeps_exact_component_for_counter_animation_with_mold_cycle_profile(self):
-        assert not _should_prefer_generated_contract_renderer(
+    def test_prefers_generated_contract_for_counter_animation_with_mold_cycle_profile(self):
+        assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "counter_animation",
@@ -6205,6 +6328,49 @@ class TestContractFirstVisualResolution:
                         "startFramesPerCycle": 60,
                         "endFramesPerCycle": 6,
                     },
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_under_specified_inset_chart_when_exact_component_exists(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "inset_chart",
+                    "chartId": "performance_vs_context_length",
+                    "series": [
+                        {
+                            "id": "performance_degradation",
+                            "data": [
+                                {"x": "4K", "y": 1.0},
+                                {"x": "1M", "y": 0.15},
+                            ],
+                        }
+                    ],
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_prefers_generated_contract_for_inset_chart_with_explicit_phase_structure(self):
+        assert _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "inset_chart",
+                    "chartId": "performance_vs_context_length",
+                    "backgroundChartId": "code_cost_triple_line",
+                    "pulseLayer": "context_rot",
+                    "phaseFrames": [0, 720, 900, 1470],
+                    "series": [
+                        {
+                            "id": "performance_degradation",
+                            "data": [
+                                {"x": "4K", "y": 1.0},
+                                {"x": "1M", "y": 0.15},
+                            ],
+                        }
+                    ],
                 }
             },
             has_exact_component=True,
@@ -6236,6 +6402,23 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_keeps_exact_component_for_sparse_sidebar_annotation_when_exact_component_exists(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "sidebar_annotation",
+                    "topic": "Z3 formal verification",
+                    "keyTerms": ["Z3", "SMT solver"],
+                    "logos": [
+                        {"text": "Z3", "color": "#A78BFA"},
+                        {"text": "SF", "color": "#7C3AED"},
+                    ],
+                    "provenWalls": [1, 3],
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_prefers_generated_contract_for_line_charts_even_with_exact_component(self):
         assert _should_prefer_generated_contract_renderer(
             {
@@ -6247,12 +6430,38 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
-    def test_prefers_generated_contract_for_code_editor_animation_even_with_exact_component(self):
+    def test_prefers_generated_contract_for_legacy_codebase_reveal_even_when_exact_component_exists(self):
         assert _should_prefer_generated_contract_renderer(
             {
                 "dataPoints": {
                     "type": "code_editor_animation",
                     "editorId": "legacy_codebase_reveal",
+                    "files": [
+                        "auth_handler.py",
+                        "payment_processor.py",
+                        "legacy_utils.py",
+                    ],
+                    "warningComments": [
+                        {"line": 42, "text": "# here be dragons"},
+                    ],
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_structured_code_transformation_when_available(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "code_transformation",
+                    "transformId": "module_to_prompt",
+                    "sourceFile": "auth_handler.py",
+                    "generatedFile": "auth_handler.prompt.md",
+                    "command": "pdd update auth_handler.py",
+                    "states": [
+                        {"id": "code_highlighted"},
+                        {"id": "prompt_extracted"},
+                    ],
                 }
             },
             has_exact_component=True,
@@ -6300,10 +6509,53 @@ class TestContractFirstVisualResolution:
             has_exact_component=True,
         )
 
+    def test_keeps_exact_component_for_module_grid_title_card_when_available(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "title_card",
+                    "sectionLabel": "WHERE TO START",
+                    "titleLine1": "WHERE TO",
+                    "titleLine2": "START",
+                    "ghostElements": [
+                        {
+                            "shape": "module_grid",
+                            "rows": 4,
+                            "cols": 6,
+                            "highlightCell": [2, 3],
+                        }
+                    ],
+                }
+            },
+            has_exact_component=True,
+        )
+
+    def test_keeps_exact_component_for_supported_synthesis_families_when_available(self):
+        for data_points in [
+            {
+                "type": "synthesis_animation",
+                "chartId": "verilog_synthesis",
+                "codeSample": "module counter(); endmodule",
+                "synthesisStages": ["code_input", "synthesis_process", "gate_output"],
+            },
+            {
+                "type": "equivalence_demo",
+                "chartId": "triple_synthesis_equivalence",
+                "runs": [
+                    {"id": "run_1"},
+                    {"id": "run_2"},
+                    {"id": "run_3"},
+                ],
+                "equivalenceLabel": "Functionally equivalent",
+            },
+        ]:
+            assert not _should_prefer_generated_contract_renderer(
+                {"dataPoints": data_points},
+                has_exact_component=True,
+            )
+
     def test_prefers_generated_contract_for_remaining_shared_visual_families_even_with_exact_component(self):
         for data_points in [
-            {"type": "synthesis_animation", "chartId": "verilog_synthesis"},
-            {"type": "equivalence_demo", "chartId": "triple_synthesis_equivalence"},
             {"type": "key_insight", "chartId": "key_insight_walls"},
             {"type": "sidebar_annotation", "topic": "Z3 formal verification"},
             {"type": "system_diagram", "label": "PDD operates at the module level."},
@@ -6365,6 +6617,34 @@ class TestExtractVisualOverlayConfig:
         assert _extract_visual_overlay_config(spec) == {
             "fadeInFrames": 15,
             "fadeOutFrames": 30,
+        }
+
+    def test_extracts_structured_media_overlay_config_from_data_points(self):
+        spec = "\n".join(
+            [
+                "[veo:]",
+                "",
+                "## Data Points JSON",
+                "```json",
+                json.dumps(
+                    {
+                        "type": "veo_clip",
+                        "clipId": "developer_codebase_zoomout",
+                        "overlays": [
+                            {
+                                "type": "floating_comment",
+                                "text": "// don't touch this",
+                                "color": "#EF4444",
+                            }
+                        ],
+                    }
+                ),
+                "```",
+            ]
+        )
+
+        assert _extract_visual_overlay_config(spec) == {
+            "structuredOverlay": True,
         }
 
     def test_prefers_generated_contract_for_animated_diagrams(self):
@@ -6548,4 +6828,351 @@ class TestExtractVisualOverlayConfig:
             ("08_prompt_file_generate", "ColdOpen08PromptFileGenerate", "ColdOpen08PromptFileGenerate"),
             ("09_test_fix_cycle", "ColdOpen09TestFixCycle", "ColdOpen09TestFixCycle"),
             ("10_transition_overlay", "ColdOpen10TransitionOverlay", "ColdOpen10TransitionOverlay"),
+        ]
+
+    def test_resolve_section_component_records_prefers_generated_contract_for_current_chart_families(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        remotion_src = project_dir / "remotion" / "src" / "remotion"
+        remotion_public.mkdir(parents=True)
+
+        part1_specs = project_dir / "specs" / "part1_economics"
+        part1_specs.mkdir(parents=True)
+        (part1_specs / "08_performance_vs_context.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "inset_chart",
+                            "chartId": "performance_vs_context_length",
+                            "series": [{"id": "performance_degradation", "data": [{"x": "4K", "y": 1.0}]}],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        part1_component = remotion_src / "Part1Economics08PerformanceVsContext"
+        part1_component.mkdir(parents=True)
+        (part1_component / "index.tsx").write_text(
+            "export const Part1Economics08PerformanceVsContext = () => null;\n",
+            encoding="utf-8",
+        )
+
+        part2_specs = project_dir / "specs" / "part2_paradigm_shift"
+        part2_specs.mkdir(parents=True)
+        (part2_specs / "04_mold_production_counter.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "counter_animation",
+                            "chartId": "mold_production_counter",
+                            "counter": {"start": 1, "end": 10000},
+                            "moldCycle": {"startFramesPerCycle": 60, "endFramesPerCycle": 6},
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        part2_component = remotion_src / "Part2ParadigmShift04MoldProductionCounter"
+        part2_component.mkdir(parents=True)
+        (part2_component / "index.tsx").write_text(
+            "export const Part2ParadigmShift04MoldProductionCounter = () => null;\n",
+            encoding="utf-8",
+        )
+
+        part1_section = {
+            "id": "part1_economics",
+            "compositionId": "Part1EconomicsSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "part1_economics",
+            "compositions": ["08_performance_vs_context"],
+        }
+        part2_section = {
+            "id": "part2_paradigm_shift",
+            "compositionId": "Part2ParadigmShiftSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "part2_paradigm_shift",
+            "compositions": ["04_mold_production_counter"],
+        }
+
+        assert resolve_section_component_records(
+            part1_section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        ) == [
+            (
+                "08_performance_vs_context",
+                "Part1Economics08PerformanceVsContext",
+                "Part1Economics08PerformanceVsContext",
+            )
+        ]
+        assert resolve_section_component_records(
+            part2_section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        ) == []
+
+    def test_resolve_section_component_records_keeps_exact_components_for_rich_code_and_synthesis_visuals(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        remotion_src = project_dir / "remotion" / "src" / "remotion"
+        remotion_public.mkdir(parents=True)
+
+        where_specs = project_dir / "specs" / "where_to_start"
+        where_specs.mkdir(parents=True)
+        (where_specs / "01_section_title_card.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "title_card",
+                            "sectionLabel": "WHERE TO START",
+                            "titleLine1": "WHERE TO",
+                            "titleLine2": "START",
+                            "ghostElements": [
+                                {
+                                    "shape": "module_grid",
+                                    "rows": 4,
+                                    "cols": 6,
+                                    "highlightCell": [2, 3],
+                                }
+                            ],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (where_specs / "02_legacy_codebase_reveal.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "code_editor_animation",
+                            "editorId": "legacy_codebase_reveal",
+                            "files": ["auth_handler.py", "payment_processor.py", "legacy_utils.py"],
+                            "warningComments": [{"line": 42, "text": "# here be dragons"}],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (where_specs / "03_module_highlight_terminal.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "code_transformation",
+                            "transformId": "module_to_prompt",
+                            "sourceFile": "auth_handler.py",
+                            "generatedFile": "auth_handler.prompt.md",
+                            "command": "pdd update auth_handler.py",
+                            "states": [{"id": "code_highlighted"}, {"id": "prompt_extracted"}],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        for component_dir, export_name in [
+            ("WhereToStart01SectionTitleCard", "WhereToStart01SectionTitleCard"),
+            ("WhereToStart02LegacyCodebaseReveal", "WhereToStart02LegacyCodebaseReveal"),
+            ("WhereToStart03ModuleHighlightTerminal", "WhereToStart03ModuleHighlightTerminal"),
+        ]:
+            path = remotion_src / component_dir
+            path.mkdir(parents=True)
+            (path / "index.tsx").write_text(
+                f"export const {export_name} = () => null;\n",
+                encoding="utf-8",
+            )
+
+        where_section = {
+            "id": "where_to_start",
+            "compositionId": "WhereToStartSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "where_to_start",
+            "compositions": ["01_section_title_card", "02_legacy_codebase_reveal", "03_module_highlight_terminal"],
+        }
+
+        assert resolve_section_component_records(
+            where_section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        ) == [
+            ("01_section_title_card", "WhereToStart01SectionTitleCard", "WhereToStart01SectionTitleCard"),
+            ("03_module_highlight_terminal", "WhereToStart03ModuleHighlightTerminal", "WhereToStart03ModuleHighlightTerminal"),
+        ]
+
+        part2_specs = project_dir / "specs" / "part2_paradigm_shift"
+        part2_specs.mkdir(parents=True)
+        (part2_specs / "12_verilog_synthesis.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "synthesis_animation",
+                            "chartId": "verilog_synthesis",
+                            "codeSample": "module counter(); endmodule",
+                            "synthesisStages": ["code_input", "synthesis_process", "gate_output"],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (part2_specs / "13_triple_synthesis_equivalence.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "equivalence_demo",
+                            "chartId": "triple_synthesis_equivalence",
+                            "runs": [{"id": "run_1"}, {"id": "run_2"}, {"id": "run_3"}],
+                            "equivalenceLabel": "Functionally equivalent",
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        for component_dir, export_name in [
+            ("Part2ParadigmShift12VerilogSynthesis", "Part2ParadigmShift12VerilogSynthesis"),
+            ("Part2ParadigmShift13TripleSynthesisEquivalence", "Part2ParadigmShift13TripleSynthesisEquivalence"),
+        ]:
+            path = remotion_src / component_dir
+            path.mkdir(parents=True)
+            (path / "index.tsx").write_text(
+                f"export const {export_name} = () => null;\n",
+                encoding="utf-8",
+            )
+
+        part2_section = {
+            "id": "part2_paradigm_shift",
+            "compositionId": "Part2ParadigmShiftSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "part2_paradigm_shift",
+            "compositions": ["12_verilog_synthesis", "13_triple_synthesis_equivalence"],
+        }
+
+        assert resolve_section_component_records(
+            part2_section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        ) == [
+            ("12_verilog_synthesis", "Part2ParadigmShift12VerilogSynthesis", "Part2ParadigmShift12VerilogSynthesis"),
+            (
+                "13_triple_synthesis_equivalence",
+                "Part2ParadigmShift13TripleSynthesisEquivalence",
+                "Part2ParadigmShift13TripleSynthesisEquivalence",
+            ),
+        ]
+
+    def test_resolve_section_component_records_keeps_exact_component_for_sparse_sidebar_annotations(self, tmp_path):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        remotion_src = project_dir / "remotion" / "src" / "remotion"
+        specs_dir = project_dir / "specs" / "part3_mold_parts"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (specs_dir / "10_z3_formal_proof.md").write_text(
+            "\n".join(
+                [
+                    "[Remotion]",
+                    "",
+                    "## Data Points JSON",
+                    "```json",
+                    json.dumps(
+                        {
+                            "type": "sidebar_annotation",
+                            "topic": "Z3 formal verification",
+                            "keyTerms": ["Z3", "SMT solver"],
+                            "provenWalls": [1, 3],
+                            "logos": [
+                                {"text": "Z3", "color": "#A78BFA"},
+                                {"text": "SF", "color": "#7C3AED"},
+                            ],
+                        }
+                    ),
+                    "```",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        component_dir = remotion_src / "Part3MoldParts10Z3FormalProof"
+        component_dir.mkdir(parents=True)
+        (component_dir / "index.tsx").write_text(
+            "export const Part3MoldParts10Z3FormalProof = () => null;\n",
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "part3_mold_parts",
+            "compositionId": "Part3MoldPartsSection",
+            "durationSeconds": 10,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "part3_mold_parts",
+            "compositions": ["10_z3_formal_proof"],
+        }
+
+        assert resolve_section_component_records(
+            section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        ) == [
+            ("10_z3_formal_proof", "Part3MoldParts10Z3FormalProof", "Part3MoldParts10Z3FormalProof")
         ]

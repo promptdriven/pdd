@@ -94,7 +94,21 @@ export function buildClaudeAuditSpecSnapshot(
   const normalized = normalizeSpecForAudit(specContent, targetResolution);
   const strippedForClaude = normalized
     .split(/\n(?=##\s+)/)
-    .filter((section) => !/^##\s*(Code Structure|Data Points)\b/i.test(section.trim()))
+    .filter((section) => !/^##\s*Code Structure\b/i.test(section.trim()))
+    .map((section) => {
+      if (!/^##\s*Data Points(?: JSON)?\b/i.test(section.trim())) {
+        return section;
+      }
+
+      return section.replace(
+        /^##\s*Data Points(?: JSON)?\b[^\n]*/i,
+        [
+          "## Structured Visual Contract (authoritative)",
+          "",
+          "When descriptive prose and structured contract details disagree, trust this structured contract.",
+        ].join("\n")
+      );
+    })
     .join("\n")
     .trim();
 
@@ -115,8 +129,18 @@ export function buildClaudeAuditSpecSnapshot(
   );
 
   relativized = relativized.replace(
+    /"x"\s*:\s*\d+(?:\.\d+)?/gi,
+    '"x": "expected horizontal anchor"'
+  );
+
+  relativized = relativized.replace(
     /\by\s*=\s*\d+(?:\.\d+)?/gi,
     "expected vertical anchor"
+  );
+
+  relativized = relativized.replace(
+    /"y"\s*:\s*\d+(?:\.\d+)?/gi,
+    '"y": "expected vertical anchor"'
   );
 
   relativized = relativized.replace(

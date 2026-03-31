@@ -24,19 +24,23 @@ import {
  */
 export const DebtAreaPulse: React.FC = () => {
   const frame = useCurrentFrame();
+  const localChartFadeStart = 0;
+  const localChartFadeEnd = PHASE_INSET_FADE_END - PHASE_INSET_FADE_START;
+  const localPulseStart = PHASE_PULSE_START - PHASE_INSET_FADE_START;
+  const localAnnotationStart = PHASE_ANNOTATION_START - PHASE_INSET_FADE_START;
 
   // ── Fade-in (inverse of inset fade-out) ──
   const chartFadeIn = interpolate(
     frame,
-    [PHASE_INSET_FADE_START, PHASE_INSET_FADE_END],
+    [localChartFadeStart, localChartFadeEnd],
     [0, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );
 
   // ── Pulse cycle (sinusoidal) ──
-  const pulsePhase = frame >= PHASE_PULSE_START ? frame - PHASE_PULSE_START : 0;
+  const pulsePhase = frame >= localPulseStart ? frame - localPulseStart : 0;
   const pulseOpacity =
-    frame >= PHASE_PULSE_START
+    frame >= localPulseStart
       ? interpolate(
           Math.sin((pulsePhase / PULSE_CYCLE_FRAMES) * Math.PI * 2),
           [-1, 1],
@@ -47,7 +51,7 @@ export const DebtAreaPulse: React.FC = () => {
   // ── Annotation fade-in ──
   const annotationOpacity = interpolate(
     frame,
-    [PHASE_ANNOTATION_START, PHASE_ANNOTATION_START + PHASE_ANNOTATION_FADE_DURATION],
+    [localAnnotationStart, localAnnotationStart + PHASE_ANNOTATION_FADE_DURATION],
     [0, 1],
     {
       extrapolateLeft: 'clamp',

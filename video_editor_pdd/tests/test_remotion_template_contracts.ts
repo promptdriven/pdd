@@ -174,11 +174,25 @@ describe("shared generated media renderer", () => {
     expect(source).toMatch(/Math\.max\(\s*18|Math\.max\(\s*20/);
   });
 
+  it("renders structured floating-comment overlays for media visuals that need composited annotations", () => {
+    const source = fs.readFileSync(generatedMediaVisualPath, "utf8");
+
+    expect(source).toMatch(/const floatingComments =/);
+    expect(source).toMatch(/toLowerCase\(\)\s*===\s*"floating_comment"/);
+    expect(source).toMatch(/floatingCommentOpacity/);
+    expect(source).toMatch(/comment\.text/);
+    expect(source).toMatch(/comment\.color/);
+    expect(source.indexOf("const mediaOpacity =")).toBeLessThan(
+      source.indexOf("const floatingCommentOpacity =")
+    );
+  });
+
   it("supports authored fade windows for raw-media callback specs instead of rendering clips at full opacity for the entire slot", () => {
     const source = fs.readFileSync(generatedMediaVisualPath, "utf8");
 
     expect(source).toMatch(/fadeInFrames|fadeOutFrames/);
-    expect(source).toMatch(/useCurrentFrame/);
+    expect(source).toMatch(/useVisualFrame/);
+    expect(source).toMatch(/useVisualDurationInFrames/);
     expect(source).toMatch(/opacity/);
     expect(source).toMatch(/interpolate\(/);
   });
@@ -370,6 +384,10 @@ describe("shared generated contract renderer", () => {
     process.cwd(),
     "remotion/src/remotion/_shared/visual-runtime.tsx"
   );
+  const coldOpenSplitScreenPath = path.join(
+    process.cwd(),
+    "remotion/src/remotion/ColdOpen01SplitScreenDarning/ColdOpen01SplitScreenDarning.tsx"
+  );
   const extractBlock = (source: string, startMarker: string, endMarker: string) => {
     const start = source.indexOf(startMarker);
     const end = source.indexOf(endMarker, start + 1);
@@ -435,6 +453,8 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/ghostElements/);
     expect(source).toMatch(/divider|rule/i);
     expect(ghostBlock).toMatch(/codebase_tree/);
+    expect(ghostBlock).toMatch(/module_grid/);
+    expect(ghostBlock).toMatch(/highlightCell/);
     expect(ghostBlock).toMatch(/mold_shell|mold_walls|mold_nozzle|mold_material/);
     expect(ghostBlock).toMatch(/quadratic_curve/);
     expect(ghostBlock).toMatch(/crossing_point/);
@@ -496,6 +516,15 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/useVisualMediaAssetSrc\(\s*"rightRevealSrc"\s*\)/);
   });
 
+  it("keeps the cold-open exact split component aligned with canonical reveal aliases", () => {
+    const source = fs.readFileSync(coldOpenSplitScreenPath, "utf8");
+
+    expect(source).toMatch(/useMediaSrc\(\s*'leftRevealSrc'/);
+    expect(source).toMatch(/useMediaSrc\(\s*'rightRevealSrc'/);
+    expect(source).not.toContain("leftZoomSrc");
+    expect(source).not.toContain("rightZoomSrc");
+  });
+
   it("keeps slot-scaled previews authoritative for intrinsic duration, not only intrinsic frame", () => {
     const contractSource = fs.readFileSync(generatedContractVisualPath, "utf8");
     const runtimeSource = fs.readFileSync(visualRuntimePath, "utf8");
@@ -503,10 +532,15 @@ describe("shared generated contract renderer", () => {
     const splitBlock = extractBlock(contractSource, "const SplitVisual", "const TableVisual");
 
     expect(runtimeSource).toMatch(/export const useVisualDurationInFrames =/);
+    expect(runtimeSource).toMatch(/export const useVisualFrame =/);
     expect(runtimeSource).toMatch(/sequenceContext\?\.durationInFrames \?\? videoConfig\.durationInFrames/);
     expect(contractSource).toMatch(/useVisualDurationInFrames/);
+    expect(contractSource).toMatch(/useVisualFrame/);
+    expect(chartBlock).toMatch(/const frame = useVisualFrame\(\);/);
+    expect(splitBlock).toMatch(/const frame = useVisualFrame\(\);/);
     expect(chartBlock).toMatch(/const durationInFrames = useVisualDurationInFrames\(\);/);
     expect(splitBlock).toMatch(/const durationInFrames = useVisualDurationInFrames\(\);/);
+    expect(contractSource).not.toMatch(/const frame = useCurrentFrame\(\);/);
     expect(chartBlock).not.toMatch(/const \{ durationInFrames \} = useVideoConfig\(\);/);
     expect(splitBlock).not.toMatch(/const \{ durationInFrames \} = useVideoConfig\(\);/);
   });
@@ -552,8 +586,10 @@ describe("shared generated contract renderer", () => {
     expect(moldCounterBlock).toMatch(/"#D9944A"/);
     expect(moldCounterBlock).not.toMatch(/"#60A5FA"/);
 
-    expect(schematicBlock).toMatch(/repeat\(20, minmax\(0, 1fr\)\)/);
-    expect(schematicBlock).toMatch(/Array\.from\(\{ length: 640 \}\)/);
+    expect(schematicBlock).toMatch(/const schematicColumns = 36/);
+    expect(schematicBlock).toMatch(/const schematicCells = 2304/);
+    expect(schematicBlock).toMatch(/repeat\(\$\{schematicColumns\}, minmax\(0, 1fr\)\)/);
+    expect(schematicBlock).toMatch(/Array\.from\(\{ length: schematicCells \}\)/);
     expect(schematicBlock).toMatch(/fontSize: 62/);
     expect(schematicBlock).toMatch(/stroke="#2D3748"/);
     expect(schematicBlock).toMatch(/stroke="#4A5568"/);
@@ -667,6 +703,35 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/return "code_cost_triple_line";/);
   });
 
+  it("supports Stage 6 annotation alias fields for code-cost callouts instead of falling back to placeholder text", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const annotationBlock = extractBlock(
+      source,
+      "const AnnotationVisual",
+      "const SidebarAnnotationVisual"
+    );
+
+    expect(annotationBlock).toMatch(/annotation\.targetLine/);
+    expect(annotationBlock).toMatch(/annotation\.accentColor/);
+    expect(annotationBlock).toMatch(/annotation\.mainText/);
+    expect(annotationBlock).toMatch(/case "immediate_patch":/);
+    expect(annotationBlock).toMatch(/case "total_cost_debt":/);
+  });
+
+  it("positions code-cost annotation overlays relative to the chart panel instead of the full composition height", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const annotationBlock = extractBlock(
+      source,
+      "const AnnotationVisual",
+      "const SidebarAnnotationVisual"
+    );
+
+    expect(annotationBlock).toMatch(/const chartPanelWidth = width - 144;/);
+    expect(annotationBlock).toMatch(/left: chartPanelWidth \* 0\.72/);
+    expect(annotationBlock).toMatch(/top: chartPanelHeight \* 0\.56/);
+    expect(annotationBlock).toMatch(/top: chartPanelHeight \* 0\.14/);
+  });
+
   it("renders transition cards without the old debug title and center divider artifact", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
     const transitionBlock = extractBlock(source, "const TransitionVisual", "const ChartVisual");
@@ -691,6 +756,37 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/Every token is author-curated\./);
     expect(source).toMatch(/No retrieval guessing\. No wasted space\./);
     expect(source).toMatch(/The entire context window is devoted to your problem\./);
+  });
+
+  it("builds authored split-panel aura overlays over time instead of using a barely visible static glow", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const splitBlock = extractBlock(source, "const SplitVisual", "const TableVisual");
+
+    expect(splitBlock).toMatch(/const auraBuildStart = Math\.max\(12, Math\.floor\(durationInFrames \* 0\.2\)\);/);
+    expect(splitBlock).toMatch(/const auraProgress = aura\s*\?\s*interpolate\(frame,/s);
+    expect(splitBlock).toMatch(/mixBlendMode: "screen"/);
+    expect(splitBlock).toMatch(/boxShadow: `0 0 200px \$\{auraColor\}AA`/);
+  });
+
+  it("keeps schematic density zoom previews dense enough to fill the frame instead of collapsing into a tiny central blob", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const chartBlock = extractBlock(source, 'if (chartId === "schematic_density_zoom") {', 'if (chartId === "verilog_synthesis") {');
+
+    expect(chartBlock).toMatch(/const schematicColumns = 36;/);
+    expect(chartBlock).toMatch(/const schematicCells = 2304;/);
+    expect(chartBlock).toMatch(/const endScale = Math\.max\(2\.1,/);
+    expect(chartBlock).toMatch(/gridTemplateColumns: `repeat\(\$\{schematicColumns\}, minmax\(0, 1fr\)\)`/);
+  });
+
+  it("normalizes escaped multiline code samples and centers verilog synthesis previews", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const chartBlock = extractBlock(source, 'if (chartId === "verilog_synthesis") {', 'if (chartId === "triple_synthesis_equivalence") {');
+
+    expect(chartBlock).toContain('const normalizedCodeSample = codeSample.replace(/\\\\n/g, "\\n")');
+    expect(chartBlock).toContain('const codeLines = normalizedCodeSample.split("\\n")');
+    expect(chartBlock).toContain('left: "50%"');
+    expect(chartBlock).toContain('transform: "translateX(-50%)"');
+    expect(chartBlock).toContain('width: 800');
   });
 
   it("keeps context-window panels centered and uses the authored clean-panel labels", () => {
@@ -760,6 +856,17 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/asStringArray\(data\.files\)/);
   });
 
+  it("renders legacy codebase reveals as dense editor views from the shared contract renderer", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/prefersDenseEditor/);
+    expect(source).toMatch(/denseEditorColumns/);
+    expect(source).toMatch(/denseEditorLineNumbers/);
+    expect(source).toMatch(/denseEditorTabHeight/);
+    expect(source).toMatch(/warningCommentTexts/);
+    expect(source).toMatch(/gridTemplateColumns:\s*`\$\{denseEditorGutterWidth}px/);
+  });
+
   it("supports the remaining animated-diagram families that were still falling back to placeholders", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
 
@@ -804,6 +911,9 @@ describe("shared generated contract renderer", () => {
     expect(annotationBlock).toMatch(/targetPositions|annotationPositions/);
     expect(annotationBlock).toMatch(/callout/);
     expect(annotationBlock).toMatch(/debt_gap|debt_shading/);
+    expect(annotationBlock).toMatch(/annotationCardWidth/);
+    expect(annotationBlock).toMatch(/clampedLeft/);
+    expect(annotationBlock).toMatch(/clampedTop/);
   });
 
   it("supports feedback-loop overlays on inherited code-cost charts instead of leaving parentSpec annotations blank", () => {
@@ -824,6 +934,32 @@ describe("shared generated contract renderer", () => {
     expect(quoteBlock).toMatch(/splitDramaticQuoteLines/);
     expect(quoteBlock).toMatch(/— \${attribution}|—\\s*\\$\\{attribution\\}/);
     expect(quoteBlock).toMatch(/fontWeight:\s*index === primaryLines\.length - 1 \? 700 : 400/);
+  });
+
+  it("keeps nested inset-chart return phases in local sequence frame space", () => {
+    const source = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "remotion/src/remotion/Part1Economics08PerformanceVsContext/DebtAreaPulse.tsx"
+      ),
+      "utf8"
+    );
+
+    expect(source).toMatch(/const localChartFadeStart = 0;/);
+    expect(source).toMatch(
+      /const localChartFadeEnd = PHASE_INSET_FADE_END - PHASE_INSET_FADE_START;/
+    );
+    expect(source).toMatch(
+      /const localPulseStart = PHASE_PULSE_START - PHASE_INSET_FADE_START;/
+    );
+    expect(source).toMatch(
+      /const localAnnotationStart = PHASE_ANNOTATION_START - PHASE_INSET_FADE_START;/
+    );
+    expect(source).toMatch(/\[localChartFadeStart, localChartFadeEnd\]/);
+    expect(source).toMatch(/frame >= localPulseStart/);
+    expect(source).toMatch(
+      /\[localAnnotationStart, localAnnotationStart \+ PHASE_ANNOTATION_FADE_DURATION\]/
+    );
   });
 });
 

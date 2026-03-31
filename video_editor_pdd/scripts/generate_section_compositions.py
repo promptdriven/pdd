@@ -18,7 +18,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def to_pascal_case(section_id: str) -> str:
@@ -1152,9 +1152,30 @@ def _resolve_generated_spec_basename_video(
     if not remotion_public:
         return None
 
+    search_stems: List[str] = []
+
+    def _add_stem(raw_stem: str) -> None:
+        cleaned = raw_stem.strip()
+        if cleaned and cleaned not in search_stems:
+            search_stems.append(cleaned)
+
+    _add_stem(spec_base)
+
+    without_index = re.sub(r'^\d+[_-]*', '', spec_base).strip()
+    _add_stem(without_index)
+
+    for stem in list(search_stems):
+        for prefix in ('veo_', 'veo-', 'split_', 'split-', 'title_', 'title-', 'remotion_', 'remotion-'):
+            if stem.startswith(prefix):
+                _add_stem(stem[len(prefix):])
+
     return _existing_static_path(
         remotion_public,
-        [f'veo/{spec_base}{ext}' for ext in VIDEO_EXTENSION_PRIORITY],
+        [
+            f'veo/{stem}{ext}'
+            for stem in search_stems
+            for ext in VIDEO_EXTENSION_PRIORITY
+        ],
     )
 
 
@@ -1440,6 +1461,7 @@ CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
     'code_transformation',
     'code_visualization',
     'equivalence_demo',
+    'inset_chart',
     'key_insight_card',
     'key_insight',
     'line_chart',
@@ -1496,6 +1518,22 @@ def _is_structured_title_card(data_points: Dict[str, Any]) -> bool:
 
 
 def _should_keep_exact_title_card_component(data_points: Dict[str, Any]) -> bool:
+    ghost_elements = data_points.get('ghostElements')
+    if not isinstance(ghost_elements, list):
+        return False
+
+    for ghost in ghost_elements:
+        if not isinstance(ghost, dict):
+            continue
+        shape = ghost.get('shape')
+        if not isinstance(shape, str):
+            continue
+        normalized_shape = shape.strip().lower()
+        if normalized_shape == 'module_grid':
+            return True
+        if normalized_shape == 'network_graph':
+            return True
+
     return False
 
 
@@ -1517,16 +1555,6 @@ def _should_keep_exact_component_when_available(data_points: Dict[str, Any]) -> 
                 return True
             if panel.get('partDissolve') or panel.get('partDissolveReappear'):
                 return True
-        return False
-
-    if normalized_type == 'counter_animation':
-        chart_id = data_points.get('chartId')
-        if (
-            isinstance(chart_id, str)
-            and chart_id.strip().lower() == 'mold_production_counter'
-            and isinstance(data_points.get('moldCycle'), dict)
-        ):
-            return True
         return False
 
     if normalized_type == 'schematic_zoom':
@@ -1558,6 +1586,42 @@ def _should_keep_exact_component_when_available(data_points: Dict[str, Any]) -> 
             and not has_secondary_callback_text
         )
 
+    if normalized_type == 'code_editor_animation':
+        editor_id = data_points.get('editorId')
+        if (
+            isinstance(editor_id, str)
+            and editor_id.strip().lower() == 'legacy_codebase_reveal'
+        ):
+            return False
+        files = data_points.get('files')
+        warning_comments = data_points.get('warningComments')
+        return (isinstance(files, list) and bool(files)) or (
+            isinstance(warning_comments, list) and bool(warning_comments)
+        )
+
+    if normalized_type == 'code_transformation':
+        states = data_points.get('states')
+        return any(
+            isinstance(data_points.get(key), str) and data_points.get(key, '').strip()
+            for key in ('sourceFile', 'generatedFile', 'command', 'transformId')
+        ) or (isinstance(states, list) and bool(states))
+
+    if normalized_type == 'synthesis_animation':
+        synthesis_stages = data_points.get('synthesisStages')
+        return (
+            isinstance(data_points.get('codeSample'), str)
+            and data_points.get('codeSample', '').strip()
+        ) or (isinstance(synthesis_stages, list) and bool(synthesis_stages))
+
+    if normalized_type == 'equivalence_demo':
+        runs = data_points.get('runs')
+        return (
+            isinstance(runs, list)
+            and len(runs) >= 3
+            and isinstance(data_points.get('equivalenceLabel'), str)
+            and data_points.get('equivalenceLabel', '').strip()
+        )
+
     if normalized_type == 'quote_card':
         quote = data_points.get('quote')
         attribution = data_points.get('attribution')
@@ -1574,6 +1638,39 @@ def _should_keep_exact_component_when_available(data_points: Dict[str, Any]) -> 
             and isinstance(accent_word, str)
             and accent_word.strip()
             and not has_structured_lines
+        )
+
+    if normalized_type == 'inset_chart':
+        explicit_phase_fields = (
+            'backgroundChartId',
+            'returnChartId',
+            'pulseLayer',
+            'phaseFrames',
+            'phaseSequence',
+            'insetLifecycle',
+            'transitionBack',
+        )
+        has_explicit_phase_structure = any(
+            (
+                isinstance(data_points.get(key), str) and data_points.get(key).strip()
+            ) or (
+                isinstance(data_points.get(key), (list, dict)) and bool(data_points.get(key))
+            )
+            for key in explicit_phase_fields
+        )
+        return not has_explicit_phase_structure
+
+    if normalized_type == 'sidebar_annotation':
+        has_rich_text = any(
+            isinstance(data_points.get(key), str) and data_points.get(key, '').strip()
+            for key in ('mainText', 'bodyText', 'summary', 'emphasisLine')
+        )
+        return (
+            not has_rich_text
+            and isinstance(data_points.get('logos'), list)
+            and bool(data_points.get('logos'))
+            and isinstance(data_points.get('provenWalls'), list)
+            and bool(data_points.get('provenWalls'))
         )
 
     return False
@@ -1887,6 +1984,11 @@ def build_visual_contract_manifest(
                 visual['mediaAliases'] = media_aliases
 
             panel_clip_ids = _extract_split_panel_clip_ids(data_points)
+            panel_child_sources: Dict[str, List[Tuple[set[str], str]]] = {
+                'left': [],
+                'right': [],
+            }
+
             for panel_name in ('left', 'right'):
                 raw_clip_ids = panel_clip_ids.get(panel_name, [])
                 resolved_sources: List[str] = []
@@ -1939,10 +2041,55 @@ def build_visual_contract_manifest(
                             elif '(right panel)' in normalized_parent_ref:
                                 panel = 'right'
 
+                candidate_keys: set[str] = set()
+                candidate_keys.add(
+                    re.sub(r'[_-]+', '', _normalize_clip_identifier(child.get('specBaseName', ''))).lower()
+                )
+                if isinstance(child_data, dict):
+                    raw_clip_id = child_data.get('clipId') or child_data.get('clip')
+                    if isinstance(raw_clip_id, str) and raw_clip_id.strip():
+                        candidate_keys.add(
+                            re.sub(r'[_-]+', '', _normalize_clip_identifier(raw_clip_id)).lower()
+                        )
+
                 if panel == 'left':
+                    panel_child_sources['left'].append((candidate_keys, candidate_src))
                     media_aliases.setdefault('leftSrc', candidate_src)
                 elif panel == 'right':
+                    panel_child_sources['right'].append((candidate_keys, candidate_src))
                     media_aliases.setdefault('rightSrc', candidate_src)
+
+            for panel_name in ('left', 'right'):
+                ordered_clip_ids = panel_clip_ids.get(panel_name, [])
+                child_sources = panel_child_sources.get(panel_name, [])
+                if not ordered_clip_ids or not child_sources:
+                    continue
+
+                ordered_sources: List[str] = []
+                for clip_id in ordered_clip_ids:
+                    normalized_id = re.sub(r'[_-]+', '', _normalize_clip_identifier(clip_id)).lower()
+                    for candidate_keys, candidate_src in child_sources:
+                        if any(
+                            candidate == normalized_id
+                            or normalized_id in candidate
+                            or candidate in normalized_id
+                            for candidate in candidate_keys
+                        ):
+                            if candidate_src not in ordered_sources:
+                                ordered_sources.append(candidate_src)
+                            break
+
+                for _, candidate_src in child_sources:
+                    if candidate_src not in ordered_sources:
+                        ordered_sources.append(candidate_src)
+
+                if not ordered_sources:
+                    continue
+
+                media_aliases[f'{panel_name}Src'] = ordered_sources[0]
+                media_aliases[f'{panel_name}BaseSrc'] = ordered_sources[0]
+                if len(ordered_sources) > 1:
+                    media_aliases[f'{panel_name}RevealSrc'] = ordered_sources[-1]
 
         manifest_sections.append({
             'id': section['id'],
@@ -2192,6 +2339,16 @@ def _extract_visual_overlay_config(spec_content: str) -> Optional[Dict[str, Any]
             position = counter.get('position')
             if isinstance(position, str) and position.strip():
                 config['counterPosition'] = position.strip()
+
+    overlays = data_points.get('overlays') if isinstance(data_points, dict) else None
+    if isinstance(overlays, list) and any(
+        isinstance(item, dict)
+        and str(item.get('type', '')).strip().lower() == 'floating_comment'
+        and isinstance(item.get('text'), str)
+        and item.get('text', '').strip()
+        for item in overlays
+    ):
+        config['structuredOverlay'] = True
 
     fade_in_match = re.search(
         r'frame\s+(\d+)\s*-\s*(\d+)[^\n]*fade\s+in(?:\s+from\s+black)?',

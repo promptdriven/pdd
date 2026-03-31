@@ -96,7 +96,7 @@ Technical assessment: The previous review thought the shape sat at y≈410.
     expect(snapshot).not.toContain("y=540");
   });
 
-  it("strips machine-oriented code structure and data-point coordinate blocks from the Claude-facing snapshot", () => {
+  it("keeps the structured visual contract while stripping code structure from the Claude-facing snapshot", () => {
     const spec = `
 ### Canvas
 - Resolution: 1920x1080 (16:9)
@@ -122,7 +122,11 @@ Technical assessment: The previous review thought the shape sat at y≈410.
 
     expect(snapshot).toContain("expected horizontal anchor");
     expect(snapshot).not.toContain("<PipelineNode x={330} />");
-    expect(snapshot).not.toContain('"x": 330');
+    expect(snapshot).toContain("## Structured Visual Contract (authoritative)");
+    expect(snapshot).toContain(
+      "When descriptive prose and structured contract details disagree, trust this structured contract."
+    );
+    expect(snapshot).toContain('"x": "expected horizontal anchor"');
     expect(snapshot).not.toContain("## Code Structure");
     expect(snapshot).not.toContain("## Data Points");
   });

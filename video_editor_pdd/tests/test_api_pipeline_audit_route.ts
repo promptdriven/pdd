@@ -707,6 +707,9 @@ describe("audit executor factory", () => {
     const prompt = mockRunClaudeAudit.mock.calls[0][0] as string;
     expect(prompt).toContain("Render resolution: 1920x1080");
     expect(prompt).toContain("Treat spatial requirements semantically rather than as exact pixel arithmetic.");
+    expect(prompt).toContain(
+      'If the snapshot includes a "Structured Visual Contract (authoritative)" section, treat that structured contract as the source of truth over conflicting prose.'
+    );
     expect(prompt).toContain("Sample time (section-local):");
     expect(prompt).toContain("Sample time (intrinsic visual):");
     expect(prompt).toContain("Sample frame (intrinsic visual):");
