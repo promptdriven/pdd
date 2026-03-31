@@ -442,3 +442,45 @@ def test_find_architecture_caller_update_main(tmp_path):
     arch_data = json.loads(result[0].read_text())
     assert len(arch_data) == 1
     assert arch_data[0]["filename"] == "nested_module_Python.prompt"
+
+
+def test_find_architecture_max_depth_limit(tmp_path):
+    """Architecture files beyond max depth (4) must NOT be discovered."""
+    # Depth 4: a/b/c/d/architecture.json (at the limit, should be skipped)
+    deep = tmp_path / "a" / "b" / "c" / "d"
+    deep.mkdir(parents=True)
+    (deep / "architecture.json").write_text("[]")
+    # Depth 3: a/b/c/architecture.json (within limit, should be found)
+    (tmp_path / "a" / "b" / "c" / "architecture.json").write_text("[]")
+
+    result = find_architecture_for_project(tmp_path)
+
+    assert len(result) == 1, (
+        f"Expected 1 architecture file (depth-3 only), got {len(result)}: {result}"
+    )
+    found_paths = {str(p.relative_to(tmp_path)) for p in result}
+    assert "a/b/c/architecture.json" in found_paths
+    assert "a/b/c/d/architecture.json" not in found_paths
+
+
+def test_find_architecture_skips_venv_directories(tmp_path):
+    """Virtual environment directories must be excluded from discovery."""
+    # Valid nested architecture
+    (tmp_path / "backend" / "api").mkdir(parents=True)
+    (tmp_path / "backend" / "api" / "architecture.json").write_text("[]")
+    # venv directory (should be excluded)
+    (tmp_path / "venv" / "lib").mkdir(parents=True)
+    (tmp_path / "venv" / "lib" / "architecture.json").write_text("[]")
+    # .venv directory (should be excluded)
+    (tmp_path / ".venv" / "lib").mkdir(parents=True)
+    (tmp_path / ".venv" / "lib" / "architecture.json").write_text("[]")
+    # env directory (should be excluded)
+    (tmp_path / "env" / "lib").mkdir(parents=True)
+    (tmp_path / "env" / "lib" / "architecture.json").write_text("[]")
+
+    result = find_architecture_for_project(tmp_path)
+
+    assert len(result) == 1, (
+        f"Expected 1 architecture file (backend/api only), got {len(result)}: {result}"
+    )
+    assert result[0] == tmp_path / "backend" / "api" / "architecture.json"

@@ -205,10 +205,17 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     if root_arch.exists():
         results.append(root_arch)
 
-    # Recursively scan all subdirectories
-    excluded = {"node_modules", "__pycache__", ".git"}
+    # Recursively scan subdirectories (bounded depth)
+    max_depth = 4
+    excluded = {"node_modules", "__pycache__", ".git", "venv", ".venv", "env"}
     try:
         for dirpath, dirnames, filenames in os.walk(project_root):
+            # Enforce depth limit
+            rel = Path(dirpath).relative_to(project_root)
+            depth = len(rel.parts)
+            if depth >= max_depth:
+                dirnames.clear()
+                continue
             dirnames[:] = sorted(
                 d for d in dirnames
                 if not d.startswith(".") and d not in excluded
