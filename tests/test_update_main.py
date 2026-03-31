@@ -368,8 +368,9 @@ def temp_git_repo(tmp_path, mock_get_language_for_repo):
 
 def test_create_and_find_prompt_code_pairs(temp_git_repo):
     """
-    Test that the helper function correctly finds code files and creates missing prompts.
+    Test that the helper function correctly finds code files and resolves prompt paths.
     With structure preservation, prompts mirror the source directory structure.
+    Scanning must NOT create empty prompt files on disk (side-effect-free).
     """
     repo_path_str = str(temp_git_repo)
 
@@ -381,13 +382,9 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     # Run the function
     pairs = find_and_resolve_all_pairs(repo_path_str)
 
-    # Assert that prompts were created in the prompts/src directory
-    assert module1_prompt_path.exists()
-    assert module1_prompt_path.read_text() == ""
-    assert module2_prompt_path.exists()
-    assert module2_prompt_path.read_text() == ""
-    assert existing_prompt_path_nested.exists()
-    assert existing_prompt_path_nested.read_text() == ""
+    # Scanning should NOT create empty prompt files on disk
+    assert not module1_prompt_path.exists(), "Scan should not create empty prompt files"
+    assert not module2_prompt_path.exists(), "Scan should not create empty prompt files"
 
     # Assert that the returned pairs are correct
     expected_pairs = [
@@ -2233,3 +2230,38 @@ class TestRepoModeEmptyPrompts:
 
         # Should have been called even though is_code_changed returned False
         assert mock_ufp.called
+
+
+class TestFindAndResolveAllPairsNoTouch:
+    """find_and_resolve_all_pairs must NOT create empty prompt files on disk."""
+
+    def test_scan_does_not_create_prompt_files(self, tmp_path, monkeypatch):
+        """Scanning a repo should resolve paths without creating empty .prompt files."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "src").mkdir()
+        (repo / "src" / "module.py").write_text("def main(): pass\n")
+        (repo / "src" / "helper.py").write_text("def help(): pass\n")
+
+        # Init git so git ls-files works
+        import subprocess
+        env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True, env=env)
+
+        monkeypatch.chdir(repo)
+
+        with patch("pdd.update_main.get_language", side_effect=lambda ext: "python" if ext == ".py" else None):
+            pairs = find_and_resolve_all_pairs(str(repo), quiet=True)
+
+        # Should find the code files
+        assert len(pairs) >= 2
+
+        # The prompt paths should be resolved but NOT created on disk
+        for prompt_path, code_path in pairs:
+            assert not Path(prompt_path).exists(), (
+                f"Scanning should not create prompt files, but {prompt_path} exists on disk"
+            )
+

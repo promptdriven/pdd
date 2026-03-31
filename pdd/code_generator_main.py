@@ -21,7 +21,7 @@ from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .python_env_detector import detect_host_python_executable
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
@@ -1013,7 +1013,7 @@ def code_generator_main(
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_timeout())
+                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_request_timeout())
                         response.raise_for_status()
                         
                         response_data = response.json()

@@ -2944,17 +2944,11 @@ def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create a test file with a structural violation (assert hasattr)
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
     test_file = worktree_path / "tests" / "test_bug_fix.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
     # The violating code line we expect to see in the retry addendum
     violating_code_line = 'assert hasattr(some_module, "target_func")'
-    test_file.write_text(
-        "from pdd import some_module\n"
-        "\n"
-        "def test_bug():\n"
-        f"    {violating_code_line}\n"
-    )
 
     captured_retry_instruction = None
     first_step9 = True
@@ -2966,6 +2960,13 @@ def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                test_file.write_text(
+                    "from pdd import some_module\n"
+                    "\n"
+                    "def test_bug():\n"
+                    f"    {violating_code_line}\n"
+                )
                 # First step9 call: return output pointing to the violating file
                 return (
                     True,
@@ -3041,23 +3042,13 @@ def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create a test file with source-string-matching violations
-    # Build the file content line-by-line to avoid triggering the structural
-    # pattern detector on THIS test file (the detector does line-by-line regex)
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
     test_file = worktree_path / "tests" / "test_bug_fix.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
-    file_lines = [
-        "from pathlib import Path",
-        "",
-        "def test_function_exists():",
-    ]
     # Construct the violating lines using concatenation so the detector
     # doesn't see "content = ....read_text()" on a single line in THIS file
     src_read = 'content = Path("pdd/module.py").read' + '_text()'
     src_assertion = 'assert "def target_func" in content'
-    file_lines.append(f"    {src_read}")
-    file_lines.append(f"    {src_assertion}")
-    test_file.write_text("\n".join(file_lines) + "\n")
 
     captured_retry_instruction = None
     first_step9 = True
@@ -3069,6 +3060,15 @@ def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                file_lines = [
+                    "from pathlib import Path",
+                    "",
+                    "def test_function_exists():",
+                    f"    {src_read}",
+                    f"    {src_assertion}",
+                ]
+                test_file.write_text("\n".join(file_lines) + "\n")
                 return (
                     True,
                     "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
@@ -3139,16 +3139,10 @@ def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create a test file with a structural violation (assert hasattr)
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
     test_file = worktree_path / "tests" / "test_bug_fix.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
     violating_code_line = 'assert hasattr(module, "func_a")'
-    test_file.write_text(
-        "from pdd import module\n"
-        "\n"
-        "def test_one():\n"
-        f"    {violating_code_line}\n"
-    )
 
     captured_retry_instruction = None
     first_step9 = True
@@ -3160,6 +3154,13 @@ def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                test_file.write_text(
+                    "from pdd import module\n"
+                    "\n"
+                    "def test_one():\n"
+                    f"    {violating_code_line}\n"
+                )
                 return (
                     True,
                     "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
@@ -3248,27 +3249,15 @@ def test_step9_retry_includes_code_from_multiple_files(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create two test files with different hasattr violations
+    # Prepare directory — files written inside mock (after pre-step9 snapshot).
     tests_dir = worktree_path / "tests"
     tests_dir.mkdir(parents=True, exist_ok=True)
 
     violation_a = 'assert hasattr(alpha, "run_pipeline")'
     file_a = tests_dir / "test_fix_a.py"
-    file_a.write_text(
-        "from pdd import alpha\n"
-        "\n"
-        "def test_alpha():\n"
-        f"    {violation_a}\n"
-    )
 
     violation_b = 'assert hasattr(beta, "execute_task")'
     file_b = tests_dir / "test_fix_b.py"
-    file_b.write_text(
-        "from pdd import beta\n"
-        "\n"
-        "def test_beta():\n"
-        f"    {violation_b}\n"
-    )
 
     captured_retry_instruction = None
     first_step9 = True
@@ -3280,6 +3269,19 @@ def test_step9_retry_includes_code_from_multiple_files(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing both files during execution
+                file_a.write_text(
+                    "from pdd import alpha\n"
+                    "\n"
+                    "def test_alpha():\n"
+                    f"    {violation_a}\n"
+                )
+                file_b.write_text(
+                    "from pdd import beta\n"
+                    "\n"
+                    "def test_beta():\n"
+                    f"    {violation_b}\n"
+                )
                 return (
                     True,
                     "Generated tests\nFILES_CREATED: tests/test_fix_a.py, tests/test_fix_b.py",
@@ -4195,7 +4197,7 @@ def test_structural_guard_and_cross_validation_both_fire(mock_dependencies, defa
 
     # Need to patch detect_structural_test_patterns to detect the violation
     with patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns") as mock_detect:
-        def detect_side_effect(path):
+        def detect_side_effect(path, start_line=None):
             content = Path(path).read_text() if Path(path).exists() else ""
             if "FLAGGED_STRUCTURAL_PATTERN" in content:
                 return ["Uses structural pattern to test code shape"]
