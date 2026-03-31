@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-Frame at 90.6% progress (hold phase) shows all required elements: amber exponential curve (#D9944A) rising from low-left to upper-right with shaded fill below; green flat line (#5AAA6E) running horizontally near the bottom with reset arrows at cycle ticks; formula label 'Debt × (1 + Rate)^Time' in amber above the curve; flat line label 'Regeneration cost (debt resets each cycle)' in green near the line; '$1.52 trillion/year' callout with '— CISQ' attribution in the steep section region; X-axis labeled 'Time (maintenance cycles)' with ticks 0-20; Y-axis labeled 'Cumulative Cost'; deep navy-black background with horizontal grid lines. The exponential gap between the two curves is visually stark as intended. All elements are fully visible and properly rendered for the hold phase.

@@ -1,4 +1,0 @@
-## Verdict
-warn
-## Summary
-The annotation panel's main text overflows the right edge of the viewport — 'used in chip verificat...' is clipped at the screen boundary, indicating the panel's right edge (spec: x up to 1840) combined with inner padding doesn't leave enough room for the full text at the rendered font size, or the panel extends beyond 1840px. Additionally, at frame 749/780 (96.2% progress, well into the 720-780 slide-out phase), the annotation panel is still fully visible and stationary rather than sliding out. The logo badges (Z3, SF) are positioned but appear slightly right-of-center within the panel rather than truly centered. All other elements — purple-highlighted keywords (Z3, SMT solver, prove), emphasis text, italic line, connector lines, proven wall purple glow, mold at reduced opacity — are present and correct.

@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame at 75.6% progress (phase 6: hold with both annotations visible) matches the spec well. Both annotation callout boxes are present with correct text content, accent colors (blue #4A90D9 for GitHub, red #EF4444 for Uplevel), source labels, and fine print. Connector lines extend from each callout toward their respective chart lines. The spatial layout places the Uplevel (flat/red) annotation upper-right pointing toward the dashed line and the GitHub (positive/blue) annotation lower-right pointing toward the solid dropping line, creating the intended visual contrast. The underlying code cost chart from spec 03 is visible with its lines and shaded area. The contrast line between annotations is specified at #FFFFFF 0.08 opacity — effectively invisible on the dark background, and its absence or near-invisibility is consistent with that extremely low opacity spec. All text content matches the structured contract exactly.

@@ -1,3 +1,0 @@
-Re-export barrel (`lib/visual-runtime.ts`) that exposes slot-scaled frame helpers from the shared Remotion runtime.
-
-Export `buildSlotScaledSequenceContext`, `computeSlotScaledFrame`, and the `SlotScaledSequenceContext` type (as a type-only export) from `../remotion/src/remotion/_shared/slot-scaled-runtime`.

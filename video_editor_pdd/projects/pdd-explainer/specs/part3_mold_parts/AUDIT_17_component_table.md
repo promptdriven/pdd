@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The rendered frame at 95% progress (frame 284/300, hold phase) matches the spec requirements. All three table rows are fully visible with correct component names (Prompt/Grounding/Tests), correct Encodes values (WHAT intent/HOW style/CORRECTNESS), and correct Owner values (Developer/Automatic/Accumulated). Color-coded left accent borders are present in amber, teal, and blue. Header row displays uppercase column labels in muted gray. The hierarchy line 'When these conflict, tests win. Always.' is visible below the table with 'tests win' and 'Always' highlighted in blue. The subtext about walls overriding specification is present in muted gray. Background is deep navy-black. Table is horizontally centered with the full composition (table + hierarchy text) balanced on the canvas.

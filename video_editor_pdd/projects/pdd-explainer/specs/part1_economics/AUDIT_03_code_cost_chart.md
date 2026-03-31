@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-Frame at 77.3% progress shows the chart in the expected hold phase (frame 900-1650). All three series are visible: blue solid 'Cost to generate' line with high plateau and steep post-2023 plunge, amber solid 'Immediate patch cost' line with gradual post-2020 decline, and amber dashed 'Total cost (with debt)' line that barely moves. The shaded debt area between solid and dashed amber lines is clearly rendered with 'Technical debt' label. Date markers (Codex, GPT-4, Claude, Gemini) appear as vertical dashed lines in the 2021-2024 range. Y-axis labeled 'Cost (Developer Hours)', X-axis spans 2000-2025. Background is deep navy-black. Legend in upper-right shows all three series with correct colors and stroke styles. The widening gap between the amber lines effectively communicates the debt accumulation narrative. All elements match the structured visual contract.

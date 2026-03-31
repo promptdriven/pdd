@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-At frame 224/240 (93.7% progress), the composition is in the 'begin fade-out' phase (frames 210-240). All critical elements are present and correctly positioned: parser_v2.prompt editor with 10 lines and badge, terminal with '$ pdd test parser', green checkmark test results, '47 tests passing' summary, test wall lines between panels, and 'With tests: prompt specifies only intent' label on the right. However, the fade-out is rendering as a wash toward light gray/white rather than fading to the dark background (#0A0F1A). The entire frame appears desaturated and extremely pale, making the content barely legible. While this could be an intentional fade-to-white transition, the spec's dark background suggests the fade should dissolve to dark, not light. The overall composition, layout, and content are correct — the issue is purely the fade-out color direction.

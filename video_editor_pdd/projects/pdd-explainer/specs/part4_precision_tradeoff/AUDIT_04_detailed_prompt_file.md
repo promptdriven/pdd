@@ -1,4 +1,0 @@
-## Verdict
-pass
-## Summary
-The frame at 93.7% progress accurately represents the spec. The editor window is centered with correct styling: dark frame, traffic-light dots, 'parser_v1.prompt' filename, '50 lines' amber pill badge. The prompt content is displayed in monospace font with line numbers and amber gutter indicators forming a dense wall of requirement markers. Content sections (Error Handling Rules, Output Format Constraints, Performance Requirements) are visible and match the spec's content structure. The label 'Without tests: prompt must specify everything' appears in amber below the window. The animation phase is correct — at frame 224/240 (phase 6: hold/begin fade), all content is revealed and the label is present. Background is deep navy-black with subtle amber border glow on the editor window.
