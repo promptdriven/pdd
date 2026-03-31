@@ -79,16 +79,10 @@ class TestOrchestratorStructuralTestRetry:
         mock_run = deps["mock_run"]
         worktree = deps["worktree_path"]
 
-        # Write a structural test file that step 9 "creates"
+        # Prepare the directory — file is created inside the mock to simulate
+        # Step 9 creating it (after the pre-step-9 line-count snapshot).
         structural_test = worktree / "tests" / "test_structural.py"
         structural_test.parent.mkdir(parents=True, exist_ok=True)
-        structural_test.write_text(textwrap.dedent("""\
-            import inspect
-            from src import module
-            def test_has_feature():
-                source = inspect.getsource(module)
-                assert "feature" in source
-        """))
 
         step9_call_count = 0
 
@@ -97,6 +91,14 @@ class TestOrchestratorStructuralTestRetry:
             label = kwargs.get("label", "")
             if label == "step9":
                 step9_call_count += 1
+                # Simulate Step 9 writing the file during execution
+                structural_test.write_text(textwrap.dedent("""\
+                    import inspect
+                    from src import module
+                    def test_has_feature():
+                        source = inspect.getsource(module)
+                        assert "feature" in source
+                """))
                 return (True, f"FILES_CREATED: tests/test_structural.py", 0.1, "gpt-4")
             return (True, "Step output", 0.1, "gpt-4")
 
@@ -118,15 +120,9 @@ class TestOrchestratorStructuralTestRetry:
         mock_run = deps["mock_run"]
         worktree = deps["worktree_path"]
 
+        # Prepare directory — file written inside mock (after snapshot).
         structural_test = worktree / "tests" / "test_structural.py"
         structural_test.parent.mkdir(parents=True, exist_ok=True)
-        structural_test.write_text(textwrap.dedent("""\
-            import inspect
-            from src import module
-            def test_check():
-                source = inspect.getsource(module)
-                assert "keyword" in source
-        """))
 
         retry_instructions = []
 
@@ -135,6 +131,14 @@ class TestOrchestratorStructuralTestRetry:
             if label == "step9":
                 instruction = kwargs.get("instruction", "")
                 retry_instructions.append(instruction)
+                # Simulate Step 9 writing the file during execution
+                structural_test.write_text(textwrap.dedent("""\
+                    import inspect
+                    from src import module
+                    def test_check():
+                        source = inspect.getsource(module)
+                        assert "keyword" in source
+                """))
                 return (True, "FILES_CREATED: tests/test_structural.py", 0.1, "gpt-4")
             return (True, "Step output", 0.1, "gpt-4")
 
