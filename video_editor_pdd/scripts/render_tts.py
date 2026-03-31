@@ -311,11 +311,43 @@ def _split_section_body_by_subheadings(body: str) -> List[str]:
     return chunks
 
 
+def _split_spoken_blocks(body_chunk: str) -> List[str]:
+    """Split a section or folded-heading chunk into spoken blocks.
+
+    Stage 3 now emits canonical TTS scripts where each narration block is
+    separated by a blank line, with any trailing pause kept inside the block.
+    Preserve those boundaries exactly rather than inferring new segment
+    boundaries from pause duration.
+    """
+    blocks: List[str] = []
+    current_lines: List[str] = []
+
+    def flush() -> None:
+        block = "\n".join(current_lines).strip()
+        if block:
+            blocks.append(block)
+        current_lines.clear()
+
+    for line in body_chunk.splitlines():
+        trimmed = line.strip()
+        if not trimmed:
+            flush()
+            continue
+        if re.fullmatch(r"---+", trimmed):
+            flush()
+            continue
+        current_lines.append(line.rstrip())
+
+    flush()
+    return blocks
+
+
 def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
     """
     Parse section-heading-based TTS script format.
-    Splits each section into multiple segments at major pause boundaries (>= 1.0s).
-    Segment IDs follow the pattern: {section_id}_{NNN}.
+    Preserves each canonical narration block as its own segment, while folded
+    ### headings continue the parent section counter. Segment IDs follow the
+    pattern: {section_id}_{NNN}.
     """
     section_map = _load_section_ids(project_dir)
 
@@ -345,18 +377,13 @@ def _parse_section_based(content: str, project_dir: str = ".") -> List[Segment]:
 
         seg_counter = 0
         for body_chunk in _split_section_body_by_subheadings(body):
-            parts = re.split(
-                r"\[PAUSE\s*:\s*(?:[1-9]\d*\.?\d*|0\.\d*[5-9]\d*)\s*s?\]",
-                body_chunk,
-            )
-
-            for part in parts:
-                clean = _normalize_spoken_text(part)
+            for block in _split_spoken_blocks(body_chunk):
+                clean = _normalize_spoken_text(block)
                 if len(clean) < 10:
                     continue  # Skip trivially short fragments
                 seg_counter += 1
                 seg_id = f"{section_id}_{seg_counter:03d}"
-                segments.append(Segment(seg_id, part.strip()))
+                segments.append(Segment(seg_id, block))
 
         # If no sub-segments were created, use the whole section as one segment
         if seg_counter == 0:

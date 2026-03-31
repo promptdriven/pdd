@@ -1,89 +1,95 @@
 [split:]
 
-# Section 0.1: Split Screen — Developer Darning Code vs. Grandmother Darning Socks
+# Section 0.1: Split Screen — Developer Patching vs. Grandmother Darning
 
 **Tool:** Split
-**Duration:** ~9s (270 frames @ 30fps)
-**Timestamp:** 0:00 - 0:09
+**Duration:** ~14s (420 frames @ 30fps)
+**Timestamp:** 0:00 - 0:13
 
 ## Visual Description
-A split-screen composition that persists across four narration beats, establishing the central metaphor of the cold open: AI-assisted code editing IS darning.
 
-**LEFT PANEL:** A developer at a keyboard with a Cursor-like IDE interface visible, making a slick AI-assisted edit. The edit completes cleanly — a single function patched. Then the camera zooms out to reveal the single edit is one of thousands of patches in a massive codebase. Files everywhere, diff markers, TODO comments. The accumulated weight of careful repair work.
+A persistent split-screen composition spanning the first three narration segments. The visual thesis of the entire video: code patching is the modern equivalent of sock darning.
 
-**RIGHT PANEL:** A 1950s great-grandmother carefully darning a wool sock by warm lamplight. She completes a neat patch. Then the camera zooms out to reveal her open drawer — dozens of carefully mended socks, shirts, trousers. The accumulated weight of careful repair work mirrors the code side.
+**LEFT PANEL:** A developer at a keyboard with a Cursor-style AI code editor visible on screen. They make a slick AI-assisted edit — a code suggestion appears, they accept it, the diff lands cleanly. Then the camera zooms out to reveal the single edit was one of thousands of patches in a massive codebase: files everywhere, diff markers, TODO comments, tech debt stretching in all directions.
 
-The split holds through four segments: the initial task, the completion, the zoom-out reveal, and the "accumulated weight" beat. Both panels progress in parallel, creating a visual rhyme.
+**RIGHT PANEL:** A 1950s great-grandmother carefully darning a wool sock by warm lamplight. Her needle works methodically, closing a hole with neat cross-hatched stitches. Then the camera zooms out to reveal her open drawer — dozens of carefully mended socks, shirts, and trousers, all meticulously repaired. The accumulated weight of careful repair work.
+
+The split holds through three beats: the initial parallel work, the simultaneous task completion, and the dual zoom-out reveal. Both panels progress in lockstep to drive the analogy home.
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
 - Layout: Two 940px-wide panels with 40px center divider
-- Divider: White (#FFFFFF), 2px solid line, 40% opacity
+- Divider: White (#FFFFFF), 2px solid line, 30% opacity
 - Background behind divider: Black (#000000)
 
 ### Panel Configuration
-- Left panel: clip `developer_cursor_edit` (0:00-5:22), then clip `developer_codebase_zoomout` (5:34-8:66)
-- Right panel: clip `grandmother_darning` (0:00-5:22), then clip `grandmother_drawer_zoomout` (5:34-8:66)
-- Transition between clips: 10-frame crossfade at segment boundary
+- Left panel: clip `developer_cursor_edit` (full duration)
+- Right panel: clip `grandmother_darning` (full duration)
+- Both panels dim slightly during zoom-out to add gravity
 
 ### Animation Sequence
-1. **Frame 0-15 (0-0.5s):** Split screen fades in from black. Divider appears. Both panels begin simultaneously.
-2. **Frame 15-108 (0.5-3.6s):** LEFT: Developer making an AI-assisted edit in Cursor. Code highlights, inline suggestion appears and is accepted. RIGHT: Grandmother darning a wool sock by lamplight. Needle moves through fabric with practiced precision.
-3. **Frame 113-157 (3.76-5.22s):** Both complete their tasks simultaneously. LEFT: The code edit lands cleanly — green diff indicator. RIGHT: The sock patch finishes neatly — thread snipped.
-4. **Frame 160-260 (5.34-8.66s):** Zoom out on both sides. LEFT: Camera pulls back to reveal massive codebase — hundreds of files with diff markers, TODO comments, patch annotations. RIGHT: Grandmother's drawer opens — dozens of carefully mended garments. Both sides show the accumulated weight of all that careful repair work.
-5. **Frame 260-270 (8.66-9.0s):** Hold. The parallel is unmistakable. Split screen holds for a beat before the hard cut.
+1. **Frame 0-15 (0-0.5s):** Split screen fades in from black. Divider draws from center outward. Both panels begin.
+2. **Frame 15-120 (0.5-4s):** LEFT: Developer typing, Cursor interface visible, AI suggestion appears. RIGHT: Grandmother darning, needle moving through wool. Parallel work established.
+3. **Frame 120-180 (4-6s):** Both complete their task simultaneously. LEFT: Code edit lands cleanly, green diff highlight. RIGHT: Sock patch finishes, needle pulls through final stitch.
+4. **Frame 180-300 (6-10s):** Dual zoom-out begins. LEFT: Camera pulls back — the single edit is revealed as one patch among thousands. Files, diff markers, TODO comments fill the screen. RIGHT: Grandmother's drawer opens — dozens of mended garments visible.
+5. **Frame 300-390 (10-13s):** Hold on the wide view. Both sides show the accumulated weight of careful repair work. A subtle vignette darkens the edges of both panels.
+6. **Frame 390-420 (13-14s):** Split screen fades to black, divider dissolves.
 
 ### Typography
-- None within panels — narration carries the meaning. The visual parallel provides the labeling.
+- None within panels — the visual parallel carries the argument.
 
 ### Easing
-- Divider fade-in: `easeOut(quad)` over 15 frames
-- Panel crossfade: `easeInOut(cubic)` over 10 frames
-- Final hold: static
+- Divider draw: `easeOut(cubic)` over 15 frames
+- Zoom-out: `easeInOut(cubic)` over 120 frames
+- Vignette: `easeIn(quad)` over 60 frames
+- Fade-out: `easeIn(quad)` over 30 frames
 
 ## Narration Sync
-> "If you use Cursor, or Claude Code, or Copilot..."
-> "...you're getting really good at this."
-> "But here's what your great-grandmother figured out sixty years ago."
+> "If you use Cursor, or Copilot, or Claude Code... you're getting really good at patching."
+> "But here's what your great-grandmother could tell you about that."
 
 Segments: `cold_open_001`, `cold_open_002`, `cold_open_003`
 
-- **0.00s** (seg 001): Split screen establishes — developer editing, grandmother darning
-- **3.60s** (seg 001 ends): Both tasks complete simultaneously
-- **3.76s** (seg 002): "You're getting really good at this" — completion moment
-- **5.34s** (seg 003): Zoom out begins — reveal the accumulated weight
-- **8.66s** (seg 003 ends): Split holds, showing parallel accumulation
+- **0.00s** (seg 001): Split screen establishes — developer coding, grandmother darning
+- **3.80s** (seg 001 ends): Both working in parallel
+- **4.62s** (seg 002): "you're getting really good at patching" — both tasks complete
+- **8.92s** (seg 002 ends): Completion beat
+- **9.42s** (seg 003): "But here's what your great-grandmother could tell you" — zoom-out begins
+- **13.46s** (seg 003 ends): Wide view holds, accumulated weight visible
 
 ## Code Structure (Remotion)
 ```typescript
-<Sequence from={0} durationInFrames={270}>
-  <SplitScreen dividerColor="#FFFFFF" dividerWidth={2} dividerOpacity={0.4}>
+<Sequence from={0} durationInFrames={420}>
+  <SplitScreen dividerColor="#FFFFFF" dividerWidth={2} dividerOpacity={0.3}>
     {/* Left panel: developer */}
     <PanelLeft>
-      <Sequence from={0} durationInFrames={160}>
-        <VeoClip clipId="developer_cursor_edit" />
-      </Sequence>
-      <Sequence from={150} durationInFrames={120}>
-        <FadeIn duration={10}>
-          <VeoClip clipId="developer_codebase_zoomout" />
-        </FadeIn>
+      <VeoClip clipId="developer_cursor_edit" />
+      <Sequence from={180} durationInFrames={210}>
+        <ZoomOut
+          from={1.0} to={0.35}
+          durationFrames={120} easing="easeInOutCubic"
+        />
       </Sequence>
     </PanelLeft>
 
     {/* Right panel: grandmother */}
     <PanelRight>
-      <Sequence from={0} durationInFrames={160}>
-        <VeoClip clipId="grandmother_darning" />
-      </Sequence>
-      <Sequence from={150} durationInFrames={120}>
-        <FadeIn duration={10}>
-          <VeoClip clipId="grandmother_drawer_zoomout" />
-        </FadeIn>
+      <VeoClip clipId="grandmother_darning" />
+      <Sequence from={180} durationInFrames={210}>
+        <ZoomOut
+          from={1.0} to={0.35}
+          durationFrames={120} easing="easeInOutCubic"
+        />
       </Sequence>
     </PanelRight>
   </SplitScreen>
+
+  {/* Vignette overlay during zoom-out */}
+  <Sequence from={240} durationInFrames={180}>
+    <Vignette intensity={0.4} easing="easeInQuad" />
+  </Sequence>
 </Sequence>
 ```
 
@@ -92,19 +98,21 @@ Segments: `cold_open_001`, `cold_open_002`, `cold_open_003`
 {
   "type": "split_screen",
   "layout": "vertical_50_50",
-  "divider": { "color": "#FFFFFF", "width": 2, "opacity": 0.4 },
+  "divider": { "color": "#FFFFFF", "width": 2, "opacity": 0.3 },
   "panels": {
     "left": {
-      "clips": ["developer_cursor_edit", "developer_codebase_zoomout"],
-      "label": "Developer patching code"
+      "clips": ["developer_cursor_edit"],
+      "label": "Developer — AI-assisted code patching",
+      "zoomOut": { "startFrame": 180, "from": 1.0, "to": 0.35 }
     },
     "right": {
-      "clips": ["grandmother_darning", "grandmother_drawer_zoomout"],
-      "label": "Grandmother darning socks"
+      "clips": ["grandmother_darning"],
+      "label": "Grandmother — careful sock darning",
+      "zoomOut": { "startFrame": 180, "from": 1.0, "to": 0.35 }
     }
   },
   "narrationSegments": ["cold_open_001", "cold_open_002", "cold_open_003"],
-  "durationSeconds": 9.0
+  "durationSeconds": 14.0
 }
 ```
 

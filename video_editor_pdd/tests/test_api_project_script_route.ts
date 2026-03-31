@@ -26,6 +26,7 @@ const mockReadFileSync = jest.fn();
 const mockWriteFileSync = jest.fn();
 const mockMkdirSync = jest.fn();
 const mockRenameSync = jest.fn();
+const mockLoadProject = jest.fn();
 
 jest.mock("fs", () => ({
   __esModule: true,
@@ -36,6 +37,10 @@ jest.mock("fs", () => ({
     mkdirSync: (...args: unknown[]) => mockMkdirSync(...args),
     renameSync: (...args: unknown[]) => mockRenameSync(...args),
   },
+}));
+
+jest.mock("@/lib/project", () => ({
+  loadProject: (...args: unknown[]) => mockLoadProject(...args),
 }));
 
 // Import after mocking
@@ -90,6 +95,12 @@ async function parseResponse(
 beforeEach(() => {
   jest.resetAllMocks();
   jest.spyOn(console, "error").mockImplementation(() => {});
+  mockLoadProject.mockReturnValue({
+    sections: [
+      { id: "cold_open", label: "Cold Open" },
+      { id: "part1_economics", label: "Part 1: Economics of Darning" },
+    ],
+  });
 });
 
 afterEach(() => {
@@ -198,6 +209,66 @@ describe("GET /api/project/script", () => {
     expect(response.headers.get("content-type")).toMatch(/application\/json/);
   });
 
+  it("canonicalizes stale tts_script.md content before returning it", async () => {
+    const path = require("path");
+    const mainScriptPath = path.join(process.cwd(), "narrative", "main_script.md");
+    const ttsScriptPath = path.join(process.cwd(), "narrative", "tts_script.md");
+    const staleTtsScript = [
+      "## Cold Open",
+      "",
+      "[TONE: warm]",
+      "If you use Cursor...",
+      "",
+      "## Part 1: Economics of Darning",
+      "",
+      "[TONE: energetic]",
+      "Watch this.",
+      "",
+      "[TONE: analytical]",
+      "This isn't nostalgia.",
+    ].join("\n");
+    const mainScript = [
+      "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "",
+      "**NARRATOR:**",
+      "If you use Cursor...",
+      "",
+      "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+      "",
+      "**NARRATOR:**",
+      "Watch this.",
+      "",
+      "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+      "",
+      "**NARRATOR:**",
+      "This isn't nostalgia.",
+    ].join("\n");
+    mockExistsSync.mockImplementation((filePath: string) => {
+      return filePath === mainScriptPath || filePath === ttsScriptPath;
+    });
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (filePath === mainScriptPath) return mainScript;
+      if (filePath === ttsScriptPath) return staleTtsScript;
+      return "";
+    });
+
+    const response = await GET(
+      new Request("http://localhost/api/project/script?file=tts", { method: "GET" })
+    );
+    const { status, body } = await parseResponse(response);
+
+    expect(status).toBe(200);
+    expect(body.content).toContain("### THE THIRTY-SECOND DEMO (2:00 - 2:30)");
+    const part1Block = body.content.split("## Part 1: Economics of Darning")[1] ?? "";
+    expect(part1Block).not.toContain("Watch this.");
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      `${ttsScriptPath}.tmp`,
+      expect.stringContaining("### THE THIRTY-SECOND DEMO (2:00 - 2:30)"),
+      "utf-8"
+    );
+    expect(mockRenameSync).toHaveBeenCalledWith(`${ttsScriptPath}.tmp`, ttsScriptPath);
+  });
+
   it("returns sectionContent for a matching section request", async () => {
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
@@ -227,6 +298,13 @@ describe("GET /api/project/script", () => {
   });
 
   it("matches section IDs that are compact abbreviations of verbose headings", async () => {
+    mockLoadProject.mockReturnValue({
+      sections: [
+        { id: "cold_open", label: "Cold Open" },
+        { id: "part1_economics", label: "Part 1: Economics of Darning" },
+        { id: "part2_paradigm_shift", label: "Part 2: The Paradigm Shift" },
+      ],
+    });
     mockExistsSync.mockReturnValue(true);
     mockReadFileSync.mockReturnValue(
       [

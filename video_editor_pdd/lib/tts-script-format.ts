@@ -1,8 +1,10 @@
+import fs from "fs";
+import path from "path";
 import type { Section } from "./types";
 import {
-  groupScriptSectionsByProjectSection,
+  buildNarrativeStructureManifest,
   normalizeNarrativeHeading,
-  parseTimedNarrativeHeadings,
+  normalizeAndPersistNarrativeStructureManifest,
 } from "./narration-manifest";
 
 type SectionSummary = Pick<Section, "id" | "label"> & {
@@ -208,28 +210,26 @@ export function buildCanonicalTtsScript(
   rawTtsScript: string,
   sections: ReadonlyArray<SectionSummary>,
 ): string {
-  const extractedSections = parseTimedNarrativeHeadings(mainScript);
+  const structure = buildNarrativeStructureManifest(mainScript, sections);
   const effectiveSections =
     sections.length > 0
       ? sections
-      : extractedSections.map((section) => ({
+      : structure.headings.map((section) => ({
           id: section.heading
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, "_")
             .replace(/^_+|_+$/g, ""),
           label: section.heading,
         }));
-  const groupedSections = groupScriptSectionsByProjectSection(
-    extractedSections,
-    effectiveSections,
-  );
   const generatedBlocks = parseGeneratedBlocks(rawTtsScript);
   let blockIndex = 0;
 
   const sectionBlocks = effectiveSections.map((section, sectionIndex) => {
     const heading = section.label || titleFromId(section.id);
     const lines = [`## ${heading}`, ""];
-    const scriptSections = groupedSections.get(section.id) ?? [];
+    const scriptSections = structure.headings.filter(
+      (entry) => entry.pipelineSectionId === section.id,
+    );
 
     if (scriptSections.length === 0) {
       const generated = generatedBlocks[blockIndex];
@@ -249,7 +249,10 @@ export function buildCanonicalTtsScript(
     }
 
     scriptSections.forEach((scriptSection, scriptSectionIndex) => {
-      if (shouldRenderSubheading(scriptSection.heading, heading, scriptSectionIndex)) {
+      if (
+        scriptSection.kind === "folded_heading" &&
+        shouldRenderSubheading(scriptSection.heading, heading, scriptSectionIndex)
+      ) {
         lines.push(`### ${scriptSection.heading}`);
         lines.push("");
       }
@@ -307,4 +310,45 @@ export function buildCanonicalTtsScript(
     : rawTtsScript.trim()
       ? `${rawTtsScript.trim()}\n`
       : "";
+}
+
+export function normalizeAndPersistCanonicalTtsScript(params: {
+  projectDir: string;
+  mainScript: string;
+  rawTtsScript: string;
+  sections: ReadonlyArray<SectionSummary>;
+  ttsScriptPath?: string;
+}): string {
+  const {
+    projectDir,
+    mainScript,
+    rawTtsScript,
+    sections,
+    ttsScriptPath = path.join(projectDir, "narrative", "tts_script.md"),
+  } = params;
+
+  if (!mainScript.trim() || !rawTtsScript.trim()) {
+    return rawTtsScript;
+  }
+
+  normalizeAndPersistNarrativeStructureManifest({
+    projectDir,
+    mainScript,
+    projectSections: sections,
+  });
+
+  const canonicalScript = buildCanonicalTtsScript(
+    mainScript,
+    rawTtsScript,
+    sections,
+  );
+
+  if (canonicalScript !== rawTtsScript) {
+    fs.mkdirSync(path.dirname(ttsScriptPath), { recursive: true });
+    const tmpPath = `${ttsScriptPath}.tmp`;
+    fs.writeFileSync(tmpPath, canonicalScript, "utf-8");
+    fs.renameSync(tmpPath, ttsScriptPath);
+  }
+
+  return canonicalScript;
 }

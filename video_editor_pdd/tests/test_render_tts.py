@@ -132,8 +132,6 @@ class TestEdgeTtsFallback:
     """Verify the EdgeTTS fallback does not depend on soundfile."""
 
     def test_edge_tts_engine_reads_ffmpeg_wav_without_soundfile(self, tmp_path):
-        engine = EdgeTTSEngine()
-
         class FakeCommunicate:
             def __init__(self, _text, _voice):
                 self._text = _text
@@ -157,6 +155,7 @@ class TestEdgeTtsFallback:
             return mock.Mock(returncode=0, stderr=b"")
 
         with mock.patch.dict(sys.modules, {"edge_tts": FakeEdgeTtsModule()}):
+            engine = EdgeTTSEngine()
             with mock.patch("subprocess.run", side_effect=fake_ffmpeg_run):
                 audio = engine.synthesize("hello from edge")
 
@@ -1231,8 +1230,8 @@ class TestMain:
             "seg_003",
         ]
 
-    def test_manifest_only_writes_split_section_manifest_without_audio(self, tmp_path):
-        """Spec: --manifest-only emits the renderer's true pause-split segments for section scripts."""
+    def test_manifest_only_preserves_canonical_section_blocks_without_audio(self, tmp_path):
+        """Section-based scripts should preserve one segment per narration block, even with long pauses."""
         narrative_dir = tmp_path / "narrative"
         narrative_dir.mkdir()
         (tmp_path / "project.json").write_text(
@@ -1276,13 +1275,12 @@ class TestMain:
         manifest = json.loads(manifest_path.read_text())
         assert [segment["id"] for segment in manifest["segments"]] == [
             "animation_section_001",
-            "animation_section_002",
         ]
         assert not (output_dir / "animation_section_001.wav").exists()
-        assert manifest["segments"][1]["text"] == "Second sentence."
+        assert manifest["segments"][0]["cleanText"] == "First sentence. Second sentence."
 
-    def test_manifest_only_splits_folded_subheadings_into_additional_parent_section_segments(self, tmp_path):
-        """Folded ### headings should advance the parent section segment counter instead of merging into the prior segment."""
+    def test_manifest_only_preserves_folded_heading_blocks_and_parent_section_counter(self, tmp_path):
+        """Folded demo blocks should keep their own parent-section segments, even across short pauses."""
         narrative_dir = tmp_path / "narrative"
         narrative_dir.mkdir()
         (tmp_path / "project.json").write_text(
@@ -1299,11 +1297,44 @@ class TestMain:
         (narrative_dir / "tts_script.md").write_text(
             "# Demo\n\n"
             "## Cold Open\n\n"
-            "[TONE: neutral] Intro text that is definitely long enough to parse.\n\n"
+            "[TONE: conversational, knowing]\n"
+            "If you use Cursor, or Claude Code, or Copilot...\n"
+            "[PAUSE: 0.8s]\n\n"
+            "[TONE: affirming, light]\n"
+            "...you're getting really good at this.\n"
+            "[PAUSE: 1.2s]\n\n"
+            "[TONE: reflective, pivoting to insight]\n"
+            "But here's what your great-grandmother figured out sixty years ago.\n"
+            "[PAUSE: 0.8s]\n\n"
+            "[TONE: matter-of-fact, light]\n"
+            "When socks got cheap enough... she stopped.\n"
+            "[PAUSE: 1.0s]\n\n"
+            "[TONE: direct, punchy]\n"
+            "Code just got that cheap.\n"
+            "[PAUSE: 0.8s]\n\n"
+            "[TONE: provocative, inviting]\n"
+            "So why are we still patching?\n"
+            "[PAUSE: 1.0s]\n\n"
             "### THE THIRTY-SECOND DEMO (2:00 - 2:30)\n\n"
-            "[TONE: neutral] Watch this.\n\n"
+            "[TONE: energetic, demonstrative]\n"
+            "Watch this.\n"
+            "[PAUSE: 0.4s]\n\n"
+            "[TONE: precise, impressed by the ratio]\n"
+            "Fifteen lines of prompt. Two hundred lines of generated code.\n"
+            "[PAUSE: 0.5s]\n\n"
+            "[TONE: rapid, building momentum]\n"
+            "Now a failing test. Regenerate. Bug gone. Not patched — gone. The test is a permanent wall. That bug can never come back.\n"
+            "[PAUSE: 0.8s]\n\n"
+            "[TONE: transitional, grounded]\n"
+            "Now let me show you why this matters.\n"
+            "[PAUSE: 1.0s]\n\n"
             "## Part 1: Economics of Darning\n\n"
-            "[TONE: neutral] Part one opening text that is definitely long enough to parse.\n",
+            "[TONE: analytical, authoritative]\n"
+            "This isn't nostalgia. It's economics.\n"
+            "[PAUSE: 0.4s]\n\n"
+            "[TONE: historical, illustrative]\n"
+            "In 1950, a wool sock cost real money relative to an hour of labor. Darning made sense. You'd spend thirty minutes to save a dollar.\n"
+            "[PAUSE: 0.5s]\n",
             encoding="utf-8",
         )
         output_dir = tmp_path / "outputs" / "tts"
@@ -1329,9 +1360,26 @@ class TestMain:
         assert [segment["id"] for segment in manifest["segments"]] == [
             "cold_open_001",
             "cold_open_002",
+            "cold_open_003",
+            "cold_open_004",
+            "cold_open_005",
+            "cold_open_006",
+            "cold_open_007",
+            "cold_open_008",
+            "cold_open_009",
+            "cold_open_010",
             "part1_economics_001",
+            "part1_economics_002",
         ]
-        assert manifest["segments"][1]["cleanText"] == "Watch this."
+        assert manifest["segments"][6]["cleanText"] == "Watch this."
+        assert (
+            manifest["segments"][7]["cleanText"]
+            == "Fifteen lines of prompt. Two hundred lines of generated code."
+        )
+        assert (
+            manifest["segments"][10]["cleanText"]
+            == "This isn't nostalgia. It's economics."
+        )
 
     def test_manifest_only_strips_markdown_narrator_markers_from_clean_text(self, tmp_path):
         """Section manifests should not preserve markdown narrator labels as spoken text."""

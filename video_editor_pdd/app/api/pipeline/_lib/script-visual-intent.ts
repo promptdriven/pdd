@@ -1,6 +1,7 @@
-import { groupScriptSectionsByProjectSection } from "@/lib/narration-manifest";
+import { buildNarrativeStructureManifestFromHeadings } from "@/lib/narration-manifest";
 
 export type ScriptSectionVisualIntent = {
+  order: number;
   heading: string;
   normalizedHeading: string;
   veoMarkers: string[];
@@ -110,6 +111,7 @@ export function parseScriptSectionVisualIntent(
 
       const heading = trimmed.replace(/^##\s+/, "").trim();
       current = {
+        order: sections.length,
         heading,
         normalizedHeading: normalizeSectionIntentKey(heading),
         veoMarkers: [],
@@ -176,10 +178,21 @@ export function findMatchingScriptSectionVisualIntent(
   allSections?: ReadonlyArray<{ id: string; label: string; scriptHeadings?: string[] }>
 ): ScriptSectionVisualIntent | null {
   if (allSections && allSections.length > 0) {
-    const grouped = groupScriptSectionsByProjectSection(sections, allSections);
-    const groupedMatches = grouped.get(target.id) ?? [];
+    const structure = buildNarrativeStructureManifestFromHeadings(
+      sections.map((section) => ({
+        heading: section.heading,
+        narration: [],
+      })),
+      allSections,
+    );
+    const sectionsByOrder = new Map(sections.map((section) => [section.order, section]));
+    const groupedMatches = structure.headings
+      .filter((entry) => entry.pipelineSectionId === target.id)
+      .map((entry) => sectionsByOrder.get(entry.order))
+      .filter((section): section is ScriptSectionVisualIntent => Boolean(section));
     if (groupedMatches.length > 0) {
       return {
+        order: groupedMatches[0].order,
         heading: groupedMatches[0].heading,
         normalizedHeading: groupedMatches[0].normalizedHeading,
         veoMarkers: groupedMatches.flatMap((section) => section.veoMarkers),

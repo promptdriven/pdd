@@ -500,6 +500,113 @@ describe("tts-script executor", () => {
     expect(savedScript).toContain("Hello from the intro.");
     expect(savedScript).toContain("Goodbye from the outro.");
   });
+
+  it("rewrites a stale folded-demo artifact even when Claude leaves the file content unchanged", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-script-folded-demo-"));
+    process.chdir(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, "narrative"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "project.json"), "{}", "utf-8");
+    mockLoadProject.mockReturnValue({
+      name: "demo",
+      outputResolution: { width: 1920, height: 1080 },
+      tts: {
+        engine: "qwen3-tts",
+        modelPath: "models/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        tokenizerPath: "models/Qwen3-TTS-Tokenizer-12Hz",
+        speaker: "Aiden",
+        speakingRate: 0.95,
+        sampleRate: 24000,
+      },
+      sections: [
+        {
+          id: "cold_open",
+          label: "Cold Open",
+          videoFile: "cold_open.mp4",
+          specDir: "cold_open",
+          remotionDir: "S00-ColdOpen",
+          compositionId: "ColdOpenSection",
+          durationSeconds: 0,
+          offsetSeconds: 0,
+        },
+        {
+          id: "part1_economics",
+          label: "Part 1: Economics of Darning",
+          videoFile: "part1_economics.mp4",
+          specDir: "part1_economics",
+          remotionDir: "S01-Part1Economics",
+          compositionId: "Part1EconomicsSection",
+          durationSeconds: 0,
+          offsetSeconds: 0,
+        },
+      ],
+      audioSync: { sectionGroups: {}, silenceGapDefault: 0.3 },
+      veo: {
+        model: "veo-3.1-generate-preview",
+        defaultAspectRatio: "16:9",
+        maxConcurrentGenerations: 4,
+        references: [],
+        frameChains: [],
+      },
+      render: {
+        maxParallelRenders: 3,
+        useLambda: false,
+        lambdaRegion: "us-east-1",
+      },
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, "narrative", "main_script.md"),
+      [
+        "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+        "",
+        "**NARRATOR:**",
+        "If you use Cursor...",
+        "",
+        "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+        "",
+        "**NARRATOR:**",
+        "Watch this.",
+        "",
+        "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+        "",
+        "**NARRATOR:**",
+        "This isn't nostalgia.",
+        "",
+      ].join("\n"),
+      "utf-8"
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "narrative", "tts_script.md"),
+      [
+        "## Cold Open",
+        "",
+        "[TONE: warm]",
+        "If you use Cursor...",
+        "",
+        "## Part 1: Economics of Darning",
+        "",
+        "[TONE: energetic]",
+        "Watch this.",
+        "",
+        "[TONE: analytical]",
+        "This isn't nostalgia.",
+        "",
+      ].join("\n"),
+      "utf-8"
+    );
+
+    mockRunClaudeFix.mockResolvedValue(undefined);
+
+    const executor = registerCallArgs.factory({}, jest.fn());
+    await executor(jest.fn());
+
+    const savedScript = fs.readFileSync(
+      path.join(tmpDir, "narrative", "tts_script.md"),
+      "utf-8"
+    );
+    expect(savedScript).toContain("### THE THIRTY-SECOND DEMO (2:00 - 2:30)");
+    const part1Block = savedScript.split("## Part 1: Economics of Darning")[1] ?? "";
+    expect(part1Block).not.toContain("Watch this.");
+  });
 });
 
 // ---------------------------------------------------------------------------

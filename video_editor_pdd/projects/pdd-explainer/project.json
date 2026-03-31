@@ -264,9 +264,10 @@
       },
       {
         "id": "developer",
-        "label": "Modern Developer",
+        "label": "Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
+          "cold_open",
           "part5_compound_returns"
         ],
         "referencePrompt": "Software developer at modern desk with large monitor showing code editor, cool blue-white lighting, mechanical keyboard, minimalist workspace",
@@ -279,7 +280,6 @@
         "imagePath": "outputs/veo/references/developer_protagonist.png",
         "sections": [
           "closing",
-          "cold_open",
           "part1_economics"
         ],
         "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Cool blue-white lighting from LED desk lamp and monitor glow.",
@@ -315,8 +315,15 @@
       {
         "clips": [
           "developer_cursor_edit",
-          "developer_codebase_zoomout",
+          "developer_cursor_callback"
+        ],
+        "referenceId": "developer",
+        "source": "stage6-inferred"
+      },
+      {
+        "clips": [
           "developer_cursor_p1",
+          "developer_codebase_zoomout",
           "developer_regenerate_closing"
         ],
         "referenceId": "developer_protagonist",
@@ -325,8 +332,8 @@
       {
         "clips": [
           "grandmother_darning",
-          "grandmother_drawer_zoomout",
           "grandmother_darning_p1",
+          "grandmother_darning_sock",
           "grandmother_socks_callback"
         ],
         "referenceId": "grandmother",

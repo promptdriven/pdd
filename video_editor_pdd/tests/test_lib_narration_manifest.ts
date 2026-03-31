@@ -3,7 +3,10 @@ import os from "os";
 import path from "path";
 
 import {
+  buildNarrativeStructureManifest,
   loadNarrationManifest,
+  loadNarrativeStructureManifest,
+  normalizeAndPersistNarrativeStructureManifest,
   resolveSegmentTimingForSection,
 } from "../lib/narration-manifest";
 
@@ -35,6 +38,24 @@ describe("lib/narration-manifest", () => {
       JSON.stringify(words)
     );
   }
+
+  const mainScriptWithFoldedDemo = [
+    "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+    "",
+    "**NARRATOR:**",
+    "If you use Cursor...",
+    "",
+    "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+    "",
+    "**NARRATOR:**",
+    "Watch this.",
+    "",
+    "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+    "",
+    "**NARRATOR:**",
+    "This isn't nostalgia.",
+    "",
+  ].join("\n");
 
   it("loadNarrationManifest returns segments with timing", () => {
     writeManifest([
@@ -172,5 +193,76 @@ describe("lib/narration-manifest", () => {
   it("loadNarrationManifest returns null when manifest is missing", () => {
     const result = loadNarrationManifest(tmpDir);
     expect(result).toBeNull();
+  });
+
+  it("buildNarrativeStructureManifest preserves every timed heading with explicit owner and kind", () => {
+    const manifest = buildNarrativeStructureManifest(mainScriptWithFoldedDemo, [
+      { id: "cold_open", label: "Cold Open" },
+      { id: "part1_economics", label: "Part 1: Economics of Darning" },
+    ]);
+
+    expect(manifest.headings).toEqual([
+      expect.objectContaining({
+        order: 0,
+        heading: "COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+        pipelineSectionId: "cold_open",
+        kind: "section",
+      }),
+      expect.objectContaining({
+        order: 1,
+        heading: "THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+        pipelineSectionId: "cold_open",
+        kind: "folded_heading",
+      }),
+      expect.objectContaining({
+        order: 2,
+        heading: "PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+        pipelineSectionId: "part1_economics",
+        kind: "section",
+      }),
+    ]);
+  });
+
+  it("normalizeAndPersistNarrativeStructureManifest writes and loadNarrativeStructureManifest reads the canonical artifact", () => {
+    const manifest = normalizeAndPersistNarrativeStructureManifest({
+      projectDir: tmpDir,
+      mainScript: mainScriptWithFoldedDemo,
+      projectSections: [
+        { id: "cold_open", label: "Cold Open" },
+        { id: "part1_economics", label: "Part 1: Economics of Darning" },
+      ],
+    });
+
+    expect(
+      fs.existsSync(path.join(tmpDir, "outputs", "narrative", "structure.json")),
+    ).toBe(true);
+    expect(loadNarrativeStructureManifest(tmpDir)).toEqual(manifest);
+  });
+
+  it("excludes untimed appendix headings from the canonical narrative structure manifest", () => {
+    const manifest = buildNarrativeStructureManifest(
+      [
+        mainScriptWithFoldedDemo,
+        "",
+        "## VISUAL DESIGN NOTES",
+        "",
+        "Design appendix.",
+        "",
+        "## RESEARCH CITATIONS",
+        "",
+        "Citation appendix.",
+        "",
+      ].join("\n"),
+      [
+        { id: "cold_open", label: "Cold Open" },
+        { id: "part1_economics", label: "Part 1: Economics of Darning" },
+      ],
+    );
+
+    expect(manifest.headings.map((heading) => heading.heading)).toEqual([
+      "COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+      "PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+    ]);
   });
 });

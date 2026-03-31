@@ -1,4 +1,11 @@
-import { buildCanonicalTtsScript } from "../lib/tts-script-format";
+import fs from "fs";
+import os from "os";
+import path from "path";
+
+import {
+  buildCanonicalTtsScript,
+  normalizeAndPersistCanonicalTtsScript,
+} from "../lib/tts-script-format";
 
 describe("lib/tts-script-format", () => {
   it("rewrites headingless generated narration into canonical section-based format", () => {
@@ -283,5 +290,64 @@ describe("lib/tts-script-format", () => {
     expect(output).toContain("[EMOTION: calm]");
     expect(output).toContain("[INSTRUCT:");
     expect(output).toContain("This is the only line.");
+  });
+
+  it("persists a canonical folded-heading tts script artifact when the saved file is stale", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tts-script-format-"));
+    const ttsScriptPath = path.join(tmpDir, "narrative", "tts_script.md");
+    fs.mkdirSync(path.dirname(ttsScriptPath), { recursive: true });
+
+    const mainScript = [
+      "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "",
+      "**NARRATOR:**",
+      "If you use Cursor...",
+      "",
+      "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+      "",
+      "**NARRATOR:**",
+      "Watch this.",
+      "",
+      "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+      "",
+      "**NARRATOR:**",
+      "This isn't nostalgia.",
+      "",
+    ].join("\n");
+
+    const staleRawTtsScript = [
+      "## Cold Open",
+      "",
+      "[TONE: warm]",
+      "If you use Cursor...",
+      "",
+      "## Part 1: Economics of Darning",
+      "",
+      "[TONE: energetic]",
+      "Watch this.",
+      "",
+      "[TONE: analytical]",
+      "This isn't nostalgia.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(ttsScriptPath, staleRawTtsScript, "utf-8");
+
+    const output = normalizeAndPersistCanonicalTtsScript({
+      projectDir: tmpDir,
+      mainScript,
+      rawTtsScript: staleRawTtsScript,
+      sections: [
+        { id: "cold_open", label: "Cold Open" },
+        { id: "part1_economics", label: "Part 1: Economics of Darning" },
+      ],
+      ttsScriptPath,
+    });
+
+    expect(output).toContain("### THE THIRTY-SECOND DEMO (2:00 - 2:30)");
+    const part1Block = output.split("## Part 1: Economics of Darning")[1] ?? "";
+    expect(part1Block).not.toContain("Watch this.");
+    expect(fs.readFileSync(ttsScriptPath, "utf-8")).toBe(output);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

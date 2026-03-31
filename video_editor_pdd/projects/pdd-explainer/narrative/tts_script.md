@@ -42,9 +42,7 @@ Code just got that cheap.
 So why are we still patching?
 [PAUSE: 1.0s]
 
----
-
-## Part 1: Economics of Darning
+### THE THIRTY-SECOND DEMO (2:00 - 2:30)
 
 [TONE: energetic, demonstrative]
 [PACE: brisk]
@@ -73,6 +71,10 @@ Now a failing test. Regenerate. Bug gone. Not patched — gone. The test is a pe
 [INSTRUCT: Slow down and speak with warm authority, signaling a shift from demo to explanation.]
 Now let me show you why this matters.
 [PAUSE: 1.0s]
+
+---
+
+## Part 1: Economics of Darning
 
 [TONE: analytical, authoritative]
 [PACE: moderate]
@@ -277,10 +279,6 @@ Tools like Cursor and Claude Code are the best darning needles ever made. I use 
 But they're still darning needles. And the fundamental problem with darning isn't speed — it's accumulation.
 [PAUSE: 1.2s]
 
----
-
-## Part 2: The Paradigm Shift
-
 [TONE: transitional, gathering]
 [PACE: slower, deliberate]
 [EMOTION: setting up the big moment]
@@ -308,6 +306,10 @@ A bigger window AND a smarter model. Not one or the other. Both. That's not an i
 [INSTRUCT: Deliver with a friendly challenge, daring the audience to test it themselves.]
 Try it yourself. Take your favorite LLM, give it a hard coding problem as code, then give it the same problem described in natural language. The natural language version will win.
 [PAUSE: 1.0s]
+
+---
+
+## Part 2: The Paradigm Shift
 
 [TONE: expansive, pattern-recognition]
 [PACE: moderate]
@@ -414,10 +416,6 @@ By 1990, most designs were still schematic-based. By the mid-1990s, half had swi
 Today, a modern chip has billions of gates. Nobody reviews the netlist. It's impossible. The abstraction isn't just convenient — it's physically necessary.
 [PAUSE: 0.5s]
 
----
-
-## Part 3: The Mold Has Three Parts
-
 [TONE: connecting to present]
 [PACE: moderate]
 [EMOTION: the same wall, right now]
@@ -445,6 +443,10 @@ This is that same transition. For software.
 [INSTRUCT: Tie the metaphors together cleanly, each sentence should feel like a final piece clicking into place.]
 The prompt is your mold. The code is just plastic. And just like chip synthesis — the code is different every generation. But the tests lock the behavior. The process is deterministic.
 [PAUSE: 1.0s]
+
+---
+
+## Part 3: The Mold Has Three Parts
 
 [TONE: precise, getting technical]
 [PACE: moderate]
@@ -628,10 +630,6 @@ When these conflict, tests win. Always. The walls override the specification. Th
 The code is output. The mold is what matters.
 [PAUSE: 0.8s]
 
----
-
-## Part 4: The Precision Tradeoff
-
 [TONE: analytical, introducing a tradeoff]
 [PACE: moderate]
 [EMOTION: intellectual curiosity]
@@ -659,6 +657,10 @@ In injection molding, precision comes from the walls. The material just flows un
 [INSTRUCT: Map the physical analogy directly to PDD, clean and direct.]
 This maps directly to PDD.
 [PAUSE: 0.3s]
+
+---
+
+## Part 4: The Precision Tradeoff
 
 [TONE: explanatory, inverse relationship]
 [PACE: steady]
@@ -709,10 +711,6 @@ PDD handles this. A prompt can embed code snippets for exactly those critical se
 Think of it as a spectrum. Natural language on one end, code on the other. The question isn't "prompts OR code." It's "how far into prompt space can you stay?" For most of the specification — further than you'd think.
 [PAUSE: 1.0s]
 
----
-
-## Part 5: Compound Returns
-
 [TONE: zooming out, macro perspective]
 [PACE: moderate]
 [EMOTION: the big picture]
@@ -740,6 +738,10 @@ And those costs compound — literally. Technical debt follows a compound intere
 [INSTRUCT: Draw the contrast between two diverging paths, one compounds costs and the other compounds returns.]
 Patching accrues compound costs. Each patch adds debt. Debt generates more debt.
 [PAUSE: 0.3s]
+
+---
+
+## Part 5: Compound Returns
 
 [TONE: hopeful, the inverse]
 [PACE: moderate]
@@ -790,10 +792,6 @@ A researcher at Microsoft, after seeing PDD for the first time, said: "This is e
 Now — you don't work on a greenfield project. Nobody does.
 [PAUSE: 0.4s]
 
----
-
-## Where to Start
-
 [TONE: concrete, instructional]
 [PACE: steady]
 [EMOTION: actionable guidance]
@@ -815,16 +813,16 @@ One module at a time. No big bang. No rewrite. Just a gradual migration of where
 You don't patch socks because socks got cheap. The economics made patching irrational.
 [PAUSE: 0.5s]
 
----
-
-## Closing
-
 [TONE: punchy, landing the parallel]
 [PACE: moderate]
 [EMOTION: confident declaration]
 [INSTRUCT: Land this short line with weight, the parallel is complete.]
 Code just got that cheap.
 [PAUSE: 0.6s]
+
+---
+
+## Where to Start
 
 [TONE: clean, triadic]
 [PACE: steady, rhythmic]
@@ -847,11 +845,43 @@ Code is generated, verified, and disposable.
 The code is just plastic.
 [PAUSE: 1.0s]
 
+---
+
+## Closing
+
 [TONE: definitive, closing]
 [PACE: slow, final]
 [EMOTION: absolute conviction]
 [INSTRUCT: Deliver as the final statement of the entire video, slow and definitive with total conviction.]
 The mold is what matters.
+[PAUSE: 1.0s]
+
+[TONE: explanatory]
+[PACE: moderate]
+[EMOTION: calm]
+[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a explanatory tone, with calm emotion.]
+Code just got that cheap.
+[PAUSE: 1.0s]
+
+[TONE: explanatory]
+[PACE: moderate]
+[EMOTION: calm]
+[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a explanatory tone, with calm emotion.]
+Prompts encode intent. Tests preserve behavior. Grounding maintains style.
+[PAUSE: 1.0s]
+
+[TONE: explanatory]
+[PACE: moderate]
+[EMOTION: calm]
+[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a explanatory tone, with calm emotion.]
+Code is generated, verified, and disposable.
+[PAUSE: 1.0s]
+
+[TONE: explanatory]
+[PACE: moderate]
+[EMOTION: calm]
+[INSTRUCT: Speak with a confident, authoritative tone like a knowledgeable educator, with a explanatory tone, with calm emotion.]
+The code is just plastic.
 [PAUSE: 1.0s]
 
 [TONE: explanatory]

@@ -1,4 +1,5 @@
 import {
+  buildNarrativeStructureManifest,
   groupScriptSectionsByProjectSection,
   parseTimedNarrativeHeadings,
   resolveNarrativeSectionAssignments,
@@ -100,5 +101,38 @@ describe("lib/narrative-section-resolver", () => {
     expect(
       grouped.get("part1_economics")?.map((section) => section.heading),
     ).toEqual(["PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)"]);
+  });
+
+  it("uses the canonical narrative structure manifest when grouping sections", () => {
+    const mainScript = [
+      "## COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "",
+      "**NARRATOR:**",
+      "Cold open line.",
+      "",
+      "## THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+      "",
+      "**NARRATOR:**",
+      "Watch this.",
+      "",
+      "## PART 1: THE ECONOMICS OF DARNING (2:30 - 8:30)",
+      "",
+      "**NARRATOR:**",
+      "This isn't nostalgia.",
+      "",
+    ].join("\n");
+
+    const parsed = parseTimedNarrativeHeadings(mainScript);
+    const manifest = buildNarrativeStructureManifest(mainScript, projectSections);
+    const grouped = groupScriptSectionsByProjectSection(
+      parsed,
+      projectSections,
+      manifest,
+    );
+
+    expect(grouped.get("cold_open")?.map((section) => section.heading)).toEqual([
+      "COLD OPEN: THE SOCK HOOK (0:00 - 2:00)",
+      "THE THIRTY-SECOND DEMO (2:00 - 2:30)",
+    ]);
   });
 });

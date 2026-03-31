@@ -3,7 +3,12 @@ import fs from "fs";
 import path from "path";
 import { getProjectDir } from "@/lib/projects";
 import { loadProject } from "@/lib/project";
-import { groupScriptSectionsByProjectSection } from "@/lib/narration-manifest";
+import {
+  groupScriptSectionsByProjectSection,
+  normalizeAndPersistNarrativeStructureManifest,
+  type NarrativeStructureManifest,
+} from "@/lib/narration-manifest";
+import { normalizeAndPersistCanonicalTtsScript } from "@/lib/tts-script-format";
 import { normalizeSectionKey, parseScriptSections } from "@/lib/spec-script-context";
 
 export const dynamic = "force-dynamic";
@@ -39,7 +44,8 @@ function tokenOverlapScore(left: string, right: string): number {
 
 function extractSectionScriptContent(
   content: string,
-  sectionId: string
+  sectionId: string,
+  narrativeStructure?: NarrativeStructureManifest | null,
 ): { sectionHeading: string | null; sectionContent: string | null } {
   const scriptSections = parseScriptSections(content);
   if (scriptSections.length === 0) {
@@ -51,6 +57,7 @@ function extractSectionScriptContent(
     const groupedSections = groupScriptSectionsByProjectSection(
       scriptSections,
       project.sections,
+      narrativeStructure,
     );
     const groupedTarget = groupedSections.get(sectionId);
 
@@ -130,6 +137,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   try {
     const url = new URL(request.url);
     const sectionId = url.searchParams.get("section");
+    const requestedFile = url.searchParams.get("file") ?? "main";
     const filePath = resolveScriptPath(request);
 
     if (!fs.existsSync(filePath)) {
@@ -139,9 +147,39 @@ export async function GET(request: Request): Promise<NextResponse> {
       );
     }
 
-    const content = fs.readFileSync(filePath, "utf-8");
+    let content = fs.readFileSync(filePath, "utf-8");
+    let narrativeStructure: NarrativeStructureManifest | null = null;
+    if (requestedFile === "tts") {
+      try {
+        const project = loadProject();
+        const mainScriptPath = path.join(getProjectDir(), "narrative", "main_script.md");
+        const mainScript = fs.existsSync(mainScriptPath)
+          ? fs.readFileSync(mainScriptPath, "utf-8")
+          : "";
+        content = normalizeAndPersistCanonicalTtsScript({
+          projectDir: getProjectDir(),
+          mainScript,
+          rawTtsScript: content,
+          sections: project.sections,
+          ttsScriptPath: filePath,
+        });
+      } catch {
+        // Fall back to the raw artifact when project metadata is unavailable.
+      }
+    } else if (requestedFile === "main") {
+      try {
+        const project = loadProject();
+        narrativeStructure = normalizeAndPersistNarrativeStructureManifest({
+          projectDir: getProjectDir(),
+          mainScript: content,
+          projectSections: project.sections,
+        });
+      } catch {
+        // Fall back to raw main script content when project metadata is unavailable.
+      }
+    }
     const { sectionHeading, sectionContent } = sectionId
-      ? extractSectionScriptContent(content, sectionId)
+      ? extractSectionScriptContent(content, sectionId, narrativeStructure)
       : { sectionHeading: null, sectionContent: null };
 
     return NextResponse.json(

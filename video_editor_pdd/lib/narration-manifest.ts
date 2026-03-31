@@ -50,6 +50,22 @@ export type AssignedNarrativeHeading<T extends NarrativeHeadingLike> = T & {
   matchSource: NarrativeHeadingAssignmentSource;
 };
 
+export type NarrativeStructureEntry = {
+  headingId: string;
+  order: number;
+  heading: string;
+  normalizedHeading: string;
+  narration: string[];
+  pipelineSectionId: string | null;
+  pipelineSectionLabel: string | null;
+  matchSource: NarrativeHeadingAssignmentSource;
+  kind: "section" | "folded_heading" | "unmatched";
+};
+
+export type NarrativeStructureManifest = {
+  headings: NarrativeStructureEntry[];
+};
+
 /**
  * Load the enriched segments.json narration manifest from `outputs/tts/segments.json`.
  * Returns null when the manifest does not exist or cannot be parsed.
@@ -143,6 +159,20 @@ function loadWordTimestamps(
 
 function collapseWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function headingSlug(value: string): string {
+  return normalizeNarrativeHeading(value)
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function isTimedNarrativeHeading(value: string): boolean {
+  return /\(\s*\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\s*\)\s*$/i.test(value.trim());
+}
+
+function narrativeStructureManifestPath(projectDir = getProjectDir()): string {
+  return path.join(projectDir, "outputs", "narrative", "structure.json");
 }
 
 export function normalizeNarrativeHeading(value: string): string {
@@ -441,7 +471,102 @@ export function parseTimedNarrativeHeadings(mainScript: string): Array<{
         narration: extractNarrationParagraphs(body),
       };
     })
-    .filter((section) => section.heading.length > 0);
+    .filter((section) => section.heading.length > 0 && isTimedNarrativeHeading(section.heading));
+}
+
+export function buildNarrativeStructureManifest(
+  mainScript: string,
+  projectSections: ReadonlyArray<SectionHeadingOwner>,
+): NarrativeStructureManifest {
+  return buildNarrativeStructureManifestFromHeadings(
+    parseTimedNarrativeHeadings(mainScript),
+    projectSections,
+  );
+}
+
+export function buildNarrativeStructureManifestFromHeadings(
+  parsedSections: ReadonlyArray<{ heading: string; narration: string[] }>,
+  projectSections: ReadonlyArray<SectionHeadingOwner>,
+): NarrativeStructureManifest {
+  const assignments = resolveNarrativeSectionAssignments(
+    parsedSections,
+    projectSections,
+  );
+  const seenSectionCounts = new Map<string, number>();
+
+  return {
+    headings: assignments.map((assignment, order) => {
+      const seenCount = assignment.pipelineSectionId
+        ? seenSectionCounts.get(assignment.pipelineSectionId) ?? 0
+        : 0;
+
+      if (assignment.pipelineSectionId) {
+        seenSectionCounts.set(assignment.pipelineSectionId, seenCount + 1);
+      }
+
+      return {
+        headingId: `${String(order + 1).padStart(2, "0")}_${headingSlug(assignment.heading) || "heading"}`,
+        order,
+        heading: assignment.heading,
+        normalizedHeading: assignment.normalizedHeading,
+        narration: assignment.narration,
+        pipelineSectionId: assignment.pipelineSectionId,
+        pipelineSectionLabel: assignment.pipelineSectionLabel,
+        matchSource: assignment.matchSource,
+        kind: !assignment.pipelineSectionId
+          ? "unmatched"
+          : seenCount === 0
+            ? "section"
+            : "folded_heading",
+      };
+    }),
+  };
+}
+
+export function loadNarrativeStructureManifest(
+  projectDir = getProjectDir(),
+): NarrativeStructureManifest | null {
+  const manifestPath = narrativeStructureManifestPath(projectDir);
+  if (!fs.existsSync(manifestPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    if (!parsed || !Array.isArray(parsed.headings)) {
+      return null;
+    }
+    return parsed as NarrativeStructureManifest;
+  } catch {
+    return null;
+  }
+}
+
+export function normalizeAndPersistNarrativeStructureManifest(params: {
+  mainScript: string;
+  projectSections: ReadonlyArray<SectionHeadingOwner>;
+  projectDir?: string;
+}): NarrativeStructureManifest {
+  const {
+    mainScript,
+    projectSections,
+    projectDir = getProjectDir(),
+  } = params;
+  const manifest = buildNarrativeStructureManifest(mainScript, projectSections);
+  const manifestPath = narrativeStructureManifestPath(projectDir);
+  const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
+  const current = fs.existsSync(manifestPath)
+    ? fs.readFileSync(manifestPath, "utf-8")
+    : null;
+
+  if (current !== serialized) {
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    const tmpPath = `${manifestPath}.tmp`;
+    fs.writeFileSync(tmpPath, serialized, "utf-8");
+    fs.renameSync(tmpPath, manifestPath);
+  }
+
+  return manifest;
 }
 
 export function groupScriptSectionsByProjectSection<
@@ -449,9 +574,26 @@ export function groupScriptSectionsByProjectSection<
 >(
   scriptSections: ReadonlyArray<T>,
   projectSections: ReadonlyArray<SectionHeadingOwner>,
+  narrativeStructure?: NarrativeStructureManifest | null,
 ): Map<string, Array<AssignedNarrativeHeading<T>>> {
   const grouped = new Map<string, Array<AssignedNarrativeHeading<T>>>();
-  const assignments = resolveNarrativeSectionAssignments(scriptSections, projectSections);
+  const manifestAssignments =
+    narrativeStructure &&
+    narrativeStructure.headings.length === scriptSections.length
+      ? scriptSections.map((section, index) => {
+          const entry = narrativeStructure.headings[index];
+          return {
+            ...section,
+            normalizedHeading: entry.normalizedHeading,
+            pipelineSectionId: entry.pipelineSectionId,
+            pipelineSectionLabel: entry.pipelineSectionLabel,
+            matchSource: entry.matchSource,
+          } as AssignedNarrativeHeading<T>;
+        })
+      : null;
+  const assignments =
+    manifestAssignments ??
+    resolveNarrativeSectionAssignments(scriptSections, projectSections);
 
   assignments.forEach((assignment) => {
     if (!assignment.pipelineSectionId) {

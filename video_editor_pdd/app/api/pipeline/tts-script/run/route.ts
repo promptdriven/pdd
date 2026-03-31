@@ -6,7 +6,7 @@ import { registerExecutor, runPipelineStage } from "@/lib/jobs";
 import { runClaudeFix } from "@/lib/claude";
 import { loadProject } from "@/lib/project";
 import { getProjectDir } from "@/lib/projects";
-import { buildCanonicalTtsScript } from "@/lib/tts-script-format";
+import { normalizeAndPersistCanonicalTtsScript } from "@/lib/tts-script-format";
 import {
   isDeterministicPipelineMode,
   writeDeterministicTtsScript,
@@ -94,13 +94,13 @@ registerExecutor("tts-script", (_params, _send) => {
       ? fs.readFileSync(ttsScriptPath, "utf-8")
       : "";
 
-    const canonicalScript = buildCanonicalTtsScript(
+    normalizeAndPersistCanonicalTtsScript({
+      projectDir,
       mainScript,
       rawTtsScript,
-      project.sections,
-    );
-    fs.mkdirSync(narrativeDir, { recursive: true });
-    fs.writeFileSync(ttsScriptPath, canonicalScript, "utf-8");
+      sections: project.sections,
+      ttsScriptPath,
+    });
     onLog("[tts-script] Normalized tts_script.md to canonical section format.");
   };
 });
