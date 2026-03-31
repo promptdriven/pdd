@@ -1,4 +1,4 @@
 ## Verdict
-pass
+skip
 ## Summary
-The frame shows a developer at a modern workspace, viewed from a slight over-the-shoulder angle, consistent with the spec's '15° off-axis' direction. The developer is seated at a desk with hands on the keyboard, typing. A large monitor displays a dark-themed code editor with visible colored inline code suggestions (blue/purple tones visible in the editor). The workspace is clean and modern with ambient lighting — a desk lamp provides a cool white fill and there is warm-to-cool ambient lighting in the background. The developer appears focused, in casual attire, matching the 'modern casual attire' and 'practiced confidence' descriptions. The sample is at 75% progress (6s of 8s), placing it in the '4-8s' animation phase where the developer should be accepting suggestions and continuing to type, which is consistent with the active typing posture shown. The framing is a medium close-up with moderate depth of field — both hands and screen are in focus. No typography is expected and none is present. The overall tone is respectful, professional, and productive as specified.
+Infrastructure error: Failed to analyze audit frame for 15_developer_cursor. Claude CLI returned error: You've hit your limit · resets 12am (America/Los_Angeles)

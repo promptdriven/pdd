@@ -3311,6 +3311,46 @@ class TestGeneratedTimelineWrapper:
 
         assert visual_ids == ["05_split_nature_comparison"]
 
+    def test_resolve_section_visual_ids_ignores_superseded_specs_and_shadowed_stale_compositions(self, tmp_path):
+        project_dir = tmp_path
+        specs_dir = project_dir / "specs" / "cold_open"
+        specs_dir.mkdir(parents=True)
+        (specs_dir / "05_code_cursor_blink.md").write_text("[Remotion]\n", encoding="utf-8")
+        (specs_dir / "08_prompt_file_generate.md").write_text("[Remotion]\n", encoding="utf-8")
+        (specs_dir / "09_test_fix_cycle.md").write_text("[Remotion]\n", encoding="utf-8")
+        (specs_dir / "09_test_fix_regenerate.md").write_text(
+            "<!-- DUPLICATE: This spec has been superseded by 09_test_fix_cycle.md. Delete this file. -->\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "10_transition_overlay.md").write_text("[Remotion]\n", encoding="utf-8")
+        (specs_dir / "10_why_this_matters.md").write_text(
+            "<!-- DUPLICATE: This spec has been superseded by 10_transition_overlay.md. Delete this file. -->\n",
+            encoding="utf-8",
+        )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 20,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": [
+                "07_code_cursor_blink",
+                "08_code_regeneration",
+                "09_title_card_pdd",
+            ],
+        }
+
+        visual_ids = resolve_section_visual_ids(section, str(project_dir))
+
+        assert visual_ids == [
+            "05_code_cursor_blink",
+            "08_prompt_file_generate",
+            "09_test_fix_cycle",
+            "10_transition_overlay",
+        ]
+
     def test_generated_timeline_ignores_stale_veo_asset_when_script_has_no_veo(self, tmp_path):
         """A stale staged Veo asset must not contaminate a Remotion-only section render."""
         project_dir = tmp_path
@@ -3787,6 +3827,68 @@ class TestDigitPrefixedIdentifiers:
         assert 'import { Closing09FinalTitleCard } from "./Closing09FinalTitleCard";' not in root
         assert 'id="closing08-final-title-card"' in root
         assert 'GeneratedContractVisual' in root
+
+    def test_generate_root_tsx_ignores_superseded_specs_and_shadowed_preview_ids(self, tmp_path):
+        project_dir = tmp_path
+        remotion_dir = tmp_path / "remotion"
+        remotion_public = remotion_dir / "public"
+        specs_dir = project_dir / "specs" / "cold_open"
+
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        (specs_dir / "05_code_cursor_blink.md").write_text(
+            "[Remotion]\n\n## Data Points JSON\n```json\n{\"type\":\"remotion_animation\",\"componentId\":\"code_cursor_blink\"}\n```\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "08_prompt_file_generate.md").write_text(
+            "[Remotion]\n\n## Data Points JSON\n```json\n{\"type\":\"remotion_animation\",\"componentId\":\"prompt_file_generate\"}\n```\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "09_test_fix_cycle.md").write_text(
+            "[Remotion]\n\n## Data Points JSON\n```json\n{\"type\":\"remotion_animation\",\"componentId\":\"test_fix_cycle\"}\n```\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "09_test_fix_regenerate.md").write_text(
+            "<!-- DUPLICATE: This spec has been superseded by 09_test_fix_cycle.md. Delete this file. -->\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "10_transition_overlay.md").write_text(
+            "[Remotion]\n\n## Data Points JSON\n```json\n{\"type\":\"transition\",\"transitionId\":\"why_this_matters_overlay\"}\n```\n",
+            encoding="utf-8",
+        )
+        (specs_dir / "10_why_this_matters.md").write_text(
+            "<!-- DUPLICATE: This spec has been superseded by 10_transition_overlay.md. Delete this file. -->\n",
+            encoding="utf-8",
+        )
+
+        root = generate_root_tsx(
+            [{
+                "id": "cold_open",
+                "compositionId": "ColdOpenSection",
+                "durationSeconds": 20,
+                "offsetSeconds": 0,
+                "timelineSource": "generated",
+                "specDir": "cold_open",
+                "compositions": [
+                    "07_code_cursor_blink",
+                    "08_code_regeneration",
+                    "09_title_card_pdd",
+                ],
+            }],
+            30,
+            str(remotion_dir),
+            project_dir=str(project_dir),
+        )
+
+        assert 'id="cold-open05-code-cursor-blink"' in root
+        assert 'id="cold-open08-prompt-file-generate"' in root
+        assert 'id="cold-open09-test-fix-cycle"' in root
+        assert 'id="cold-open10-transition-overlay"' in root
+        assert 'cold-open09-test-fix-regenerate' not in root
+        assert 'cold-open10-why-this-matters' not in root
+        assert 'cold-open08-code-regeneration' not in root
+        assert 'cold-open09-title-card-pdd' not in root
 
     def test_generate_root_tsx_includes_preview_media_and_contract_aliases_from_visual_contract_manifest(self, tmp_path):
         project_dir = tmp_path
@@ -6219,6 +6321,17 @@ class TestContractFirstVisualResolution:
                 has_exact_component=True,
             )
 
+    def test_keeps_exact_component_for_unsupported_remotion_animation_when_available(self):
+        assert not _should_prefer_generated_contract_renderer(
+            {
+                "dataPoints": {
+                    "type": "remotion_animation",
+                    "componentId": "code_cursor_blink",
+                }
+            },
+            has_exact_component=True,
+        )
+
     def test_prefers_generated_contract_for_supported_diagram_ids_even_with_exact_component(self):
         assert _should_prefer_generated_contract_renderer(
             {
@@ -6358,3 +6471,81 @@ class TestExtractVisualOverlayConfig:
         )
 
         assert records == []
+
+    def test_resolve_section_component_records_prefers_exact_supported_remotion_components_and_ignores_stale_project_ids(
+        self, tmp_path
+    ):
+        project_dir = tmp_path
+        remotion_public = project_dir / "remotion" / "public"
+        remotion_src = project_dir / "remotion" / "src" / "remotion"
+        specs_dir = project_dir / "specs" / "cold_open"
+        remotion_public.mkdir(parents=True)
+        specs_dir.mkdir(parents=True)
+
+        for spec_name, data_points in [
+            ("05_code_cursor_blink.md", {"type": "remotion_animation", "componentId": "code_cursor_blink"}),
+            ("06_code_regeneration.md", {"type": "remotion_animation", "componentId": "code_regeneration"}),
+            ("08_prompt_file_generate.md", {"type": "remotion_animation", "componentId": "prompt_file_generate"}),
+            ("09_test_fix_cycle.md", {"type": "remotion_animation", "componentId": "test_fix_cycle"}),
+            ("10_transition_overlay.md", {"type": "transition", "componentId": "transition_overlay_why"}),
+        ]:
+            (specs_dir / spec_name).write_text(
+                "\n".join(
+                    [
+                        "[Remotion]",
+                        "",
+                        "## Data Points JSON",
+                        "```json",
+                        json.dumps(data_points),
+                        "```",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+        for component_dir in [
+            "ColdOpen05CodeCursorBlink",
+            "ColdOpen06CodeRegeneration",
+            "ColdOpen08PromptFileGenerate",
+            "ColdOpen09TestFixCycle",
+            "ColdOpen10TransitionOverlay",
+            "ColdOpen09TestFixRegenerate",
+            "ColdOpen10WhyThisMatters",
+        ]:
+            path = remotion_src / component_dir
+            path.mkdir(parents=True)
+            (path / "index.ts").write_text(
+                f"export const {component_dir} = () => null;\nexport default {component_dir};\n",
+                encoding="utf-8",
+            )
+
+        section = {
+            "id": "cold_open",
+            "compositionId": "ColdOpenSection",
+            "durationSeconds": 20,
+            "offsetSeconds": 0,
+            "timelineSource": "generated",
+            "specDir": "cold_open",
+            "compositions": [
+                "07_code_cursor_blink",
+                "08_code_regeneration",
+                "09_title_card_pdd",
+                "09_test_fix_regenerate",
+                "10_why_this_matters",
+            ],
+        }
+
+        records = resolve_section_component_records(
+            section,
+            project_dir=str(project_dir),
+            remotion_public=str(remotion_public),
+            remotion_src=str(remotion_src),
+        )
+
+        assert records == [
+            ("05_code_cursor_blink", "ColdOpen05CodeCursorBlink", "ColdOpen05CodeCursorBlink"),
+            ("06_code_regeneration", "ColdOpen06CodeRegeneration", "ColdOpen06CodeRegeneration"),
+            ("08_prompt_file_generate", "ColdOpen08PromptFileGenerate", "ColdOpen08PromptFileGenerate"),
+            ("09_test_fix_cycle", "ColdOpen09TestFixCycle", "ColdOpen09TestFixCycle"),
+            ("10_transition_overlay", "ColdOpen10TransitionOverlay", "ColdOpen10TransitionOverlay"),
+        ]

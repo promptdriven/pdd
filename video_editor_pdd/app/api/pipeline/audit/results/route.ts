@@ -38,6 +38,8 @@ type AuditSectionResult = {
 
 const DATA_POINTS_JSON_RE =
   /(?:^|\n)##\s*Data Points(?:\s+JSON)?\s*(?:\r?\n)+```json\s*([\s\S]+?)\s*```/i;
+const SUPSERSEDED_SPEC_TOMBSTONE_RE =
+  /^\s*<!--\s*duplicate:\s*this spec has been superseded by\b/i;
 
 function parseAuditMarkdown(content: string): {
   verdict: "PASS" | "FAIL" | "SKIP" | "WARN";
@@ -80,6 +82,35 @@ function parseDataPointsJson(content: string): Record<string, unknown> | null {
   }
 }
 
+function isSupersededSpecTombstone(content: string): boolean {
+  const firstNonEmptyLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return Boolean(
+    firstNonEmptyLine && SUPSERSEDED_SPEC_TOMBSTONE_RE.test(firstNonEmptyLine)
+  );
+}
+
+function listActiveRawSpecFiles(specDir: string): string[] {
+  if (!fs.existsSync(specDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(specDir)
+    .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
+    .filter((specFile) => {
+      const specPath = path.join(specDir, specFile);
+      try {
+        return !isSupersededSpecTombstone(fs.readFileSync(specPath, "utf-8"));
+      } catch {
+        return true;
+      }
+    });
+}
+
 function isEmbeddedChildSpec(content: string): boolean {
   const dataPoints = parseDataPointsJson(content);
   if (!dataPoints) {
@@ -99,9 +130,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
     for (const section of config.sections) {
       const specDir = resolveSectionSpecDir(section.specDir);
       const files = fs.existsSync(specDir) ? fs.readdirSync(specDir) : [];
-      const rawSpecFiles = files.filter(
-        (f) => f.endsWith(".md") && !f.startsWith("AUDIT_")
-      );
+      const rawSpecFiles = listActiveRawSpecFiles(specDir);
       const auditFiles = files.filter(
         (f) => f.endsWith(".md") && f.startsWith("AUDIT_")
       );
@@ -126,17 +155,19 @@ export async function GET(_request: NextRequest): Promise<NextResponse> {
       const renderableSpecNames = new Set(
         renderableVisuals.map((visual) => visual.specName)
       );
-      const fallbackAuditVisuals = auditFiles
-        .map((auditFile) => {
-          const specName = path
-            .basename(auditFile, ".md")
-            .replace(/^AUDIT_/, "");
-          return {
-            specName,
-            specPath: resolveSectionSpecFile(section.specDir, `${specName}.md`),
-          };
-        })
-        .filter((visual) => !renderableSpecNames.has(visual.specName));
+      const fallbackAuditVisuals = usesCompositionManifest
+        ? []
+        : auditFiles
+            .map((auditFile) => {
+              const specName = path
+                .basename(auditFile, ".md")
+                .replace(/^AUDIT_/, "");
+              return {
+                specName,
+                specPath: resolveSectionSpecFile(section.specDir, `${specName}.md`),
+              };
+            })
+            .filter((visual) => !renderableSpecNames.has(visual.specName));
       const visualsToRead = [...renderableVisuals, ...fallbackAuditVisuals];
       const fps = config.render?.fps ?? 30;
 

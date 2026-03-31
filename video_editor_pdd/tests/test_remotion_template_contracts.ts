@@ -659,6 +659,14 @@ describe("shared generated contract renderer", () => {
     expect(source).toMatch(/translateX\(-50%\)/);
   });
 
+  it("normalizes legacy code-cost chart aliases so annotation overlays inherit the shared code-cost renderer", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+
+    expect(source).toMatch(/rawChartId === "code_cost_generate_vs_patch"/);
+    expect(source).toMatch(/rawChartId === "code_cost_comparison"/);
+    expect(source).toMatch(/return "code_cost_triple_line";/);
+  });
+
   it("renders transition cards without the old debug title and center divider artifact", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
     const transitionBlock = extractBlock(source, "const TransitionVisual", "const ChartVisual");
@@ -791,10 +799,22 @@ describe("shared generated contract renderer", () => {
     const source = fs.readFileSync(generatedContractVisualPath, "utf8");
     const annotationBlock = extractBlock(source, "const AnnotationVisual", "const TextMorphVisual");
 
+    expect(annotationBlock).toMatch(/const chartId = resolveContractChartId\(data\);/);
     expect(annotationBlock).toMatch(/chartId === "code_cost_triple_line"/);
     expect(annotationBlock).toMatch(/targetPositions|annotationPositions/);
     expect(annotationBlock).toMatch(/callout/);
     expect(annotationBlock).toMatch(/debt_gap|debt_shading/);
+  });
+
+  it("supports feedback-loop overlays on inherited code-cost charts instead of leaving parentSpec annotations blank", () => {
+    const source = fs.readFileSync(generatedContractVisualPath, "utf8");
+    const annotationBlock = extractBlock(source, "const AnnotationVisual", "const TextMorphVisual");
+
+    expect(annotationBlock).toMatch(/const feedbackLoop = asRecord\(data\.feedbackLoop\)/);
+    expect(annotationBlock).toMatch(/const parentSpec = asString\(data\.parentSpec\)/);
+    expect(annotationBlock).toMatch(/<ChartVisual/);
+    expect(annotationBlock).toMatch(/feedbackLoopNodes\.length > 0 \|\| Boolean\(parentSpec\)/);
+    expect(annotationBlock).toMatch(/activeFeedbackEdge/);
   });
 
   it("supports dramatic long-quote cadence and attribution punctuation for minimal quote cards", () => {

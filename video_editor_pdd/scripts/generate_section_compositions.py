@@ -874,6 +874,24 @@ def component_base_name(component_id: str, section_id: str) -> str:
     return component_id[len(prefix):] if component_id.startswith(prefix) else component_id
 
 
+SUPSERSEDED_SPEC_TOMBSTONE_RE = re.compile(
+    r'^\s*<!--\s*duplicate:\s*this spec has been superseded by\b',
+    re.IGNORECASE,
+)
+
+
+def _is_superseded_spec_tombstone(spec_content: str) -> bool:
+    """Return True when a spec file is only a superseded placeholder comment."""
+    if not spec_content:
+        return False
+
+    first_nonempty_line = next(
+        (line.strip() for line in spec_content.splitlines() if line.strip()),
+        '',
+    )
+    return bool(first_nonempty_line and SUPSERSEDED_SPEC_TOMBSTONE_RE.match(first_nonempty_line))
+
+
 def _list_section_spec_basenames(project_dir: str, section: Dict[str, Any]) -> List[str]:
     """List visual spec basenames for a section, excluding metadata specs."""
     if not project_dir:
@@ -892,6 +910,9 @@ def _list_section_spec_basenames(project_dir: str, section: Dict[str, Any]) -> L
             continue
         base = os.path.splitext(entry)[0]
         if base in NON_COMPONENT_BASENAMES:
+            continue
+        spec_path = os.path.join(spec_dir, entry)
+        if _is_superseded_spec_tombstone(_read_text_if_exists(spec_path)):
             continue
         basenames.append(base)
     return basenames
@@ -914,6 +935,8 @@ def _has_renderable_spec_media(
     spec_path = os.path.join(spec_dir, f'{spec_base}.md')
     if os.path.isfile(spec_path):
         spec_content = _read_text_if_exists(spec_path)
+        if _is_superseded_spec_tombstone(spec_content):
+            return False
         if VISUAL_MEDIA_KEY_RE.search(spec_content):
             return True
         if STRUCTURED_VIDEO_FIELD_RE.search(spec_content):
@@ -957,6 +980,8 @@ def _has_component_visual_intent(
     spec_content = _read_text_if_exists(spec_path)
     if not spec_content:
         return False
+    if _is_superseded_spec_tombstone(spec_content):
+        return False
 
     lines = spec_content.splitlines()
     first_line = lines[0].strip().lower() if lines else ''
@@ -983,6 +1008,11 @@ def resolve_section_visual_ids(
     spec_basenames = _list_section_spec_basenames(project_dir, section)
     consumed: set[str] = set()
     visual_ids: List[str] = []
+    live_spec_lookup_keys = {
+        _normalize_component_lookup_key(base, section['id'])
+        for base in spec_basenames
+        if _normalize_component_lookup_key(base, section['id'])
+    }
 
     for base in spec_basenames:
         matching = next(
@@ -1003,6 +1033,18 @@ def resolve_section_visual_ids(
 
     for comp_id in composition_ids:
         if comp_id not in consumed:
+            spec_base = component_base_name(comp_id, section['id'])
+            if _normalize_component_lookup_key(comp_id, section['id']) in live_spec_lookup_keys:
+                continue
+            if spec_basenames:
+                spec_dir = section.get('specDir') or section['id']
+                if not os.path.isabs(spec_dir):
+                    spec_dir = os.path.join(project_dir, 'specs', str(spec_dir).replace('\\', '/').replace('specs/', '').strip('/'))
+                spec_path = os.path.join(spec_dir, f'{spec_base}.md')
+                if not os.path.isfile(spec_path):
+                    continue
+                if _is_superseded_spec_tombstone(_read_text_if_exists(spec_path)):
+                    continue
             visual_ids.append(comp_id)
 
     return visual_ids
@@ -1404,7 +1446,6 @@ CONTRACT_FIRST_EXACT_OVERRIDE_TYPES = {
     'module_migration_animation',
     'pipeline_pullback',
     'quote_card',
-    'remotion_animation',
     'schematic_zoom',
     'sidebar_annotation',
     'synthesis_animation',
@@ -1990,6 +2031,7 @@ def resolve_section_component_records(
         seen_visual_ids.add(visual_id)
 
     require_existing = bool(project_dir and remotion_public and remotion_src)
+    live_visual_ids: set[str] = set()
     if require_existing:
         manifest = build_visual_contract_manifest([section], project_dir, remotion_public)
         section_entry = next(iter(manifest.get('sections', [])), None)
@@ -1997,6 +2039,7 @@ def resolve_section_component_records(
             if visual.get('renderMode') != 'component':
                 continue
             visual_id = str(visual.get('id') or '')
+            live_visual_ids.add(visual_id)
             has_exact_component = _has_exact_component(visual_id)
             if _should_prefer_generated_contract_renderer(visual, has_exact_component):
                 contract_first_visual_ids.add(visual_id)
@@ -2011,6 +2054,8 @@ def resolve_section_component_records(
 
     for composition in section.get('compositions', []):
         comp_id = composition if isinstance(composition, str) else composition.get('id', '')
+        if live_visual_ids and str(comp_id or '') not in live_visual_ids:
+            continue
         if str(comp_id or '') in contract_first_visual_ids:
             continue
         _add_record(str(comp_id or ''), require_existing=require_existing)

@@ -1,4 +1,4 @@
 ## Verdict
 pass
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (prompt, grounding, code, intent, style), so the frame does not support a hard missing-text failure.
+Frame at 83.3% progress (hold phase, frames 180-270) shows the complete pipeline with all four required components visible and correctly labeled: Intent/Prompt (amber, at nozzle), Style/Grounding (teal, mid-cavity), Correctness/Tests (blue, at walls), and Output/Code (cyan, at exit). The mold cross-section structure is present with outer shell, amber nozzle, blue wall lines, and teal cavity fill. Continuous flow is depicted with amber entry stream, teal teardrop cavity fill, and cyan exit stream. All four flow labels are visible as required in the hold phase. Colors match spec values. The exit stream angles slightly right rather than straight down, but this is within acceptable layout variation. The dual-label format (e.g., 'Intent' + 'Prompt') enriches the spec's single-label requirement without contradicting it.

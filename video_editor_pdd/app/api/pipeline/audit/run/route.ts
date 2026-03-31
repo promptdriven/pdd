@@ -80,6 +80,8 @@ const GEOMETRY_DISCREPANCY_RE =
 const MAX_RENDERABLE_FRAME_RE =
   /highest frame that can be rendered is (\d+)/i;
 const MEDIA_SAMPLE_EPSILON_SECONDS = 0.001;
+const SUPSERSEDED_SPEC_TOMBSTONE_RE =
+  /^\s*<!--\s*duplicate:\s*this spec has been superseded by\b/i;
 const AUDIT_CLAUDE_MAX_CONCURRENT = Math.max(
   1,
   Number.parseInt(process.env.AUDIT_CLAUDE_MAX_CONCURRENT ?? "2", 10) || 2
@@ -373,6 +375,65 @@ function shouldSaveAuditTraces(): boolean {
   return process.env.VIDEO_EDITOR_SAVE_AUDIT_TRACES === "1";
 }
 
+function isSupersededSpecTombstone(content: string): boolean {
+  const firstNonEmptyLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return Boolean(
+    firstNonEmptyLine && SUPSERSEDED_SPEC_TOMBSTONE_RE.test(firstNonEmptyLine)
+  );
+}
+
+function listActiveRawSpecFiles(specDir: string): string[] {
+  if (!fs.existsSync(specDir)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(specDir)
+    .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
+    .filter((specFile) => {
+      const specPath = path.join(specDir, specFile);
+      try {
+        return !isSupersededSpecTombstone(fs.readFileSync(specPath, "utf-8"));
+      } catch {
+        return true;
+      }
+    });
+}
+
+function clearStaleSectionAuditReports(
+  section: Section,
+  activeSpecNames: Set<string>,
+  onLog: (msg: string) => void
+): void {
+  const specDir = resolveSectionSpecDir(section.specDir);
+  if (!fs.existsSync(specDir)) {
+    return;
+  }
+
+  for (const entry of fs.readdirSync(specDir)) {
+    if (!entry.endsWith(".md") || !entry.startsWith("AUDIT_")) {
+      continue;
+    }
+
+    const specName = path.basename(entry, ".md").replace(/^AUDIT_/, "");
+    if (activeSpecNames.has(specName)) {
+      continue;
+    }
+
+    const auditPath = path.join(specDir, entry);
+    try {
+      fs.unlinkSync(auditPath);
+      onLog(`[audit] Removed stale audit report for non-renderable spec "${specName}"`);
+    } catch {
+      // Ignore cleanup errors; stale files should not block the active audit pass.
+    }
+  }
+}
+
 function writeAuditTrace(
   tracePath: string,
   payload: Record<string, unknown>
@@ -614,11 +675,7 @@ async function auditSection(
   onLog: (msg: string) => void
 ): Promise<{ passCount: number; warnCount: number; failCount: number }> {
   const specDir = resolveSectionSpecDir(section.specDir);
-  const rawSpecFiles = fs.existsSync(specDir)
-    ? fs
-        .readdirSync(specDir)
-        .filter((f) => f.endsWith(".md") && !f.startsWith("AUDIT_"))
-    : [];
+  const rawSpecFiles = listActiveRawSpecFiles(specDir);
   const configuredCompositionIds = resolveSectionCompositionIds(section);
   const resolvedSectionVisuals = resolveSectionVisuals(
     getProjectDir(),
@@ -659,6 +716,11 @@ async function auditSection(
     configuredCompositionIds.length > 0 && Boolean(section.compositionId);
   const renderedVideoPath = resolveSectionRenderedVideoPath(section);
   clearSectionAuditArtifacts(section.id);
+  clearStaleSectionAuditReports(
+    section,
+    new Set(renderableVisuals.map((visual) => visual.specName)),
+    onLog
+  );
   const previewFrameCountCache = new Map<string, Promise<number>>();
 
   const getPreviewFrameCount = async (

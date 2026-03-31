@@ -2352,6 +2352,64 @@ Technical assessment: Previous review claimed it was at y≈410.
     );
   });
 
+  it("removes stale orphan audit reports for specs that are no longer renderable", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "cold_open",
+        label: "Cold Open",
+        specDir: "cold_open",
+        compositionId: "ColdOpenSection",
+        compositions: ["live_visual"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "cold_open");
+    const liveSpecPath = pathMod.join(specDir, "live_visual.md");
+    const tombstoneSpecPath = pathMod.join(specDir, "legacy_visual.md");
+    const liveAuditPath = pathMod.join(specDir, "AUDIT_live_visual.md");
+    const tombstoneAuditPath = pathMod.join(specDir, "AUDIT_legacy_visual.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === liveSpecPath ||
+      candidate === tombstoneSpecPath ||
+      candidate === liveAuditPath ||
+      candidate === tombstoneAuditPath ||
+      candidate.endsWith(".mp4")
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return [
+          "live_visual.md",
+          "legacy_visual.md",
+          "AUDIT_live_visual.md",
+          "AUDIT_legacy_visual.md",
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [liveSpecPath]: "**Timestamp:** 0:00 - 0:03\n",
+        [tombstoneSpecPath]:
+          "<!-- DUPLICATE: This spec has been superseded by live_visual.md. Delete this file. -->\n",
+      })
+    );
+
+    const executor = registerCallArgs.factory(
+      { sections: ["cold_open"] },
+      jest.fn()
+    );
+    await executor(jest.fn());
+
+    expect(mockUnlinkSync).toHaveBeenCalledWith(tombstoneAuditPath);
+    expect(mockUnlinkSync).not.toHaveBeenCalledWith(liveAuditPath);
+  });
+
   it("audit report path follows specs/{specDir}/AUDIT_{specName}.md", async () => {
     const config = mockProjectConfig();
     config.sections = [config.sections[1]]; // main
@@ -2993,6 +3051,77 @@ describe("GET — audit markdown parsing", () => {
       (spec: { specName: string }) => spec.specName === "overlay"
     );
     expect(missingSpec.summary).toMatch(/missing audit report/i);
+  });
+
+  it("ignores orphan audit files and superseded spec tombstones when section is manifest-backed", async () => {
+    const config = mockProjectConfig();
+    config.sections = [
+      {
+        ...config.sections[0],
+        id: "cold_open",
+        label: "Cold Open",
+        specDir: "cold_open",
+        compositions: ["live_visual"],
+      },
+    ];
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specDir = pathMod.join("/project-root", "specs", "cold_open");
+    const liveSpecPath = pathMod.join(specDir, "live_visual.md");
+    const tombstoneSpecPath = pathMod.join(specDir, "legacy_visual.md");
+    const liveAuditPath = pathMod.join(specDir, "AUDIT_live_visual.md");
+    const tombstoneAuditPath = pathMod.join(specDir, "AUDIT_legacy_visual.md");
+
+    mockExistsSync.mockImplementation((candidate: string) =>
+      candidate === specDir ||
+      candidate === liveSpecPath ||
+      candidate === tombstoneSpecPath ||
+      candidate === liveAuditPath ||
+      candidate === tombstoneAuditPath
+    );
+    mockReaddirSync.mockImplementation((candidate: string) => {
+      if (candidate === specDir) {
+        return [
+          "live_visual.md",
+          "legacy_visual.md",
+          "AUDIT_live_visual.md",
+          "AUDIT_legacy_visual.md",
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation(
+      withDefaultAuditJson("**Timestamp:** 0:00 - 0:03\n", {
+        [liveSpecPath]: "**Timestamp:** 0:00 - 0:03\n",
+        [tombstoneSpecPath]:
+          "<!-- DUPLICATE: This spec has been superseded by live_visual.md. Delete this file. -->\n",
+        [liveAuditPath]: "## Verdict\npass\n## Summary\nFrame matches spec\n",
+        [tombstoneAuditPath]: "## Verdict\nfail\n## Summary\nStale orphan report\n",
+      })
+    );
+
+    const response = await GET(makeGetRequest() as any);
+    const body = await response.json();
+
+    expect(body.sections[0].status).toBe("done");
+    expect(body.sections[0].passCount).toBe(1);
+    expect(body.sections[0].failCount).toBe(0);
+    expect(body.sections[0].specs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          specName: "live_visual",
+          verdict: "PASS",
+        }),
+      ])
+    );
+    expect(body.sections[0].specs).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({
+          specName: "legacy_visual",
+        }),
+      ])
+    );
   });
 
   it("omits embedded child specs from standalone Review rows", async () => {

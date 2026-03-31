@@ -3448,6 +3448,67 @@ describe("compositions executor — generated section timelines", () => {
     expect(savedConfig.sections[0].compositions).not.toContain("01_chart");
   });
 
+  it("ignores superseded spec tombstones during discovery so stale legacy ids are not written back", async () => {
+    setupMockSpawn(0);
+
+    const config = mockProjectConfig();
+    config.sections[0].id = "cold_open";
+    config.sections[0].specDir = "cold_open";
+    config.sections[0].compositionId = "ColdOpenSection";
+    mockLoadProject.mockReturnValue(config);
+
+    const pathMod = require("path");
+    const specsDir = pathMod.join(process.cwd(), "specs", "cold_open");
+    const remotionDir = pathMod.join(process.cwd(), "remotion/src/remotion");
+
+    mockExistsSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return false;
+      if (p === specsDir) return true;
+      if (p === pathMod.join(remotionDir, "ColdOpen09TestFixCycle", "index.ts")) return true;
+      if (p === pathMod.join(remotionDir, "ColdOpen10TransitionOverlay", "index.ts")) return true;
+      return false;
+    });
+    mockReaddirSync.mockImplementation((dir: string) => {
+      if (typeof dir === "string" && dir.includes("specs") && dir.includes("cold_open")) {
+        return [
+          { name: "09_test_fix_cycle.md", isDirectory: () => false, isFile: () => true },
+          { name: "09_test_fix_regenerate.md", isDirectory: () => false, isFile: () => true },
+          { name: "10_transition_overlay.md", isDirectory: () => false, isFile: () => true },
+          { name: "10_why_this_matters.md", isDirectory: () => false, isFile: () => true },
+        ];
+      }
+      return [];
+    });
+    mockReadFileSync.mockImplementation((p: string) => {
+      if (typeof p !== "string") return "";
+      if (p.includes("09_test_fix_cycle.md")) {
+        return "[Remotion]\n# live\n";
+      }
+      if (p.includes("09_test_fix_regenerate.md")) {
+        return "<!-- DUPLICATE: This spec has been superseded by 09_test_fix_cycle.md. Delete this file. -->\n";
+      }
+      if (p.includes("10_transition_overlay.md")) {
+        return "[Remotion]\n# live\n";
+      }
+      if (p.includes("10_why_this_matters.md")) {
+        return "<!-- DUPLICATE: This spec has been superseded by 10_transition_overlay.md. Delete this file. -->\n";
+      }
+      return "";
+    });
+
+    const executor = registerCallArgs.factory(
+      { components: [], wrappers: ["ColdOpenSection"] },
+      jest.fn(),
+    );
+    await executor(jest.fn());
+
+    const savedConfig = mockSaveProject.mock.calls.at(-1)?.[0];
+    expect(savedConfig.sections[0].compositions).toEqual([
+      "09_test_fix_cycle",
+      "10_transition_overlay",
+    ]);
+  });
+
   it("does not ask Claude to generate a section composition prompt for generated timelines", async () => {
     const config = mockProjectConfig();
     config.sections[0].specDir = "specs/intro";

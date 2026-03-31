@@ -85,7 +85,10 @@ const resolveContractChartId = (data: Record<string, unknown>): string | null =>
     return null;
   }
 
-  if (rawChartId === "code_cost_generate_vs_patch") {
+  if (
+    rawChartId === "code_cost_generate_vs_patch" ||
+    rawChartId === "code_cost_comparison"
+  ) {
     return "code_cost_triple_line";
   }
 
@@ -5613,17 +5616,42 @@ const AnnotationVisual: React.FC<{
   width: number;
   height: number;
 }> = ({ data, width, height }) => {
+  const frame = useCurrentFrame();
   const title = resolveTitle(data);
   const accent = resolveAccentColor(data);
-  const chartId = asString(data.chartId);
+  const chartId = resolveContractChartId(data);
   const diagramId = asString(data.diagramId) ?? "";
   const annotations = Array.isArray(data.annotations)
     ? data.annotations
         .map((entry) => asRecord(entry))
         .filter((entry): entry is Record<string, unknown> => Boolean(entry))
     : [];
+  const feedbackLoop = asRecord(data.feedbackLoop);
+  const feedbackLoopNodes = asRecordArray(feedbackLoop?.nodes).map((entry, index) => ({
+    id: asString(entry.id) ?? `loop_node_${index + 1}`,
+    text: asString(entry.text) ?? asString(entry.label) ?? `Loop ${index + 1}`,
+    color:
+      asString(entry.color) ??
+      ["#4A90D9", "#D9944A", "#EF4444"][index % 3] ??
+      "#E2E8F0",
+    x: [0.5, 0.72, 0.28][index] ?? 0.5,
+    y: [0.2, 0.64, 0.64][index] ?? 0.5,
+  }));
+  const feedbackLoopCycleFrames = Math.max(
+    1,
+    asNumber(feedbackLoop?.cycleDurationFrames) ?? 90
+  );
+  const activeFeedbackEdge =
+    feedbackLoopNodes.length > 0
+      ? Math.floor(
+          (frame % feedbackLoopCycleFrames) /
+            (feedbackLoopCycleFrames / feedbackLoopNodes.length)
+        )
+      : -1;
   const comparison = asRecord(data.comparison);
+  const parentSpec = asString(data.parentSpec);
   const emphasisLine = asString(data.emphasisLine);
+  const chartPanelHeight = Math.max(470, height * 0.42);
   const annotationPositions: Record<
     string,
     { left: number; top: number; targetX: number; targetY: number; anchor: "left" | "right" }
@@ -5857,7 +5885,7 @@ const AnnotationVisual: React.FC<{
           <div
             style={{
               position: "relative",
-              minHeight: 470,
+              minHeight: chartPanelHeight,
               borderRadius: 28,
               backgroundColor: "rgba(2, 6, 23, 0.42)",
               border: "1px solid rgba(148, 163, 184, 0.14)",
@@ -5867,7 +5895,7 @@ const AnnotationVisual: React.FC<{
             <svg
               width="100%"
               height="100%"
-              viewBox={`0 0 ${width - 144} ${Math.max(470, height * 0.42)}`}
+              viewBox={`0 0 ${width - 144} ${chartPanelHeight}`}
               style={{ position: "absolute", inset: 0 }}
             >
               <path
@@ -5966,6 +5994,108 @@ const AnnotationVisual: React.FC<{
                 </div>
               );
             })}
+          </div>
+        ) : (chartId === "code_cost_triple_line" &&
+            (feedbackLoopNodes.length > 0 || Boolean(parentSpec))) ? (
+          <div
+            style={{
+              position: "relative",
+              minHeight: chartPanelHeight,
+              borderRadius: 28,
+              backgroundColor: "rgba(2, 6, 23, 0.42)",
+              border: "1px solid rgba(148, 163, 184, 0.14)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+              }}
+            >
+              <ChartVisual
+                data={{
+                  ...data,
+                  chartId,
+                }}
+                width={width - 144}
+                height={chartPanelHeight}
+                frame={frame}
+              />
+            </div>
+            {feedbackLoopNodes.length > 0 ? (
+              <>
+                <svg
+                  width="100%"
+                  height="100%"
+                  viewBox={`0 0 ${width - 144} ${chartPanelHeight}`}
+                  style={{ position: "absolute", inset: 0 }}
+                >
+                  {feedbackLoopNodes.map((node, index) => {
+                    const nextNode =
+                      feedbackLoopNodes[(index + 1) % feedbackLoopNodes.length];
+                    if (!nextNode) {
+                      return null;
+                    }
+
+                    const startX = (width - 144) * node.x;
+                    const startY = chartPanelHeight * node.y;
+                    const endX = (width - 144) * nextNode.x;
+                    const endY = chartPanelHeight * nextNode.y;
+                    const midX = (startX + endX) / 2;
+                    const bendY = Math.min(startY, endY) - 56;
+                    const isActive = activeFeedbackEdge === index;
+
+                    return (
+                      <path
+                        key={`${node.id}-${nextNode.id}`}
+                        d={`M ${startX} ${startY} Q ${midX} ${bendY} ${endX} ${endY}`}
+                        fill="none"
+                        stroke={isActive ? "#FFFFFF" : "rgba(226, 232, 240, 0.52)"}
+                        strokeWidth={isActive ? 4 : 2.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    );
+                  })}
+                </svg>
+                {feedbackLoopNodes.map((node, index) => {
+                  const isActive =
+                    activeFeedbackEdge === index ||
+                    activeFeedbackEdge ===
+                      (index - 1 + feedbackLoopNodes.length) %
+                        feedbackLoopNodes.length;
+
+                  return (
+                    <div
+                      key={node.id}
+                      style={{
+                        position: "absolute",
+                        left: `calc(${(node.x * 100).toFixed(2)}% - 96px)`,
+                        top: `calc(${(node.y * 100).toFixed(2)}% - 26px)`,
+                        width: 192,
+                        padding: "12px 16px",
+                        borderRadius: 999,
+                        textAlign: "center",
+                        color: "#F8FAFC",
+                        fontFamily: "'Inter', sans-serif",
+                        fontSize: 18,
+                        fontWeight: 600,
+                        letterSpacing: 0.1,
+                        backgroundColor: "rgba(2, 6, 23, 0.84)",
+                        border: `1px solid ${node.color}${isActive ? "CC" : "55"}`,
+                        boxShadow: isActive
+                          ? `0 0 0 2px ${node.color}33, 0 20px 40px rgba(2, 6, 23, 0.34)`
+                          : "0 18px 36px rgba(2, 6, 23, 0.24)",
+                        transform: `scale(${isActive ? 1.03 : 1})`,
+                      }}
+                    >
+                      <div style={{ color: node.color }}>{node.text}</div>
+                    </div>
+                  );
+                })}
+              </>
+            ) : null}
           </div>
         ) : annotations.length > 0 ? (
           <div

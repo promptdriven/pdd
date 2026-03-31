@@ -130,6 +130,31 @@ function componentBaseName(componentId: string, sectionId: string): string {
   return componentId.startsWith(prefix) ? componentId.slice(prefix.length) : componentId;
 }
 
+const SUPSERSEDED_SPEC_TOMBSTONE_RE =
+  /^\s*<!--\s*duplicate:\s*this spec has been superseded by\b/i;
+
+function isSupersededSpecTombstone(content: string): boolean {
+  const firstNonEmptyLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return Boolean(firstNonEmptyLine && SUPSERSEDED_SPEC_TOMBSTONE_RE.test(firstNonEmptyLine));
+}
+
+function normalizeVisualLookupKey(value: string, sectionId: string): string {
+  const strippedSectionPrefix = value.startsWith(`${sectionId}_`)
+    ? value.slice(sectionId.length + 1)
+    : value;
+
+  return strippedSectionPrefix
+    .replace(/^\d+[_-]?/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z0-9]+/gi, "")
+    .toLowerCase();
+}
+
 function toPascalCase(value: string): string {
   return value
     .split(/[_-]+/)
@@ -487,6 +512,14 @@ function listSectionSpecBaseNames(
     return fs
       .readdirSync(specDir)
       .filter((entry) => entry.endsWith(".md") && !entry.startsWith("AUDIT_"))
+      .filter((entry) => {
+        try {
+          const content = fs.readFileSync(path.join(specDir, entry), "utf-8");
+          return !isSupersededSpecTombstone(content);
+        } catch {
+          return false;
+        }
+      })
       .map((entry) => path.basename(entry, path.extname(entry)))
       .filter((baseName) => !NON_COMPONENT_BASENAMES.has(baseName))
       .sort((left, right) => left.localeCompare(right));
@@ -655,6 +688,9 @@ function collectEmbeddedCompanionIds(
     } catch {
       continue;
     }
+    if (isSupersededSpecTombstone(content)) {
+      continue;
+    }
 
     for (const clipId of extractSplitChildClipIds(content)) {
       companionIds.add(clipId);
@@ -674,6 +710,11 @@ export function resolveSectionVisuals(
   const consumedCompositionIds = new Set<string>();
   const resolvedVisuals: ResolvedSectionVisual[] = [];
   const companionIds = collectEmbeddedCompanionIds(projectDir, section);
+  const liveSpecLookupKeys = new Set(
+    specBaseNames
+      .map((specBaseName) => normalizeVisualLookupKey(specBaseName, section.id))
+      .filter(Boolean)
+  );
 
   for (const specBaseName of specBaseNames) {
     const matchingCompositionId = configuredIds.find((compositionId) => {
@@ -761,11 +802,27 @@ export function resolveSectionVisuals(
     if (consumedCompositionIds.has(compositionId)) {
       continue;
     }
+    if (liveSpecLookupKeys.has(normalizeVisualLookupKey(compositionId, section.id))) {
+      continue;
+    }
 
     const specBaseName = componentBaseName(compositionId, section.id);
     const specPath = section.specDir
       ? path.join(resolveSectionSpecDir(projectDir, section.specDir), `${specBaseName}.md`)
       : undefined;
+    if (specBaseNames.length > 0) {
+      if (!specPath || !fs.existsSync(specPath)) {
+        continue;
+      }
+      try {
+        const specContent = fs.readFileSync(specPath, "utf-8");
+        if (isSupersededSpecTombstone(specContent)) {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+    }
 
     resolvedVisuals.push({
       id: compositionId,

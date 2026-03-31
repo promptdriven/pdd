@@ -1,4 +1,4 @@
 ## Verdict
-pass
+skip
 ## Summary
-OCR confirmed visible text tokens in the rendered frame (agentic, patching, tokens, mostly, wrong), so the frame does not support a hard missing-text failure.
+Infrastructure error: Failed to analyze audit frame for 11_patching_vs_regeneration. Claude CLI returned error: You've hit your limit · resets 12am (America/Los_Angeles)

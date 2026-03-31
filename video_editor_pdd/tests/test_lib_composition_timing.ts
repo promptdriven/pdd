@@ -856,6 +856,137 @@ describe("lib/composition-timing", () => {
     ]);
   });
 
+  it("ignores superseded spec tombstones and semantically shadowed legacy composition ids", () => {
+    const specDir = path.join(tmpDir, "specs", "cold_open");
+    const manifestDir = path.join(tmpDir, "outputs", "compositions");
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.mkdirSync(manifestDir, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(specDir, "05_code_cursor_blink.md"),
+      [
+        "[Remotion]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        '{"type":"remotion_animation","componentId":"code_cursor_blink"}',
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "08_prompt_file_generate.md"),
+      [
+        "[Remotion]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        '{"type":"remotion_animation","componentId":"prompt_file_generate"}',
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "09_test_fix_cycle.md"),
+      [
+        "[Remotion]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        '{"type":"remotion_animation","componentId":"test_fix_cycle"}',
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "09_test_fix_regenerate.md"),
+      "<!-- DUPLICATE: This spec has been superseded by 09_test_fix_cycle.md. Delete this file. -->"
+    );
+    fs.writeFileSync(
+      path.join(specDir, "10_transition_overlay.md"),
+      [
+        "[Remotion]",
+        "",
+        "## Data Points JSON",
+        "```json",
+        '{"type":"transition","transitionId":"why_this_matters_overlay"}',
+        "```",
+      ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(specDir, "10_why_this_matters.md"),
+      "<!-- DUPLICATE: This spec has been superseded by 10_transition_overlay.md. Delete this file. -->"
+    );
+    fs.writeFileSync(
+      path.join(manifestDir, "visual-manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-03-30T00:00:00.000Z",
+          sections: [
+            {
+              id: "cold_open",
+              visuals: [
+                {
+                  id: "05_code_cursor_blink",
+                  specBaseName: "05_code_cursor_blink",
+                  renderMode: "component",
+                  mediaAliases: {},
+                },
+                {
+                  id: "08_prompt_file_generate",
+                  specBaseName: "08_prompt_file_generate",
+                  renderMode: "component",
+                  mediaAliases: {},
+                },
+                {
+                  id: "09_test_fix_cycle",
+                  specBaseName: "09_test_fix_cycle",
+                  renderMode: "component",
+                  mediaAliases: {},
+                },
+                {
+                  id: "10_transition_overlay",
+                  specBaseName: "10_transition_overlay",
+                  renderMode: "component",
+                  mediaAliases: {},
+                },
+              ],
+            },
+          ],
+        },
+        null,
+        2
+      )
+    );
+
+    const visuals = resolveSectionVisuals(
+      tmpDir,
+      {
+        id: "cold_open",
+        specDir: "cold_open",
+        durationSeconds: 20,
+        compositionId: "ColdOpenSection",
+        compositions: [
+          "07_code_cursor_blink",
+          "08_code_regeneration",
+          "09_title_card_pdd",
+        ],
+      },
+      []
+    );
+
+    expect(visuals.map((visual) => visual.specBaseName)).toEqual([
+      "05_code_cursor_blink",
+      "08_prompt_file_generate",
+      "09_test_fix_cycle",
+      "10_transition_overlay",
+    ]);
+    expect(visuals.map((visual) => visual.previewCompositionId)).toEqual([
+      "cold-open05-code-cursor-blink",
+      "cold-open08-prompt-file-generate",
+      "cold-open09-test-fix-cycle",
+      "cold-open10-transition-overlay",
+    ]);
+  });
+
   it("derives general audit hints from spec structure for layout, effects, and animation phases", () => {
     const hints = resolveSpecAuditHints([
       "# Split Comparison",

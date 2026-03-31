@@ -1,20 +1,4 @@
 ## Verdict
 pass
 ## Summary
-The frame at 93.7% progress (frame 224/240, within the Hold/Fade-out phase 210-240) satisfies the spec requirements. Key observations:
-
-1. **Two-column layout:** Left and right columns are clearly presented side-by-side with a center gap, matching the spec's two-column layout.
-
-2. **Left Column (High Prompt Effort):** Amber/gold bordered miniaturized prompt file with '50 lines' badge visible at top. Arrow points downward to a code block with green glow border. Code lines are visible in monospace font showing identical validation logic. Label reads '50-line prompt → Correct code' in amber color.
-
-3. **Right Column (Low Prompt + Tests):** Blue bordered compact prompt file with '10 lines' badge. Test indicator dots (small blue squares) are arranged around the prompt file as a frame/border. Arrow points downward to an identical code block with matching green glow. Label reads '10-line prompt + 47 tests → Same correct code' in blue.
-
-4. **Code blocks:** Both code blocks show identical content (validateSchema function), matching the spec's requirement that both produce the same correct output. Both have green glow borders indicating completion.
-
-5. **Comparison bar:** Present at bottom, centered, with the label 'Prompt effort: 50 lines vs 10 lines'. The bar shows the 5:1 ratio with a longer amber segment and shorter blue segment. The '5× less' callout appears to the right in blue.
-
-6. **Animation phase:** At frame 224 the scene is in the Hold phase (210-240), consistent with all elements being fully visible. A slight fade may be beginning but all elements remain clearly legible.
-
-7. **Colors and typography:** Background is deep navy-black. Amber (#D9944A-range) and blue (#4A90D9-range) color coding is correct throughout. Monospace code font and Inter-style labels are used appropriately.
-
-Minor observations that do not warrant failure: The left prompt file appears slightly larger than specified 320×180 and the right slightly different from 200×120, but the relative size difference (left larger, right compact) is preserved. The test indicators are rendered as dotted border segments rather than individual 5×5 squares, but the visual effect of 'test wall' framing the prompt is achieved. The comparison bar position is slightly above y:950 but remains in the bottom region as intended.
+The frame is at 93.7% progress (frame 224/240), which falls in the 'Hold. Fade out.' phase (frames 210-240). All major elements are present and correctly rendered: left column with amber-bordered 50-line prompt file, right column with blue-bordered 10-line prompt file surrounded by test indicator dots, downward arrows from both prompts, identical generated code blocks with green glow borders, column labels ('50-line prompt → Correct code' and '10-line prompt + 47 tests → Same correct code'), and the comparison bar at the bottom with '5× less' callout. The code content is visually identical in both blocks. Colors match spec intent (amber #D9944A for left, blue #4A90D9 for right, green glow on code blocks, navy-black background). However, the two columns are not equally centered in the frame — the left column is positioned far left (anchored near x≈180) while the right column is positioned far right (anchored near x≈980), creating an unusually wide gap between them rather than the specified 40px center gap with two 800px-wide columns centered on the canvas. The columns appear pushed to the edges rather than symmetrically framing a narrow center gap. The spec calls for columns centered with a 40px gap, but the visible gap is roughly 550-600px. This is a noticeable layout discrepancy but does not break the side-by-side comparison narrative.

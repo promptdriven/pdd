@@ -20,13 +20,16 @@
       "specDir": "cold_open",
       "remotionDir": "S00-ColdOpen",
       "compositionId": "ColdOpenSection",
-      "durationSeconds": 20.48,
+      "durationSeconds": 49.258667,
       "offsetSeconds": 0,
       "compositions": [
         "01_split_screen_darning",
-        "07_code_cursor_blink",
-        "08_code_regeneration",
-        "09_title_card_pdd"
+        "05_code_cursor_blink",
+        "06_code_regeneration",
+        "07_title_card_pdd",
+        "08_prompt_file_generate",
+        "09_test_fix_cycle",
+        "10_transition_overlay"
       ],
       "timelineSource": "generated"
     },
@@ -38,7 +41,7 @@
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
       "durationSeconds": 458.090667,
-      "offsetSeconds": 20.48,
+      "offsetSeconds": 49.258667,
       "compositions": [
         "01_section_title_card",
         "02_sock_price_chart",
@@ -47,6 +50,7 @@
         "05_code_churn_annotations",
         "06_debt_layers_zoom",
         "07_context_window_shrink",
+        "08_context_rot_return",
         "08_performance_vs_context",
         "09_two_by_two_grid",
         "10_fork_codebase_size",
@@ -68,7 +72,7 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 230.314667,
-      "offsetSeconds": 478.570667,
+      "offsetSeconds": 507.349334,
       "compositions": [
         "01_section_title_card",
         "04_mold_production_counter",
@@ -92,7 +96,7 @@
       "remotionDir": "S03-Part3MoldParts",
       "compositionId": "Part3MoldPartsSection",
       "durationSeconds": 365.845333,
-      "offsetSeconds": 708.8853340000001,
+      "offsetSeconds": 737.664001,
       "compositions": [
         "01_section_title_card",
         "02_mold_cross_section",
@@ -122,7 +126,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 112.789333,
-      "offsetSeconds": 1074.730667,
+      "offsetSeconds": 1103.5093339999999,
       "compositions": [
         "01_section_title_card",
         "02_split_printer_vs_mold",
@@ -144,7 +148,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 124.949333,
-      "offsetSeconds": 1187.52,
+      "offsetSeconds": 1216.2986669999998,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -164,7 +168,7 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 33.258667,
-      "offsetSeconds": 1312.469333,
+      "offsetSeconds": 1341.2479999999998,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -184,7 +188,7 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 16.32,
-      "offsetSeconds": 1345.728,
+      "offsetSeconds": 1374.5066669999999,
       "compositions": [
         "03_pdd_triangle",
         "04_dissolve_regenerate_loop",

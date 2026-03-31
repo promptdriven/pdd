@@ -45,6 +45,19 @@ const getSpecsDir = () => path.join(getProjectDir(), "specs");
 
 /** Names that are section-level metadata, not visual components. */
 const NON_COMPONENT_BASENAMES = new Set(["spec", "veo"]);
+const SUPSERSEDED_SPEC_TOMBSTONE_RE =
+  /^\s*<!--\s*duplicate:\s*this spec has been superseded by\b/i;
+
+function isSupersededSpecTombstone(content: string): boolean {
+  const firstNonEmptyLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+
+  return Boolean(
+    firstNonEmptyLine && SUPSERSEDED_SPEC_TOMBSTONE_RE.test(firstNonEmptyLine)
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Utility: find spec file content for a component (best effort)
@@ -1032,7 +1045,12 @@ registerExecutor("compositions", (params, send: SseSend) => {
           // Skip Veo generation prompts (first line contains [veo:])
           if (entry.name.endsWith(".md")) {
             try {
-              const firstLine = fs.readFileSync(path.join(sectionSpecDir, entry.name), "utf-8").split("\n")[0];
+              const specSource = fs.readFileSync(
+                path.join(sectionSpecDir, entry.name),
+                "utf-8"
+              );
+              if (isSupersededSpecTombstone(specSource)) continue;
+              const firstLine = specSource.split("\n")[0];
               if (firstLine.includes("[veo:")) continue;
             } catch { /* ignore read errors */ }
           }

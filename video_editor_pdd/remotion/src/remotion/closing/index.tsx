@@ -3,11 +3,14 @@ import { Sequence, useCurrentFrame, Audio, OffthreadVideo, staticFile } from "re
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
+import { Closing06TheBeat } from "../Closing06TheBeat";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
+  "06_the_beat": Closing06TheBeat,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "06_the_beat": 60,
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
