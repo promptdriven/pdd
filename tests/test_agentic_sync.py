@@ -1040,6 +1040,55 @@ class TestDetectModulesFromBranchDiff:
             result = _detect_modules_from_branch_diff(Path("/fake/project"))
         assert result == ["commands/fix", "commands/sync"]
 
+    def test_preserves_context_prefix_for_multi_context_prompts(self):
+        """Prompts under context-specific dirs like prompts/frontend/ preserve the full path.
+
+        When pdd_cloud has multiple contexts (frontend, backend, etc.), the diff
+        output contains paths like 'prompts/frontend/app/dashboard/page_TypescriptReact.prompt'.
+        The basename must include the context prefix ('frontend/app/dashboard/page') so that
+        pdd sync can resolve the correct .pddrc context. Stripping to just 'page' causes
+        sync to pick the wrong context or fail with 'No prompt files found'.
+
+        Regression test for GitHub issue promptdriven/pdd_cloud#826.
+        """
+        diff_output = (
+            "prompts/frontend/app/dashboard/page_TypescriptReact.prompt\n"
+            "prompts/frontend/components/layout/Sidebar_TypescriptReact.prompt\n"
+            "prompts/frontend/components/dashboard/GitHubAppCTA_TypescriptReact.prompt\n"
+            "prompts/backend/utils/credit_helpers_python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="change/issue-836\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == [
+            "frontend/app/dashboard/page",
+            "frontend/components/layout/Sidebar",
+            "frontend/components/dashboard/GitHubAppCTA",
+            "backend/utils/credit_helpers",
+        ]
+
+    def test_handles_extension_prompts_with_nested_prompts_dir(self):
+        """Prompts under extension dirs like extensions/github_pdd_app/prompts/ are handled.
+
+        Extension prompts have a different structure: the 'prompts/' directory is nested
+        inside the extension, not at the repo root. The function should still extract
+        correct basenames relative to the prompts/ directory.
+        """
+        diff_output = (
+            "extensions/github_pdd_app/prompts/pdd_executor_Python.prompt\n"
+            "extensions/github_pdd_app/prompts/solving_orchestrator_Python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="change/issue-838\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == ["pdd_executor", "solving_orchestrator"]
+
 
 class TestBranchDiffSkipsLlm:
     """Verify run_agentic_sync uses branch diff and skips LLM when modules found."""
