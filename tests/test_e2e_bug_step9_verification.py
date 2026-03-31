@@ -64,7 +64,13 @@ def e2e_bug_mocks(tmp_path):
          patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]) as mock_structural:
 
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
-        mock_load.return_value = "Prompt for {issue_number}"
+        # Step 10 template includes {step9_test_verification} so the
+        # verification output propagates into the prompt.
+        def _mock_load_template(name: str) -> str:
+            if "step10" in name or "step12" in name:
+                return "Prompt for {issue_number}\n{step9_test_verification}"
+            return "Prompt for {issue_number}"
+        mock_load.side_effect = _mock_load_template
         mock_worktree.return_value = (mock_worktree_path, None)
 
         # Default pytest result: 1 failure (expected for TDD — bug detected)
