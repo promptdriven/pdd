@@ -9,10 +9,13 @@ entries with existing ones.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def load_registry(project_root: Path) -> dict:
@@ -224,8 +227,8 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
                 arch_path = Path(dirpath) / "architecture.json"
                 if arch_path != root_arch:
                     results.append(arch_path)
-    except (OSError, IOError):
-        pass
+    except (OSError, IOError) as exc:
+        logger.warning("Error scanning %s for architecture files: %s", project_root, exc)
 
     return results
 
