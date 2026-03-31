@@ -497,11 +497,27 @@ def _get_state_dir(cwd: Path) -> Path:
     return root / ".pdd" / "bug-state"
 
 
-def detect_structural_test_patterns(file_path: str) -> List[str]:
+def detect_structural_test_patterns(
+    file_path: str,
+    start_line: Optional[int] = None,
+) -> List[str]:
     """Scan a test file for structural/non-behavioral test patterns.
 
     Returns a list of human-readable violation descriptions. Empty list means
     the file is clean.
+
+    Args:
+        file_path: Path to the test file to scan.
+        start_line: If provided, only report violations on lines at or after
+            this 1-based line number.  Lines before ``start_line`` are still
+            scanned for source-variable tracking (so a ``read_text()`` call
+            in old code followed by ``assert "x" in var`` in new code is
+            caught), but violations on those pre-existing lines are
+            suppressed.  If ``start_line`` exceeds the file length (e.g. the
+            file was rewritten shorter than the snapshot), it is clamped to 1
+            so the entire file is scanned.  Used to avoid false positives
+            when appending new tests to a file that already contains flagged
+            patterns (issue #990).
 
     Detected patterns:
     - inspect.getsource / inspect.signature used to read source or signatures
@@ -525,9 +541,21 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
 
     lines = content.splitlines()
 
-    # Track whether inspect.getsource or inspect.signature is used
-    has_getsource = False
-    has_signature = False
+    # Effective start line for reporting violations.  Lines before this are
+    # still scanned for variable tracking but violations are suppressed.
+    # If start_line exceeds the file length (file was rewritten/truncated
+    # rather than appended to), clamp to 1 to scan everything.
+    if start_line is not None and start_line > 1:
+        effective_start = 1 if start_line > len(lines) else start_line
+    else:
+        effective_start = 1
+
+    # Track whether inspect.getsource or inspect.signature is used in
+    # reportable lines (at or after ``effective_start``).  These flags gate
+    # source-string-matching violations so a pre-existing getsource before
+    # ``effective_start`` does not suppress new violations after it.
+    has_getsource_reportable = False
+    has_signature_reportable = False
 
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
@@ -536,27 +564,30 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
         if "inspect.getsource" in stripped:
             # Exclude comments
             if not stripped.startswith("#"):
-                has_getsource = True
-                violations.append(
-                    f"Line {i}: inspect.getsource — reads source code as string "
-                    f"for structural assertion instead of testing behavior"
-                )
+                if i >= effective_start:
+                    has_getsource_reportable = True
+                    violations.append(
+                        f"Line {i}: inspect.getsource — reads source code as string "
+                        f"for structural assertion instead of testing behavior"
+                    )
 
         # Detect inspect.signature usage
         if "inspect.signature" in stripped:
             if not stripped.startswith("#"):
-                has_signature = True
-                violations.append(
-                    f"Line {i}: inspect.signature — inspects function signature "
-                    f"instead of calling the function and asserting on behavior"
-                )
+                if i >= effective_start:
+                    has_signature_reportable = True
+                    violations.append(
+                        f"Line {i}: inspect.signature — inspects function signature "
+                        f"instead of calling the function and asserting on behavior"
+                    )
 
         # Detect hasattr as the primary assertion
         if re.match(r"\s*assert\s+hasattr\s*\(", line):
-            violations.append(
-                f"Line {i}: assert hasattr() — checks attribute existence "
-                f"instead of calling and asserting on behavior"
-            )
+            if i >= effective_start:
+                violations.append(
+                    f"Line {i}: assert hasattr() — checks attribute existence "
+                    f"instead of calling and asserting on behavior"
+                )
 
     # Detect source-string-matching patterns:
     # Look for read_text()/read()/getsource() result being used in `assert ... in ...`
@@ -675,6 +706,8 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
 
     if source_var_names:
         for i, line in enumerate(lines, 1):
+            if i < effective_start:
+                continue
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
@@ -684,7 +717,8 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
                     rf'assert\s+.*\bin\s+{re.escape(var)}\b', stripped
                 ):
                     # Only flag if not already flagged by getsource/signature
-                    if not has_getsource and not has_signature:
+                    # in the reportable range (not pre-existing lines).
+                    if not has_getsource_reportable and not has_signature_reportable:
                         violations.append(
                             f"Line {i}: source string matching — asserts keyword "
                             f"presence in file/source content instead of testing behavior"
@@ -1018,8 +1052,20 @@ def run_agentic_bug_orchestrator(
 
         # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
         pre_step7_files: List[str] = []
+        pre_step9_line_counts: Dict[str, int] = {}
         if step_num == 9:
             pre_step7_files = _get_modified_and_untracked(current_work_dir)
+            # Snapshot line counts for existing test files so the structural
+            # test guard can skip pre-existing patterns (issue #990).
+            tests_dir = current_work_dir / "tests"
+            if tests_dir.is_dir():
+                for py_file in tests_dir.rglob("*.py"):
+                    try:
+                        pre_step9_line_counts[str(py_file.resolve())] = len(
+                            py_file.read_text().splitlines()
+                        )
+                    except (OSError, UnicodeDecodeError):
+                        pass
 
         # Pre-Step 12: deterministic file staging (#912)
         # Stage all tracked changed_files before Step 12 dispatch so the LLM
@@ -1173,14 +1219,18 @@ def run_agentic_bug_orchestrator(
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
 
-            # Structural test guard: scan generated files for banned patterns
+            # Structural test guard: scan generated files for banned patterns.
+            # Only check lines added by Step 9, not pre-existing content (#990).
             file_violations: dict = {}  # fpath -> [violations]
             retry_extracted: List[str] = []
             cv_extracted: List[str] = []
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
-                violations = detect_structural_test_patterns(str(abs_path))
+                pre_count = pre_step9_line_counts.get(str(abs_path.resolve()), 0)
+                violations = detect_structural_test_patterns(
+                    str(abs_path), start_line=pre_count + 1
+                )
                 if violations:
                     file_violations[fpath] = violations
                     all_violations.extend(violations)
@@ -1309,7 +1359,9 @@ def run_agentic_bug_orchestrator(
                         changed_files = list(set(changed_files))
                         context["files_to_stage"] = ", ".join(changed_files)
 
-                    # Re-scan retry output for structural patterns
+                    # Re-scan retry output for structural patterns.
+                    # Retry files were backed up (.bak) and rewritten from scratch,
+                    # so scan from line 1 — there is no pre-existing content to skip.
                     retry_violations: List[str] = []
                     for fpath in retry_extracted:
                         abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
@@ -1441,11 +1493,12 @@ def run_agentic_bug_orchestrator(
                             changed_files = list(set(changed_files))
                             context["files_to_stage"] = ", ".join(changed_files)
 
-                        # Scan coverage-retry files for structural test patterns
+                        # Scan coverage-retry files for structural test patterns (#990: skip pre-existing)
                         cov_violations: List[str] = []
                         for fpath in cov_retry_extracted:
                             abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
-                            v = detect_structural_test_patterns(str(abs_path))
+                            pre_count = pre_step9_line_counts.get(str(abs_path.resolve()), 0)
+                            v = detect_structural_test_patterns(str(abs_path), start_line=pre_count + 1)
                             if v:
                                 cov_violations.extend(v)
                         if cov_violations and not quiet:

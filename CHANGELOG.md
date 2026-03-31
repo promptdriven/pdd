@@ -1,3 +1,31 @@
+## v0.0.193 (2026-03-30)
+
+### Feat
+
+- CI auto-heal drift detection with integration fixes (#1001)
+- implement cold open video components and update corresponding project specifications
+- **fix**: failure-aware retries, fix orchestrator prompts
+
+### Fix
+
+- increase cloud batch PDD_CLOUD_TIMEOUT from 480s to 720s
+- scope structural test validator to new lines only (#990)
+- log warning on architecture scan errors instead of silently swallowing
+- add depth limit and expanded exclusions to recursive architecture discovery
+- make find_architecture_for_project() discover nested architecture.json files
+- **fix**: CLI flag for failure-aware retries; isolate early-exit; tests
+- **fix**: wire failure_classification in prompt; gate early exit on post-fix kind
+- canonicalize folded narrative headings
+- separate connect and read timeouts for cloud API requests
+- don't create empty prompt files during repo scan
+
+### Refactor
+
+- improve clarity and detail in audit summary documentation
+- refine audit summary descriptions for consistency and add new developer cursor and grandmother darning audit specs
+- update audit specifications with detailed frame analysis and layout compliance notes
+- update narrative structure mapping and reorganize project specification files
+
 ## v0.0.192 (2026-03-29)
 
 ### Feat

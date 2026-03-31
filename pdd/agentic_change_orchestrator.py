@@ -204,6 +204,82 @@ def _scope_architecture_to_changed_files(
     except OSError:
         pass
 
+def _validate_architecture_filepaths(
+    worktree_path: Path,
+) -> List[str]:
+    """Validate and auto-correct architecture.json filepath entries.
+
+    For each entry with a ``filepath`` field, checks whether the file exists
+    relative to *worktree_path*.  When a file is not found at the declared
+    path but *is* found at the PDD-conventional location
+    (``pdd/<module_name>.py`` derived from the ``filename`` field), the
+    filepath is corrected in-place.  Returns a list of human-readable
+    warning strings describing any mismatches (corrected or not).
+    """
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists():
+        return []
+
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    warnings: List[str] = []
+    changed = False
+
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        filepath = entry.get("filepath")
+        if not filepath:
+            continue
+
+        full_path = worktree_path / filepath
+        if full_path.exists():
+            continue  # filepath is valid
+
+        # Try to derive the conventional PDD path from the filename field.
+        # filename is like "ci_drift_heal_python.prompt" -> module "ci_drift_heal" -> "pdd/ci_drift_heal.py"
+        # Only Python modules can be reliably mapped to pdd/<name>.py; other
+        # languages (shell, typescript, etc.) have different conventions.
+        filename = entry.get("filename", "")
+        conventional_path = None
+        if filename.endswith(".prompt"):
+            # Strip the language suffix (e.g. "_python.prompt", "_shell.prompt")
+            stem = filename[:-len(".prompt")]
+            # Remove the last _<language> suffix
+            parts = stem.rsplit("_", 1)
+            if len(parts) == 2:
+                module_name, lang_suffix = parts
+                # Only derive pdd/<module>.py for Python modules
+                if lang_suffix == "python":
+                    conventional_path = f"pdd/{module_name}.py"
+
+        if conventional_path and (worktree_path / conventional_path).exists():
+            warnings.append(
+                f"architecture.json: filepath '{filepath}' does not exist; "
+                f"corrected to '{conventional_path}'"
+            )
+            entry["filepath"] = conventional_path
+            changed = True
+        else:
+            warnings.append(
+                f"architecture.json: filepath '{filepath}' for entry "
+                f"'{filename}' does not exist on disk"
+            )
+
+    if changed:
+        try:
+            with open(arch_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    return warnings
+
+
 def _sanitize_architecture_interfaces(
     worktree_path: Path,
     previous_architecture: Optional[List[Dict[str, Any]]],
@@ -1115,18 +1191,20 @@ def run_agentic_change_orchestrator(
                     worktree_path, previous_architecture, changed_files
                 )
                 _sanitize_architecture_dependencies(worktree_path)
+                filepath_warnings = _validate_architecture_filepaths(worktree_path)
                 interface_warnings = _sanitize_architecture_interfaces(
                     worktree_path,
                     previous_architecture,
                 )
-                if interface_warnings:
+                all_warnings = filepath_warnings + interface_warnings
+                if all_warnings:
                     if not quiet:
-                        for warning in interface_warnings:
+                        for warning in all_warnings:
                             console.print(f"[yellow]Warning: {warning}[/yellow]")
                     step_output = (
                         step_output.rstrip()
                         + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
-                        + "\n".join(f"- {warning}" for warning in interface_warnings)
+                        + "\n".join(f"- {warning}" for warning in all_warnings)
                     )
 
         context[f"step{step_num}_output"] = step_output
