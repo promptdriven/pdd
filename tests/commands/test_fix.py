@@ -239,6 +239,7 @@ def test_manual_non_loop_mode_passes_error_file(runner: CliRunner, mock_deps) ->
     assert kwargs["loop"] is False
     assert kwargs["verification_program"] is None
     assert kwargs["protect_tests"] is False
+    assert kwargs["failure_aware_retries"] is True
 
 
 def test_manual_loop_mode_uses_no_error_file(runner: CliRunner, mock_deps) -> None:
@@ -262,6 +263,29 @@ def test_manual_loop_mode_uses_no_error_file(runner: CliRunner, mock_deps) -> No
     assert kwargs["error_file"] is None
     assert kwargs["loop"] is True
     assert kwargs["verification_program"] == "verify.py"
+    assert kwargs["failure_aware_retries"] is True
+
+
+def test_manual_loop_mode_passes_no_failure_aware_retries(runner: CliRunner, mock_deps) -> None:
+    mock_deps["fix_main"].return_value = (True, "fixed test", "fixed code", 1, 0.1, "gpt-4.1")
+
+    result = runner.invoke(
+        fix,
+        [
+            "--manual",
+            "--loop",
+            "--no-failure-aware-retries",
+            "--verification-program",
+            "verify.py",
+            "prompt.prompt",
+            "code.py",
+            "tests/test_fix.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    kwargs = mock_deps["fix_main"].call_args.kwargs
+    assert kwargs["failure_aware_retries"] is False
 
 
 def test_manual_multiple_test_files_calls_fix_main_for_each(runner: CliRunner, mock_deps) -> None:
