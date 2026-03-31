@@ -12,10 +12,9 @@ import { Part4PrecisionTradeoffSection } from "./part4_precision_tradeoff";
 import { Part5CompoundReturnsSection } from "./part5_compound_returns";
 import { WhereToStartSection } from "./where_to_start";
 import { ClosingSection } from "./closing";
-import { ColdOpen05CodeCursorBlink } from "./ColdOpen05CodeCursorBlink";
-import { ColdOpen06CodeRegeneration } from "./ColdOpen06CodeRegeneration";
+import { ColdOpen07CodeCursorBlink } from "./ColdOpen07CodeCursorBlink";
 import { ColdOpen08PromptFileGenerate } from "./ColdOpen08PromptFileGenerate";
-import { ColdOpen09TestFixCycle } from "./ColdOpen09TestFixCycle";
+import { ColdOpen09TestFixRegenerate } from "./ColdOpen09TestFixRegenerate";
 import { ColdOpen10TransitionOverlay } from "./ColdOpen10TransitionOverlay";
 import { Part1Economics03CodeCostChart } from "./Part1Economics03CodeCostChart";
 import { Part1Economics06DebtLayersZoom } from "./Part1Economics06DebtLayersZoom";
@@ -29,9 +28,10 @@ import { Part1Economics13CrossingLinesMoment } from "./Part1Economics13CrossingL
 import { Part1Economics18KeyInsightStillness } from "./Part1Economics18KeyInsightStillness";
 import { Part1Economics19DoubleMeterInsight } from "./Part1Economics19DoubleMeterInsight";
 import { Part1Economics20TryItYourself } from "./Part1Economics20TryItYourself";
-import { Part2ParadigmShift04MoldProductionCounter } from "./Part2ParadigmShift04MoldProductionCounter";
 import { Part2ParadigmShift07SplitCraftsmanVsMold } from "./Part2ParadigmShift07SplitCraftsmanVsMold";
 import { Part2ParadigmShift11SchematicDensityZoom } from "./Part2ParadigmShift11SchematicDensityZoom";
+import { Part2ParadigmShift12VerilogSynthesis } from "./Part2ParadigmShift12VerilogSynthesis";
+import { Part2ParadigmShift13TripleSynthesisEquivalence } from "./Part2ParadigmShift13TripleSynthesisEquivalence";
 import { Part2ParadigmShift14SynopsysPddEquivalence } from "./Part2ParadigmShift14SynopsysPddEquivalence";
 import { Part2ParadigmShift15AbstractionStaircase } from "./Part2ParadigmShift15AbstractionStaircase";
 import { Part2ParadigmShift16BillionGateUnreviewable } from "./Part2ParadigmShift16BillionGateUnreviewable";
@@ -44,6 +44,7 @@ import { Part3MoldParts05BugAddsWall } from "./Part3MoldParts05BugAddsWall";
 import { Part3MoldParts06RatchetTimelapse } from "./Part3MoldParts06RatchetTimelapse";
 import { Part3MoldParts08BugForkRoad } from "./Part3MoldParts08BugForkRoad";
 import { Part3MoldParts09FiveGenerations } from "./Part3MoldParts09FiveGenerations";
+import { Part3MoldParts10Z3FormalProof } from "./Part3MoldParts10Z3FormalProof";
 import { Part3MoldParts12PromptNozzle } from "./Part3MoldParts12PromptNozzle";
 import { Part3MoldParts15GroundingStyles } from "./Part3MoldParts15GroundingStyles";
 import { Part3MoldParts17ComponentTable } from "./Part3MoldParts17ComponentTable";
@@ -57,19 +58,22 @@ import { Part5CompoundReturns04DivergingCostCurves } from "./Part5CompoundReturn
 import { Part5CompoundReturns05InvestmentComparisonTable } from "./Part5CompoundReturns05InvestmentComparisonTable";
 import { Part5CompoundReturns08EconomicsCrossingCallback } from "./Part5CompoundReturns08EconomicsCrossingCallback";
 import { Part5CompoundReturns09ContrarianQuoteCard } from "./Part5CompoundReturns09ContrarianQuoteCard";
+import { WhereToStart01SectionTitleCard } from "./WhereToStart01SectionTitleCard";
+import { WhereToStart03ModuleHighlightTerminal } from "./WhereToStart03ModuleHighlightTerminal";
 import { WhereToStart04SourceOfTruthLabel } from "./WhereToStart04SourceOfTruthLabel";
 import { Closing06TheBeat } from "./Closing06TheBeat";
 
 const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "cold_open:01_split_screen_darning": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
+  "cold_open:01_split_developer_grandmother": { leftSrc: "veo/developer_cursor_edit.mp4", defaultSrc: "veo/developer_cursor_edit.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4", revealSrc: "veo/grandmother_darning.mp4" },
   "cold_open:02_veo_developer_cursor_edit": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
   "cold_open:03_veo_grandmother_darning": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
-  "cold_open:04_veo_sock_toss": { defaultSrc: "veo/sock_toss_modern.mp4", backgroundSrc: "veo/sock_toss_modern.mp4", outputSrc: "veo/sock_toss_modern.mp4", baseSrc: "veo/sock_toss_modern.mp4" },
-  "part1_economics:14_split_developer_grandma": { leftSrc: "veo/developer_cursor_p1.mp4", defaultSrc: "veo/developer_cursor_p1.mp4", rightSrc: "veo/grandmother_darning_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4", revealSrc: "veo/grandmother_darning_p1.mp4" },
+  "cold_open:04_veo_developer_codebase_zoomout": { defaultSrc: "veo/developer_codebase_zoomout.mp4", backgroundSrc: "veo/developer_codebase_zoomout.mp4", outputSrc: "veo/developer_codebase_zoomout.mp4", baseSrc: "veo/developer_codebase_zoomout.mp4" },
+  "cold_open:05_veo_grandmother_drawer_zoomout": { defaultSrc: "veo/grandmother_drawer_zoomout.mp4", backgroundSrc: "veo/grandmother_drawer_zoomout.mp4", outputSrc: "veo/grandmother_drawer_zoomout.mp4", baseSrc: "veo/grandmother_drawer_zoomout.mp4" },
+  "part1_economics:14_split_developer_grandma": { leftSrc: "veo/developer_cursor_p1.mp4", defaultSrc: "veo/developer_cursor_p1.mp4", rightSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4", revealSrc: "veo/grandmother_darning.mp4" },
   "part1_economics:15_developer_cursor": { defaultSrc: "veo/developer_cursor_p1.mp4", backgroundSrc: "veo/developer_cursor_p1.mp4", outputSrc: "veo/developer_cursor_p1.mp4", baseSrc: "veo/developer_cursor_p1.mp4" },
   "part1_economics:15_veo_developer_cursor": { defaultSrc: "veo/developer_cursor_edit.mp4", backgroundSrc: "veo/developer_cursor_edit.mp4", outputSrc: "veo/developer_cursor_edit.mp4", baseSrc: "veo/developer_cursor_edit.mp4" },
-  "part1_economics:16_grandmother_darning": { defaultSrc: "veo/grandmother_darning_p1.mp4", backgroundSrc: "veo/grandmother_darning_p1.mp4", outputSrc: "veo/grandmother_darning_p1.mp4", baseSrc: "veo/grandmother_darning_p1.mp4" },
-  "part1_economics:16_veo_grandmother_darning": { defaultSrc: "veo/grandmother_darning_sock.mp4", backgroundSrc: "veo/grandmother_darning_sock.mp4", outputSrc: "veo/grandmother_darning_sock.mp4", baseSrc: "veo/grandmother_darning_sock.mp4" },
+  "part1_economics:16_grandmother_darning": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
+  "part1_economics:16_veo_grandmother_darning": { defaultSrc: "veo/grandmother_darning.mp4", backgroundSrc: "veo/grandmother_darning.mp4", outputSrc: "veo/grandmother_darning.mp4", baseSrc: "veo/grandmother_darning.mp4" },
   "part1_economics:17_developer_codebase_zoomout": { defaultSrc: "veo/developer_codebase_zoomout.mp4", backgroundSrc: "veo/developer_codebase_zoomout.mp4", outputSrc: "veo/developer_codebase_zoomout.mp4", baseSrc: "veo/developer_codebase_zoomout.mp4" },
   "part2_paradigm_shift:02_factory_floor_wide": { defaultSrc: "veo/factory_floor_wide.mp4", backgroundSrc: "veo/factory_floor_wide.mp4", outputSrc: "veo/factory_floor_wide.mp4", baseSrc: "veo/factory_floor_wide.mp4" },
   "part2_paradigm_shift:03_injection_molding_closeup": { defaultSrc: "veo/injection_molding_closeup.mp4", backgroundSrc: "veo/injection_molding_closeup.mp4", outputSrc: "veo/injection_molding_closeup.mp4", baseSrc: "veo/injection_molding_closeup.mp4" },
@@ -79,7 +83,7 @@ const PREVIEW_VISUAL_MEDIA: Record<string, Record<string, string>> = {
   "part2_paradigm_shift:08_veo_craftsman_carving": { defaultSrc: "veo/craftsman_carving.mp4", backgroundSrc: "veo/craftsman_carving.mp4", outputSrc: "veo/craftsman_carving.mp4", baseSrc: "veo/craftsman_carving.mp4" },
   "part2_paradigm_shift:09_veo_mold_plastic_flow": { defaultSrc: "veo/mold_plastic_flow.mp4", backgroundSrc: "veo/mold_plastic_flow.mp4", outputSrc: "veo/mold_plastic_flow.mp4", baseSrc: "veo/mold_plastic_flow.mp4" },
   "part2_paradigm_shift:10_veo_1980s_chip_lab": { defaultSrc: "veo/1980s_chip_lab.mp4", backgroundSrc: "veo/1980s_chip_lab.mp4", outputSrc: "veo/1980s_chip_lab.mp4", baseSrc: "veo/1980s_chip_lab.mp4" },
-  "part3_mold_parts:14_veo_grounding_material": { defaultSrc: "veo/grounding_material_flow.mp4", backgroundSrc: "veo/grounding_material_flow.mp4", outputSrc: "veo/grounding_material_flow.mp4", baseSrc: "veo/grounding_material_flow.mp4" },
+  "part3_mold_parts:14_veo_grounding_material": { defaultSrc: "veo/grounding_material.mp4", backgroundSrc: "veo/grounding_material.mp4", outputSrc: "veo/grounding_material.mp4", baseSrc: "veo/grounding_material.mp4" },
   "part5_compound_returns:06_veo_grandmother_socks_callback": { defaultSrc: "veo/grandmother_socks_callback.mp4", backgroundSrc: "veo/grandmother_socks_callback.mp4", outputSrc: "veo/grandmother_socks_callback.mp4", baseSrc: "veo/grandmother_socks_callback.mp4" },
   "part5_compound_returns:07_veo_developer_cursor_callback": { defaultSrc: "veo/developer_cursor_callback.mp4", backgroundSrc: "veo/developer_cursor_callback.mp4", outputSrc: "veo/developer_cursor_callback.mp4", baseSrc: "veo/developer_cursor_callback.mp4" },
   "closing:01_veo_sock_discard": { defaultSrc: "veo/sock_discard_callback.mp4", backgroundSrc: "veo/sock_discard_callback.mp4", outputSrc: "veo/sock_discard_callback.mp4", baseSrc: "veo/sock_discard_callback.mp4" },
@@ -91,6 +95,7 @@ const PREVIEW_VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | 
   "part1_economics:01_section_title_card": { fadeOutFrames: 60 },
   "part1_economics:02_sock_price_chart": { fadeInFrames: 30 },
   "part1_economics:09_two_by_two_grid": { fadeInFrames: 45 },
+  "part1_economics:17_developer_codebase_zoomout": { structuredOverlay: true },
   "part1_economics:18_key_insight_stillness": { fadeOutFrames: 60 },
   "part2_paradigm_shift:01_section_title_card": { fadeOutFrames: 90 },
   "part2_paradigm_shift:13_triple_synthesis_equivalence": { fadeInFrames: 120 },
@@ -120,16 +125,18 @@ const PREVIEW_VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | 
 };
 
 const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
-  "cold_open:01_split_screen_darning": {"specBaseName": "01_split_screen_darning", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.3}, "panels": {"left": {"clips": ["developer_cursor_edit"], "label": "Developer — AI-assisted code patching", "zoomOut": {"startFrame": 180, "from": 1.0, "to": 0.35}}, "right": {"clips": ["grandmother_darning"], "label": "Grandmother — careful sock darning", "zoomOut": {"startFrame": 180, "from": 1.0, "to": 0.35}}}, "narrationSegments": ["cold_open_001", "cold_open_002", "cold_open_003"], "durationSeconds": 14.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4", "defaultSrc": "veo/developer_cursor_edit.mp4", "rightSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4", "revealSrc": "veo/grandmother_darning.mp4", "leftBaseSrc": "veo/developer_cursor_edit.mp4", "rightBaseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:02_veo_developer_cursor_edit": {"specBaseName": "02_veo_developer_cursor_edit", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_edit", "durationSeconds": 14, "usedIn": "01_split_screen_darning (left panel)", "characters": [{"id": "developer", "label": "Developer", "referencePrompt": "Young developer, late 20s, casual hoodie, modern desk setup with ultrawide monitor, dark-themed code editor, ambient RGB lighting"}]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_edit.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "cold_open:03_veo_grandmother_darning": {"specBaseName": "03_veo_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning", "durationSeconds": 14, "usedIn": "01_split_screen_darning (right panel)", "characters": [{"id": "grandmother", "label": "Great-Grandmother", "referencePrompt": "Elderly woman in her 70s, 1950s attire, cardigan sweater, reading glasses, warm lamplight, domestic setting, kind weathered hands"}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/grandmother_darning.mp4", "outputSrc": "veo/grandmother_darning.mp4", "baseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "cold_open:04_veo_sock_toss": {"specBaseName": "04_veo_sock_toss", "dataPoints": {"type": "veo_clip", "clipId": "sock_toss_modern", "durationSeconds": 5}, "mediaAliases": {"defaultSrc": "veo/sock_toss_modern.mp4", "backgroundSrc": "veo/sock_toss_modern.mp4", "outputSrc": "veo/sock_toss_modern.mp4", "baseSrc": "veo/sock_toss_modern.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "cold_open:05_code_cursor_blink": {"specBaseName": "05_code_cursor_blink", "dataPoints": {"type": "remotion_animation", "componentId": "code_cursor_blink", "durationFrames": 210, "fps": 30, "narrationSegments": ["cold_open_005", "cold_open_006"], "codeFile": "process_order.py", "patchComments": 6, "visibleLines": 40}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:06_code_regeneration": {"specBaseName": "06_code_regeneration", "dataPoints": {"type": "remotion_animation", "componentId": "code_regeneration", "durationFrames": 150, "fps": 30, "narrationSegments": ["cold_open_007", "cold_open_008"], "codeFile": "process_order.py", "deletedLines": 40, "regeneratedLines": 25, "pddCommand": "pdd generate process_order"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:07_title_card_pdd": {"specBaseName": "07_title_card_pdd", "dataPoints": {"type": "title_card", "componentId": "title_card_pdd", "durationFrames": 60, "fps": 30, "narrationSegments": ["cold_open_008"], "title": "Prompt-Driven Development", "overlayOpacity": 0.7, "inheritsBackground": "06_code_regeneration"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:08_prompt_file_generate": {"specBaseName": "08_prompt_file_generate", "dataPoints": {"type": "remotion_animation", "componentId": "prompt_file_generate", "durationFrames": 150, "fps": 30, "narrationSegments": ["cold_open_008"], "promptFile": "email_validator.prompt", "promptLines": 15, "outputLines": 200, "pddCommand": "pdd generate email_validator"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:09_test_fix_cycle": {"specBaseName": "09_test_fix_cycle", "dataPoints": {"type": "remotion_animation", "componentId": "test_fix_cycle", "durationFrames": 390, "fps": 30, "narrationSegments": ["cold_open_009"], "phases": ["initial_failure", "add_test", "pdd_fix", "regenerate", "all_pass"], "failingTest": "test_unicode_domain", "pddCommand": "pdd fix email_validator", "testResults": ["test_basic_format", "test_invalid_domain", "test_empty_string", "test_special_chars", "test_unicode_domain"], "totalPassed": 5}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "cold_open:10_transition_overlay": {"specBaseName": "10_transition_overlay", "dataPoints": {"type": "title_card", "componentId": "transition_overlay_why", "durationFrames": 90, "fps": 30, "narrationSegments": ["cold_open_010"], "text": "Now let me show you WHY this matters.", "emphasis": {"word": "WHY", "weight": 700, "color": "#E2E8F0"}, "inheritsBackground": "09_test_fix_cycle", "transitionsTo": "part1_economics"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:01_split_developer_grandmother": {"specBaseName": "01_split_developer_grandmother", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["developer_cursor_edit_co", "developer_codebase_zoomout_co"], "label": "Developer with Cursor"}, "right": {"clips": ["grandmother_darning_co", "grandmother_drawer_zoomout_co"], "label": "Grandmother darning"}}, "narrationSegments": ["cold_open_001", "cold_open_002", "cold_open_003"], "durationSeconds": 14.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4", "defaultSrc": "veo/developer_cursor_edit.mp4", "rightSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4", "revealSrc": "veo/grandmother_darning.mp4", "leftBaseSrc": "veo/developer_cursor_edit.mp4", "leftRevealSrc": "veo/developer_codebase_zoomout.mp4", "rightBaseSrc": "veo/grandmother_darning.mp4", "rightRevealSrc": "veo/grandmother_drawer_zoomout.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:02_veo_developer_cursor_edit": {"specBaseName": "02_veo_developer_cursor_edit", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_edit_co", "durationSeconds": 6, "usedIn": "01_split_developer_grandmother (left panel)", "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer, early 30s, focused expression, modern office setting, cool monitor glow on face"}]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_edit.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:03_veo_grandmother_darning": {"specBaseName": "03_veo_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_co", "durationSeconds": 6, "usedIn": "01_split_developer_grandmother (right panel)", "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly grandmother, warm lamplight, skilled hands, cozy interior, darning a wool sock"}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/grandmother_darning.mp4", "outputSrc": "veo/grandmother_darning.mp4", "baseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:04_veo_developer_codebase_zoomout": {"specBaseName": "04_veo_developer_codebase_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "developer_codebase_zoomout_co", "durationSeconds": 8, "usedIn": "01_split_developer_grandmother (left panel)", "camera": {"framing": "medium_to_wide", "movement": "dolly_back", "dof": "deepening", "angle": "eye_level"}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer, early 30s, focused expression, modern office setting, cool monitor glow on face"}]}, "mediaAliases": {"defaultSrc": "veo/developer_codebase_zoomout.mp4", "backgroundSrc": "veo/developer_codebase_zoomout.mp4", "outputSrc": "veo/developer_codebase_zoomout.mp4", "baseSrc": "veo/developer_codebase_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:05_veo_grandmother_drawer_zoomout": {"specBaseName": "05_veo_grandmother_drawer_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_drawer_zoomout_co", "durationSeconds": 8, "usedIn": "01_split_developer_grandmother (right panel)", "camera": {"framing": "medium_closeup_to_medium", "movement": "pull_back", "dof": "sharpening_on_drawer"}, "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly grandmother, warm lamplight, skilled hands, cozy interior, darning a wool sock"}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_drawer_zoomout.mp4", "backgroundSrc": "veo/grandmother_drawer_zoomout.mp4", "outputSrc": "veo/grandmother_drawer_zoomout.mp4", "baseSrc": "veo/grandmother_drawer_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:06_veo_sock_discard": {"specBaseName": "06_veo_sock_discard", "dataPoints": {"type": "veo_clip", "clipId": "sock_discard_co", "durationSeconds": 4, "narrationSegments": ["cold_open_004"], "characters": []}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "raw-media"},
+  "cold_open:07_code_cursor_blink": {"specBaseName": "07_code_cursor_blink", "dataPoints": {"type": "code_editor", "editorTheme": "dark", "language": "python", "functionName": "validate_email", "lineCount": 30, "patchComments": [{"line": 4, "text": "// patched for unicode"}, {"line": 8, "text": "// edge case fix #247"}, {"line": 12, "text": "// temporary workaround"}, {"line": 15, "text": "// patched: null check"}, {"line": 18, "text": "// fix: RFC 5321 compliance"}, {"line": 21, "text": "// workaround for legacy domains"}, {"line": 24, "text": "// TODO: refactor this block"}, {"line": 27, "text": "// patched again (2024-03)"}], "cursorPosition": {"line": 28, "column": "end"}, "narrationSegments": ["cold_open_005", "cold_open_006"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:08_code_regeneration": {"specBaseName": "08_code_regeneration", "dataPoints": {"type": "code_editor_animation", "editorTheme": "dark", "language": "python", "functionName": "validate_email", "phases": [{"phase": "select", "frames": [0, 15], "description": "Selection sweep over patched code"}, {"phase": "delete", "frames": [15, 25], "description": "All code deletes"}, {"phase": "empty", "frames": [25, 35], "description": "Brief empty editor beat"}, {"phase": "regenerate", "frames": [35, 90], "description": "Clean code flows in"}, {"phase": "terminal", "frames": [70, 150], "description": "pdd generate overlay"}], "terminalCommand": "pdd generate email_validator", "narrationSegments": ["cold_open_007", "cold_open_008"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:09_title_card_pdd": {"specBaseName": "09_title_card_pdd", "dataPoints": {"type": "title_card", "titleLine1": "Prompt-Driven", "titleLine2": "Development", "backgroundColor": "rgba(10, 15, 26, 0.8)", "accentColor": "#4A90D9", "overlayOnPrevious": true, "narrationSegments": ["cold_open_008"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:10_prompt_file_generate": {"specBaseName": "10_prompt_file_generate", "dataPoints": {"type": "code_generation_demo", "layout": "split_pane", "leftPane": {"file": "email_validator.prompt", "lineCount": 15, "contentType": "natural_language"}, "rightPane": {"file": "email_validator.py", "lineCount": 200, "contentType": "python"}, "ratio": "15:200", "terminal": {"command": "pdd generate email_validator", "result": "Generated 200 lines (0.8s)"}, "narrationSegments": ["cold_open_008", "cold_open_009"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:11_test_fix_regenerate": {"specBaseName": "11_test_fix_regenerate", "dataPoints": {"type": "test_fix_cycle", "tests": [{"name": "test_basic_email", "initialStatus": "pass", "finalStatus": "pass"}, {"name": "test_invalid_format", "initialStatus": "pass", "finalStatus": "pass"}, {"name": "test_missing_domain", "initialStatus": "pass", "finalStatus": "pass"}, {"name": "test_unicode_domain", "initialStatus": "fail", "finalStatus": "pass"}], "terminal": {"command": "pdd fix email_validator", "result": "Fixed and regenerated (1.2s)"}, "keyInsight": "Bug is gone, not patched. Test is a permanent wall.", "narrationSegments": ["cold_open_009"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
+  "cold_open:12_transition_overlay": {"specBaseName": "12_transition_overlay", "dataPoints": {"type": "transition_overlay", "text": "Now let me show you WHY this matters.", "emphasis": {"word": "WHY", "color": "#4A90D9", "weight": 700}, "transitionTo": "part1_economics", "narrationSegments": ["cold_open_010"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:01_section_title_card": {"specBaseName": "01_section_title_card", "dataPoints": {"type": "title_card", "sectionNumber": 1, "sectionLabel": "PART 1", "titleLine1": "THE ECONOMICS", "titleLine2": "OF DARNING", "backgroundColor": "#0A0F1A", "ghostElements": [{"shape": "crossing_lines", "colors": ["#D9944A", "#4A90D9"], "role": "cost_crossing_preview"}], "narrationSegments": ["part1_economics_001", "part1_economics_002", "part1_economics_003"]}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
   "part1_economics:02_sock_price_chart": {"specBaseName": "02_sock_price_chart", "dataPoints": {"type": "line_chart", "chartId": "sock_price_vs_labor", "xAxis": {"label": "Year", "range": [1950, 2020], "tickInterval": 10}, "yAxis": {"label": "Cost (relative to hourly wage)", "range": [0, 1]}, "series": [{"id": "labor_cost", "label": "Labor cost", "color": "#D9944A", "data": [{"x": 1950, "y": 0.2}, {"x": 1960, "y": 0.35}, {"x": 1970, "y": 0.5}, {"x": 1980, "y": 0.6}, {"x": 1990, "y": 0.7}, {"x": 2000, "y": 0.78}, {"x": 2010, "y": 0.82}, {"x": 2020, "y": 0.85}]}, {"id": "garment_cost", "label": "Garment cost (relative)", "color": "#4A90D9", "data": [{"x": 1950, "y": 0.8}, {"x": 1960, "y": 0.5}, {"x": 1965, "y": 0.35}, {"x": 1970, "y": 0.25}, {"x": 1980, "y": 0.18}, {"x": 1990, "y": 0.12}, {"x": 2000, "y": 0.1}, {"x": 2020, "y": 0.08}]}], "annotations": [{"type": "crossing_point", "x": 1962, "label": "The Threshold"}], "narrationSegments": ["part1_economics_004", "part1_economics_005"]}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 30}, "renderMode": "component"},
   "part1_economics:03_code_cost_chart": {"specBaseName": "03_code_cost_chart", "dataPoints": {"type": "multi_line_chart", "chartId": "code_cost_generate_vs_patch", "xAxis": {"label": "Year", "range": [2000, 2026]}, "yAxis": {"label": "Cost (Developer Hours)"}, "series": [{"id": "generate_cost", "label": "Cost to generate", "color": "#4A90D9", "strokeStyle": "solid", "data": [{"x": 2000, "y": 0.9}, {"x": 2010, "y": 0.88}, {"x": 2020, "y": 0.85}, {"x": 2021, "y": 0.82}, {"x": 2022, "y": 0.78}, {"x": 2023, "y": 0.65}, {"x": 2024, "y": 0.35}, {"x": 2025, "y": 0.18}, {"x": 2026, "y": 0.1}]}, {"id": "immediate_patch", "label": "Immediate patch cost", "color": "#D9944A", "strokeStyle": "solid", "data": [{"x": 2000, "y": 0.55}, {"x": 2010, "y": 0.52}, {"x": 2020, "y": 0.48}, {"x": 2021, "y": 0.42}, {"x": 2022, "y": 0.35}, {"x": 2023, "y": 0.28}, {"x": 2024, "y": 0.22}, {"x": 2025, "y": 0.18}, {"x": 2026, "y": 0.15}]}, {"id": "total_cost_debt", "label": "Total cost (with debt)", "color": "#D9944A", "strokeStyle": "dashed", "data": [{"x": 2000, "y": 0.6}, {"x": 2010, "y": 0.62}, {"x": 2020, "y": 0.65}, {"x": 2021, "y": 0.66}, {"x": 2022, "y": 0.68}, {"x": 2023, "y": 0.7}, {"x": 2024, "y": 0.72}, {"x": 2025, "y": 0.73}, {"x": 2026, "y": 0.74}]}], "shadedArea": {"upper": "total_cost_debt", "lower": "immediate_patch", "color": "#D9944A", "opacity": 0.12, "label": "Technical debt"}, "dateMarkers": ["Codex (2021)", "GPT-4 (2023)", "Claude (2023)", "Gemini (2024)"], "narrationSegments": ["part1_economics_006", "part1_economics_007", "part1_economics_008", "part1_economics_009"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
@@ -144,12 +151,12 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
   "part1_economics:11_patching_vs_regeneration": {"specBaseName": "11_patching_vs_regeneration", "dataPoints": {"type": "side_by_side_comparison", "chartId": "patching_vs_regeneration", "panels": {"left": {"header": "Agentic Patching", "tokenCount": 15000, "distribution": {"irrelevant": 0.8, "relevant": 0.05, "neutral": 0.15}, "label": "15,000 tokens — mostly wrong", "accentColor": "#EF4444"}, "right": {"header": "PDD Regeneration", "blocks": [{"label": "Prompt", "tokens": 300, "color": "#4A90D9"}, {"label": "Tests", "tokens": 2000, "color": "#D9944A"}, {"label": "Grounding", "tokens": 200, "color": "#5AAA6E"}], "label": "2,300 tokens — all curated", "accentColor": "#5AAA6E"}}, "narrationSegments": ["part1_economics_023", "part1_economics_024"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:12_context_compression": {"specBaseName": "12_context_compression", "dataPoints": {"type": "context_compression_animation", "chartId": "module_compression", "modules": ["auth", "parser", "router", "validator", "logger", "cache", "queue", "mailer", "search", "analytics", "billing", "permissions", "notifications", "export", "import", "scheduler", "webhook", "api_client", "transformer", "serializer"], "codeTokensPerModule": 750, "promptTokensPerModule": 100, "contextWindowTokens": 4000, "overflowCount": 17, "compressionRatio": "5-10×", "narrationSegments": ["part1_economics_025", "part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:13_crossing_lines_moment": {"specBaseName": "13_crossing_lines_moment", "dataPoints": {"type": "crossing_moment", "chartRef": "code_cost_generate_vs_patch", "crossings": [{"id": "generate_crosses_total_cost", "year": 2025.2, "description": "Generate cost drops below total cost with debt"}, {"id": "generate_crosses_immediate", "year": 2025.6, "description": "Generate cost drops below immediate patch cost"}], "label": "We are here.", "narrationSegments": ["part1_economics_026"]}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part1_economics:14_split_developer_grandma": {"specBaseName": "14_split_developer_grandma", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["developer_cursor_p1"], "label": "Developer with Cursor"}, "right": {"clips": ["grandmother_darning_p1"], "label": "Grandmother darning"}}, "narrationSegments": ["part1_economics_027", "part1_economics_028"], "durationSeconds": 17.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_p1.mp4", "defaultSrc": "veo/developer_cursor_p1.mp4", "rightSrc": "veo/grandmother_darning_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4", "revealSrc": "veo/grandmother_darning_p1.mp4", "leftBaseSrc": "veo/developer_cursor_p1.mp4", "rightBaseSrc": "veo/grandmother_darning_p1.mp4"}, "overlayConfig": null, "renderMode": "component"},
+  "part1_economics:14_split_developer_grandma": {"specBaseName": "14_split_developer_grandma", "dataPoints": {"type": "split_screen", "layout": "vertical_50_50", "divider": {"color": "#FFFFFF", "width": 2, "opacity": 0.6}, "panels": {"left": {"clips": ["developer_cursor_p1"], "label": "Developer with Cursor"}, "right": {"clips": ["grandmother_darning_p1"], "label": "Grandmother darning"}}, "narrationSegments": ["part1_economics_027", "part1_economics_028"], "durationSeconds": 17.0}, "mediaAliases": {"leftSrc": "veo/developer_cursor_edit.mp4", "defaultSrc": "veo/developer_cursor_p1.mp4", "rightSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4", "revealSrc": "veo/grandmother_darning.mp4", "leftBaseSrc": "veo/developer_cursor_edit.mp4", "rightBaseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:15_developer_cursor": {"specBaseName": "15_developer_cursor", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_p1", "camera": {"framing": "medium_close_up", "movement": "subtle_push_in", "dof": "moderate", "aperture": "f/4", "angle": "over_shoulder"}, "lighting": {"key": {"color": "#B0C4DE", "type": "monitor_glow"}, "fill": {"color": "#E2E8F0", "opacity": 0.2, "type": "ambient"}, "accent": {"color": "#4A90D9", "opacity": 0.1, "type": "led_backlight"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_p1.mp4", "backgroundSrc": "veo/developer_cursor_p1.mp4", "outputSrc": "veo/developer_cursor_p1.mp4", "baseSrc": "veo/developer_cursor_p1.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part1_economics:15_veo_developer_cursor": {"specBaseName": "15_veo_developer_cursor", "dataPoints": {"type": "veo_clip", "clipId": "developer_cursor_edit", "durationSeconds": 18, "usedIn": "14_split_developer_grandma (left panel)", "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer, early 30s, focused expression, modern office setting, cool monitor glow on face"}]}, "mediaAliases": {"defaultSrc": "veo/developer_cursor_edit.mp4", "backgroundSrc": "veo/developer_cursor_edit.mp4", "outputSrc": "veo/developer_cursor_edit.mp4", "baseSrc": "veo/developer_cursor_edit.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "part1_economics:16_grandmother_darning": {"specBaseName": "16_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_p1", "camera": {"framing": "medium_close_up", "movement": "static_with_sway", "dof": "shallow", "aperture": "f/2.8", "angle": "elevated"}, "lighting": {"key": {"color": "#FFB347", "opacity": 0.7, "type": "table_lamp"}, "fill": {"color": "#D4A574", "opacity": 0.15, "type": "ambient"}}, "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly woman in 1950s domestic setting, skilled hands darning wool socks by lamplight, warm amber tones"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning_p1.mp4", "backgroundSrc": "veo/grandmother_darning_p1.mp4", "outputSrc": "veo/grandmother_darning_p1.mp4", "baseSrc": "veo/grandmother_darning_p1.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "part1_economics:16_veo_grandmother_darning": {"specBaseName": "16_veo_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_sock", "durationSeconds": 18, "usedIn": "14_split_developer_grandma (right panel)", "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly grandmother, warm lamplight, skilled hands, cozy interior, darning a wool sock"}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning_sock.mp4", "backgroundSrc": "veo/grandmother_darning_sock.mp4", "outputSrc": "veo/grandmother_darning_sock.mp4", "baseSrc": "veo/grandmother_darning_sock.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
-  "part1_economics:17_developer_codebase_zoomout": {"specBaseName": "17_developer_codebase_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "developer_codebase_zoomout", "camera": {"framing": "medium_to_wide", "movement": "dolly_back", "dof": "deepening", "angle": "eye_level"}, "lighting": {"key": {"color": "#D4E4F0", "opacity": 0.3, "type": "overhead_fluorescent"}, "fill": {"type": "multiple_monitor_glow"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "overlays": [{"type": "floating_comment", "text": "// don't touch this", "color": "#EF4444"}, {"type": "floating_comment", "text": "// legacy", "color": "#F59E0B"}, {"type": "floating_comment", "text": "// temporary fix (2019)", "color": "#EF4444"}], "narrationSegments": ["part1_economics_028"]}, "mediaAliases": {"defaultSrc": "veo/developer_codebase_zoomout.mp4", "backgroundSrc": "veo/developer_codebase_zoomout.mp4", "outputSrc": "veo/developer_codebase_zoomout.mp4", "baseSrc": "veo/developer_codebase_zoomout.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part1_economics:16_grandmother_darning": {"specBaseName": "16_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_p1", "camera": {"framing": "medium_close_up", "movement": "static_with_sway", "dof": "shallow", "aperture": "f/2.8", "angle": "elevated"}, "lighting": {"key": {"color": "#FFB347", "opacity": 0.7, "type": "table_lamp"}, "fill": {"color": "#D4A574", "opacity": 0.15, "type": "ambient"}}, "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly woman in 1950s domestic setting, skilled hands darning wool socks by lamplight, warm amber tones"}], "narrationSegments": ["part1_economics_027"]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/grandmother_darning.mp4", "outputSrc": "veo/grandmother_darning.mp4", "baseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part1_economics:16_veo_grandmother_darning": {"specBaseName": "16_veo_grandmother_darning", "dataPoints": {"type": "veo_clip", "clipId": "grandmother_darning_sock", "durationSeconds": 18, "usedIn": "14_split_developer_grandma (right panel)", "characters": [{"id": "grandmother", "label": "Grandmother", "referencePrompt": "Elderly grandmother, warm lamplight, skilled hands, cozy interior, darning a wool sock"}]}, "mediaAliases": {"defaultSrc": "veo/grandmother_darning.mp4", "backgroundSrc": "veo/grandmother_darning.mp4", "outputSrc": "veo/grandmother_darning.mp4", "baseSrc": "veo/grandmother_darning.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part1_economics:17_developer_codebase_zoomout": {"specBaseName": "17_developer_codebase_zoomout", "dataPoints": {"type": "veo_clip", "clipId": "developer_codebase_zoomout", "camera": {"framing": "medium_to_wide", "movement": "dolly_back", "dof": "deepening", "angle": "eye_level"}, "lighting": {"key": {"color": "#D4E4F0", "opacity": 0.3, "type": "overhead_fluorescent"}, "fill": {"type": "multiple_monitor_glow"}}, "characters": [{"id": "developer_protagonist", "label": "Developer", "referencePrompt": "Software developer in their 30s, modern casual attire, focused expression, typing at a workstation with monitors"}], "overlays": [{"type": "floating_comment", "text": "// don't touch this", "color": "#EF4444"}, {"type": "floating_comment", "text": "// legacy", "color": "#F59E0B"}, {"type": "floating_comment", "text": "// temporary fix (2019)", "color": "#EF4444"}], "narrationSegments": ["part1_economics_028"]}, "mediaAliases": {"defaultSrc": "veo/developer_codebase_zoomout.mp4", "backgroundSrc": "veo/developer_codebase_zoomout.mp4", "outputSrc": "veo/developer_codebase_zoomout.mp4", "baseSrc": "veo/developer_codebase_zoomout.mp4"}, "overlayConfig": {"structuredOverlay": true}, "renderMode": "generated-media"},
   "part1_economics:18_key_insight_stillness": {"specBaseName": "18_key_insight_stillness", "dataPoints": {"type": "stillness_beat", "style": "3b1b_key_insight", "backgroundColor": "#050810", "text": "So let me put together what I just showed you.", "textColor": "#94A3B8", "textOpacity": 0.6, "purpose": "Palate cleanser before key insight synthesis"}, "mediaAliases": {}, "overlayConfig": {"fadeOutFrames": 60}, "renderMode": "component"},
   "part1_economics:19_double_meter_insight": {"specBaseName": "19_double_meter_insight", "dataPoints": {"type": "double_meter", "chartId": "context_plus_performance", "meters": [{"id": "context_window", "title": "Effective Context Window", "fillColor": "#4A90D9", "bottomValue": "1×", "topValue": "5-10×", "position": "left"}, {"id": "model_performance", "title": "Model Performance", "fillColor": "#5AAA6E", "bottomValue": "Baseline", "topValue": "+89%", "position": "right"}], "insightText": "Bigger window AND smarter model.", "insightHighlight": {"word": "AND", "color": "#F59E0B"}}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part1_economics:20_try_it_yourself": {"specBaseName": "20_try_it_yourself", "dataPoints": {"type": "title_card", "style": "handwritten_challenge", "mainText": "Try it yourself.", "font": "Caveat", "instructions": ["Give your favorite LLM a hard coding problem as code,", "then as natural language.", "The natural language version will win."], "backgroundColor": "#0A0F1A", "accentColor": "#4A90D9"}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
@@ -184,7 +191,7 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
   "part3_mold_parts:11_module_boundary": {"specBaseName": "11_module_boundary", "dataPoints": {"type": "system_diagram", "centralModule": {"name": "user_parser", "color": "#4A90D9", "governed": true}, "surroundingModules": [{"name": "auth_service", "governed": false}, {"name": "db_layer", "governed": false}, {"name": "api_router", "governed": false}, {"name": "cache", "governed": false}, {"name": "logger", "governed": false}, {"name": "config", "governed": false}], "label": "PDD operates at the module level.", "narrationSegments": ["part3_mold_parts_015"], "durationSeconds": 22.0}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
   "part3_mold_parts:12_prompt_nozzle": {"specBaseName": "12_prompt_nozzle", "dataPoints": {"type": "prompt_nozzle", "nozzleLabels": ["intent", "requirements", "constraints"], "promptText": "Parse user IDs from untrusted input. Return None on failure, never throw. Handle unicode.", "promptFile": "user_parser.prompt", "dualGeneration": true, "narrationSegments": ["part3_mold_parts_016"], "durationSeconds": 24.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part3_mold_parts:13_prompt_ratio": {"specBaseName": "13_prompt_ratio", "dataPoints": {"type": "compression_ratio", "promptLines": 15, "codeLines": 200, "ratio": "1:5 to 1:10", "contextComparison": {"left": {"tokens": 15000, "type": "raw_code", "modules": 1}, "right": {"tokens": 15000, "type": "prompts", "modules": 10}}, "narrationSegments": ["part3_mold_parts_017", "part3_mold_parts_018"], "durationSeconds": 18.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "part3_mold_parts:14_veo_grounding_material": {"specBaseName": "14_veo_grounding_material", "dataPoints": {"type": "veo_clip", "clipId": "grounding_material_flow", "durationSeconds": 8, "characters": []}, "mediaAliases": {"defaultSrc": "veo/grounding_material_flow.mp4", "backgroundSrc": "veo/grounding_material_flow.mp4", "outputSrc": "veo/grounding_material_flow.mp4", "baseSrc": "veo/grounding_material_flow.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "part3_mold_parts:14_veo_grounding_material": {"specBaseName": "14_veo_grounding_material", "dataPoints": {"type": "veo_clip", "clipId": "grounding_material_flow", "durationSeconds": 8, "characters": []}, "mediaAliases": {"defaultSrc": "veo/grounding_material.mp4", "backgroundSrc": "veo/grounding_material.mp4", "outputSrc": "veo/grounding_material.mp4", "baseSrc": "veo/grounding_material.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "part3_mold_parts:15_grounding_styles": {"specBaseName": "15_grounding_styles", "dataPoints": {"type": "grounding_styles", "materialStreams": [{"label": "OOP", "color": "#4A90D9", "style": "angular"}, {"label": "Functional", "color": "#D9944A", "style": "smooth"}, {"label": "Your Team's Style", "color": "#4AD9A0", "style": "organic"}], "codeComparison": {"pathA": {"style": "OOP", "borderColor": "#4A90D9"}, "pathB": {"style": "Functional", "borderColor": "#D9944A"}}, "feedbackLoop": {"database": "Grounding Database", "stores": "(prompt, code) pair"}, "narrationSegments": ["part3_mold_parts_019"], "durationSeconds": 26.0}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
   "part3_mold_parts:16_three_components_pullback": {"specBaseName": "16_three_components_pullback", "dataPoints": {"type": "pipeline_pullback", "stages": [{"component": "Prompt", "encodes": "Intent", "color": "#D9944A"}, {"component": "Grounding", "encodes": "Style", "color": "#4AD9A0"}, {"component": "Tests", "encodes": "Correctness", "color": "#4A90D9"}, {"component": "Code", "encodes": "Output", "color": "#38BDF8"}], "narrationSegments": ["part3_mold_parts_020"], "durationSeconds": 9.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "part3_mold_parts:17_component_table": {"specBaseName": "17_component_table", "dataPoints": {"type": "component_table", "rows": [{"component": "Prompt", "encodes": "WHAT (intent)", "owner": "Developer", "color": "#D9944A"}, {"component": "Grounding", "encodes": "HOW (style)", "owner": "Automatic", "color": "#4AD9A0"}, {"component": "Tests", "encodes": "CORRECTNESS", "owner": "Accumulated", "color": "#4A90D9"}], "hierarchyRule": "When these conflict, tests win. Always.", "hierarchyOrder": ["Tests", "Prompt", "Grounding"], "narrationSegments": ["part3_mold_parts_021"], "durationSeconds": 10.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
@@ -224,16 +231,18 @@ const PREVIEW_VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> =
 };
 
 const PREVIEW_INTRINSIC_DURATIONS: Record<string, number> = {
-  "cold_open:01_split_screen_darning": 270,
-  "cold_open:02_veo_developer_cursor_edit": 420,
-  "cold_open:03_veo_grandmother_darning": 420,
-  "cold_open:04_veo_sock_toss": 150,
-  "cold_open:05_code_cursor_blink": 210,
-  "cold_open:06_code_regeneration": 150,
-  "cold_open:07_title_card_pdd": 60,
-  "cold_open:08_prompt_file_generate": 150,
-  "cold_open:09_test_fix_cycle": 390,
-  "cold_open:10_transition_overlay": 90,
+  "cold_open:01_split_developer_grandmother": 420,
+  "cold_open:02_veo_developer_cursor_edit": 180,
+  "cold_open:03_veo_grandmother_darning": 180,
+  "cold_open:04_veo_developer_codebase_zoomout": 240,
+  "cold_open:05_veo_grandmother_drawer_zoomout": 240,
+  "cold_open:06_veo_sock_discard": 120,
+  "cold_open:07_code_cursor_blink": 48,
+  "cold_open:08_code_regeneration": 60,
+  "cold_open:09_title_card_pdd": 60,
+  "cold_open:10_prompt_file_generate": 150,
+  "cold_open:11_test_fix_regenerate": 300,
+  "cold_open:12_transition_overlay": 90,
   "part1_economics:01_section_title_card": 720,
   "part1_economics:02_sock_price_chart": 720,
   "part1_economics:03_code_cost_chart": 1650,
@@ -327,10 +336,10 @@ const PREVIEW_INTRINSIC_DURATIONS: Record<string, number> = {
   "closing:07_final_title_card": 180,
 };
 
-const ColdOpen01SplitScreenDarningPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:01_split_screen_darning"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:01_split_screen_darning"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:01_split_screen_darning"] ?? 150}>
+const ColdOpen01SplitDeveloperGrandmotherPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:01_split_developer_grandmother"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:01_split_developer_grandmother"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:01_split_developer_grandmother"] ?? 150}>
         <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
@@ -354,64 +363,82 @@ const ColdOpen03VeoGrandmotherDarningPreview: React.FC = () => (
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen04VeoSockTossPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:04_veo_sock_toss"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:04_veo_sock_toss"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:04_veo_sock_toss"] ?? 150}>
-        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:04_veo_sock_toss"] ?? null} />
+const ColdOpen04VeoDeveloperCodebaseZoomoutPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:04_veo_developer_codebase_zoomout"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:04_veo_developer_codebase_zoomout"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:04_veo_developer_codebase_zoomout"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:04_veo_developer_codebase_zoomout"] ?? null} />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen05CodeCursorBlinkPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:05_code_cursor_blink"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:05_code_cursor_blink"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:05_code_cursor_blink"] ?? 150}>
-        <ColdOpen05CodeCursorBlink />
+const ColdOpen05VeoGrandmotherDrawerZoomoutPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:05_veo_grandmother_drawer_zoomout"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:05_veo_grandmother_drawer_zoomout"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:05_veo_grandmother_drawer_zoomout"] ?? 150}>
+        <GeneratedMediaVisual config={PREVIEW_VISUAL_OVERLAYS["cold_open:05_veo_grandmother_drawer_zoomout"] ?? null} />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen06CodeRegenerationPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:06_code_regeneration"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:06_code_regeneration"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:06_code_regeneration"] ?? 150}>
-        <ColdOpen06CodeRegeneration />
+const ColdOpen06VeoSockDiscardPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:06_veo_sock_discard"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:06_veo_sock_discard"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:06_veo_sock_discard"] ?? 150}>
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen07TitleCardPddPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_title_card_pdd"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_title_card_pdd"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:07_title_card_pdd"] ?? 150}>
+const ColdOpen07CodeCursorBlinkPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:07_code_cursor_blink"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:07_code_cursor_blink"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:07_code_cursor_blink"] ?? 150}>
+        <ColdOpen07CodeCursorBlink />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen08CodeRegenerationPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:08_code_regeneration"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:08_code_regeneration"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:08_code_regeneration"] ?? 150}>
+        <GeneratedContractVisual />
+      </SlotScaledSequence>
+    </VisualMediaProvider>
+  </VisualContractProvider>
+);
+const ColdOpen09TitleCardPddPreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:09_title_card_pdd"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:09_title_card_pdd"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:09_title_card_pdd"] ?? 150}>
         <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const ColdOpen08PromptFileGeneratePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:08_prompt_file_generate"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:08_prompt_file_generate"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:08_prompt_file_generate"] ?? 150}>
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:10_prompt_file_generate"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:10_prompt_file_generate"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:10_prompt_file_generate"] ?? 150}>
         <ColdOpen08PromptFileGenerate />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
-const ColdOpen09TestFixCyclePreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:09_test_fix_cycle"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:09_test_fix_cycle"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:09_test_fix_cycle"] ?? 150}>
-        <ColdOpen09TestFixCycle />
+const ColdOpen09TestFixRegeneratePreview: React.FC = () => (
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:11_test_fix_regenerate"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:11_test_fix_regenerate"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:11_test_fix_regenerate"] ?? 150}>
+        <ColdOpen09TestFixRegenerate />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
 );
 const ColdOpen10TransitionOverlayPreview: React.FC = () => (
-  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:10_transition_overlay"] ?? null}>
-    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:10_transition_overlay"] ?? null}>
-      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:10_transition_overlay"] ?? 150}>
+  <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["cold_open:12_transition_overlay"] ?? null}>
+    <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["cold_open:12_transition_overlay"] ?? null}>
+      <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["cold_open:12_transition_overlay"] ?? 150}>
         <ColdOpen10TransitionOverlay />
       </SlotScaledSequence>
     </VisualMediaProvider>
@@ -655,7 +682,7 @@ const Part2ParadigmShift04MoldProductionCounterPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:04_mold_production_counter"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:04_mold_production_counter"] ?? 150}>
-        <Part2ParadigmShift04MoldProductionCounter />
+        <GeneratedContractVisual />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -727,7 +754,7 @@ const Part2ParadigmShift12VerilogSynthesisPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:12_verilog_synthesis"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:12_verilog_synthesis"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:12_verilog_synthesis"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part2ParadigmShift12VerilogSynthesis />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -736,7 +763,7 @@ const Part2ParadigmShift13TripleSynthesisEquivalencePreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part2_paradigm_shift:13_triple_synthesis_equivalence"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part2ParadigmShift13TripleSynthesisEquivalence />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -871,7 +898,7 @@ const Part3MoldParts10Z3FormalProofPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["part3_mold_parts:10_z3_formal_proof"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["part3_mold_parts:10_z3_formal_proof"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["part3_mold_parts:10_z3_formal_proof"] ?? 150}>
-        <GeneratedContractVisual />
+        <Part3MoldParts10Z3FormalProof />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1114,7 +1141,7 @@ const WhereToStart01SectionTitleCardPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:01_section_title_card"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:01_section_title_card"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:01_section_title_card"] ?? 150}>
-        <GeneratedContractVisual />
+        <WhereToStart01SectionTitleCard />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1132,7 +1159,7 @@ const WhereToStart03ModuleHighlightTerminalPreview: React.FC = () => (
   <VisualContractProvider contract={PREVIEW_VISUAL_CONTRACTS["where_to_start:03_module_highlight_terminal"] ?? null}>
     <VisualMediaProvider media={PREVIEW_VISUAL_MEDIA["where_to_start:03_module_highlight_terminal"] ?? null}>
       <SlotScaledSequence intrinsicDurationInFrames={PREVIEW_INTRINSIC_DURATIONS["where_to_start:03_module_highlight_terminal"] ?? 150}>
-        <GeneratedContractVisual />
+        <WhereToStart03ModuleHighlightTerminal />
       </SlotScaledSequence>
     </VisualMediaProvider>
   </VisualContractProvider>
@@ -1305,8 +1332,8 @@ export const RemotionRoot: React.FC = () => {
         height={1080}
       />
       <Composition
-        id="cold-open01-split-screen-darning"
-        component={ColdOpen01SplitScreenDarningPreview}
+        id="cold-open01-split-developer-grandmother"
+        component={ColdOpen01SplitDeveloperGrandmotherPreview}
         durationInFrames={389}
         fps={30}
         width={1920}
@@ -1315,7 +1342,7 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open02-veo-developer-cursor-edit"
         component={ColdOpen02VeoDeveloperCursorEditPreview}
-        durationInFrames={420}
+        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
@@ -1323,61 +1350,77 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="cold-open03-veo-grandmother-darning"
         component={ColdOpen03VeoGrandmotherDarningPreview}
-        durationInFrames={420}
+        durationInFrames={180}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open04-veo-sock-toss"
-        component={ColdOpen04VeoSockTossPreview}
-        durationInFrames={386}
+        id="cold-open04-veo-developer-codebase-zoomout"
+        component={ColdOpen04VeoDeveloperCodebaseZoomoutPreview}
+        durationInFrames={240}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open05-code-cursor-blink"
-        component={ColdOpen05CodeCursorBlinkPreview}
+        id="cold-open05-veo-grandmother-drawer-zoomout"
+        component={ColdOpen05VeoGrandmotherDrawerZoomoutPreview}
+        durationInFrames={240}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open06-veo-sock-discard"
+        component={ColdOpen06VeoSockDiscardPreview}
+        durationInFrames={111}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="cold-open07-code-cursor-blink"
+        component={ColdOpen07CodeCursorBlinkPreview}
         durationInFrames={197}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open06-code-regeneration"
-        component={ColdOpen06CodeRegenerationPreview}
+        id="cold-open08-code-regeneration"
+        component={ColdOpen08CodeRegenerationPreview}
         durationInFrames={190}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open07-title-card-pdd"
-        component={ColdOpen07TitleCardPddPreview}
+        id="cold-open09-title-card-pdd"
+        component={ColdOpen09TitleCardPddPreview}
         durationInFrames={153}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open08-prompt-file-generate"
+        id="cold-open10-prompt-file-generate"
         component={ColdOpen08PromptFileGeneratePreview}
-        durationInFrames={153}
+        durationInFrames={545}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open09-test-fix-cycle"
-        component={ColdOpen09TestFixCyclePreview}
+        id="cold-open11-test-fix-regenerate"
+        component={ColdOpen09TestFixRegeneratePreview}
         durationInFrames={386}
         fps={30}
         width={1920}
         height={1080}
       />
       <Composition
-        id="cold-open10-transition-overlay"
+        id="cold-open12-transition-overlay"
         component={ColdOpen10TransitionOverlayPreview}
         durationInFrames={86}
         fps={30}

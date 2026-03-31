@@ -1,13 +1,20 @@
 ## Verdict
 pass
 ## Summary
-The frame at 88.9% progress (frame 479/540, within the 'fade hold / transition readiness' phase 420-540) accurately renders the fork-in-the-road diagram as specified. Key observations:
+The frame at 88.9% progress (frame 479/540, within the 'fade hold / transition readiness' phase 420-540) matches the spec well. All critical elements are present and correctly rendered:
 
-1. **Starting Node:** 'Bug found' is displayed in a dark box with a red (#EF4444) border at top center, with red text — matches spec.
-2. **Fork Lines:** Two diagonal lines diverge from the starting node — left line is blue (#4A90D9), right line is amber (#D9944A) — matches spec.
-3. **Left Branch (Code bug):** Blue-bordered node with 'Code bug' text in blue. 'Add a wall' action text appears below in muted gray (#94A3B8). A small mold icon shows a wall element with '+ wall' label and a dashed downward arrow — matches spec intent.
-4. **Right Branch (Prompt defect):** Amber-bordered node with 'Prompt defect' text in amber. 'Change the mold itself' action text below in muted gray. A small mold icon shows reshaping with 'reshape' label and a dashed downward arrow — matches spec intent.
-5. **Background:** Deep navy-black (#0A0F1A) with subtle blueprint grid visible — matches spec.
-6. **Bottom text:** 'PDD separates code failures from specification failures' — this is an additional contextual callout that reinforces the spec's narrative intent and is a reasonable implementation detail.
-7. **Layout:** Both branches are visible, the distinction is clear, composition is horizontally balanced with the starting node centered. All elements are in the expected hold phase.
-8. **Animation phase:** At frame 479 we are in the 420-540 hold/transition phase; all elements are fully visible and static, which is correct.
+1. **'Bug found' starting node** — Centered at top, red-bordered box with red text on dark fill. Matches spec (`#EF4444` border/text, `#1E1E2E` fill, rounded corners).
+
+2. **Fork lines** — Two diagonal lines diverge downward from the starting node. Left line is blue (`#4A90D9`), right line is amber (`#D9944A`). Both clearly visible.
+
+3. **Left branch 'Code bug'** — Blue-bordered node with blue text, positioned left. 'Add a wall' action text appears below in muted gray (`#94A3B8`). Small mold icon below shows a wall being added (U-shape with interior wall). Label '+ wall' visible. Dashed arrow below the icon.
+
+4. **Right branch 'Prompt defect'** — Amber-bordered node with amber text, positioned right. 'Change the mold itself' action text appears below in muted gray. Small mold icon shows nozzle/prompt reshaping (pentagon-like shape with arrow). Label 'reshape' visible. Dashed arrow below the icon.
+
+5. **Background** — Deep navy-black (`#0A0F1A`) with subtle blueprint grid visible.
+
+6. **Bottom text** — 'PDD separates code failures from specification failures' displayed at the bottom center, which reinforces the key distinction. This is an addition not explicitly in the spec's visual elements but aligns with the narration and the spec's thematic intent.
+
+7. **Layout** — Both branches are symmetrically positioned, the fork diagram reads clearly, and all animation phases prior to this frame have completed (we're in the hold/fade phase). The composition is balanced and the distinction between the two paths is visually clear.
+
+Minor observations that do not warrant failure: The starting node appears slightly wider and more rounded/pill-shaped compared to the spec's 200x50px rectangular description, but the visual intent is preserved. The mold icons use simplified iconographic representations rather than detailed mold cross-sections, which is appropriate for the small icon size. The bottom summary text is an additive element not in the spec but does not conflict with it.

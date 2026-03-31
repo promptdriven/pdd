@@ -71,12 +71,12 @@ export const ColdOpen01SplitScreenDarning: React.FC = () => {
   // --- Resolve video sources ---
   const leftClipA = useMediaSrc('leftSrc', 'veo/developer_cursor_edit.mp4');
   const leftClipB = useMediaSrc(
-    'leftZoomSrc',
+    'leftRevealSrc',
     'veo/developer_codebase_zoomout.mp4',
   );
   const rightClipA = useMediaSrc('rightSrc', 'veo/grandmother_darning.mp4');
   const rightClipB = useMediaSrc(
-    'rightZoomSrc',
+    'rightRevealSrc',
     'veo/grandmother_drawer_zoomout.mp4',
   );
 

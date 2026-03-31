@@ -406,6 +406,15 @@ Instructions:
   files for EACH embedded clip. The Veo generation pipeline only discovers standalone [veo:] specs —
   clips referenced inside [split:] or [Remotion] specs will NOT be generated unless they have their
   own dedicated [veo:] spec file. Name companions like {NN}_{clip_id}.md with a [veo:] marker.
+- IMPORTANT: If a [split:] panel changes to a second Veo shot while the same split layout persists
+  (for example: close-up work in each panel, then a wide reveal in each panel), you MUST encode the
+  ordered panel clip sequence structurally in ## Data Points JSON using panels.left.clips and
+  panels.right.clips. Example:
+  - "panels": { "left": { "clips": ["developer_cursor_edit", "developer_codebase_zoomout"] },
+                 "right": { "clips": ["grandmother_darning", "grandmother_drawer_zoomout"] } }
+  Do NOT leave the reveal shot prose-only inside Visual Description / Animation Sequence. If the
+  reveal requires different Veo footage, list both clipIds in order and generate companion [veo:]
+  specs for both clips so downstream composition manifests can bind the correct reveal media.
 - IMPORTANT: Companion [veo:] specs embedded inside a [split:] or other container MUST declare the
   parent/container link in ## Data Points JSON. Use:
   - "usedIn": "{parent_spec_base} (left panel)" or "usedIn": "{parent_spec_base} (right panel)" when the panel is known

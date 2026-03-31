@@ -75,8 +75,8 @@ Issue-Tracker = "https://github.com/promptdriven/pdd/issues"
 [project.scripts]
 pdd = "pdd.cli:cli"
 
-[tool.setuptools.packages.find]
-include = ["pdd*"]
+[tool.setuptools]
+packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"]
 
 [tool.setuptools.package-data]
 "pdd" = [

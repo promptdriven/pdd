@@ -23,13 +23,9 @@
       "durationSeconds": 49.258667,
       "offsetSeconds": 0,
       "compositions": [
-        "01_split_screen_darning",
-        "05_code_cursor_blink",
-        "06_code_regeneration",
-        "07_title_card_pdd",
-        "08_prompt_file_generate",
-        "09_test_fix_cycle",
-        "10_transition_overlay"
+        "07_code_cursor_blink",
+        "08_code_regeneration",
+        "09_title_card_pdd"
       ],
       "timelineSource": "generated"
     },
@@ -40,7 +36,7 @@
       "specDir": "part1_economics",
       "remotionDir": "S01-Part1Economics",
       "compositionId": "Part1EconomicsSection",
-      "durationSeconds": 458.090667,
+      "durationSeconds": 486.122667,
       "offsetSeconds": 49.258667,
       "compositions": [
         "01_section_title_card",
@@ -72,7 +68,7 @@
       "remotionDir": "S02-Part2ParadigmShift",
       "compositionId": "Part2ParadigmShiftSection",
       "durationSeconds": 230.314667,
-      "offsetSeconds": 507.349334,
+      "offsetSeconds": 535.3813339999999,
       "compositions": [
         "01_section_title_card",
         "04_mold_production_counter",
@@ -96,7 +92,7 @@
       "remotionDir": "S03-Part3MoldParts",
       "compositionId": "Part3MoldPartsSection",
       "durationSeconds": 365.845333,
-      "offsetSeconds": 737.664001,
+      "offsetSeconds": 765.6960009999999,
       "compositions": [
         "01_section_title_card",
         "02_mold_cross_section",
@@ -126,7 +122,7 @@
       "remotionDir": "S04-Part4PrecisionTradeoff",
       "compositionId": "Part4PrecisionTradeoffSection",
       "durationSeconds": 112.789333,
-      "offsetSeconds": 1103.5093339999999,
+      "offsetSeconds": 1131.541334,
       "compositions": [
         "01_section_title_card",
         "02_split_printer_vs_mold",
@@ -148,7 +144,7 @@
       "remotionDir": "S05-Part5CompoundReturns",
       "compositionId": "Part5CompoundReturnsSection",
       "durationSeconds": 124.949333,
-      "offsetSeconds": 1216.2986669999998,
+      "offsetSeconds": 1244.330667,
       "compositions": [
         "01_section_title_card",
         "02_maintenance_pie_chart",
@@ -168,7 +164,7 @@
       "remotionDir": "S06-WhereToStart",
       "compositionId": "WhereToStartSection",
       "durationSeconds": 33.258667,
-      "offsetSeconds": 1341.2479999999998,
+      "offsetSeconds": 1369.28,
       "compositions": [
         "01_section_title_card",
         "02_legacy_codebase_reveal",
@@ -188,7 +184,7 @@
       "remotionDir": "S07-Closing",
       "compositionId": "ClosingSection",
       "durationSeconds": 16.32,
-      "offsetSeconds": 1374.5066669999999,
+      "offsetSeconds": 1402.538667,
       "compositions": [
         "03_pdd_triangle",
         "04_dissolve_regenerate_loop",
@@ -268,10 +264,9 @@
       },
       {
         "id": "developer",
-        "label": "Developer",
+        "label": "Modern Developer",
         "imagePath": "outputs/veo/references/developer.png",
         "sections": [
-          "cold_open",
           "part5_compound_returns"
         ],
         "referencePrompt": "Software developer at modern desk with large monitor showing code editor, cool blue-white lighting, mechanical keyboard, minimalist workspace",
@@ -284,6 +279,7 @@
         "imagePath": "outputs/veo/references/developer_protagonist.png",
         "sections": [
           "closing",
+          "cold_open",
           "part1_economics"
         ],
         "referencePrompt": "A 30-something software developer, gender-neutral, wearing a dark henley shirt. Modern desk with mechanical keyboard and single ultrawide monitor. Cool blue-white lighting from LED desk lamp and monitor glow.",
@@ -292,7 +288,7 @@
       },
       {
         "id": "grandmother",
-        "label": "Great-Grandmother",
+        "label": "Grandmother",
         "imagePath": "outputs/veo/references/grandmother.png",
         "sections": [
           "cold_open",
@@ -318,15 +314,10 @@
     "frameChains": [
       {
         "clips": [
-          "developer_cursor_edit",
-          "developer_cursor_callback"
-        ],
-        "referenceId": "developer",
-        "source": "stage6-inferred"
-      },
-      {
-        "clips": [
+          "developer_cursor_edit_co",
+          "developer_codebase_zoomout_co",
           "developer_cursor_p1",
+          "developer_cursor_edit",
           "developer_codebase_zoomout",
           "developer_regenerate_closing"
         ],
@@ -335,7 +326,8 @@
       },
       {
         "clips": [
-          "grandmother_darning",
+          "grandmother_darning_co",
+          "grandmother_drawer_zoomout_co",
           "grandmother_darning_p1",
           "grandmother_darning_sock",
           "grandmother_socks_callback"

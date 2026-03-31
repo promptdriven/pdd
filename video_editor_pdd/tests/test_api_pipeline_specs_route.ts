@@ -869,6 +869,11 @@ describe("app/api/pipeline/specs/run/route.ts source structure", () => {
     expect(sourceCode).toMatch(/subordinate.*standalone top-level visual|standalone top-level visual/is);
   });
 
+  it("prompt requires split specs with multi-phase panel action to encode ordered panel clip sequences structurally", () => {
+    expect(sourceCode).toMatch(/panels\.left\.clips.*panels\.right\.clips|left panel.*clips.*right panel.*clips/is);
+    expect(sourceCode).toMatch(/Do NOT leave.*reveal.*prose-only|different Veo footage.*list both clipIds.*in order/is);
+  });
+
   it("prompt instructs Veo prompts to describe a single continuous action, not multi-phase sequences", () => {
     // Veo models can't reliably produce complex multi-action sequences in a single
     // 8-second clip. The spec gen prompt must guide Claude to write simple, single-action

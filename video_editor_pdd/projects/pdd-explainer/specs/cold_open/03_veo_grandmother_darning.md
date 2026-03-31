@@ -1,60 +1,59 @@
 [veo:]
 
-# Section 0.3: Grandmother Darning — Companion Clip
+# Section 0.3: Grandmother Darning — Cold Open Companion Clip
 
 **Tool:** Veo
-**Duration:** ~14s
-**Timestamp:** 0:00 - 0:13
+**Duration:** ~6s (180 frames @ 30fps)
+**Timestamp:** 0:00 - 0:06
 
 ## Visual Description
 
-A 1950s great-grandmother carefully darning a wool sock by warm lamplight. She sits in a comfortable armchair, wearing a cardigan, reading glasses perched on her nose. A single warm lamp illuminates her work. Her needle moves methodically through the wool, cross-hatching stitches to close a hole in a thick wool sock. The scene is warm, domestic, reverent — a portrait of careful, patient repair work. The camera holds on her hands and the sock, showing the precision of each stitch.
+Medium close-up of an elderly grandmother darning a wool sock with a traditional darning needle. She works by lamplight — warm amber glow from a table lamp. Her hands are skilled and steady, the needle moving in a practiced rhythm. A wooden darning mushroom supports the sock fabric. The setting is cozy — a wingback chair, a sewing basket nearby. She finishes the last few stitches of a repair, sets the needle down, and holds up the finished mend with quiet satisfaction.
 
 ### Veo Prompt
 ```
-Close-up of elderly woman's hands darning a wool sock with needle and thread in a 1950s living room. Warm lamplight from a single table lamp. Cross-hatched repair stitches visible on thick grey wool sock. Comfortable armchair, cardigan sweater. Warm golden tones, nostalgic domestic atmosphere. Shallow depth of field focused on hands and needle. Cinematic 4K.
+Medium close-up of an elderly grandmother's hands darning a wool sock with a traditional darning needle by warm amber lamplight. A wooden darning mushroom supports the sock. She completes the final stitches of a neat repair with practiced, steady hands. Cozy interior with a wingback chair visible in soft-focus background. The needle moves in a rhythmic weaving pattern. Cinematic 4K, warm color palette, shallow depth of field on hands and needle.
 ```
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Framing: Close-up on hands and sock, warm intimate framing
-- Color temperature: Very warm — single lamp, golden amber tones
-- Depth of field: Shallow, hands and sock sharp, armchair and room soft
+- Framing: Medium close-up on hands and sock
+- Color temperature: Warm amber throughout
+- Depth of field: Shallow, sharp on hands and needle, soft background
 
 ### Animation Sequence
-1. **0-5s:** Grandmother darning steadily. Needle moving through wool, stitches forming.
-2. **5-8s:** Final stitches complete. She pulls the thread taut, examines her work.
-3. **8-14s:** Camera holds on the finished repair. (Zoom-out effect handled by split container.)
+1. **0-3s:** Grandmother's hands working the needle through the sock fabric. Steady rhythm.
+2. **3-5s:** Final stitches complete. The repair is neat and tight.
+3. **5-6s:** Needle set down. The patch is finished.
 
 ### Typography
-- None — cinematic B-roll. Used as right panel in split screen (spec 01).
+- None — cinematic B-roll.
 
 ### Easing
 - N/A (live-action footage)
 
 ## Narration Sync
-> "But here's what your great-grandmother could tell you about that."
+> "If you use Cursor, or Copilot, or Claude Code —"
 
-Segments: `cold_open_001`, `cold_open_002`, `cold_open_003`
+Segment: `cold_open_001`
 
-- **0.00s**: Grandmother darning begins, needle in wool
-- **4.62s**: Stitches accumulating, methodical work
-- **9.42s**: "But here's what your great-grandmother could tell you" — finished repair visible
+- **0.00s**: Grandmother darning — split screen right panel
+- **3.80s**: Repair finishing
 
 ## Data Points JSON
 ```json
 {
   "type": "veo_clip",
-  "clipId": "grandmother_darning",
-  "durationSeconds": 14,
-  "usedIn": "01_split_screen_darning (right panel)",
+  "clipId": "grandmother_darning_co",
+  "durationSeconds": 6,
+  "usedIn": "01_split_developer_grandmother (right panel)",
   "characters": [
     {
       "id": "grandmother",
-      "label": "Great-Grandmother",
-      "referencePrompt": "Elderly woman in her 70s, 1950s attire, cardigan sweater, reading glasses, warm lamplight, domestic setting, kind weathered hands"
+      "label": "Grandmother",
+      "referencePrompt": "Elderly grandmother, warm lamplight, skilled hands, cozy interior, darning a wool sock"
     }
   ]
 }

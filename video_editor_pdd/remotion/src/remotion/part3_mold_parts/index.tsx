@@ -10,6 +10,7 @@ import { Part3MoldParts05BugAddsWall } from "../Part3MoldParts05BugAddsWall";
 import { Part3MoldParts06RatchetTimelapse } from "../Part3MoldParts06RatchetTimelapse";
 import { Part3MoldParts08BugForkRoad } from "../Part3MoldParts08BugForkRoad";
 import { Part3MoldParts09FiveGenerations } from "../Part3MoldParts09FiveGenerations";
+import { Part3MoldParts10Z3FormalProof } from "../Part3MoldParts10Z3FormalProof";
 import { Part3MoldParts12PromptNozzle } from "../Part3MoldParts12PromptNozzle";
 import { Part3MoldParts15GroundingStyles } from "../Part3MoldParts15GroundingStyles";
 import { Part3MoldParts17ComponentTable } from "../Part3MoldParts17ComponentTable";
@@ -23,6 +24,7 @@ const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
   "06_ratchet_timelapse": Part3MoldParts06RatchetTimelapse,
   "08_bug_fork_road": Part3MoldParts08BugForkRoad,
   "09_five_generations": Part3MoldParts09FiveGenerations,
+  "10_z3_formal_proof": Part3MoldParts10Z3FormalProof,
   "12_prompt_nozzle": Part3MoldParts12PromptNozzle,
   "15_grounding_styles": Part3MoldParts15GroundingStyles,
   "17_component_table": Part3MoldParts17ComponentTable,
@@ -37,6 +39,7 @@ const VISUAL_DURATIONS: Record<string, number> = {
   "06_ratchet_timelapse": 270,
   "08_bug_fork_road": 540,
   "09_five_generations": 540,
+  "10_z3_formal_proof": 780,
   "12_prompt_nozzle": 720,
   "15_grounding_styles": 780,
   "17_component_table": 300,
@@ -44,7 +47,7 @@ const VISUAL_DURATIONS: Record<string, number> = {
 };
 
 const VISUAL_MEDIA: Record<string, Record<string, string>> = {
-  "14_veo_grounding_material": { defaultSrc: "veo/grounding_material_flow.mp4", backgroundSrc: "veo/grounding_material_flow.mp4", outputSrc: "veo/grounding_material_flow.mp4", baseSrc: "veo/grounding_material_flow.mp4" },
+  "14_veo_grounding_material": { defaultSrc: "veo/grounding_material.mp4", backgroundSrc: "veo/grounding_material.mp4", outputSrc: "veo/grounding_material.mp4", baseSrc: "veo/grounding_material.mp4" },
 };
 
 const VISUAL_OVERLAYS: Record<string, Record<string, string | boolean | number>> = {
@@ -70,7 +73,7 @@ const VISUAL_CONTRACTS: Record<string, Record<string, unknown> | null> = {
   "11_module_boundary": {"specBaseName": "11_module_boundary", "dataPoints": {"type": "system_diagram", "centralModule": {"name": "user_parser", "color": "#4A90D9", "governed": true}, "surroundingModules": [{"name": "auth_service", "governed": false}, {"name": "db_layer", "governed": false}, {"name": "api_router", "governed": false}, {"name": "cache", "governed": false}, {"name": "logger", "governed": false}, {"name": "config", "governed": false}], "label": "PDD operates at the module level.", "narrationSegments": ["part3_mold_parts_015"], "durationSeconds": 22.0}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
   "12_prompt_nozzle": {"specBaseName": "12_prompt_nozzle", "dataPoints": {"type": "prompt_nozzle", "nozzleLabels": ["intent", "requirements", "constraints"], "promptText": "Parse user IDs from untrusted input. Return None on failure, never throw. Handle unicode.", "promptFile": "user_parser.prompt", "dualGeneration": true, "narrationSegments": ["part3_mold_parts_016"], "durationSeconds": 24.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "13_prompt_ratio": {"specBaseName": "13_prompt_ratio", "dataPoints": {"type": "compression_ratio", "promptLines": 15, "codeLines": 200, "ratio": "1:5 to 1:10", "contextComparison": {"left": {"tokens": 15000, "type": "raw_code", "modules": 1}, "right": {"tokens": 15000, "type": "prompts", "modules": 10}}, "narrationSegments": ["part3_mold_parts_017", "part3_mold_parts_018"], "durationSeconds": 18.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
-  "14_veo_grounding_material": {"specBaseName": "14_veo_grounding_material", "dataPoints": {"type": "veo_clip", "clipId": "grounding_material_flow", "durationSeconds": 8, "characters": []}, "mediaAliases": {"defaultSrc": "veo/grounding_material_flow.mp4", "backgroundSrc": "veo/grounding_material_flow.mp4", "outputSrc": "veo/grounding_material_flow.mp4", "baseSrc": "veo/grounding_material_flow.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
+  "14_veo_grounding_material": {"specBaseName": "14_veo_grounding_material", "dataPoints": {"type": "veo_clip", "clipId": "grounding_material_flow", "durationSeconds": 8, "characters": []}, "mediaAliases": {"defaultSrc": "veo/grounding_material.mp4", "backgroundSrc": "veo/grounding_material.mp4", "outputSrc": "veo/grounding_material.mp4", "baseSrc": "veo/grounding_material.mp4"}, "overlayConfig": null, "renderMode": "raw-media"},
   "15_grounding_styles": {"specBaseName": "15_grounding_styles", "dataPoints": {"type": "grounding_styles", "materialStreams": [{"label": "OOP", "color": "#4A90D9", "style": "angular"}, {"label": "Functional", "color": "#D9944A", "style": "smooth"}, {"label": "Your Team's Style", "color": "#4AD9A0", "style": "organic"}], "codeComparison": {"pathA": {"style": "OOP", "borderColor": "#4A90D9"}, "pathB": {"style": "Functional", "borderColor": "#D9944A"}}, "feedbackLoop": {"database": "Grounding Database", "stores": "(prompt, code) pair"}, "narrationSegments": ["part3_mold_parts_019"], "durationSeconds": 26.0}, "mediaAliases": {}, "overlayConfig": {"fadeInFrames": 60}, "renderMode": "component"},
   "16_three_components_pullback": {"specBaseName": "16_three_components_pullback", "dataPoints": {"type": "pipeline_pullback", "stages": [{"component": "Prompt", "encodes": "Intent", "color": "#D9944A"}, {"component": "Grounding", "encodes": "Style", "color": "#4AD9A0"}, {"component": "Tests", "encodes": "Correctness", "color": "#4A90D9"}, {"component": "Code", "encodes": "Output", "color": "#38BDF8"}], "narrationSegments": ["part3_mold_parts_020"], "durationSeconds": 9.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},
   "17_component_table": {"specBaseName": "17_component_table", "dataPoints": {"type": "component_table", "rows": [{"component": "Prompt", "encodes": "WHAT (intent)", "owner": "Developer", "color": "#D9944A"}, {"component": "Grounding", "encodes": "HOW (style)", "owner": "Automatic", "color": "#4AD9A0"}, {"component": "Tests", "encodes": "CORRECTNESS", "owner": "Accumulated", "color": "#4A90D9"}], "hierarchyRule": "When these conflict, tests win. Always.", "hierarchyOrder": ["Tests", "Prompt", "Grounding"], "narrationSegments": ["part3_mold_parts_021"], "durationSeconds": 10.0}, "mediaAliases": {}, "overlayConfig": null, "renderMode": "component"},

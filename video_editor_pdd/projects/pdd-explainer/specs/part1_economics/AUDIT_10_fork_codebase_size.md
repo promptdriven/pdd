@@ -1,4 +1,4 @@
 ## Verdict
-skip
+pass
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 10_fork_codebase_size. Claude CLI returned error: You've hit your limit · resets 12am (America/Los_Angeles)
+All spec-required elements are present and correctly positioned at 88% progress (hold phase). The forking chart shows the amber patch line splitting at ~2020 into a green lower fork (Small codebase, plunging) and a red upper fork (Large codebase, flat). Both fork labels are visible. The METR annotation, the 'Developers believed AI saved 20%. It cost 19%.' italic annotation, the dashed amber curved trap arrow from lower to upper fork, and the 'Every patch adds code.' label are all rendered. The 'Same tools. Different codebase sizes.' context label appears near the fork point in muted slate. Background is deep navy-black. The blue generate line and debt area are visible from the base chart. Minor overlap between the italic annotation text and the dashed arrow does not meaningfully impact readability. All colors match spec expectations (green #5AAA6E, red #EF4444, amber #F59E0B, slate #94A3B8).

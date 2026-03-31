@@ -3,13 +3,19 @@ import { Sequence, useCurrentFrame, Audio, staticFile } from "remotion";
 import { VISUAL_SEQUENCE } from "./constants";
 import { SlotScaledSequence, VisualMediaProvider, VisualContractProvider } from "../_shared/visual-runtime";
 import { GeneratedContractVisual } from "../_shared/GeneratedContractVisual";
+import { WhereToStart01SectionTitleCard } from "../WhereToStart01SectionTitleCard";
+import { WhereToStart03ModuleHighlightTerminal } from "../WhereToStart03ModuleHighlightTerminal";
 import { WhereToStart04SourceOfTruthLabel } from "../WhereToStart04SourceOfTruthLabel";
 
 const COMPONENT_MAP: Record<string, React.ComponentType<any>> = {
+  "01_section_title_card": WhereToStart01SectionTitleCard,
+  "03_module_highlight_terminal": WhereToStart03ModuleHighlightTerminal,
   "04_source_of_truth_label": WhereToStart04SourceOfTruthLabel,
 };
 
 const VISUAL_DURATIONS: Record<string, number> = {
+  "01_section_title_card": 546,
+  "03_module_highlight_terminal": 270,
   "04_source_of_truth_label": 150,
 };
 

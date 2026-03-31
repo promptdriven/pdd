@@ -1,4 +1,4 @@
 ## Verdict
-skip
+pass
 ## Summary
-Infrastructure error: Failed to analyze audit frame for 19_double_meter_insight. Claude CLI returned error: You've hit your limit · resets 12am (America/Los_Angeles)
+OCR confirmed visible text tokens in the rendered frame (effective, context, window, model, performance), so the frame does not support a hard missing-text failure.

@@ -1,60 +1,59 @@
 [veo:]
 
-# Section 0.2: Developer AI-Assisted Edit — Companion Clip
+# Section 0.2: Developer Cursor Edit — Cold Open Companion Clip
 
 **Tool:** Veo
-**Duration:** ~14s
-**Timestamp:** 0:00 - 0:13
+**Duration:** ~6s (180 frames @ 30fps)
+**Timestamp:** 0:00 - 0:06
 
 ## Visual Description
 
-A developer at a modern desk, working in a Cursor-style AI code editor. The screen shows a code file with a glowing inline suggestion appearing — the developer accepts it, and a clean diff highlight shows the change landing. The shot begins as a medium close-up on the developer's hands and screen, then gradually pulls back to reveal the broader workspace: multiple monitors showing sprawling codebases, diff markers everywhere, TODO comments visible in sidebars. The zoom-out reveals the single edit was just one tiny patch in an enormous, heavily-maintained codebase.
+Medium shot of a developer working at a modern desk with a large monitor showing a code editor (VS Code / Cursor style). The developer types confidently — green autocomplete suggestions appear, they press Tab to accept. The rhythm is fluid and practiced. Cool blue-white monitor glow illuminates their face. The edit is slick and efficient — one clean change landing perfectly. The developer finishes the edit and a subtle green checkmark or success indicator appears on screen.
 
 ### Veo Prompt
 ```
-Medium close-up of a developer's hands typing at a modern keyboard, sleek monitor showing a dark-themed code editor with glowing inline AI code suggestion. Developer accepts the suggestion, green diff highlight appears. Clean modern desk setup with ambient RGB lighting. Cinematic shallow depth of field, cool blue-white monitor glow on face. 4K.
+Medium shot of a software developer typing at a modern desk with a large monitor displaying a code editor with syntax-highlighted code. The developer types confidently on a mechanical keyboard, a green autocomplete suggestion appears on screen and is accepted with a keystroke. Cool blue-white monitor glow on the developer's face, dim modern office background. The edit lands cleanly. Cinematic 4K, shallow depth of field, focused on hands and screen.
 ```
 
 ## Technical Specifications
 
 ### Canvas
 - Resolution: 1920x1080 (16:9)
-- Framing: Medium close-up on hands and monitor, pulling to wide
-- Color temperature: Cool — monitor glow, modern office blues
-- Depth of field: Shallow initially, deepening on zoom-out
+- Framing: Medium shot, developer from chest up with monitor visible
+- Color temperature: Cool blue-white from monitor
+- Depth of field: Shallow, focus on hands/screen
 
 ### Animation Sequence
-1. **0-5s:** Developer typing. Cursor interface visible. AI suggestion appears inline.
-2. **5-8s:** Developer accepts edit. Green diff highlight. Clean code change.
-3. **8-14s:** Camera holds on the completed edit. (Zoom-out effect handled by split container.)
+1. **0-3s:** Developer typing, Cursor autocomplete suggestion appearing on screen.
+2. **3-5s:** Edit accepted, code updates cleanly. Green success indicator.
+3. **5-6s:** Developer pauses — the edit is done. Clean.
 
 ### Typography
-- None — cinematic B-roll. Used as left panel in split screen (spec 01).
+- None — cinematic B-roll.
 
 ### Easing
 - N/A (live-action footage)
 
 ## Narration Sync
-> "If you use Cursor, or Copilot, or Claude Code... you're getting really good at patching."
+> "If you use Cursor, or Copilot, or Claude Code —"
 
-Segments: `cold_open_001`, `cold_open_002`
+Segment: `cold_open_001`
 
-- **0.00s**: Developer begins typing, editor visible
-- **4.62s**: "you're getting really good at patching" — edit lands cleanly
-- **8.92s**: Hold on completed edit
+- **0.00s**: Developer typing — split screen left panel
+- **3.80s**: Edit completing
 
 ## Data Points JSON
 ```json
 {
   "type": "veo_clip",
-  "clipId": "developer_cursor_edit",
-  "durationSeconds": 14,
-  "usedIn": "01_split_screen_darning (left panel)",
+  "clipId": "developer_cursor_edit_co",
+  "durationSeconds": 6,
+  "usedIn": "01_split_developer_grandmother (left panel)",
   "characters": [
     {
-      "id": "developer",
+      "id": "developer_protagonist",
       "label": "Developer",
-      "referencePrompt": "Young developer, late 20s, casual hoodie, modern desk setup with ultrawide monitor, dark-themed code editor, ambient RGB lighting"
+      "referencePrompt": "Software developer, early 30s, focused expression, modern office setting, cool monitor glow on face"
     }
   ]
 }

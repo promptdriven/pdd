@@ -103,6 +103,21 @@ describe("shared Remotion runtime", () => {
     expect(source).toMatch(/useVisualContractData/);
   });
 
+  it("exposes a slot-aware frame hook so preview timing uses intrinsic visual progress", () => {
+    expect(source).toMatch(/SlotScaledRuntimeContext/);
+    expect(source).toMatch(/export const useVisualFrame =/);
+    expect(source).toMatch(/const frame = useCurrentFrame\(\);/);
+    expect(source).toMatch(/return slotScaledRuntime\?\.frame \?\? frame;/);
+    expect(source).toMatch(/slotScaledRuntime\?\.durationInFrames/);
+  });
+
+  it("synthesizes a root sequence context so exact preview components can use nested Sequence timing", () => {
+    expect(source).toMatch(/const effectiveSequenceContext = useMemo/);
+    expect(source).toMatch(/scaledSequenceContext \?\? \{/);
+    expect(source).toMatch(/id: `slot-scaled-\$\{videoConfig\.id\}`/);
+    expect(source).toMatch(/<Internals\.SequenceContext\.Provider value=\{effectiveSequenceContext\}>/);
+  });
+
   it("falls back to media aliases stored on the structured visual contract when no provider media is passed", () => {
     expect(source).toMatch(/contract\?\.mediaAliases/);
     expect(source).toMatch(/media\?\.\[key\].*contractMedia\?\.\[key\]/s);

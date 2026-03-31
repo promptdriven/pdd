@@ -29,6 +29,10 @@ export type VisualContract = {
 
 const VisualMediaContext = createContext<VisualMedia | null>(null);
 const VisualContractContext = createContext<VisualContract | null>(null);
+const SlotScaledRuntimeContext = createContext<{
+  frame: number;
+  durationInFrames: number;
+} | null>(null);
 
 export const VisualMediaProvider: React.FC<{
   media?: VisualMedia | null;
@@ -118,13 +122,24 @@ export const useVisualContractData = <
 };
 
 export const useVisualDurationInFrames = (): number => {
+  const slotScaledRuntime = useContext(SlotScaledRuntimeContext);
   const videoConfig = useVideoConfig();
   const sequenceContext = useContext(Internals.SequenceContext);
 
   return Math.max(
     1,
-    Math.floor(sequenceContext?.durationInFrames ?? videoConfig.durationInFrames)
+    Math.floor(
+      slotScaledRuntime?.durationInFrames ??
+        sequenceContext?.durationInFrames ??
+        videoConfig.durationInFrames
+    )
   );
+};
+
+export const useVisualFrame = (): number => {
+  const slotScaledRuntime = useContext(SlotScaledRuntimeContext);
+  const frame = useCurrentFrame();
+  return slotScaledRuntime?.frame ?? frame;
 };
 
 export const SlotScaledSequence: React.FC<{
@@ -157,10 +172,33 @@ export const SlotScaledSequence: React.FC<{
       targetDurationInFrames
     );
   }, [sequenceContext, targetDurationInFrames]);
+  const effectiveSequenceContext = useMemo(
+    () =>
+      scaledSequenceContext ?? {
+        cumulatedFrom: 0,
+        relativeFrom: 0,
+        durationInFrames: targetDurationInFrames,
+        parentFrom: 0,
+        id: `slot-scaled-${videoConfig.id}`,
+        height: videoConfig.height,
+        width: videoConfig.width,
+        premounting: false,
+        postmounting: false,
+        premountDisplay: null,
+        postmountDisplay: null,
+      },
+    [
+      scaledSequenceContext,
+      targetDurationInFrames,
+      videoConfig.height,
+      videoConfig.id,
+      videoConfig.width,
+    ]
+  );
   const scaledSequenceOffset =
-    scaledSequenceContext?.cumulatedFrom !== undefined
-      ? scaledSequenceContext.cumulatedFrom +
-        scaledSequenceContext.relativeFrom
+    effectiveSequenceContext?.cumulatedFrom !== undefined
+      ? effectiveSequenceContext.cumulatedFrom +
+        effectiveSequenceContext.relativeFrom
       : 0;
 
   const scaledTimelineContext = useMemo(() => {
@@ -173,12 +211,17 @@ export const SlotScaledSequence: React.FC<{
     };
   }, [scaledFrame, scaledSequenceOffset, timelineContext, videoConfig.id]);
 
-  const content = scaledSequenceContext ? (
-    <Internals.SequenceContext.Provider value={scaledSequenceContext}>
-      {children}
-    </Internals.SequenceContext.Provider>
-  ) : (
-    <>{children}</>
+  const content = (
+    <SlotScaledRuntimeContext.Provider
+      value={{
+        frame: scaledFrame,
+        durationInFrames: targetDurationInFrames,
+      }}
+    >
+      <Internals.SequenceContext.Provider value={effectiveSequenceContext}>
+        {children}
+      </Internals.SequenceContext.Provider>
+    </SlotScaledRuntimeContext.Provider>
   );
 
   return (
