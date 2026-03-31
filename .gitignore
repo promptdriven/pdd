@@ -246,3 +246,6 @@ ci/cloud-batch/test-durations.json
 # not tracked in version control to avoid OS compatibility issues.
 .local_pkgs/temp_workspace
 fake_test_output.py
+
+# Solver infrastructure artifacts
+.gh-wrapper/

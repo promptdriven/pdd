@@ -5709,7 +5709,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, message: str, title: str = 'Confirmation Required')",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5749,7 +5749,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, message: str, title: str = 'Input Required', default: str = '', password: bool = False)",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5797,7 +5797,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, app_ref: List[Optional['SyncApp']])",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5845,7 +5845,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, real_redirector: 'ThreadSafeRedirector', stdin_redirector: 'TUIStdinRedirector')",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -5877,7 +5877,7 @@
           },
           {
             "name": "__init__",
-            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None, app: App, log: RichLog)",
+            "signature": "(self, basename: str, budget: Optional[float], worker_func: Callable[[], Any], function_name_ref: List[str], cost_ref: List[float], prompt_path_ref: List[str], code_path_ref: List[str], example_path_ref: List[str], tests_path_ref: List[str], prompt_color_ref: List[str], code_color_ref: List[str], example_color_ref: List[str], tests_color_ref: List[str], stop_event: threading.Event, progress_callback_ref: Optional[List[Optional[Callable[[int, int], None]]]] = None)",
             "returns": "None",
             "sideEffects": [
               "None"
@@ -8658,6 +8658,55 @@
     },
     "position": {
       "x": 14000,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Standalone CI script for detecting and auto-healing prompt/example drift with budget-capped execution.",
+    "description": "CI script that detects prompt/example drift across PDD modules using sync_determine_operation, heals drifted modules via pdd update/sync subprocesses, tracks LLM costs against a budget cap, and commits/pushes changes automatically.",
+    "dependencies": [
+      "sync_determine_operation_python.prompt",
+      "operation_log_python.prompt",
+      "agentic_sync_runner_python.prompt",
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 80,
+    "filename": "ci_drift_heal_python.prompt",
+    "filepath": "pdd/ci_drift_heal.py",
+    "tags": [
+      "backend",
+      "ci",
+      "drift-detection"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "main",
+            "signature": "(modules: Optional[List[str]], budget_cap: Optional[float], skip_ci: bool)",
+            "returns": "int"
+          },
+          {
+            "name": "detect_drift",
+            "signature": "(modules: Optional[List[str]])",
+            "returns": "Tuple[List[DriftInfo], List[DriftInfo]]"
+          },
+          {
+            "name": "heal_module",
+            "signature": "(drift: DriftInfo, env: Dict[str, str])",
+            "returns": "bool"
+          },
+          {
+            "name": "commit_and_push",
+            "signature": "(healed_modules: List[str], skip_ci: bool)",
+            "returns": "bool"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 14200,
       "y": 2000
     }
   }

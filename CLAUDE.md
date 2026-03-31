@@ -14,6 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Cloud batch tests: `make cloud-test` (streams failures live, ~10 min)
 - Cloud batch (keep raw): `make cloud-test KEEP_RAW=1` (also preserve raw JSON/XML in test-results/cloud-batch-raw/)
 - Lint check: `pylint **/*.py`
+- Auto-heal drift CI: `.github/workflows/auto-heal-drift.yml` (triggers on PRs and push to main)
 
 ## Code Style
 - Python 3.11+, follow PEP 8 conventions
