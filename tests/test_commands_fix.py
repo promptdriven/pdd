@@ -336,6 +336,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
             strength=None,
             temperature=None,
             protect_tests=False,
+            failure_aware_retries=True,
         )
         mock_fix_main.assert_any_call(
             ctx=ANY,
@@ -355,6 +356,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
             strength=None,
             temperature=None,
             protect_tests=False,
+            failure_aware_retries=True,
         )
 
 @pytest.mark.parametrize("num_test_files", [1, 2])
