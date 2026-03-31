@@ -1,20 +1,25 @@
 ## Verdict
 pass
 ## Summary
-The frame at 95% progress (frame 284/300) is in the final hold phase (frames 270-300) and matches the spec accurately. All required elements are present and correct:
+The frame at 95% progress (frame 284/300) matches the spec's animation phase 8 (frames 270-300: Hold, table complete, hierarchy established). All required elements are present and correctly rendered:
 
-1. **Table structure**: Three-column table (COMPONENT / ENCODES / OWNER) is centered on screen with proper header row and three data rows. Header text is uppercase with tracking, matching the spec.
+1. **Table**: Centered on screen with three columns (COMPONENT, ENCODES, OWNER) in uppercase header text with muted color. Header row has darker fill with visible bottom border.
 
-2. **Row content and color-coding**: 'Prompt' in amber/gold (#D9944A range), 'Grounding' in teal/green (#4AD9A0 range), 'Tests' in blue (#4A90D9 range). Each row has its matching left accent border (3px colored strip visible on the left edge of each data row). Encodes column shows 'WHAT (intent)', 'HOW (style)', 'CORRECTNESS'. Owner column shows 'Developer', 'Automatic', 'Accumulated'.
+2. **Data rows**: All three rows visible with correct content:
+   - 'Prompt' in amber/gold with 'WHAT (intent)' and 'Developer' — amber left accent border present
+   - 'Grounding' in teal/green with 'HOW (style)' and 'Automatic' — teal left accent border present
+   - 'Tests' in blue with 'CORRECTNESS' and 'Accumulated' — blue left accent border present
 
-3. **Hierarchy line**: 'When these conflict, tests win. Always.' is displayed below the table, centered. 'tests win' and 'Always' are highlighted in blue (#4A90D9), matching the spec's emphasis requirement.
+3. **Row color accents**: Left border strips are visible on each row matching their component color (amber, teal, blue).
 
-4. **Subtext**: 'The walls override the specification. The specification overrides the style.' appears below the hierarchy line in muted gray, centered, matching spec.
+4. **Hierarchy line**: 'When these conflict, tests win. Always.' is displayed below the table, centered. 'tests win' and 'Always' are highlighted in blue, matching the spec's `#4A90D9` emphasis color.
 
-5. **Background**: Deep navy-black (#0A0F1A range), consistent with spec.
+5. **Subtext**: 'The walls override the specification. The specification overrides the style.' appears below the hierarchy line in muted gray, centered.
 
-6. **Layout**: Table is horizontally centered with generous whitespace above and below. The vertical positioning of the table is slightly above center and the hierarchy text is well-spaced below, preserving the intended composition.
+6. **Background**: Deep navy-black consistent with `#0A0F1A`.
 
-7. **Animation phase**: At frame 284 (hold phase 270-300), all elements are fully visible and static, which is correct for this phase.
+7. **Layout**: Table is horizontally centered with generous whitespace above and below. The vertical positioning of the table is slightly above center, which is a reasonable composition choice. The hierarchy line and subtext are positioned below the table with appropriate spacing.
 
-The blue pulse glow on 'tests win' / 'Always' may be at a low-opacity point in its cycle at this exact frame, but the blue color emphasis is clearly visible. Overall the frame faithfully represents the spec.
+8. **Typography**: Headers are uppercase with letter-spacing. Component names are bold and color-coded. Parenthetical text '(intent)' and '(style)' appear in smaller, muted text. All text is legible and properly styled.
+
+The blue pulse glow on 'tests win' and 'Always' may be at a low-opacity phase of its cycle at this particular frame, but the blue color emphasis is clearly visible. Overall the frame faithfully represents the complete table with hierarchy established as specified.
