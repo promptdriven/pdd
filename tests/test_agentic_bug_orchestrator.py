@@ -231,6 +231,79 @@ def test_fast_track_skips_steps_4_and_5(mock_dependencies, default_args):
     assert mock_run.call_count == 10, f"Expected 10 calls (12 - 2 skipped), got {mock_run.call_count}"
 
 
+@pytest.mark.parametrize("fast_track_summary", [
+    "{test_user_id}-approve-{8hex} is not validated",
+    '{"key": "value", "nested": {"a": 1}}',
+    "f-string bug: value was {:.2f} instead of {:d}",
+])
+def test_fast_track_with_curly_braces_does_not_crash(mock_dependencies, default_args, fast_track_summary):
+    """
+    Issue #974: FAST_TRACK summary containing curly braces must not cause
+    KeyError/IndexError. The old code used .format() on a string containing
+    LLM output, which interpreted braces as named placeholders.
+    """
+    mock_run, _, _ = mock_dependencies
+    calls = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        calls.append(label)
+        if label == 'step3':
+            return (True, f"Status: Fast-Track\nFAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, f"Should not crash on curly braces in FAST_TRACK summary: {msg}"
+    assert 'step4' not in calls
+    assert 'step5' not in calls
+    assert mock_run.call_count == 10
+
+
+def test_fast_track_curly_braces_preserved_in_step_outputs(mock_dependencies, default_args):
+    """
+    Issue #974: Curly braces from FAST_TRACK summary must appear verbatim in
+    step4/step5 outputs — not escaped, stripped, or mangled. Downstream steps
+    depend on accurate root-cause context.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    fast_track_summary = "Bug in {user_handler} parsing {json_payload}"
+
+    def side_effect_load(name):
+        # Step 6 template references step4_output so we can verify braces flow through
+        if "step6" in name:
+            return "Previous root cause: {step4_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step3':
+            return (True, f"FAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+
+    # Step 6 is the first step after the skip — its prompt should contain the braces verbatim
+    step6_call = [c for c in mock_run.call_args_list if c.kwargs.get('label') == 'step6']
+    assert len(step6_call) == 1
+    step6_prompt = step6_call[0].kwargs.get('instruction', '')
+    assert "{user_handler}" in step6_prompt, \
+        f"Curly braces should be preserved verbatim in downstream prompts, got: {step6_prompt[:300]}"
+
+
 def test_hard_stop_step_5_5_prompt_review(mock_dependencies, default_args):
     """
     Test early exit at Step 5.5 if prompt needs human review.

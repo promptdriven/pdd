@@ -1136,9 +1136,8 @@ def run_agentic_bug_orchestrator(
         if step_num == 3 and "FAST_TRACK:" in step_output:
             fast_track_match = re.search(r"FAST_TRACK:\s*(.+)", step_output)
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
-            skip_msg = f"Step {{}} skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
-            context["step4_output"] = skip_msg.format(4)
-            context["step5_output"] = skip_msg.format(5)
+            context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             state["step_outputs"]["4"] = context["step4_output"]
             state["step_outputs"]["5"] = context["step5_output"]
             state["last_completed_step"] = 5
