@@ -7,6 +7,7 @@ raising KeyError on undefined placeholders.
 Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
+import json
 import re
 import subprocess
 import sys
@@ -4744,3 +4745,158 @@ class TestReviewFix4ConsistentRetryState:
                 "Step 2 main-path retry should save state with VERIFICATION_FAILED "
                 "or IMPORT_ERROR_RETRY in step_outputs['2']"
             )
+
+
+class TestIssue1031WorkflowStateMarkers:
+    """Tests for issue #1031: _extract_test_files misses FILES_CREATED markers
+    embedded inside PDD_WORKFLOW_STATE JSON comments.
+
+    Bug: When pdd-issue chains bug → fix in separate Cloud Run Jobs, the fix
+    executor runs in a fresh clone. FILES_CREATED markers from pdd bug are
+    embedded inside a JSON-serialized PDD_WORKFLOW_STATE HTML comment where
+    newlines become \\n escape sequences. splitlines() misses them, causing
+    _extract_test_files to fall back to scanning all test files (multi-hour stall).
+
+    These tests use the exact production format from _serialize_state_comment:
+    indent=2 JSON, <!-- PDD_WORKFLOW_STATE:{type}:issue-{N} --> markers.
+    """
+
+    @staticmethod
+    def _make_workflow_comment(
+        step_output: str,
+        workflow_type: str = "bug",
+        issue_number: int = 1026,
+        step_key: str = "9",
+    ) -> str:
+        """Build a PDD_WORKFLOW_STATE comment matching production format exactly.
+
+        Uses json.dumps(indent=2) and the real marker format from
+        agentic_common._serialize_state_comment.
+        """
+        state = {"step_outputs": {step_key: step_output}}
+        json_str = json.dumps(state, indent=2)
+        return (
+            f"<!-- PDD_WORKFLOW_STATE:{workflow_type}:issue-{issue_number}\n"
+            f"{json_str}\n"
+            f"-->"
+        )
+
+    def test_json_embedded_files_created_marker(self, tmp_path):
+        """FILES_CREATED: inside a PDD_WORKFLOW_STATE JSON must be found.
+
+        This is the core bug: pdd bug produces step output with a real newline
+        before FILES_CREATED:. json.dumps() serializes it as \\n in JSON text.
+        splitlines() on the raw HTML comment never sees it as a line start.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_webhook.py").write_text("def test_x(): pass")
+        # Decoy files — if the directory scan fallback fires, these get included
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Analysis complete.\nFILES_CREATED: tests/test_webhook.py"
+        issue_content = (
+            "Bug description here.\n"
+            + self._make_workflow_comment(step_output)
+            + "\nMore text."
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_webhook.py"], (
+            f"Expected ['tests/test_webhook.py'] from JSON-embedded marker, "
+            f"got {result!r}"
+        )
+
+    def test_json_embedded_e2e_files_created_marker(self, tmp_path):
+        """E2E_FILES_CREATED: inside a PDD_WORKFLOW_STATE JSON must also be found."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_login.py").write_text("def test_x(): pass")
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Done.\nE2E_FILES_CREATED: tests/test_e2e_login.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_e2e_login.py"], (
+            f"Expected ['tests/test_e2e_login.py'] from JSON-embedded E2E marker, "
+            f"got {result!r}"
+        )
+
+    def test_json_embedded_comma_separated_markers(self, tmp_path):
+        """Multiple comma-separated files in a JSON-embedded marker are all found."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_alpha.py").write_text("def test_a(): pass")
+        (tmp_path / "tests" / "test_beta.py").write_text("def test_b(): pass")
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Created.\nFILES_CREATED: tests/test_alpha.py, tests/test_beta.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert sorted(result) == ["tests/test_alpha.py", "tests/test_beta.py"], (
+            f"Expected both test files from comma-separated marker, got {result!r}"
+        )
+
+    def test_json_embedded_marker_prevents_directory_scan_fallback(self, tmp_path):
+        """When a JSON-embedded marker is found, the directory scan must NOT fire.
+
+        Without the fix, the marker is invisible to splitlines(), no files are
+        found by any discovery path, and the ultimate fallback scans the entire
+        tests/ directory — returning hundreds of files.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_target.py").write_text("def test_t(): pass")
+        # Decoy files that the directory scan fallback would pick up
+        for i in range(10):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Fix applied.\nFILES_CREATED: tests/test_target.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_target.py"], (
+            f"Expected only ['tests/test_target.py'] but got {len(result)} files — "
+            f"directory scan fallback likely fired: {result!r}"
+        )
