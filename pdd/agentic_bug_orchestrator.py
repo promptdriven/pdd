@@ -845,6 +845,7 @@ def run_agentic_bug_orchestrator(
         "issue_title": issue_title,
         "step5_reproduction_tests": "",
         "fix_locations": "none",
+        "step9_test_verification": "",
     }
     
     # Populate context with previous step outputs
@@ -1135,9 +1136,8 @@ def run_agentic_bug_orchestrator(
         if step_num == 3 and "FAST_TRACK:" in step_output:
             fast_track_match = re.search(r"FAST_TRACK:\s*(.+)", step_output)
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
-            skip_msg = f"Step {{}} skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
-            context["step4_output"] = skip_msg.format(4)
-            context["step5_output"] = skip_msg.format(5)
+            context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             state["step_outputs"]["4"] = context["step4_output"]
             state["step_outputs"]["5"] = context["step5_output"]
             state["last_completed_step"] = 5
@@ -1523,6 +1523,20 @@ def run_agentic_bug_orchestrator(
                             f"[yellow]  → After retry, still missing coverage for: "
                             f"{', '.join(still_uncovered)} (proceeding with warning)[/yellow]"
                         )
+
+        # Deterministic subprocess verification for Step 9 generated tests (#960).
+        # _verify_e2e_tests already has correct TDD semantics: failures = expected
+        # (tests should fail on buggy code), setup/import errors = bad.
+        # Without this, Step 9 tests only get structural pattern scanning but are
+        # never actually executed — broken tests ship to the PR undetected.
+        if step_num == 9 and extracted:
+            verify_ok, verify_output = _verify_e2e_tests(extracted, current_work_dir)
+            context["step9_test_verification"] = verify_output
+            if not quiet:
+                if verify_ok:
+                    console.print(f"  → Step 9 test verification passed: {verify_output}")
+                else:
+                    console.print(f"[yellow]  → Step 9 test verification issue: {verify_output}[/yellow]")
 
         if step_num == 10:
             # Check for E2E classification marker in step output.

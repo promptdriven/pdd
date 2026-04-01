@@ -1,30 +1,47 @@
+## v0.0.194 (2026-03-31)
+
+### Fix
+
+- architecture_json.prompt path corruption — use single braces (#686) (#981)
+- FAST_TRACK KeyError on curly braces in LLM output (#974) (#976)
+- discover nested architecture.json files and strip code extensions in basename filter (#826)
+- update Step 11 E2E tests for Step 9 subprocess verification (#960)
+- parse PDD_WORKFLOW_STATE JSON to find test file markers (#1031)
+- add deterministic subprocess verification for Step 9 unit tests (#960)
+- CI validation misinterprets 'no required checks' as failure (#1025) (#1029)
+- harden contract-first audit rendering
+
+### Refactor
+
+- reorganize cold open specifications and update project documentation and visual runtime configurations.
+
 ## v0.0.193 (2026-03-30)
 
 ### Feat
 
-- CI auto-heal drift detection with integration fixes (#1001)
-- implement cold open video components and update corresponding project specifications
-- **fix**: failure-aware retries, fix orchestrator prompts
+- **CI auto-heal drift detection** (#1001): new `pdd/ci_drift_heal.py` module automatically detects prompt-code drift and heals it by running `pdd update` (stale prompts) or `pdd sync` (stale examples), with budget caps and per-module scoping. Includes GitHub Actions workflow (`.github/workflows/auto-heal-drift.yml`) that triggers on PRs and pushes to main with infinite-loop prevention
+- **failure-aware retries for `pdd fix`** (#734): new `failure_classification` module classifies test output into syntax/import, assertion/logic, and timeout/flaky categories. The fix error loop now short-circuits retries when the failure signature is unchanged (e.g. repeated SyntaxError), avoiding wasted LLM budget. New `--failure-aware-retries / --no-failure-aware-retries` CLI flag on `pdd fix` — thanks @vishalramvelu
 
 ### Fix
 
-- increase cloud batch PDD_CLOUD_TIMEOUT from 480s to 720s
-- scope structural test validator to new lines only (#990)
-- log warning on architecture scan errors instead of silently swallowing
-- add depth limit and expanded exclusions to recursive architecture discovery
-- make find_architecture_for_project() discover nested architecture.json files
-- **fix**: CLI flag for failure-aware retries; isolate early-exit; tests
-- **fix**: wire failure_classification in prompt; gate early exit on post-fix kind
-- canonicalize folded narrative headings
-- separate connect and read timeouts for cloud API requests
-- don't create empty prompt files during repo scan
+- **scope structural test validator to new lines only** (#990): `detect_structural_test_patterns()` now accepts a `start_line` parameter to suppress violations on pre-existing lines, fixing false positives when appending tests to files that already contained flagged patterns
+- **nested architecture.json discovery** (#1010): `find_architecture_for_project()` now recursively walks subdirectories (up to depth 4) instead of only scanning immediate children, with expanded exclusions (`node_modules`, `__pycache__`, `.git`, `venv`, `.venv`, `env`)
+- **log warning on architecture scan errors**: architecture discovery now logs warnings on `OSError`/`IOError` instead of silently swallowing exceptions
+- **add depth limit and expanded exclusions to recursive architecture discovery**: recursive walk is bounded to 4 levels and skips common non-project directories
+- **separate connect and read timeouts for cloud API requests**: new `get_cloud_request_timeout()` returns a `(connect=30s, read=PDD_CLOUD_TIMEOUT)` tuple so requests fail fast on unreachable servers while still allowing long LLM processing times
+- **don't create empty prompt files during repo scan**: `resolve_prompt_code_pair()` gains a `create_missing=False` option used by scan-only callers to avoid creating empty `.prompt` files as a side effect
+- **increase cloud batch PDD_CLOUD_TIMEOUT** from 480s to 720s for cloud batch test runs
 
-### Refactor
+### Test
 
-- improve clarity and detail in audit summary documentation
-- refine audit summary descriptions for consistency and add new developer cursor and grandmother darning audit specs
-- update audit specifications with detailed frame analysis and layout compliance notes
-- update narrative structure mapping and reorganize project specification files
+- add regression tests for multi-context basename resolution in `pdd update`
+- add failing tests for nested architecture.json discovery (#1010)
+- add comprehensive test suite for `ci_drift_heal` (610 lines), `failure_classification`, `fix_error_loop` failure-aware behavior, and structural test guard scoping
+
+### Docs
+
+- add `docs/ci-auto-heal.md` with full setup, configuration, and troubleshooting guide
+- update README with CI drift detection & auto-heal workflow integration section
 
 ## v0.0.192 (2026-03-29)
 

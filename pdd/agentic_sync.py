@@ -110,24 +110,20 @@ def _augment_architecture_from_pr_branch(
     change/issue-N branch, those entries are missing and _filter_invalid_basenames
     will reject them as hallucinations. This function fetches architecture.json
     from the PR branch and adds any entries whose filename is not already present.
+
+    Discovers all architecture.json files (root + nested like frontend/architecture.json)
+    using the same discovery mechanism as _load_architecture_json, then fetches each
+    from the PR branch via git show.
     """
     if architecture is None:
         return None
 
-    try:
-        result = subprocess.run(
-            ["git", "show", f"origin/change/issue-{issue_number}:architecture.json"],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        pr_arch = json.loads(result.stdout)
-    except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
-        return architecture
+    from .architecture_registry import find_architecture_for_project
 
-    if not isinstance(pr_arch, list):
-        return architecture
+    # Discover all architecture files on disk (root + subdirs)
+    arch_files = find_architecture_for_project(project_root)
+    if not arch_files:
+        arch_files = [project_root / "architecture.json"]
 
     existing_filenames = {
         entry.get("filename")
@@ -135,14 +131,37 @@ def _augment_architecture_from_pr_branch(
         if isinstance(entry, dict) and entry.get("filename")
     }
 
-    for entry in pr_arch:
-        if not isinstance(entry, dict):
+    branch_ref = f"origin/change/issue-{issue_number}"
+
+    for arch_path in arch_files:
+        try:
+            rel_path = arch_path.relative_to(project_root)
+        except ValueError:
             continue
-        filename = entry.get("filename")
-        if not filename or filename in existing_filenames:
+
+        try:
+            result = subprocess.run(
+                ["git", "show", f"{branch_ref}:{rel_path.as_posix()}"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            pr_arch = json.loads(result.stdout)
+        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
             continue
-        architecture.append(entry)
-        existing_filenames.add(filename)
+
+        if not isinstance(pr_arch, list):
+            continue
+
+        for entry in pr_arch:
+            if not isinstance(entry, dict):
+                continue
+            filename = entry.get("filename")
+            if not filename or filename in existing_filenames:
+                continue
+            architecture.append(entry)
+            existing_filenames.add(filename)
 
     return architecture
 
@@ -180,9 +199,14 @@ def _filter_invalid_basenames(
         if basename:
             basename_counts[basename] += 1
         else:
-            # Fallback for LLM prompts (_LLM.prompt) and other non-standard suffixes:
-            # strip .prompt extension, then remove trailing _LLM if present
-            stem = filename.rsplit(".prompt", 1)[0] if filename.endswith(".prompt") else filename
+            # Fallback for non-prompt filenames (e.g. "GitHubAppCTA.tsx" from
+            # frontend/architecture.json) and LLM prompts (_LLM.prompt).
+            # Strip known code extensions first, then .prompt and _LLM suffixes.
+            stem = filename
+            for ext in (".tsx", ".ts", ".jsx", ".js", ".py", ".prompt"):
+                if stem.endswith(ext):
+                    stem = stem[: -len(ext)]
+                    break
             for suffix in ("_LLM",):
                 if stem.endswith(suffix):
                     stem = stem[: -len(suffix)]
@@ -200,14 +224,15 @@ def _filter_invalid_basenames(
             valid.append(m)
         elif "/" in m:
             tail = m.rsplit("/", 1)[-1]
-            if tail in known_basenames and basename_counts[tail] == 1:
-                # Unambiguous tail match: path-qualified basename from branch
-                # diff (e.g. "frontend/app/settings/github/page" where "page"
-                # appears exactly once in architecture.json).
+            if tail in known_basenames:
+                # Path-qualified basename from branch diff (e.g.
+                # "frontend/components/layout/Sidebar"). The directory path
+                # already disambiguates even if the bare tail appears multiple
+                # times (e.g. both root and frontend architecture have "Sidebar"
+                # entries for the same module's prompt and code files).
                 valid.append(m)
             else:
-                # Either tail not found, or ambiguous (multiple entries share
-                # the same basename — can't determine which module is meant).
+                # Tail not found in any architecture entry.
                 invalid.append(m)
         else:
             invalid.append(m)

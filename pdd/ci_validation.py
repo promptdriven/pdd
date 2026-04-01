@@ -24,6 +24,11 @@ PASS_BUCKETS = {"pass", "skipping"}
 FAIL_BUCKETS = {"fail", "cancel"}
 PENDING_BUCKETS = {"pending"}
 
+# Substring gh CLI prints to stderr when no required checks are configured.
+# Centralised so tests can reference the same constant instead of duplicating
+# a magic string.
+GH_NO_REQUIRED_CHECKS_PHRASE = "no required checks"
+
 
 def detect_ci_system(cwd: Path) -> str:
     """Infer the repo's CI system from common config locations."""
@@ -221,6 +226,7 @@ def _poll_required_checks(
 ) -> Tuple[str, List[Dict[str, str]]]:
     """Poll required checks until they pass, fail, or time out."""
     saw_checks = False
+    saw_ambiguous_error = False
     matched_expected_head = not bool(expected_head_sha)
     latest_checks: List[Dict[str, str]] = []
     start = time.monotonic()
@@ -260,6 +266,23 @@ def _poll_required_checks(
                     console.print("[yellow]CI polling warning: failed to parse `gh pr checks` JSON output.[/yellow]")
 
         saw_checks = saw_checks or bool(latest_checks)
+
+        # gh pr checks --required exits 1 with empty output when no required
+        # checks are configured — intercept before the classifier since we
+        # need stderr to distinguish this from auth/network errors.
+        if result.returncode == 1 and not latest_checks:
+            stderr_lower = (result.stderr or "").lower()
+            if GH_NO_REQUIRED_CHECKS_PHRASE in stderr_lower:
+                return "no_checks", []
+            # Ambiguous error (e.g. HTTP 401); keep polling.
+            saw_ambiguous_error = True
+            if not quiet:
+                stderr_msg = result.stderr.strip()
+                if stderr_msg:
+                    console.print(f"[yellow]CI polling warning: {stderr_msg}[/yellow]")
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
         status = _classify_check_result(result.returncode, latest_checks)
 
         if status in {"passed", "failed"}:
@@ -272,7 +295,7 @@ def _poll_required_checks(
 
         time.sleep(POLL_INTERVAL_SECONDS)
 
-    if not saw_checks and matched_expected_head:
+    if not saw_checks and matched_expected_head and not saw_ambiguous_error:
         return "no_checks", []
     return "timeout", latest_checks
 

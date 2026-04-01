@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from pdd.ci_validation import (
+    _classify_check_result,
     _collect_failure_logs,
     _poll_required_checks,
     detect_ci_system,
@@ -280,3 +281,142 @@ def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_p
     kwargs = mock_comment.call_args.kwargs
     assert kwargs["attempts"] == 0
     assert kwargs["failures"] == [message]
+
+
+# ---------------------------------------------------------------------------
+# Issue #1025: _classify_check_result unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_classify_no_checks_exit_code_1_returns_failed() -> None:
+    """Without stderr context, exit 1 + empty checks falls through to 'failed'."""
+    assert _classify_check_result(1, []) == "failed"
+
+
+def test_classify_failed_checks_exit_code_1_returns_failed() -> None:
+    """Real failures with a 'fail' bucket must still be detected."""
+    checks = [{"name": "lint", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    assert _classify_check_result(1, checks) == "failed"
+
+
+def test_classify_passing_checks_exit_code_0_returns_passed() -> None:
+    """Happy path: all checks in 'pass' bucket returns 'passed'."""
+    checks = [{"name": "lint", "state": "SUCCESS", "bucket": "pass", "link": ""}]
+    assert _classify_check_result(0, checks) == "passed"
+
+
+def test_classify_empty_checks_exit_code_0_returns_passed() -> None:
+    """Exit 0 with no checks falls through to 'passed' via returncode."""
+    assert _classify_check_result(0, []) == "passed"
+
+
+def test_classify_pending_checks_returns_pending() -> None:
+    """Pending bucket detection is unchanged."""
+    checks = [{"name": "build", "state": "IN_PROGRESS", "bucket": "pending", "link": ""}]
+    assert _classify_check_result(8, checks) == "pending"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1025: poller distinguishes "no required checks" from errors
+# ---------------------------------------------------------------------------
+
+
+def test_poll_returns_no_checks_when_gh_reports_no_required_checks(tmp_path: Path) -> None:
+    """_poll_required_checks should return no_checks when gh exits 1 with empty stdout."""
+    empty_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout="",
+        stderr="no required checks reported on the 'fix/issue-1020' branch",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=empty_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "no_checks"
+    assert checks == []
+
+
+def test_poll_does_not_return_no_checks_on_auth_error(tmp_path: Path) -> None:
+    """Auth/network errors (exit 1, empty stdout) must NOT be misclassified as no_checks."""
+    auth_error_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout="",
+        stderr="HTTP 401: Bad credentials (https://api.github.com/graphql)",
+    )
+
+    call_count = 0
+
+    def counting_run_gh(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal call_count
+        call_count += 1
+        return auth_error_result
+
+    # monotonic returns: 0 (loop start), 1 (first iter), 2 (second iter), 9999 (exceed MAX_POLL)
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", side_effect=counting_run_gh), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 2.0, 9999.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=True,
+        )
+
+    # Should time out, NOT return "no_checks"
+    assert status == "timeout"
+    assert call_count >= 2, "Should have retried polling, not exited immediately"
+
+
+def test_ci_validation_loop_succeeds_without_fix_loop_when_no_required_checks(tmp_path: Path) -> None:
+    """End-to-end: no required checks should succeed without ever calling the LLM fix task."""
+    empty_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout="",
+        stderr="no required checks reported on the 'fix/issue-1020' branch",
+    )
+
+    fix_was_called = False
+
+    def fail_if_called(**kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=empty_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 2.0, 3.0]):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1025,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "No CI checks detected"
+    assert cost == 0.0
+    assert not fix_was_called, "LLM fix loop should not be entered when no required checks exist"
