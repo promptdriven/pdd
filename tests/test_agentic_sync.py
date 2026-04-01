@@ -1550,6 +1550,23 @@ class TestFilterInvalidBasenamesCodeExtensions:
         valid, invalid = _filter_invalid_basenames(modules, architecture)
         assert "frontend/components/layout/Sidebar" in valid
 
+    def test_matches_filepath_when_filename_differs(self):
+        """Architecture entries where filename differs from filepath basename.
+
+        Regression test for pdd_cloud#826: dashboard page has
+        filename='dashboardPage.tsx' but filepath='src/app/dashboard/page.tsx'.
+        The sync basename 'page' should match via the filepath.
+        """
+        architecture = [
+            {"filename": "dashboardPage.tsx", "filepath": "src/app/dashboard/page.tsx"},
+            {"filename": "dashboardConnectPage.tsx", "filepath": "src/app/dashboard/connect/page.tsx"},
+        ]
+        modules = ["frontend/app/dashboard/page"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "frontend/app/dashboard/page" in valid, (
+            f"Expected page to match via filepath 'src/app/dashboard/page.tsx', got invalid={invalid}"
+        )
+
     def test_path_qualified_basename_accepted_despite_ambiguous_tail(self):
         """Path-qualified basenames are inherently unambiguous — the path disambiguates."""
         architecture = [
