@@ -214,6 +214,15 @@ def _filter_invalid_basenames(
             if stem:
                 basename_counts[stem] += 1
 
+        # Also extract basename from filepath (e.g. "src/app/dashboard/page.tsx"
+        # -> "page"). The filename field may use a different convention
+        # (e.g. "dashboardPage.tsx") that doesn't match the prompt basename.
+        filepath = entry.get("filepath", "")
+        if filepath:
+            fp_stem = Path(filepath).stem  # "page" from "page.tsx"
+            if fp_stem and fp_stem not in basename_counts:
+                basename_counts[fp_stem] += 1
+
     known_basenames = set(basename_counts.keys())
 
     valid = []
