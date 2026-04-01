@@ -2,18 +2,25 @@
 
 ### Fix
 
-- architecture_json.prompt path corruption — use single braces (#686) (#981)
-- FAST_TRACK KeyError on curly braces in LLM output (#974) (#976)
-- discover nested architecture.json files and strip code extensions in basename filter (#826)
-- update Step 11 E2E tests for Step 9 subprocess verification (#960)
-- parse PDD_WORKFLOW_STATE JSON to find test file markers (#1031)
-- add deterministic subprocess verification for Step 9 unit tests (#960)
-- CI validation misinterprets 'no required checks' as failure (#1025) (#1029)
-- harden contract-first audit rendering
+- **architecture_json.prompt path corruption** (#686): use single braces in post-processed prompt paths to prevent Python `.format()` from mangling `{filename}` placeholders
+- **FAST_TRACK KeyError on curly braces in LLM output** (#974): escape curly braces in LLM-generated text before string formatting to avoid `KeyError` on brace-like substrings
+- **nested architecture.json discovery in sync** (#826): `_augment_architecture_from_pr_branch` now discovers all architecture files (root + nested like `frontend/architecture.json`) via `find_architecture_for_project` instead of only reading the root file; basename filter strips code extensions (`.tsx`, `.ts`, `.jsx`, `.js`, `.py`) so entries from frontend architecture files are no longer rejected as unknown
+- **path-qualified basename matching relaxed**: sync basename filter no longer requires `count == 1` for path-qualified entries (e.g. `frontend/components/Sidebar`) — the directory prefix already disambiguates
+- **parse PDD_WORKFLOW_STATE JSON to find test file markers** (#1031): `_extract_test_files` now deserializes `<!-- PDD_WORKFLOW_STATE:... -->` HTML comments to extract `E2E_FILES_CREATED:` / `FILES_CREATED:` markers that are invisible to plain `splitlines()` parsing in fresh-clone runs
+- **deterministic subprocess verification for Step 9 tests** (#960): Step 9 generated E2E tests are now executed via `_verify_e2e_tests` before proceeding to Step 10, catching broken imports and setup errors that structural pattern scanning alone could not detect; verification output is passed to the Step 10 LLM prompt
+- **CI validation misinterprets 'no required checks' as failure** (#1025): `_poll_required_checks` now inspects stderr for the `gh` "no required checks" phrase to distinguish "no checks configured" from ambiguous errors (auth/network), preventing premature `no_checks` classification during transient failures
 
-### Refactor
+### Build
 
-- reorganize cold open specifications and update project documentation and visual runtime configurations.
+- **explicit setuptools package list**: replaced `find` with an explicit `packages` list in `pyproject.toml` to prevent stale sub-packages from being included in sdist/wheel builds
+- **auto-skip InsufficientCreditsError in test runner**: `conftest.py` now converts `InsufficientCreditsError` failures to pytest skips so cloud-batch runs don't report infrastructure credit exhaustion as test failures
+
+### Test
+
+- add E2E tests for Step 9 subprocess verification (#960)
+- add unit tests for JSON-embedded workflow state marker extraction (#1031)
+- add unit tests for CI validation `no required checks` handling (#1025)
+- add regression test for `architecture_json.prompt` brace escaping (#686)
 
 ## v0.0.193 (2026-03-30)
 
