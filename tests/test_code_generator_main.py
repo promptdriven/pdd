@@ -3093,3 +3093,198 @@ class TestIssue687ExampleOutputPath:
         assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
             "${EXAMPLE_OUTPUT_PATH} was not expanded — front-matter default not applied"
         )
+
+
+# === Tests for Issue #1043: Incremental patch identical code fallback ===
+# When incremental_code_generator_func returns is_incremental=True but the
+# generated code is identical to existing code, the system should fall back
+# to full generation instead of writing identical code and exiting.
+
+def test_incremental_identical_code_falls_back_to_full_generation(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When incremental patch returns identical code, full generation should run."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_identical_prompt.prompt"
+    create_file(prompt_file_path, "New prompt content")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_identical_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_identical_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt content", "original_prompt_file": "Original prompt content"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    # Incremental returns identical code with is_incremental=True — the bug scenario
+    mock_incremental_generator_fixture.return_value = (existing_code, True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    # After the fix: was_incremental_operation should be False (fallback triggered)
+    # and local_code_generator_func should have been called for full generation
+    assert not incremental, (
+        "was_incremental_operation should be False when incremental patch produces identical code"
+    )
+    mock_local_generator_fixture.assert_called(), (
+        "Full generation (local_code_generator_func) should be called as fallback"
+    )
+    # The final output should come from the full generator, not the identical incremental result
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+
+
+def test_incremental_identical_code_with_whitespace_diff_falls_back(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """Trailing whitespace differences should still trigger fallback after .strip() comparison."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_ws_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_ws_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_ws_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    # Incremental returns code that differs only by trailing whitespace
+    mock_incremental_generator_fixture.return_value = (existing_code + "\n\n  ", True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    assert not incremental, (
+        "was_incremental_operation should be False when code differs only by whitespace"
+    )
+    mock_local_generator_fixture.assert_called(), (
+        "Full generation should run when incremental produces whitespace-only difference"
+    )
+
+
+def test_incremental_identical_code_verbose_prints_fallback_warning(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    mock_rich_console_fixture, mock_env_vars
+):
+    """Verbose mode should print a fallback warning, not 'Incremental Success'."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_verbose_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_verbose_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_verbose_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    mock_incremental_generator_fixture.return_value = (existing_code, True, 0.002, "inc_model")
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    # Check that a fallback warning was printed (not "Incremental Success")
+    all_print_args = [str(call) for call in mock_rich_console_fixture.call_args_list]
+    combined_output = " ".join(all_print_args)
+
+    # The fix should print a warning about falling back
+    assert "no changes" in combined_output.lower() or "falling back" in combined_output.lower(), (
+        f"Expected fallback warning in verbose output, got: {combined_output[:500]}"
+    )
+    # "Incremental Success" should NOT appear when code was identical
+    assert "Incremental Success" not in combined_output, (
+        "Should not print 'Incremental Success' when incremental patch produced identical code"
+    )
+
+
+def test_incremental_different_code_no_fallback(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When incremental produces genuinely different code, no fallback should occur (regression guard)."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+    updated_code = "Updated code that is different"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_diff_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_diff_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_diff_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    mock_incremental_generator_fixture.return_value = (updated_code, True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    assert incremental, "was_incremental_operation should remain True when code actually changed"
+    assert code == updated_code
+    mock_local_generator_fixture.assert_not_called(), (
+        "Full generation should NOT run when incremental produced different code"
+    )
+
+
+def test_incremental_returns_none_with_is_incremental_true_no_crash(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When incremental returns None code with is_incremental=True, should not crash and full gen should be reachable."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_none_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_none_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_none_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    # Incremental returns None code with is_incremental=True
+    mock_incremental_generator_fixture.return_value = (None, True, 0.002, "inc_model")
+
+    # Should not crash — the None guard in the fix prevents comparison
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    # With None code and is_incremental=True, the current behavior treats it as
+    # successful incremental (writing None/empty to file). After the fix, the None guard
+    # means the comparison is skipped, so was_incremental_operation stays True.
+    # The key assertion: no crash occurred and we got a result back.
+    assert model is not None, "Should return a result without crashing"
