@@ -421,8 +421,11 @@ def _generate_paths_from_templates(
     if 'prompt' not in result:
         result['prompt'] = Path(prompt_path)
 
-    # Ensure example and test paths are always present (fallback to defaults)
-    # This maintains compatibility with sync workflow that expects these keys
+    # Ensure code, example, and test paths are always present (fallback to defaults)
+    # This maintains compatibility with sync workflow that expects these keys.
+    # sync_orchestration.py accesses pdd_files['code'] directly (20+ places).
+    if 'code' not in result:
+        result['code'] = Path(f"{dir_prefix}{name}.{extension}")
     if 'example' not in result:
         result['example'] = Path(f"examples/{name}_example.{extension}")
     if 'test' not in result:
