@@ -1,3 +1,20 @@
+## v0.0.194 (2026-03-31)
+
+### Fix
+
+- architecture_json.prompt path corruption — use single braces (#686) (#981)
+- FAST_TRACK KeyError on curly braces in LLM output (#974) (#976)
+- discover nested architecture.json files and strip code extensions in basename filter (#826)
+- update Step 11 E2E tests for Step 9 subprocess verification (#960)
+- parse PDD_WORKFLOW_STATE JSON to find test file markers (#1031)
+- add deterministic subprocess verification for Step 9 unit tests (#960)
+- CI validation misinterprets 'no required checks' as failure (#1025) (#1029)
+- harden contract-first audit rendering
+
+### Refactor
+
+- reorganize cold open specifications and update project documentation and visual runtime configurations.
+
 ## v0.0.193 (2026-03-30)
 
 ### Feat
