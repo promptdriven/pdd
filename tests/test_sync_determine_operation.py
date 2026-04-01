@@ -4032,3 +4032,63 @@ class TestFingerprintIncludeDependencies:
             f"Expected regeneration when one of multiple included files changed, "
             f"got '{decision.operation}'."
         )
+
+
+# ---------------------------------------------------------------------------
+# Bug: _generate_paths_from_templates missing 'code' fallback (#826)
+# ---------------------------------------------------------------------------
+
+class TestGeneratePathsFromTemplatesCodeFallback:
+    """When .pddrc outputs config defines 'prompt' but not 'code', the returned
+    dict must still have a 'code' key. Otherwise sync_orchestration crashes with
+    KeyError: 'code'.
+
+    Regression test for promptdriven/pdd_cloud#826: the frontend catch-all
+    context has outputs.prompt but no outputs.code, causing page syncs to crash.
+    """
+
+    def test_code_key_always_present(self):
+        """_generate_paths_from_templates must return a 'code' key even when
+        outputs config only defines 'prompt'."""
+        from pdd.sync_determine_operation import _generate_paths_from_templates
+
+        outputs_config = {
+            "prompt": {"path": "prompts/frontend/{dir_prefix}{name}_{language}.prompt"},
+            # NOTE: no 'code' output defined — this is the bug trigger
+        }
+        result = _generate_paths_from_templates(
+            basename="app/dashboard/page",
+            language="typescriptreact",
+            extension="tsx",
+            outputs_config=outputs_config,
+            prompt_path="prompts/frontend/app/dashboard/page_TypescriptReact.prompt",
+        )
+
+        assert "code" in result, (
+            f"'code' key missing from result: {list(result.keys())}. "
+            "sync_orchestration accesses pdd_files['code'] directly and will "
+            "crash with KeyError if this key is absent."
+        )
+        assert "page" in str(result["code"]), (
+            f"Code path should contain the module name 'page', got: {result['code']}"
+        )
+
+    def test_code_key_present_with_generate_output_path(self):
+        """When generate_output_path is available, use it for the code fallback."""
+        from pdd.sync_determine_operation import _generate_paths_from_templates
+
+        outputs_config = {
+            "prompt": {"path": "prompts/frontend/{dir_prefix}{name}_{language}.prompt"},
+        }
+        result = _generate_paths_from_templates(
+            basename="app/dashboard/page",
+            language="typescriptreact",
+            extension="tsx",
+            outputs_config=outputs_config,
+            prompt_path="prompts/frontend/app/dashboard/page_TypescriptReact.prompt",
+        )
+
+        assert "code" in result
+        # Should use dir_prefix + name pattern
+        code_str = str(result["code"])
+        assert "page.tsx" in code_str, f"Expected page.tsx in code path, got: {code_str}"
