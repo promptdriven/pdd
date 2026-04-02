@@ -3096,9 +3096,9 @@ class TestIssue687ExampleOutputPath:
 
 
 # === Tests for Issue #1043: Incremental patch identical code fallback ===
-# When incremental_code_generator_func returns is_incremental=True but the
-# generated code is identical to existing code, the system should fall back
-# to full generation instead of writing identical code and exiting.
+# The root-cause fix lives in incremental_code_generator (returns
+# is_incremental=False when patched code == existing code). A defense-in-depth
+# check in code_generator_main also catches this at the caller level.
 
 def test_incremental_identical_code_falls_back_to_full_generation(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
@@ -3131,39 +3131,6 @@ def test_incremental_identical_code_falls_back_to_full_generation(
     # After the fix: was_incremental_operation should be False (fallback triggered)
     assert not incremental, (
         "was_incremental_operation should be False when incremental patch produces identical code"
-    )
-
-
-def test_incremental_identical_code_with_whitespace_diff_falls_back(
-    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
-    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
-):
-    """Trailing whitespace differences should still trigger fallback after .strip() comparison."""
-    mock_ctx.obj['local'] = True
-    existing_code = "Existing code content"
-
-    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_ws_prompt.prompt"
-    create_file(prompt_file_path, "New prompt")
-    output_file_path = temp_dir_setup["output_dir"] / "inc_ws_output.py"
-    create_file(output_file_path, existing_code)
-    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_ws_original.prompt"
-    create_file(original_prompt_file_path, "Original prompt")
-
-    mock_construct_paths_fixture.return_value = (
-        {},
-        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
-        {"output": str(output_file_path)},
-        "python"
-    )
-    # Incremental returns code that differs only by trailing whitespace
-    mock_incremental_generator_fixture.return_value = (existing_code + "\n\n  ", True, 0.002, "inc_model")
-
-    code, incremental, cost, model = code_generator_main(
-        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
-    )
-
-    assert not incremental, (
-        "was_incremental_operation should be False when code differs only by whitespace"
     )
 
 
@@ -3248,7 +3215,7 @@ def test_incremental_returns_none_code_does_not_crash(
     mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
 ):
     """When incremental returns None code with is_incremental=True, the None guard
-    in the fallback check must skip the .strip() comparison without crashing."""
+    in the fallback check must skip the comparison without crashing."""
     mock_ctx.obj['local'] = True
     existing_code = "Existing code content"
 
@@ -3273,3 +3240,92 @@ def test_incremental_returns_none_code_does_not_crash(
 
     # None guard skips the comparison, so was_incremental_operation stays True
     assert incremental, "None code should not trigger the identical-code fallback"
+
+
+# === Root-cause test: incremental_code_generator returns is_incremental=False
+#     when patched code is identical to existing code (issue #1043) ===
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template")
+def test_incremental_code_generator_returns_false_when_patch_is_identical(
+    mock_load_template, mock_llm_invoke
+):
+    """The incremental_code_generator itself should return is_incremental=False
+    when the LLM patcher produces code identical to the existing code."""
+    from pdd.incremental_code_generator import (
+        incremental_code_generator, DiffAnalysis, CodePatchResult,
+    )
+
+    existing_code = "def hello():\n    print('hello')\n"
+
+    # First llm_invoke call: diff analyzer says small change
+    diff_result = DiffAnalysis(
+        is_big_change=False,
+        change_description="Minor wording change",
+        analysis="Small change, incremental patching appropriate",
+    )
+    # Second llm_invoke call: patcher returns identical code (the bug scenario)
+    patch_result = CodePatchResult(
+        patched_code=existing_code,
+        analysis="No changes needed",
+        planned_modifications="None",
+    )
+    mock_llm_invoke.side_effect = [
+        {"result": diff_result, "cost": 0.001, "model_name": "mock_diff_model"},
+        {"result": patch_result, "cost": 0.001, "model_name": "mock_patch_model"},
+    ]
+
+    code, is_incremental, cost, model = incremental_code_generator(
+        original_prompt="Original prompt",
+        new_prompt="Slightly modified prompt",
+        existing_code=existing_code,
+        language="python",
+        preprocess_prompt=False,
+    )
+
+    assert not is_incremental, (
+        "incremental_code_generator should return is_incremental=False "
+        "when patched code is identical to existing code"
+    )
+    assert code is None, "Should return None code to signal full regeneration needed"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template")
+def test_incremental_code_generator_returns_true_when_patch_differs(
+    mock_load_template, mock_llm_invoke
+):
+    """Regression guard: incremental_code_generator should still return
+    is_incremental=True when the patcher produces genuinely different code."""
+    from pdd.incremental_code_generator import (
+        incremental_code_generator, DiffAnalysis, CodePatchResult,
+    )
+
+    existing_code = "def hello():\n    print('hello')\n"
+    patched_code = "def hello():\n    print('hello world')\n"
+
+    diff_result = DiffAnalysis(
+        is_big_change=False,
+        change_description="Added world to greeting",
+        analysis="Small change",
+    )
+    patch_result = CodePatchResult(
+        patched_code=patched_code,
+        analysis="Updated greeting",
+        planned_modifications="Changed print string",
+    )
+    mock_llm_invoke.side_effect = [
+        {"result": diff_result, "cost": 0.001, "model_name": "mock_diff_model"},
+        {"result": patch_result, "cost": 0.001, "model_name": "mock_patch_model"},
+    ]
+
+    code, is_incremental, cost, model = incremental_code_generator(
+        original_prompt="Original prompt",
+        new_prompt="Modified prompt",
+        existing_code=existing_code,
+        language="python",
+        preprocess_prompt=False,
+    )
+
+    assert is_incremental, "Should return is_incremental=True when code actually changed"
+    assert code == patched_code

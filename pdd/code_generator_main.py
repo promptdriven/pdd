@@ -965,12 +965,16 @@ def code_generator_main(
                 preprocess_prompt=False
             )
 
-            # Safety net: if incremental returned identical code, fall back to full generation
-            if was_incremental_operation and generated_code_content is not None:
-                if generated_code_content.strip() == existing_code_content.strip():
-                    was_incremental_operation = False
-                    if verbose:
-                        console.print("[yellow]Incremental patch produced no changes. Falling back to full generation.[/yellow]")
+            # Safety net: if incremental returned identical code, fall back to full generation.
+            # The root-cause check lives in incremental_code_generator itself; this is
+            # defense-in-depth in case a caller passes a different generator function.
+            if (was_incremental_operation
+                    and generated_code_content is not None
+                    and existing_code_content is not None
+                    and generated_code_content == existing_code_content):
+                was_incremental_operation = False
+                if verbose:
+                    console.print("[yellow]Incremental patch produced no changes. Falling back to full generation.[/yellow]")
 
             if not was_incremental_operation:
                 if verbose:

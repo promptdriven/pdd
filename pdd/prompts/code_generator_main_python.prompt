@@ -197,7 +197,7 @@
        - Stage prompt_file and output file with git (if they aren't already staged/committed)
        - Call incremental_code_generator with appropriate parameters (including `strength`, `temperature`, and `time` from `ctx.obj`)
        - If incremental_code_generator returns is_incremental=False, fall back to full generation
-       - Safety net: If incremental_code_generator returns is_incremental=True but the generated code (stripped) is identical to the existing code (stripped), reset was_incremental_operation to False so that full generation runs. Log a warning if verbose (e.g., "Incremental patch produced no changes. Falling back to full generation."). This handles cases where the LLM misjudges a diff as minor and the patcher produces identical output.
+       - If the incremental code generator returns code identical to the existing code, treat it as a no-op and fall back to full generation
     6. For full generation:
        - Call code_generator (local version) with the preprocessed+substituted prompt and `preprocess_prompt=False` (including `strength`, `temperature`, and `time` from `ctx.obj`). For cloud execution, ensure the `processed prompt` includes include expansion and variable substitution before sending.
         - If cloud execution fails, automatically fall back to local execution with appropriate warnings
