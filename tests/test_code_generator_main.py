@@ -3168,7 +3168,7 @@ def test_incremental_identical_code_with_whitespace_diff_falls_back(
 
 
 def test_incremental_identical_code_verbose_prints_fallback_warning(
-    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
     mock_incremental_generator_fixture, mock_local_generator_fixture,
     mock_rich_console_fixture, mock_env_vars
 ):
@@ -3211,7 +3211,7 @@ def test_incremental_identical_code_verbose_prints_fallback_warning(
 
 
 def test_incremental_different_code_no_fallback(
-    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
     mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
 ):
     """When incremental produces genuinely different code, no fallback should occur (regression guard)."""
@@ -3240,16 +3240,15 @@ def test_incremental_different_code_no_fallback(
 
     assert incremental, "was_incremental_operation should remain True when code actually changed"
     assert code == updated_code
-    mock_local_generator_fixture.assert_not_called(), (
-        "Full generation should NOT run when incremental produced different code"
-    )
+    mock_local_generator_fixture.assert_not_called()
 
 
-def test_incremental_returns_none_with_is_incremental_true_no_crash(
-    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+def test_incremental_returns_none_code_does_not_crash(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
     mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
 ):
-    """When incremental returns None code with is_incremental=True, should not crash and full gen should be reachable."""
+    """When incremental returns None code with is_incremental=True, the None guard
+    in the fallback check must skip the .strip() comparison without crashing."""
     mock_ctx.obj['local'] = True
     existing_code = "Existing code content"
 
@@ -3266,16 +3265,11 @@ def test_incremental_returns_none_with_is_incremental_true_no_crash(
         {"output": str(output_file_path)},
         "python"
     )
-    # Incremental returns None code with is_incremental=True
     mock_incremental_generator_fixture.return_value = (None, True, 0.002, "inc_model")
 
-    # Should not crash — the None guard in the fix prevents comparison
     code, incremental, cost, model = code_generator_main(
         mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
     )
 
-    # With None code and is_incremental=True, the current behavior treats it as
-    # successful incremental (writing None/empty to file). After the fix, the None guard
-    # means the comparison is skipped, so was_incremental_operation stays True.
-    # The key assertion: no crash occurred and we got a result back.
-    assert model is not None, "Should return a result without crashing"
+    # None guard skips the comparison, so was_incremental_operation stays True
+    assert incremental, "None code should not trigger the identical-code fallback"
