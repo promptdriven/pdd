@@ -35,6 +35,7 @@ except ImportError:
 # Import PDD internal modules
 from pdd.construct_paths import (
     _detect_context,
+    _extract_prefix_from_prompts_dir,
     _find_pddrc_file,
     _get_relative_basename,
     _load_pddrc_config,
@@ -302,12 +303,7 @@ def _relative_basename_for_context(basename: str, context_name: Optional[str]) -
 
     prompts_dir = defaults.get("prompts_dir", "")
     if prompts_dir:
-        normalized = prompts_dir.rstrip("/")
-        prefix = normalized
-        if normalized == "prompts":
-            prefix = ""
-        elif normalized.startswith("prompts/"):
-            prefix = normalized[len("prompts/"):]
+        prefix = _extract_prefix_from_prompts_dir(prompts_dir)
 
         if prefix and (basename == prefix or basename.startswith(prefix + "/")):
             relative = basename[len(prefix) + 1 :] if basename != prefix else basename.split("/")[-1]
@@ -467,12 +463,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 context_config = config.get('contexts', {}).get(context_name or '', {})
                 prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
                 if prompts_dir_config:
-                    normalized = prompts_dir_config.rstrip('/')
-                    prefix = normalized
-                    if normalized == 'prompts':
-                        prefix = ''
-                    elif normalized.startswith('prompts/'):
-                        prefix = normalized[len('prompts/'):]
+                    prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
                     # Only prepend prefix if prompts_root doesn't already end with it
                     # (when prompts_dir is passed as an absolute path like
                     # /path/to/prompts/recruiting, prompts_root already contains the prefix)
