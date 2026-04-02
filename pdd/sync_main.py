@@ -15,6 +15,7 @@ from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import (
     _is_known_language,
     construct_paths,
+    extract_prefix_from_prompts_dir,
     _find_pddrc_file,
     _get_relative_basename,
     _load_pddrc_config,
@@ -100,12 +101,7 @@ def _relative_basename_for_context(basename: str, context_config: Dict[str, Any]
     defaults = context_config.get('defaults', {})
     prompts_dir = defaults.get('prompts_dir', '')
     if prompts_dir:
-        normalized = prompts_dir.rstrip('/')
-        prefix = normalized
-        if normalized == 'prompts':
-            prefix = ''
-        elif normalized.startswith('prompts/'):
-            prefix = normalized[len('prompts/'):]
+        prefix = extract_prefix_from_prompts_dir(prompts_dir)
 
         if prefix and (basename == prefix or basename.startswith(prefix + '/')):
             relative = basename[len(prefix) + 1 :] if basename != prefix else basename.split('/')[-1]

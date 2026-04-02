@@ -24,6 +24,28 @@ import csv
 
 console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
+def extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
+    """Extract the path suffix after the 'prompts' segment in a prompts_dir value.
+
+    Splits on '/' and finds the exact 'prompts' segment, then returns everything
+    after it.  Returns empty string when prompts_dir is exactly 'prompts' or ends
+    at a 'prompts' segment.  Falls back to returning the full normalized path when
+    no exact 'prompts' segment exists.
+
+    Examples:
+        "prompts"                                    -> ""
+        "prompts/frontend"                           -> "frontend"
+        "extensions/github_pdd_app/prompts/frontend" -> "frontend"
+        "extensions/app/prompts"                     -> ""
+    """
+    normalized = prompts_dir.rstrip('/')
+    parts = normalized.split('/')
+    try:
+        idx = parts.index('prompts')
+    except ValueError:
+        return normalized
+    return '/'.join(parts[idx + 1:])
+
 # Shared mapping of language → file extension used across the codebase.
 BUILTIN_EXT_MAP = {
     'python': '.py', 'javascript': '.js', 'typescript': '.ts', 'java': '.java',
@@ -176,12 +198,7 @@ def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Opti
         defaults = context_config.get('defaults', {})
         prompts_dir = defaults.get('prompts_dir', '')
         if prompts_dir:
-            normalized = prompts_dir.rstrip('/')
-            prefix = normalized
-            if normalized == 'prompts':
-                prefix = ''
-            elif normalized.startswith('prompts/'):
-                prefix = normalized[len('prompts/'):]
+            prefix = extract_prefix_from_prompts_dir(prompts_dir)
 
             if prefix and (basename == prefix or basename.startswith(prefix + '/')):
                 matches.append((context_name, len(prefix)))
