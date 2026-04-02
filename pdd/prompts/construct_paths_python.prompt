@@ -49,7 +49,10 @@
      For relative paths uses startswith matching. When use_specificity=True, returns most specific
      (longest pattern_base) match; otherwise returns first match. Falls back to 'default' if present.
    - `_detect_context_from_basename(basename, config)`: Matches basename against context
-     prompts_dir prefixes (stripping leading 'prompts/') and paths patterns. Returns most specific match.
+     prompts_dir prefixes and paths patterns. Returns most specific match.
+     For prompts_dir values, extract the prefix after the 'prompts/' segment wherever it appears
+     in the path (e.g., 'prompts/frontend' → 'frontend', 'extensions/app/prompts/frontend' → 'frontend').
+     If prompts_dir is exactly 'prompts' or ends at a 'prompts' segment with no suffix, use empty prefix.
    - `_get_relative_basename(input_path, pattern)`: Computes basename relative to matched pattern base.
      E.g., 'frontend/components/marketplace/AssetCard' with pattern 'frontend/components/**'
      returns 'marketplace/AssetCard'. Falls back to returning input_path as-is.

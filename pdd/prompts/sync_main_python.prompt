@@ -124,6 +124,8 @@
 4. **`_relative_basename_for_context(basename: str, context_config: Dict[str, Any]) -> str`**:
    - Return basename relative to context's most specific path or prompt prefix
    - Match against paths patterns and prompts_dir
+   - For prompts_dir values, extract the prefix after the 'prompts/' segment wherever it appears
+     in the path (e.g., 'prompts/frontend' → 'frontend', 'extensions/app/prompts/frontend' → 'frontend')
    - Select longest matching prefix
 
 5. **`_normalize_prompts_root(prompts_dir: Path) -> Path`**:
