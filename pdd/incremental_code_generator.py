@@ -155,6 +155,13 @@ def incremental_code_generator(
                 console.print(Markdown(f"**Planned Modifications:**\n{patch_result.planned_modifications}"))
                 console.print(f"Total Cost: ${total_cost:.6f}")
 
+            # If the patcher returned code identical to the input, treat as
+            # no-op and signal the caller to fall back to full generation.
+            if patch_result.patched_code == existing_code:
+                if verbose:
+                    console.print("[yellow]Incremental patch produced no changes. Recommending full regeneration.[/yellow]")
+                return None, False, total_cost, model_name
+
             return patch_result.patched_code, True, total_cost, model_name
 
     except Exception as e:
