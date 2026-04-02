@@ -6438,3 +6438,141 @@ class TestMissingFixLocationsMarkerWarning:
             f"Expected warning about missing FIX_LOCATIONS marker. "
             f"Warning calls: {warning_calls}"
         )
+
+
+# -----------------------------------------------------------------------
+# Issue #1026: Content regression guard for structural retry
+# -----------------------------------------------------------------------
+
+from pdd.agentic_bug_orchestrator import _cleanup_backups_with_regression_guard
+
+
+class TestIssue1026ContentRegressionGuard:
+    """Tests for _cleanup_backups_with_regression_guard — the safety net
+    that restores from .bak when a retry loses >50% of lines (#1026).
+
+    These tests exercise the extracted function directly with real files
+    on disk — no orchestrator mocking required.
+    """
+
+    def _make_pair(self, tmp_path, name, backup_content, current_content):
+        """Helper: create an original file and its .bak, return the pair."""
+        original = tmp_path / name
+        backup = original.with_suffix(".py.bak")
+        original.write_text(current_content)
+        backup.write_text(backup_content)
+        return original, backup
+
+    def test_restores_on_major_loss(self, tmp_path):
+        """100-line backup, 2-line current → restore from backup."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "def test_clean():\n    assert True\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_large.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == [original]
+        assert original.read_text() == backup_content
+        assert not backup.exists()  # consumed by rename
+
+    def test_boundary_exactly_50_percent_no_restore(self, tmp_path):
+        """100-line backup, 50-line current (exactly 50%) → no restore."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "\n".join(f"# kept {i}" for i in range(50)) + "\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_boundary.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert original.read_text() == current_content  # unchanged
+        assert not backup.exists()  # cleaned up
+
+    def test_boundary_49_percent_triggers_restore(self, tmp_path):
+        """100-line backup, 49-line current (49%) → restore."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "\n".join(f"# kept {i}" for i in range(49)) + "\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_b49.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == [original]
+        assert original.read_text() == backup_content
+
+    def test_zero_line_backup_no_crash(self, tmp_path):
+        """Empty backup (0 lines) must not crash and should not restore."""
+        original, backup = self._make_pair(
+            tmp_path, "test_empty.py", "", "def test_ok(): assert True\n",
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert not backup.exists()  # cleaned up
+
+    def test_multi_file_selective_restore(self, tmp_path):
+        """Two files backed up — only the regressed one is restored."""
+        good_backup = "\n".join(f"# good {i}" for i in range(100)) + "\n"
+        good_current = "\n".join(f"# kept {i}" for i in range(80)) + "\n"
+        good_orig, good_bak = self._make_pair(
+            tmp_path, "test_good.py", good_backup, good_current,
+        )
+
+        bad_backup = "\n".join(f"# bad {i}" for i in range(100)) + "\n"
+        bad_current = "\n".join(f"# shrunk {i}" for i in range(10)) + "\n"
+        bad_orig, bad_bak = self._make_pair(
+            tmp_path, "test_bad.py", bad_backup, bad_current,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(good_orig, good_bak), (bad_orig, bad_bak)], quiet=True,
+        )
+
+        assert restored == [bad_orig]
+        # good: kept as-is, .bak cleaned up
+        assert good_orig.read_text() == good_current
+        assert not good_bak.exists()
+        # bad: restored from backup
+        assert bad_orig.read_text() == bad_backup
+        assert not bad_bak.exists()
+
+    def test_backup_missing_original_exists(self, tmp_path):
+        """If backup doesn't exist, nothing happens (no crash)."""
+        original = tmp_path / "test_no_bak.py"
+        backup = original.with_suffix(".py.bak")
+        original.write_text("def test_ok(): pass\n")
+        # backup intentionally not created
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert original.read_text() == "def test_ok(): pass\n"
+
+    def test_original_missing_backup_cleaned_up(self, tmp_path):
+        """If original is gone but .bak exists, .bak is cleaned up."""
+        original = tmp_path / "test_gone.py"
+        backup = original.with_suffix(".py.bak")
+        backup.write_text("# old content\n")
+        # original intentionally not created
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert not backup.exists()
