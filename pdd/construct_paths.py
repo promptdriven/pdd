@@ -24,7 +24,7 @@ import csv
 
 console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
-def extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
+def _extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
     """Extract the path suffix after the 'prompts' segment in a prompts_dir value.
 
     Splits on '/' and finds the exact 'prompts' segment, then returns everything
@@ -198,7 +198,7 @@ def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Opti
         defaults = context_config.get('defaults', {})
         prompts_dir = defaults.get('prompts_dir', '')
         if prompts_dir:
-            prefix = extract_prefix_from_prompts_dir(prompts_dir)
+            prefix = _extract_prefix_from_prompts_dir(prompts_dir)
 
             if prefix and (basename == prefix or basename.startswith(prefix + '/')):
                 matches.append((context_name, len(prefix)))

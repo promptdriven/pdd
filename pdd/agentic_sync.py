@@ -20,7 +20,7 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .construct_paths import _detect_context_from_basename, extract_prefix_from_prompts_dir, _find_pddrc_file, _load_pddrc_config
+from .construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir, _find_pddrc_file, _load_pddrc_config
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -321,7 +321,7 @@ def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
         defaults = context_config.get("defaults", {})
         prompts_dir = defaults.get("prompts_dir", "")
         if prompts_dir:
-            prefix = extract_prefix_from_prompts_dir(prompts_dir)
+            prefix = _extract_prefix_from_prompts_dir(prompts_dir)
             if prefix and (basename == prefix or basename.startswith(prefix + "/")):
                 return False  # prompts_dir match is always specific
 
