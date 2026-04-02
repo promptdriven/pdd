@@ -782,6 +782,45 @@ def _extract_violation_snippets(
     return "\n\n".join(snippets)
 
 
+def _cleanup_backups_with_regression_guard(
+    backed_up: List[Tuple[Path, Path]],
+    quiet: bool = False,
+) -> List[Path]:
+    """Clean up .bak files after successful retry, restoring any that show
+    content-size regression (>50% line loss).
+
+    Returns list of paths that were restored from backup.
+    """
+    restored: List[Path] = []
+    for original, backup in backed_up:
+        try:
+            if backup.exists() and original.exists():
+                backup_lines = len(backup.read_text().splitlines())
+                new_lines = len(original.read_text().splitlines())
+                if backup_lines > 0 and new_lines < backup_lines * 0.5:
+                    backup.rename(original)
+                    logger.warning(
+                        "Content regression in %s (%d→%d lines), "
+                        "restored from backup — original structural "
+                        "violations may still be present",
+                        original.name, backup_lines, new_lines,
+                    )
+                    if not quiet:
+                        console.print(
+                            f"[red]  → Content regression detected in {original.name} "
+                            f"({new_lines} lines < {backup_lines * 0.5:.0f} threshold), "
+                            f"restoring from backup.[/red]"
+                        )
+                    restored.append(original)
+                else:
+                    backup.unlink()
+            elif backup.exists():
+                backup.unlink()
+        except (OSError, UnicodeDecodeError):
+            pass  # Best-effort cleanup
+    return restored
+
+
 def run_agentic_bug_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -1343,13 +1382,11 @@ def run_agentic_bug_orchestrator(
                             "[red]  → Retry of step 9 failed; original files restored.[/red]"
                         )
                 else:
-                    # Retry succeeded — clean up backup files
-                    for _original, backup in backed_up:
-                        try:
-                            if backup.exists():
-                                backup.unlink()
-                        except OSError:
-                            pass  # Best-effort cleanup
+                    # Retry succeeded — check for content-size regression
+                    # before cleanup (#1026).
+                    _cleanup_backups_with_regression_guard(
+                        backed_up, quiet=quiet,
+                    )
                     # Re-extract files from retry
                     retry_created = _parse_changed_files(retry_output, "FILES_CREATED")
                     retry_modified = _parse_changed_files(retry_output, "FILES_MODIFIED")
