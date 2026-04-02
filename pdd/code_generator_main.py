@@ -965,6 +965,13 @@ def code_generator_main(
                 preprocess_prompt=False
             )
 
+            # Safety net: if incremental returned identical code, fall back to full generation
+            if was_incremental_operation and generated_code_content is not None:
+                if generated_code_content.strip() == existing_code_content.strip():
+                    was_incremental_operation = False
+                    if verbose:
+                        console.print("[yellow]Incremental patch produced no changes. Falling back to full generation.[/yellow]")
+
             if not was_incremental_operation:
                 if verbose:
                     console.print(Panel("Incremental generator suggested full regeneration. Falling back.", title="[yellow]Fallback[/yellow]", expand=False))
