@@ -1,3 +1,19 @@
+## v0.0.195 (2026-04-01)
+
+### Fix
+
+- move identical-patch check to incremental_code_generator root cause (#1043)
+- repair test fixtures and assertions for #1043 incremental fallback tests
+- incremental generator falls back to full gen when patch produces no changes (#1043)
+- centralize prompts_dir prefix extraction for extension directories (#1049)
+- content regression guard for structural retry (#1026) (#1042)
+- add 'code' fallback in _generate_paths_from_templates (#826)
+- match basenames against filepath when filename differs (#826)
+
+### Refactor
+
+- improve architecture discovery, CI validation, and test robustness, and introduce Z3 formal verification for prompt-test correspondence.
+
 ## v0.0.194 (2026-03-31)
 
 ### Fix
