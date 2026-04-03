@@ -1,4 +1,6 @@
-from typing import Optional, Tuple
+from __future__ import annotations
+
+from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
@@ -6,7 +8,7 @@ from rich.markdown import Markdown
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from . import DEFAULT_STRENGTH # Removed unused EXTRACTION_STRENGTH
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
 console = Console()
 
@@ -20,6 +22,10 @@ class CodePatchResult(BaseModel):
     patched_code: str = Field(description="The updated code with incremental patches applied")
     analysis: str = Field(description="Analysis of the patching process")
     planned_modifications: str = Field(description="Description of the modifications planned and applied")
+
+class PatchVerification(BaseModel):
+    is_complete: bool = Field(description="Whether the patched code implements all requirements from the prompt")
+    missing_requirements: List[str] = Field(description="List of requirements missing or incomplete in the patched code (empty if is_complete is True)")
 
 def incremental_code_generator(
     original_prompt: str,
@@ -160,6 +166,43 @@ def incremental_code_generator(
             if patch_result.patched_code == existing_code:
                 if verbose:
                     console.print("[yellow]Incremental patch produced no changes. Recommending full regeneration.[/yellow]")
+                return None, False, total_cost, model_name
+
+            # Step 4.5: Verify completeness of patched code
+            verifier_template = load_prompt_template("patch_verifier_LLM")
+            if preprocess_prompt:
+                verifier_template = preprocess(
+                    verifier_template,
+                    recursive=False,
+                    double_curly_brackets=True,
+                    exclude_keys=["PROMPT", "PATCHED_CODE"]
+                )
+
+            verification_response = llm_invoke(
+                prompt=verifier_template,
+                input_json={
+                    "PROMPT": new_prompt,
+                    "PATCHED_CODE": patch_result.patched_code
+                },
+                strength=0.5 * strength,
+                temperature=temperature,
+                time=0.5 * time,
+                verbose=verbose,
+                output_pydantic=PatchVerification
+            )
+            verification_result: PatchVerification = verification_response['result']
+            total_cost += verification_response['cost']
+
+            if verbose:
+                if verification_result.is_complete:
+                    console.print("[bold green]Patch verification passed.[/bold green]")
+                else:
+                    console.print("[bold yellow]Patch verification failed.[/bold yellow]")
+                    console.print(f"Missing requirements: {verification_result.missing_requirements}")
+
+            if not verification_result.is_complete:
+                if verbose:
+                    console.print(f"[bold yellow]Missing requirements: {verification_result.missing_requirements}. Falling back to full regeneration.[/bold yellow]")
                 return None, False, total_cost, model_name
 
             return patch_result.patched_code, True, total_cost, model_name
