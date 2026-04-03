@@ -340,4 +340,7 @@ def run_one_session_sync(
         "model_name": provider,
         "operations_completed": operations,
         "errors": errors,
+        # sync_main's summary table reads result.get("error") (singular).
+        # Without this key, one-session errors display as "No details."
+        "error": "; ".join(errors) if errors else "",
     }

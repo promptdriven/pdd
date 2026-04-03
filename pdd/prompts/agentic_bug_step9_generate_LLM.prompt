@@ -50,11 +50,12 @@ You are working on step 9 of 12 in an agentic bug investigation workflow. Previo
 
 % Critical: Testing Caller Behavior Bugs
 
-When the bug involves incorrect function call arguments (e.g., caller uses `limit=` but callee expects `k=`):
+The fix locations for this bug are: `{fix_locations}`. When the fix spans multiple files (caller + callee), you MUST test BOTH sides — not just the callee.
 
 **DO: Mock the callee and verify caller behavior**
 - Use `@patch` or `with patch()` to mock the called function
 - Invoke the caller's code path
+- Assert the mock was called (`assert_called()`) before inspecting `call_args`
 - Use `mock.call_args.kwargs` to verify the caller passed correct parameter names
 
 Example:
@@ -64,13 +65,12 @@ from unittest.mock import patch
 def test_caller_uses_correct_parameter():
     with patch('module.callee_function') as mock_callee:
         caller_function()  # This triggers the call
-        # Verify caller used 'k=' not 'limit='
+        mock_callee.assert_called()  # Fails clearly if caller never invoked callee
         assert 'k' in mock_callee.call_args.kwargs
 ```
 
-**DO NOT: Test that the callee rejects wrong parameters**
-- This anti-pattern tests the callee's signature, not the caller's behavior
-- Such tests always pass because the callee was never broken
+**DO NOT: Test only the callee**
+- Such tests always pass because the callee was never broken — the bug is in the caller
 - Example of WRONG approach: `pytest.raises(TypeError, lambda: callee(limit=5))`
 
 % Critical: No Structural/Shape Tests — Behavioral Assertions Only

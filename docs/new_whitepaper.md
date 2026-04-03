@@ -167,7 +167,7 @@ Parent Prompts"]
 
 **Key Steps in the PDD Cycle:**
 
-1.  **Define**: The process begins by translating requirements (e.g., from a PRD) into a specific, modular prompt (`.prompt` file) for a target code component. To provide necessary context, relevant few-shot examples can be found manually or automatically using tools like `pdd auto-deps`.
+1.  **Define**: The process begins by translating requirements (e.g., from a PRD) into a specific, modular prompt (`.prompt` file) for a target code component. To provide necessary context, relevant few-shot examples and documentation files can be found manually or automatically using tools like `pdd auto-deps`.
 2.  **Generate**: Next, invoke `pdd generate` to create the primary code module based on the prompt and the gathered context.
 3.  **Example**: To define the module's public interface and demonstrate its usage, run `pdd example` to produce a minimal example file.
 4.  **Verify/Fix (Initial)**: Ensure the generated code is fundamentally functional – that it runs without crashing and handles basic cases outlined in the prompt. This initial check often involves iterative fixing, potentially aided by `pdd verify` or `pdd fix` commands along with simple runtime tests. Manual review against the prompt's stated intent is also vital here.

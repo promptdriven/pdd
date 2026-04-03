@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 from dotenv import load_dotenv
+from pdd.llm_invoke import InsufficientCreditsError
 
 
 # Load environment variables from .env early in collection
@@ -17,6 +18,20 @@ _ORIGINAL_PDD_PATH = os.environ.get('PDD_PATH')
 # Store original streams at module load time for restoration
 _ORIGINAL_STDOUT = sys.stdout
 _ORIGINAL_STDERR = sys.stderr
+
+
+_ORIGINAL_GIT_WORK_TREE = os.environ.get('GIT_WORK_TREE')
+
+
+@pytest.fixture(autouse=True)
+def preserve_git_work_tree():
+    """Clear GIT_WORK_TREE during tests to avoid interfering with git init in temp dirs."""
+    os.environ.pop('GIT_WORK_TREE', None)
+    yield
+    if _ORIGINAL_GIT_WORK_TREE is not None:
+        os.environ['GIT_WORK_TREE'] = _ORIGINAL_GIT_WORK_TREE
+    else:
+        os.environ.pop('GIT_WORK_TREE', None)
 
 
 @pytest.fixture(autouse=True)
@@ -83,6 +98,23 @@ def pytest_configure(config: pytest.Config) -> None:
         os.environ["PDD_RUN_ALL_TESTS"] = "1"
     else:
         os.environ.setdefault("PDD_RUN_ALL_TESTS", "0")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call):
+    """Convert InsufficientCreditsError failures to skips.
+
+    The cloud batch test account may run out of credits, causing tests that call
+    the production LLM endpoint to fail with InsufficientCreditsError. These are
+    infrastructure failures, not code bugs — convert to skip rather than fail.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call" and report.failed and call.excinfo is not None:
+        if call.excinfo.errisinstance(InsufficientCreditsError):
+            report.outcome = "skipped"
+            report.wasxfail = ""
+            report.longrepr = f"Skipped: Insufficient credits for cloud LLM call"
 
 
 # Ignore CSV-driven assets under tests/csv during collection

@@ -26,6 +26,8 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES,
     detect_control_token,
     classify_step_output,
+    GITHUB_STATE_MARKER_START,
+    GITHUB_STATE_MARKER_END,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -142,6 +144,72 @@ def _classify_step_output(output: str, step_num: int) -> Optional[str]:
             return "CONTINUE_CYCLE"
 
     return None
+
+
+# Patterns that indicate "code not written / can't load" rather than "code wrong".
+# Used by _classify_verification_failure as deterministic detection.
+# All patterns anchored to pytest ^E traceback format to avoid false positives
+# from log lines, print statements, or assertion messages.
+# Since _verify_tests_independently runs pytest, all exceptions surface as ^E lines.
+_IMPORT_ERROR_PATTERNS = [
+    # Python — pytest ^E traceback format only
+    _re.compile(r"^E\s+ImportError:", _re.MULTILINE),
+    _re.compile(r"^E\s+ModuleNotFoundError:", _re.MULTILINE),
+    _re.compile(r"^E\s+NameError:", _re.MULTILINE),
+    _re.compile(r"^E\s+AttributeError:", _re.MULTILINE),
+    _re.compile(r"^E\s+SyntaxError:", _re.MULTILINE),
+    # JS/TS — pytest ^E format or test runner line-start errors
+    _re.compile(r"^E\s+Cannot find module", _re.MULTILINE),
+    _re.compile(r"^E\s+Module not found", _re.MULTILINE),
+    _re.compile(r"^E\s+ReferenceError:", _re.MULTILINE),
+    # Test runner unavailable (from _verify_tests_independently itself)
+    _re.compile(r"FAILED \(no test runner available\)"),
+]
+
+
+def _classify_verification_failure(output: str) -> str:
+    """Classify verification failure via deterministic pattern matching.
+
+    Checks for common error signatures (ImportError, ModuleNotFoundError,
+    NameError, etc.) that indicate code was not written or can't compile.
+    Unrecognized patterns default to test_failure (conservative — no LLM call).
+
+    Returns:
+        'import_error' if code was not written, can't compile, or fails to load.
+        'test_failure' if code exists and loads but produces wrong results.
+    """
+    for pattern in _IMPORT_ERROR_PATTERNS:
+        if pattern.search(output):
+            return "import_error"
+
+    return "test_failure"
+
+
+def _handle_verification_failure(
+    verify_output: str,
+    import_error_retries: int,
+    console: "Console",
+) -> Tuple[str, int, bool]:
+    """Classify verification failure and determine retry action.
+
+    Centralizes the classify-then-retry logic used at all 4 verification
+    call sites. Returns whether the caller should retry from Step 1.
+
+    Args:
+        verify_output: Raw output from _verify_tests_independently.
+        import_error_retries: Global retry count (max 1 across all cycles).
+        console: Rich Console for logging.
+
+    Returns:
+        (failure_type, updated_import_error_retries, should_retry)
+        should_retry is True if caller should set last_completed_step=0 and break.
+    """
+    failure_type = _classify_verification_failure(verify_output)
+    if failure_type == "import_error" and import_error_retries < 1:
+        console.print("[yellow][VERIFICATION] Failure classified as import_error — retrying from Step 1[/yellow]")
+        return failure_type, import_error_retries + 1, True
+    console.print(f"[yellow][VERIFICATION] Failure classified as {failure_type} — proceeding with fallback workflow[/yellow]")
+    return failure_type, import_error_retries, False
 
 
 def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
@@ -315,6 +383,24 @@ def _is_test_file(filename: str) -> bool:
     return False
 
 
+def _extract_marker_files(text: str) -> List[str]:
+    """Extract test file paths from E2E_FILES_CREATED/FILES_CREATED markers in text.
+
+    Scans each line for marker prefixes. Returns raw paths (not deduplicated,
+    not existence-checked) — the caller handles that via _add().
+    """
+    paths: List[str] = []
+    for line in text.splitlines():
+        for prefix in ("E2E_FILES_CREATED:", "FILES_CREATED:"):
+            if line.strip().startswith(prefix):
+                content = line.split(":", 1)[1].strip()
+                for p in content.split(","):
+                    p = p.strip()
+                    if _is_test_file(p):
+                        paths.append(p)
+    return paths
+
+
 def _extract_test_files(
     issue_content: str,
     changed_files: List[str],
@@ -325,7 +411,7 @@ def _extract_test_files(
 
     Looks for:
     - E2E_FILES_CREATED: markers from pdd bug output
-    - FILES_CREATED: markers
+    - FILES_CREATED: markers (including inside PDD_WORKFLOW_STATE JSON)
     - File paths matching test conventions (Python test_*.py, Jest *.test.ts/tsx,
       Playwright *.spec.ts/tsx) in changed_files
     - Test files actually created/modified on disk (hash comparison)
@@ -341,28 +427,55 @@ def _extract_test_files(
             seen.add(path)
             test_files.append(path)
 
-    # Parse markers from issue content
-    for line in issue_content.splitlines():
-        for prefix in ("E2E_FILES_CREATED:", "FILES_CREATED:"):
-            if line.strip().startswith(prefix):
-                content = line.split(":", 1)[1].strip()
-                for p in content.split(","):
-                    p = p.strip()
-                    if _is_test_file(p):
-                        _add(p)
+    # Parse markers from issue content (plain text lines)
+    for p in _extract_marker_files(issue_content):
+        _add(p)
+
+    # Parse markers from PDD_WORKFLOW_STATE JSON comments (pdd-issue fresh-clone
+    # context). In fresh-clone runs, step outputs are JSON-serialized inside
+    # <!-- PDD_WORKFLOW_STATE:... --> HTML comments, turning embedded newlines
+    # into \n escape sequences that splitlines() above cannot see. We find all
+    # workflow state blocks, deserialize the JSON to restore real newlines, then
+    # run the same marker parser on each step output value.
+    # This is safe from issue #633 false positives because it only parses
+    # structured workflow state data, not free-form narrative.
+    marker_start = GITHUB_STATE_MARKER_START
+    marker_end = GITHUB_STATE_MARKER_END
+    search_start = 0
+    while True:
+        idx = issue_content.find(marker_start, search_start)
+        if idx == -1:
+            break
+        # JSON begins after the first newline following the marker tag
+        json_start = issue_content.find("\n", idx)
+        if json_start == -1:
+            break
+        json_start += 1  # skip the newline itself
+        end_idx = issue_content.find(marker_end, json_start)
+        if end_idx == -1:
+            break
+        json_str = issue_content[json_start:end_idx].strip()
+        search_start = end_idx + len(marker_end)
+        try:
+            state = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        step_outputs = state.get("step_outputs", {})
+        if not isinstance(step_outputs, dict):
+            continue
+        for value in step_outputs.values():
+            if isinstance(value, str):
+                for p in _extract_marker_files(value):
+                    _add(p)
 
     # Include test files from changed_files list
     for f in changed_files:
         if _is_test_file(f):
             _add(f)
 
-    # Scan issue content for inline test file references
-    # Match Python test files (test_*.py) and TypeScript test files (*.test.ts/tsx, *.spec.ts/tsx)
-    for match in _re.finditer(
-        r'((?:[\w/._-]+/)*(?:test_[\w.-]+\.py|[\w.-]+\.(?:test|spec)\.(?:tsx|ts)))',
-        issue_content,
-    ):
-        _add(match.group(1))
+    # NOTE: Raw regex scan of issue content was removed (issue #633) because it
+    # matched file paths mentioned as examples in narrative text. The JSON-aware
+    # PDD_WORKFLOW_STATE parser above is safe: it only parses structured data.
 
     # Detect test files actually created/modified on disk during workflow
     if initial_file_hashes is not None:
@@ -376,7 +489,6 @@ def _extract_test_files(
     # aren't in markers, changed_files, or hash detection (e.g., when
     # initial_file_hashes is None or the files were committed before the hash
     # snapshot was taken).
-    count_before_git = len(test_files)
     committed_files = _get_modified_and_untracked(cwd)
     for f in committed_files:
         basename = Path(f).name
@@ -384,18 +496,20 @@ def _extract_test_files(
             _add(f)
 
     # Ultimate fallback: directory scan for test_*.py files on disk.
-    # Only runs when git-based discovery didn't add any new files, to avoid
+    # Only runs when NO discovery path found ANY files, to avoid
     # pulling the entire test suite into verification (slow + timeouts).
     # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
-    git_found_nothing_new = len(test_files) == count_before_git
-    if git_found_nothing_new:
+    if not test_files:
         scan_dirs = [cwd / "tests", cwd]
         for scan_dir in scan_dirs:
             if not scan_dir.is_dir():
                 continue
             glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
             for test_py in sorted(glob_fn("test_*.py")):
-                rel = str(test_py.relative_to(cwd))
+                try:
+                    rel = str(test_py.relative_to(cwd))
+                except ValueError:
+                    continue
                 if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
                     continue
                 _add(rel)
@@ -637,7 +751,11 @@ def _push_with_retry(
     repo_name: str,
 ) -> Tuple[bool, str]:
     """
-    Pushes to remote, retrying with PDD_GH_TOKEN_FILE on auth failure.
+    Pushes to remote, retrying on non-fast-forward or auth failure.
+
+    On non-fast-forward error (branch diverged after rebase):
+    - Retry with --force-with-lease, which safely overwrites the remote only
+      if it hasn't changed since the last fetch.
 
     On push auth failure (Authentication failed, HTTP 401, could not read Username,
     or HTTP Basic: Access denied):
@@ -663,6 +781,30 @@ def _push_with_retry(
         return True, ""
 
     stderr = push_result.stderr
+
+    # Non-fast-forward: branch diverged (e.g. after rebase onto main).
+    # Retry with --force-with-lease which is safe — it only overwrites
+    # the remote if it matches what we last fetched.
+    # Only match specific non-ff markers — avoid generic "[rejected]" which
+    # could be protected branches, pre-receive hooks, etc.
+    non_ff_markers = ["non-fast-forward", "tip of your current branch is behind"]
+    is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
+
+    if is_non_fast_forward:
+        console.print(
+            "[yellow]WARNING: Push rejected (non-fast-forward). "
+            "Retrying with --force-with-lease...[/yellow]"
+        )
+        retry_result = subprocess.run(
+            ["git", "push", "--force-with-lease", "-u", "origin", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if retry_result.returncode == 0:
+            return True, ""
+        return False, retry_result.stderr
+
     auth_errors = ["Authentication failed", "HTTP 401", "could not read Username", "HTTP Basic: Access denied"]
     is_auth_failure = any(err in stderr for err in auth_errors)
 
@@ -957,15 +1099,17 @@ def run_agentic_e2e_fix_orchestrator(
     success = False
     final_message = ""
     consecutive_provider_failures = 0
+    import_error_retries = 0  # Global budget: max 1 retry across all cycles
+    verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
-        
+
         while current_cycle <= max_cycles:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
-            
+
             # Snapshot file hashes at cycle start for convergence detection (5b)
             cycle_start_hashes = _get_file_hashes(cwd)
             
@@ -1000,12 +1144,19 @@ def run_agentic_e2e_fix_orchestrator(
                         if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
-                                verified, _ = _verify_tests_independently(test_files, cwd)
+                                verified, verify_output = _verify_tests_independently(test_files, cwd)
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
                                     final_message = "All tests passed (Step 1 verified, Step 2 skipped)."
                                     break
+                                else:
+                                    _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
+                                    step_outputs[str(step_num)] = f"FAILED: VERIFICATION_FAILED: {verify_output}"
+                                    if should_retry:
+                                        verification_failure_context = verify_output
+                                        last_completed_step = 0
+                                        break
                             else:
                                 console.print("[green]ALL_TESTS_PASS (Step 1) — Step 2 skipped, no test files for verification. Exiting early.[/green]")
                                 success = True
@@ -1037,12 +1188,19 @@ def run_agentic_e2e_fix_orchestrator(
                         if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
-                                verified, _ = _verify_tests_independently(test_files, cwd)
+                                verified, verify_output = _verify_tests_independently(test_files, cwd)
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
                                     final_message = "All tests passed (Step 1 verified, Step 2 skipped)."
                                     break
+                                else:
+                                    _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
+                                    step_outputs[str(step_num)] = f"FAILED: VERIFICATION_FAILED: {verify_output}"
+                                    if should_retry:
+                                        verification_failure_context = verify_output
+                                        last_completed_step = 0
+                                        break
                             else:
                                 console.print("[green]ALL_TESTS_PASS (Step 1) — Step 2 skipped, no test files for verification. Exiting early.[/green]")
                                 success = True
@@ -1107,6 +1265,16 @@ def run_agentic_e2e_fix_orchestrator(
                     prev_output = step_outputs.get(str(prev_step), "")
                     if prev_output.startswith("E2E_SKIP:"):
                         formatted_prompt += f"\n\nNote: Step {prev_step} was skipped — {prev_output}"
+
+                # Inject verification failure context on Step 1 retry
+                if step_num == 1 and verification_failure_context:
+                    formatted_prompt += (
+                        "\n\nPREVIOUS ATTEMPT FAILED: Independent verification found the "
+                        "following errors after you claimed ALL_TESTS_PASS. You MUST write "
+                        "all required code to disk before claiming tests pass:\n"
+                        f"{verification_failure_context}"
+                    )
+                    verification_failure_context = ""  # Clear after use
 
                 # 3. Run Task
                 base_timeout = E2E_FIX_STEP_TIMEOUTS.get(step_num, 340.0)
@@ -1232,8 +1400,13 @@ def run_agentic_e2e_fix_orchestrator(
                             break
                         else:
                             console.print("[bold red]LLM claimed ALL_TESTS_PASS but independent verification FAILED.[/bold red]")
+                            _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
                             step_output = f"VERIFICATION_FAILED: LLM claimed ALL_TESTS_PASS but pytest failed.\n{verify_output}"
                             step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                            if should_retry:
+                                verification_failure_context = verify_output
+                                last_completed_step = 0
+                                break
                             last_completed_step = step_num - 1
                     else:
                         console.print("[yellow]No test files found for independent verification. Trusting LLM output.[/yellow]")
@@ -1284,8 +1457,13 @@ def run_agentic_e2e_fix_orchestrator(
                                 break
                             else:
                                 console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
+                                _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
                                 step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
                                 step_outputs[str(step_num)] = f"FAILED: {step_output}"
+                                if should_retry:
+                                    verification_failure_context = verify_output
+                                    last_completed_step = 0
+                                    break
                                 last_completed_step = step_num - 1
                                 # Don't break — fall through to cycle increment
                         else:

@@ -2532,6 +2532,16 @@ def llm_invoke(
                                 current_temperature = 1
                     except Exception:
                         pass
+                    # Gemini 3 requirement: temperature < 1.0 causes infinite loops and
+                    # degraded reasoning. Force temperature=1 for all Gemini 3+ models.
+                    try:
+                        if 'gemini-3' in model_name_litellm.lower() and litellm_kwargs.get('temperature', 0) < 1:
+                            if verbose:
+                                logger.info(f"[INFO] Gemini 3 model detected: forcing temperature=1 (was {litellm_kwargs.get('temperature')}).")
+                            litellm_kwargs['temperature'] = 1
+                            current_temperature = 1
+                    except Exception:
+                        pass
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)

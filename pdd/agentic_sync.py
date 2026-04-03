@@ -20,7 +20,7 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .construct_paths import _detect_context_from_basename, _find_pddrc_file, _load_pddrc_config
+from .construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir, _find_pddrc_file, _load_pddrc_config
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -98,6 +98,74 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return []
 
 
+def _augment_architecture_from_pr_branch(
+    architecture: Optional[List[Dict[str, Any]]],
+    project_root: Path,
+    issue_number: int,
+) -> Optional[List[Dict[str, Any]]]:
+    """Merge new architecture.json entries from the PR branch for this issue.
+
+    When pdd sync runs from main, architecture.json only contains entries for
+    modules that exist on main. If pdd-change created new modules on a
+    change/issue-N branch, those entries are missing and _filter_invalid_basenames
+    will reject them as hallucinations. This function fetches architecture.json
+    from the PR branch and adds any entries whose filename is not already present.
+
+    Discovers all architecture.json files (root + nested like frontend/architecture.json)
+    using the same discovery mechanism as _load_architecture_json, then fetches each
+    from the PR branch via git show.
+    """
+    if architecture is None:
+        return None
+
+    from .architecture_registry import find_architecture_for_project
+
+    # Discover all architecture files on disk (root + subdirs)
+    arch_files = find_architecture_for_project(project_root)
+    if not arch_files:
+        arch_files = [project_root / "architecture.json"]
+
+    existing_filenames = {
+        entry.get("filename")
+        for entry in architecture
+        if isinstance(entry, dict) and entry.get("filename")
+    }
+
+    branch_ref = f"origin/change/issue-{issue_number}"
+
+    for arch_path in arch_files:
+        try:
+            rel_path = arch_path.relative_to(project_root)
+        except ValueError:
+            continue
+
+        try:
+            result = subprocess.run(
+                ["git", "show", f"{branch_ref}:{rel_path.as_posix()}"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            pr_arch = json.loads(result.stdout)
+        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
+            continue
+
+        if not isinstance(pr_arch, list):
+            continue
+
+        for entry in pr_arch:
+            if not isinstance(entry, dict):
+                continue
+            filename = entry.get("filename")
+            if not filename or filename in existing_filenames:
+                continue
+            architecture.append(entry)
+            existing_filenames.add(filename)
+
+    return architecture
+
+
 def _filter_invalid_basenames(
     modules: List[str],
     architecture: Optional[List[Dict[str, Any]]],
@@ -131,15 +199,29 @@ def _filter_invalid_basenames(
         if basename:
             basename_counts[basename] += 1
         else:
-            # Fallback for LLM prompts (_LLM.prompt) and other non-standard suffixes:
-            # strip .prompt extension, then remove trailing _LLM if present
-            stem = filename.rsplit(".prompt", 1)[0] if filename.endswith(".prompt") else filename
+            # Fallback for non-prompt filenames (e.g. "GitHubAppCTA.tsx" from
+            # frontend/architecture.json) and LLM prompts (_LLM.prompt).
+            # Strip known code extensions first, then .prompt and _LLM suffixes.
+            stem = filename
+            for ext in (".tsx", ".ts", ".jsx", ".js", ".py", ".prompt"):
+                if stem.endswith(ext):
+                    stem = stem[: -len(ext)]
+                    break
             for suffix in ("_LLM",):
                 if stem.endswith(suffix):
                     stem = stem[: -len(suffix)]
                     break
             if stem:
                 basename_counts[stem] += 1
+
+        # Also extract basename from filepath (e.g. "src/app/dashboard/page.tsx"
+        # -> "page"). The filename field may use a different convention
+        # (e.g. "dashboardPage.tsx") that doesn't match the prompt basename.
+        filepath = entry.get("filepath", "")
+        if filepath:
+            fp_stem = Path(filepath).stem  # "page" from "page.tsx"
+            if fp_stem and fp_stem not in basename_counts:
+                basename_counts[fp_stem] += 1
 
     known_basenames = set(basename_counts.keys())
 
@@ -151,14 +233,15 @@ def _filter_invalid_basenames(
             valid.append(m)
         elif "/" in m:
             tail = m.rsplit("/", 1)[-1]
-            if tail in known_basenames and basename_counts[tail] == 1:
-                # Unambiguous tail match: path-qualified basename from branch
-                # diff (e.g. "frontend/app/settings/github/page" where "page"
-                # appears exactly once in architecture.json).
+            if tail in known_basenames:
+                # Path-qualified basename from branch diff (e.g.
+                # "frontend/components/layout/Sidebar"). The directory path
+                # already disambiguates even if the bare tail appears multiple
+                # times (e.g. both root and frontend architecture have "Sidebar"
+                # entries for the same module's prompt and code files).
                 valid.append(m)
             else:
-                # Either tail not found, or ambiguous (multiple entries share
-                # the same basename — can't determine which module is meant).
+                # Tail not found in any architecture entry.
                 invalid.append(m)
         else:
             invalid.append(m)
@@ -238,12 +321,7 @@ def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
         defaults = context_config.get("defaults", {})
         prompts_dir = defaults.get("prompts_dir", "")
         if prompts_dir:
-            normalized = prompts_dir.rstrip("/")
-            prefix = normalized
-            if normalized == "prompts":
-                prefix = ""
-            elif normalized.startswith("prompts/"):
-                prefix = normalized[len("prompts/"):]
+            prefix = _extract_prefix_from_prompts_dir(prompts_dir)
             if prefix and (basename == prefix or basename.startswith(prefix + "/")):
                 return False  # prompts_dir match is always specific
 
@@ -864,6 +942,9 @@ def run_agentic_sync(
         stripped = extract_module_from_include(m + ".prompt")
         stripped_modules.append(stripped if stripped else m)
     modules_to_sync = list(dict.fromkeys(stripped_modules))
+
+    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
+    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
 
     # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
     modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)

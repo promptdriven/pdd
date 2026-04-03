@@ -288,6 +288,60 @@ class TestTypeScriptTestRunnerDetection:
         assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
 
 
+class TestPlaywrightDetection:
+    """Tests for Playwright detection for .spec.ts files."""
+
+    def test_spec_ts_with_playwright_config_uses_playwright(self, tmp_path):
+        """When playwright.config.ts exists, .spec.ts files should use npx playwright test."""
+        (tmp_path / "playwright.config.ts").write_text("export default {};")
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "e2e" / "login.spec.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("import { test } from '@playwright/test';")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert result.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
+
+    def test_spec_ts_without_playwright_config_falls_back_to_jest(self, tmp_path):
+        """.spec.ts with only jest config (no playwright) should use Jest (Angular-style)."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "tests" / "app.spec.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('test', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result, f"Expected jest command, got: {result}"
+
+    def test_test_ts_with_both_configs_uses_jest(self, tmp_path):
+        """.test.ts files should use Jest even when playwright.config.ts exists."""
+        (tmp_path / "playwright.config.ts").write_text("export default {};")
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "tests" / "calculator.test.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("describe('test', () => {})")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+
+        assert result is not None
+        assert "npx jest" in result, f"Expected jest command, got: {result}"
+
+    def test_spec_tsx_with_playwright_config_uses_playwright(self, tmp_path):
+        """When playwright.config.ts exists, .spec.tsx files should also use playwright."""
+        (tmp_path / "playwright.config.ts").write_text("export default {};")
+        test_file = tmp_path / "e2e" / "component.spec.tsx"
+        test_file.parent.mkdir()
+        test_file.write_text("import { test } from '@playwright/test';")
+
+        result = get_test_command_for_file(str(test_file), language="typescriptreact")
+
+        assert result is not None
+        assert result.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
+
+
 class TestIntegrationWithRealCSV:
     """Integration tests using the actual CSV file."""
 

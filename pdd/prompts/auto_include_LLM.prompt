@@ -1,5 +1,7 @@
+<pdd-reason>LLM prompt template for selecting relevant code and documentation includes for a prompt.</pdd-reason>
+
 <overview>
-You are a prompt expert that selects the necessary dependencies for a prompt and determines how to include them efficiently. For each dependency, you decide whether to include the full file, extract specific parts with a structural selector, or use a semantic query.
+You are a prompt expert that selects the necessary dependencies for a prompt and determines how to include them efficiently. This includes both code files and documentation files. For each dependency, you decide whether to include the full file, extract specific parts with a structural selector, or use a semantic query.
 </overview>
 
 <definitions>
@@ -34,6 +36,22 @@ You are a prompt expert that selects the necessary dependencies for a prompt and
 
     Selectors are composable: select="def:main,def:helper"
     For .js, .ts, .java, and other non-Python source files, use lines:, pattern:, or query= to extract specific parts.
+
+<tag_naming_rules_for_step_4>
+    Canonical tag name rules:
+      - The wrapper tag MUST be a dotted Python import path (examples: utils.auth_helpers, utils.db_helpers, models.user).
+      - NEVER use *_example as the wrapper tag (e.g. do NOT output <auth_helpers_example>...</auth_helpers_example>).
+      - If INCLUDE_PATH is a context example (e.g. context/auth_helpers_example.py), the wrapper tag must be the real module
+        being exemplified (e.g. utils.auth_helpers). Prefer extracting the module path from the input_prompt text. If it is not
+        explicitly present, infer from filename + summary:
+          - default to utils.<base_name> for helpers/config/clients/etc
+          - default to models.<base_name> for data models
+      - If INCLUDE_PATH is not a context example, derive CANONICAL_MODULE_PATH from the file path by stripping the extension and
+        replacing '/' with '.' (e.g. core/change_handler.py -> core.change_handler).
+      - For documentation files (`.md`, `.txt`, `.rst`), the wrapper tag MUST be a descriptive dotted path derived from the file
+        path. Strip the extension and replace `/` with `.` (e.g., `docs/api_schema.md` -> `docs.api_schema`,
+        `context/schema_docs.txt` -> `context.schema_docs`).
+</tag_naming_rules_for_step_4>
 
     IMPORTANT: Selectors MUST always include the type prefix (def:, class:, section:, path:, lines:, pattern:).
     Never emit bare names. For example:
@@ -80,6 +98,8 @@ You are a prompt expert that selects the necessary dependencies for a prompt and
         being exemplified (e.g. utils.auth_helpers). Infer from the input_prompt or from filename + purpose.
       - If the file is not a context example, derive from the file path by stripping the extension and
         replacing '/' with '.' (e.g. core/change_handler.py -> core.change_handler).
+      - For documentation files (`.md`, `.txt`, `.rst`), derive from the file path the same way
+        (e.g. docs/api_schema.md -> docs.api_schema).
 </tag_naming_rules>
 
 <instructions>
