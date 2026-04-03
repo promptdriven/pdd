@@ -100,10 +100,10 @@ When using `page.route()` or similar API mocking in E2E tests:
      ```typescript
      await page.route("**/api/boards/**", async (route) => {
        const method = route.request().method();
-       if (method === "GET") {
+       if (method === 'GET') {
          return route.fulfill({ status: 200, body: JSON.stringify({ boards: [] }) });
        }
-       if (method === "POST") {
+       if (method === 'POST') {
          return route.fulfill({ status: 500, body: JSON.stringify({ message: "Save failed (500)" }) });
        }
        return route.continue();
