@@ -666,3 +666,68 @@ def test_z3_cycle_detection_property():
     # Verify Python code detected it
     assert len(cycles) > 0
     assert "d" in sorted_modules # D should be sorted as it's not in cycle
+
+
+# =============================================================================
+# Issue #1048: generate_sync_order_script must shell-quote module names
+# =============================================================================
+
+
+def test_issue_1048_bracket_module_is_shell_quoted(tmp_path):
+    """Module names with brackets must be shell-quoted in generated scripts.
+
+    Bug: 'pdd sync frontend/app/[id]/page' is written unquoted into bash.
+    In bash, [id] is interpreted as a glob pattern. The module name must be
+    quoted (e.g., via shlex.quote) to prevent bash glob expansion.
+    """
+    import shlex
+
+    output = tmp_path / "sync.sh"
+    module = "frontend/app/[id]/page"
+    content = sync_order.generate_sync_order_script([module], output)
+
+    pdd_sync_lines = [line for line in content.splitlines() if line.strip().startswith("pdd sync")]
+    assert len(pdd_sync_lines) == 1, f"Expected exactly one 'pdd sync' line, got: {pdd_sync_lines}"
+
+    sync_line = pdd_sync_lines[0].strip()
+    expected_quoted = shlex.quote(module)
+    assert expected_quoted in sync_line, \
+        f"Bug #1048: Module with brackets not shell-quoted. Expected {expected_quoted} in: {sync_line!r}"
+
+
+def test_issue_1048_parentheses_module_is_shell_quoted(tmp_path):
+    """Module names with parentheses must be shell-quoted.
+
+    Bug: 'pdd sync frontend/routes/(auth)/login' causes bash syntax error
+    because ( starts a subshell. The module must be quoted.
+    """
+    import shlex
+
+    output = tmp_path / "sync.sh"
+    module = "frontend/routes/(auth)/login"
+    content = sync_order.generate_sync_order_script([module], output)
+
+    pdd_sync_lines = [line for line in content.splitlines() if line.strip().startswith("pdd sync")]
+    assert len(pdd_sync_lines) == 1
+
+    sync_line = pdd_sync_lines[0].strip()
+    expected_quoted = shlex.quote(module)
+    assert expected_quoted in sync_line, \
+        f"Bug #1048: Module with parentheses not shell-quoted. Expected {expected_quoted} in: {sync_line!r}"
+
+
+def test_issue_1048_mixed_modules_quoting_preserved(tmp_path):
+    """Mix of simple and special-character modules: special ones must be quoted."""
+    import shlex
+
+    output = tmp_path / "sync.sh"
+    modules = ["simple_module", "frontend/app/[id]/page", "frontend/routes/(group)/layout"]
+    content = sync_order.generate_sync_order_script(modules, output)
+
+    pdd_sync_lines = [line for line in content.splitlines() if line.strip().startswith("pdd sync")]
+    assert len(pdd_sync_lines) == 3, f"Expected 3 pdd sync lines, got {len(pdd_sync_lines)}"
+
+    for module in ["frontend/app/[id]/page", "frontend/routes/(group)/layout"]:
+        expected_quoted = shlex.quote(module)
+        assert expected_quoted in content, \
+            f"Bug #1048: Module {module!r} not shell-quoted. Expected {expected_quoted} in script."

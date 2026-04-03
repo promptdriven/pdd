@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import os
 import re
 
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
+
+logger = logging.getLogger(__name__)
 
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
@@ -262,6 +265,13 @@ def save_fingerprint(
     # Issue #522: Pass stored include deps for prompt hash calculation
     prev_fp = read_fingerprint(basename, language)
     stored_deps = prev_fp.include_deps if prev_fp else None
+    if not paths:
+        from .sync_determine_operation import get_pdd_file_paths
+        try:
+            paths = get_pdd_file_paths(basename, language)
+        except (ImportError, OSError, ValueError) as e:
+            logger.warning("Could not resolve paths for %s/%s: %s", basename, language, e)
+            paths = {}
     current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps) if paths else {}
 
     # Create Fingerprint with same format as _save_fingerprint_atomic

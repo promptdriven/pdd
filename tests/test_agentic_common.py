@@ -4134,3 +4134,194 @@ class TestIssue830SaveWorkflowStateDivergence:
             f"Expected a warning about GitHub state save failure. "
             f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# GIT_WORK_TREE worktree isolation (Issue #894)
+# ---------------------------------------------------------------------------
+
+
+def test_git_work_tree_set_to_cwd_in_subprocess_env(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """GIT_WORK_TREE must be set to cwd so CLI agents stay in the worktree.
+
+    Without this, agents follow the worktree's .git file pointer back to
+    the main repo and write files there instead of in the worktree.
+    See: https://github.com/gltanaka/pdd/issues/894
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" in env_passed, "GIT_WORK_TREE not set — CLI agent will escape worktree"
+    assert env_passed["GIT_WORK_TREE"] == str(mock_cwd)
+
+
+def test_git_work_tree_overrides_inherited_value(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """A pre-existing GIT_WORK_TREE from the parent env must be overwritten.
+
+    If the parent process already has GIT_WORK_TREE pointing elsewhere,
+    the subprocess must use the worktree cwd, not the inherited value.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert env_passed["GIT_WORK_TREE"] == str(mock_cwd), (
+        f"GIT_WORK_TREE should be {mock_cwd}, got {env_passed.get('GIT_WORK_TREE')}"
+    )
+
+
+def test_git_work_tree_matches_subprocess_cwd(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """GIT_WORK_TREE and the subprocess cwd kwarg must agree.
+
+    If they diverge, git operations may resolve to a different directory
+    than file writes, causing split-brain behavior.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    cwd_passed = kwargs["cwd"]
+    assert "GIT_WORK_TREE" in env_passed, "GIT_WORK_TREE not set in subprocess env"
+    assert str(env_passed["GIT_WORK_TREE"]) == str(cwd_passed), (
+        f"GIT_WORK_TREE ({env_passed['GIT_WORK_TREE']}) != cwd ({cwd_passed})"
+    )
+
+# -----------------------------------------------------------------------------
+# Scope Guard Tests (_revert_out_of_scope_changes)
+# -----------------------------------------------------------------------------
+
+import subprocess as _subprocess
+
+
+def _init_test_git_repo(path):
+    """Initialize a git repo at *path* with all existing files committed."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "t@t"}
+    _subprocess.run(["git", "init", str(path)], check=True, capture_output=True, env=env)
+    _subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, capture_output=True, env=env)
+    _subprocess.run(
+        ["git", "-C", str(path), "commit", "-m", "initial", "--allow-empty"],
+        check=True, capture_output=True, env=env,
+    )
+
+
+class TestRevertOutOfScopeChanges:
+    """Tests for _revert_out_of_scope_changes scope guard utility."""
+
+    def test_reverts_deleted_files(self, tmp_path):
+        """Deleted files outside allowed set must be restored."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("def main(): pass")
+        (proj / "unrelated.py").write_text("def other(): pass")
+        _init_test_git_repo(proj)
+
+        # Simulate agent deleting unrelated file
+        (proj / "unrelated.py").unlink()
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").exists(), "Deleted file should be restored"
+        assert (proj / "unrelated.py").read_text() == "def other(): pass"
+        assert len(reverted) == 1
+
+    def test_preserves_allowed_changes(self, tmp_path):
+        """Changes to files in the allowed set must not be reverted."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("def main(): pass")
+        _init_test_git_repo(proj)
+
+        (proj / "code.py").write_text("def main(): return 42")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "code.py").read_text() == "def main(): return 42"
+        assert len(reverted) == 0
+
+    def test_reverts_modifications_outside_scope(self, tmp_path):
+        """Modified files outside allowed set must be reverted."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("def main(): pass")
+        (proj / "unrelated.py").write_text("original content")
+        _init_test_git_repo(proj)
+
+        (proj / "unrelated.py").write_text("CORRUPTED")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").read_text() == "original content"
+        assert len(reverted) == 1
+
+    def test_noop_when_not_in_git_repo(self, tmp_path):
+        """Should silently return empty list when not in a git repo."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "not_a_repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("content")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert reverted == []
+
+    def test_noop_when_allowed_paths_not_under_cwd(self, tmp_path):
+        """Should skip when allowed paths are outside cwd (test scenario guard)."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("content")
+        _init_test_git_repo(proj)
+
+        # allowed paths in a completely different directory
+        other = tmp_path / "other"
+        other.mkdir()
+        allowed = {(other / "file.py").resolve()}
+
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+        assert reverted == []
+

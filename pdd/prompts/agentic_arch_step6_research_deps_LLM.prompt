@@ -36,8 +36,9 @@ You are working on step 6 of 13 in an agentic architecture workflow. Step 5 desi
 
 For each module identified in step 5:
 
-1. **Find API documentation URLs:**
-   - Official framework docs relevant to this module's implementation
+1. **Find API documentation URLs using `WebSearch` and `WebFetch` tools:**
+   - Use `WebSearch` to find official framework docs relevant to this module's implementation
+   - Use `WebFetch` to retrieve specific API reference pages
    - Library-specific API references
    - Authentication/authorization documentation if applicable
 
@@ -91,7 +92,7 @@ Your comment should follow this format:
 % Important
 
 - Focus on documentation that directly helps implement the specific module
-- Use web search to find current, relevant documentation
+- Use `WebSearch` and `WebFetch` tools to find current, relevant documentation — do not guess version numbers or API signatures from training data, which may be outdated
 - Prefer official documentation over third-party tutorials
 - Keep purpose descriptions concise (they become XML tag names)
 - Not every module needs context_urls - only include genuinely useful references

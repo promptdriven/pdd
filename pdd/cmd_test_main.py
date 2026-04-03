@@ -14,7 +14,7 @@ from rich.panel import Panel
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .generate_test import generate_test
 from .increase_tests import increase_tests
 
@@ -33,6 +33,7 @@ def cmd_test_main(
     merge: bool = False,
     strength: float | None = None,
     temperature: float | None = None,
+    manual: bool = False,
 ) -> tuple[str, float, str, bool | None]:
     """
     CLI wrapper for generating or enhancing unit tests.
@@ -49,6 +50,8 @@ def cmd_test_main(
         merge: If True, merge output into the first existing test file.
         strength: Optional override for LLM strength.
         temperature: Optional override for LLM temperature.
+        manual: If True, bypass agentic test generation and use the legacy
+            single-LLM path for all languages (including non-Python).
 
     Returns:
         tuple: (generated_test_code, total_cost, model_name, agentic_success)
@@ -117,8 +120,14 @@ def cmd_test_main(
     # explore the project and determine the correct test setup.
     # For Python with agentic_mode=True, we also use agentic test generation for consistency.
     agentic_mode = ctx.obj.get("agentic_mode", False)
-    use_agentic_tests = (detected_language and detected_language.lower() != 'python') or agentic_mode
-
+    # For Python test_extend (merge=True), use native path which properly
+    # merges with existing tests. The agentic path ignores existing_tests
+    # and merge, overwriting the file entirely — destroying coverage.
+    use_agentic_tests = (
+        not manual
+        and ((detected_language and detected_language.lower() != 'python') or agentic_mode)
+        and not (detected_language and detected_language.lower() == 'python' and merge)
+    )
     if use_agentic_tests:
         from .agentic_test_generate import run_agentic_test_generate
 
@@ -270,7 +279,7 @@ def cmd_test_main(
                 cloud_url,
                 json=payload,
                 headers=headers,
-                timeout=get_cloud_timeout()
+                timeout=get_cloud_request_timeout()
             )
 
             # Check for HTTP errors explicitly

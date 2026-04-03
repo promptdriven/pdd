@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import stat
 import logging
 from datetime import datetime
@@ -333,7 +334,7 @@ def generate_sync_order_script(modules: List[str], output_path: Path, worktree_p
     total = len(modules)
     for i, module in enumerate(modules, 1):
         lines.append(f'echo "[{i}/{total}] Syncing {module}..."')
-        lines.append(f"pdd sync {module}")
+        lines.append(f"pdd sync {shlex.quote(module)}")
         lines.append("")
 
     script_content = "\n".join(lines)
