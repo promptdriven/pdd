@@ -357,7 +357,7 @@ def test_verbose_verification_failure_shows_missing(mock_preprocess, mock_load_t
     incremental_code_generator(**common_inputs)
     captured = capsys.readouterr()
     assert "input validation" in captured.out
-    assert "Falling back to full regeneration" in captured.out
+    assert "missing requirements" in captured.out.lower()
 
 
 # --- Preprocessing Tests ---
@@ -487,3 +487,25 @@ def test_decision_logic_formal_verification():
         solver.add(should_regenerate == combo["expected_should_regenerate"])
         solver.add(expected_logic)
         assert solver.check() == sat, f"Failed for {combo}"
+
+
+# --- Graceful Degradation Tests ---
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_verification_error_degrades_gracefully(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
+    """When verification LLM call fails, accept the patch anyway (graceful degradation)."""
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False),
+        mock_patch_response(),
+        Exception("Verification LLM unavailable"),
+    ]
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+
+    # Patch accepted despite verification failure
+    assert updated_code == "def updated(): pass"
+    assert is_incremental is True

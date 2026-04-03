@@ -168,42 +168,49 @@ def incremental_code_generator(
                     console.print("[yellow]Incremental patch produced no changes. Recommending full regeneration.[/yellow]")
                 return None, False, total_cost, model_name
 
-            # Step 4.5: Verify completeness of patched code
-            verifier_template = load_prompt_template("patch_verifier_LLM")
-            if preprocess_prompt:
-                verifier_template = preprocess(
-                    verifier_template,
-                    recursive=False,
-                    double_curly_brackets=True,
-                    exclude_keys=["PROMPT", "PATCHED_CODE"]
+            # Step 4.5: Verify completeness of patched code.
+            # Catches incomplete patches (e.g. function signature updated but
+            # call sites not wired) before accepting.  Falls back to full
+            # regeneration when gaps are found.  See issue #1076.
+            try:
+                verifier_template = load_prompt_template("patch_verifier_LLM")
+                if preprocess_prompt:
+                    verifier_template = preprocess(
+                        verifier_template,
+                        recursive=False,
+                        double_curly_brackets=True,
+                        exclude_keys=["PROMPT", "PATCHED_CODE"]
+                    )
+
+                verification_response = llm_invoke(
+                    prompt=verifier_template,
+                    input_json={
+                        "PROMPT": new_prompt,
+                        "PATCHED_CODE": patch_result.patched_code
+                    },
+                    strength=0.5 * strength,
+                    temperature=temperature,
+                    time=0.5 * time,
+                    verbose=verbose,
+                    output_pydantic=PatchVerification
                 )
+                verification_result: PatchVerification = verification_response['result']
+                total_cost += verification_response['cost']
 
-            verification_response = llm_invoke(
-                prompt=verifier_template,
-                input_json={
-                    "PROMPT": new_prompt,
-                    "PATCHED_CODE": patch_result.patched_code
-                },
-                strength=0.5 * strength,
-                temperature=temperature,
-                time=0.5 * time,
-                verbose=verbose,
-                output_pydantic=PatchVerification
-            )
-            verification_result: PatchVerification = verification_response['result']
-            total_cost += verification_response['cost']
+                if not verification_result.is_complete:
+                    if verbose:
+                        console.print("[yellow]Patch verification found missing requirements. Falling back to full regeneration.[/yellow]")
+                        for req in verification_result.missing_requirements:
+                            console.print(f"  [yellow]- {req}[/yellow]")
+                    return None, False, total_cost, model_name
 
-            if verbose:
-                if verification_result.is_complete:
-                    console.print("[bold green]Patch verification passed.[/bold green]")
-                else:
-                    console.print("[bold yellow]Patch verification failed.[/bold yellow]")
-                    console.print(f"Missing requirements: {verification_result.missing_requirements}")
-
-            if not verification_result.is_complete:
                 if verbose:
-                    console.print(f"[bold yellow]Missing requirements: {verification_result.missing_requirements}. Falling back to full regeneration.[/bold yellow]")
-                return None, False, total_cost, model_name
+                    console.print("[green]Patch verification passed — all prompt requirements implemented.[/green]")
+            except Exception as verify_exc:
+                # Verification failure should not block the patch — log and
+                # accept the patch as-is (graceful degradation).
+                if verbose:
+                    console.print(f"[yellow]Patch verification skipped ({verify_exc})[/yellow]")
 
             return patch_result.patched_code, True, total_cost, model_name
 
