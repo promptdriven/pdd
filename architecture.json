@@ -6486,7 +6486,8 @@
     "dependencies": [
       "llm_invoke_python.prompt",
       "postprocess_python.prompt",
-      "preprocess_python.prompt"
+      "preprocess_python.prompt",
+      "patch_verifier_LLM.prompt"
     ],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
@@ -8737,6 +8738,32 @@
     "position": {
       "x": 14200,
       "y": 2000
+    }
+  },
+  {
+    "reason": "Verifies patched code completeness against prompt requirements before accepting incremental patches.",
+    "description": "Lightweight LLM verification prompt that checks whether patched code implements all requirements from the new prompt. Returns is_complete and missing_requirements.",
+    "dependencies": [],
+    "priority": 150,
+    "filename": "patch_verifier_LLM.prompt",
+    "filepath": "prompts/patch_verifier_LLM.prompt",
+    "tags": [
+      "generation",
+      "verification",
+      "prompt"
+    ],
+    "context_urls": [],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "patch_verifier",
+            "signature": "(prompt: str, patched_code: str)",
+            "returns": "PatchVerification"
+          }
+        ]
+      }
     }
   }
 ]
