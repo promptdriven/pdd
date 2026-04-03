@@ -12,6 +12,7 @@ whether the prompt file was modified, along with cost and provider details.
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+import glob
 import os
 import traceback
 
@@ -132,7 +133,7 @@ def _discover_test_files(
     code_path = code_path.resolve()
     stem = code_path.stem
     suffix = code_path.suffix
-    pattern = f"test_{stem}*{suffix}"
+    pattern = f"test_{glob.escape(stem)}*{glob.escape(suffix)}"
 
     search_dirs: List[Path] = []
     if tests_dir is not None:

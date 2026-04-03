@@ -1,4 +1,5 @@
 import fnmatch
+import glob
 import re
 import time
 from pathlib import Path
@@ -27,14 +28,9 @@ from .sync_orchestration import sync_orchestration
 from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
 
-# Regex for basename validation supporting subdirectory paths (e.g., 'core/cloud')
-# Allows: alphanumeric, underscore, hyphen, and forward slash for subdirectory paths
-# Structure inherently prevents:
-#   - Path traversal (..) - dot not in character class
-#   - Leading slash (/abs) - must start with [a-zA-Z0-9_-]+
-#   - Trailing slash (path/) - must end with [a-zA-Z0-9_-]+
-#   - Double slash (a//b) - requires characters between slashes
-VALID_BASENAME_CHARS = re.compile(r"^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$")
+# Blocklist of characters that are dangerous in shell contexts or malformed as paths.
+# Everything else is allowed — frameworks use [], (), +, @, dots, unicode, etc.
+DANGEROUS_BASENAME_CHARS = re.compile(r'[;|&$`><!\'"~{}*?#\\%\s\x00-\x1f\x7f]')
 
 # All languages from language_format.csv that produce code|test|example outputs.
 # Used for prompt discovery when scanning for available language variants.
@@ -54,10 +50,16 @@ def _validate_basename(basename: str) -> None:
     """Raises UsageError if the basename is invalid."""
     if not basename:
         raise click.UsageError("BASENAME cannot be empty.")
-    if not VALID_BASENAME_CHARS.match(basename):
+    if any(seg in (".", "..") for seg in basename.split("/")):
+        raise click.UsageError("Path traversal ('..' or '.') is not allowed in BASENAME.")
+    if basename.startswith("/"):
+        raise click.UsageError("Absolute paths not allowed in BASENAME.")
+    if basename.endswith("/") or "//" in basename:
+        raise click.UsageError("Malformed path in BASENAME.")
+    match = DANGEROUS_BASENAME_CHARS.search(basename)
+    if match:
         raise click.UsageError(
-            f"Basename '{basename}' contains invalid characters. "
-            "Only alphanumeric, underscore, hyphen, and forward slash (for subdirectories) are allowed."
+            f"Basename '{basename}' contains dangerous character '{match.group()}'."
         )
 
 
@@ -330,7 +332,9 @@ def _detect_languages_with_context(basename: str, prompts_dir: Path, context_nam
                         prompts_base_path = pddrc_parent / prompts_base_dir
                         if prompts_base_path.is_dir():
                             # Recursively search for {basename}_*.prompt files
-                            pattern = f"**/{name_part}_*.prompt"
+                            # Escape glob metacharacters in name_part (e.g., [id] -> [[]id])
+                            escaped_name = glob.escape(name_part)
+                            pattern = f"**/{escaped_name}_*.prompt"
                             for prompt_file in prompts_base_path.glob(pattern):
                                 stem = prompt_file.stem
                                 if stem.startswith(f"{name_part}_"):
@@ -391,9 +395,10 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
     # Use path parts comparison to avoid false positives (e.g., 'end' matching 'backend')
     dir_parts = Path(dir_part).parts if dir_part else ()
     if dir_parts and prompts_dir.parts[-len(dir_parts):] == dir_parts:
-        pattern = f"{name_part}_*.prompt"
+        # Escape glob metacharacters (e.g., brackets in [id]) so they're treated as literals
+        pattern = f"{glob.escape(name_part)}_*.prompt"
     else:
-        pattern = f"{basename}_*.prompt"
+        pattern = f"{glob.escape(basename)}_*.prompt"
     for prompt_file in prompts_dir.glob(pattern):
         # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
@@ -615,9 +620,9 @@ def sync_main(
             dir_part = ''
         dir_parts = Path(dir_part).parts if dir_part else ()
         if dir_parts and prompts_dir.parts[-len(dir_parts):] == dir_parts:
-            llm_pattern = f"{name_part}_[Ll][Ll][Mm].prompt"
+            llm_pattern = f"{glob.escape(name_part)}_[Ll][Ll][Mm].prompt"
         else:
-            llm_pattern = f"{basename}_[Ll][Ll][Mm].prompt"
+            llm_pattern = f"{glob.escape(basename)}_[Ll][Ll][Mm].prompt"
         llm_files = list(prompts_dir.glob(llm_pattern)) if prompts_dir.is_dir() else []
         if llm_files:
             if not quiet:

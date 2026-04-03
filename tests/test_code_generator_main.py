@@ -3329,3 +3329,37 @@ def test_incremental_code_generator_returns_true_when_patch_differs(
 
     assert is_incremental, "Should return is_incremental=True when code actually changed"
     assert code == patched_code
+
+
+# =============================================================================
+# Issue #1048: _find_default_test_files glob must escape brackets in code_stem
+# =============================================================================
+
+
+def test_issue_1048_find_default_test_files_bracket_stem(tmp_path):
+    """_find_default_test_files: glob 'test_[id]_page*.py' must escape brackets.
+
+    Bug: When code_path has stem '[id]_page', the glob pattern 'test_[id]_page*.py'
+    interprets [id] as a character class matching 'i' or 'd'.
+    """
+    from pdd.code_generator_main import _find_default_test_files
+    from pathlib import Path
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+
+    target_file = tests_dir / "test_[id]_page.py"
+    target_file.write_text("def test_bracket(): pass")
+    decoy_file = tests_dir / "test_i_page.py"
+    decoy_file.write_text("def test_decoy(): pass")
+
+    code_path = Path(tmp_path / "src" / "[id]_page.py")
+
+    result = _find_default_test_files(tests_dir, code_path)
+    result_names = [Path(f).name for f in result]
+
+    assert "test_[id]_page.py" in result_names, \
+        f"Bug #1048: _find_default_test_files can't find test_[id]_page.py because " \
+        f"glob treats [id] as char class. Found: {result_names}"
+    assert "test_i_page.py" not in result_names, \
+        f"Bug #1048: Matched decoy test_i_page.py via [id] char class. Found: {result_names}"

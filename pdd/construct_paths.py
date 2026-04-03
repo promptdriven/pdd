@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import os
+import glob
 from pathlib import Path
 from typing import Dict, Tuple, Any, Optional, List, Callable
 import fnmatch
@@ -1040,7 +1041,7 @@ def construct_paths(
             if not resolved_config.get("prompts_dir"):
                 # First, check current working directory for prompt files matching the basename pattern
                 current_dir = Path.cwd()
-                prompt_pattern = f"{basename}_*.prompt"
+                prompt_pattern = f"{glob.escape(basename)}_*.prompt"
                 if list(current_dir.glob(prompt_pattern)):
                     # Found prompt files in current working directory
                     resolved_config["prompts_dir"] = str(current_dir)

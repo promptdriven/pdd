@@ -4,6 +4,7 @@ Runs each step as a separate agentic task, accumulates context, tracks progress/
 and supports resuming from saved state. Includes a review loop (steps 11-12).
 """
 
+import glob
 import json
 import os
 import re
@@ -1337,7 +1338,7 @@ def run_agentic_change_orchestrator(
                     basename = basename[: -len(suffix)]
                     break
             # Look for matching test files
-            for test_file in test_base.glob(f"test_{basename}*"):
+            for test_file in test_base.glob(f"test_{glob.escape(basename)}*"):
                 rel = str(test_file.relative_to(cwd))
                 if rel not in impacted_tests:
                     impacted_tests.append(rel)

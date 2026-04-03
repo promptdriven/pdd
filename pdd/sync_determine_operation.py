@@ -9,6 +9,7 @@ Implements fingerprint-based state analysis and deterministic operation selectio
 import os
 import re
 import sys
+import glob
 import json
 import hashlib
 import subprocess
@@ -431,9 +432,9 @@ def _generate_paths_from_templates(
     if 'test' in result:
         test_path = result['test']
         test_dir_path = test_path.parent
-        test_stem = f"test_{name}"
+        test_stem = f"test_{glob.escape(name)}"
         if test_dir_path.exists():
-            matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+            matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{glob.escape(extension)}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
         result['test_files'] = matching_test_files or [test_path]
@@ -581,9 +582,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 # Bug #156: Find all matching test files
                 test_dir_path = test_path.parent
-                test_stem = f"test_{name_part}"
+                test_stem = f"test_{glob.escape(name_part)}"
                 if test_dir_path.exists():
-                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{glob.escape(extension)}"))
                 else:
                     matching_test_files = [test_path] if test_path.exists() else []
 
@@ -606,7 +607,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 fallback_test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
                 # Bug #156: Find matching test files even in fallback
                 if Path('.').exists():
-                    fallback_matching = sorted(Path('.').glob(f"{dir_prefix}test_{name_part}*.{extension}"))
+                    fallback_matching = sorted(Path('.').glob(f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}*.{glob.escape(extension)}"))
                 else:
                     fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
@@ -773,10 +774,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Bug #156: Find all matching test files
         test_dir = test_path.parent
         _, name_part_for_glob = _extract_name_part(basename)
-        test_stem = f"test_{name_part_for_glob}"
+        test_stem = f"test_{glob.escape(name_part_for_glob)}"
         extension = get_extension(language)
         if test_dir.exists():
-            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{glob.escape(extension)}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
 
@@ -795,9 +796,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
         # Bug #156: Try to find matching test files even in fallback
         test_dir = Path('.')
-        test_stem = f"{dir_prefix}test_{name_part}"
+        test_stem = f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}"
         if test_dir.exists():
-            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{glob.escape(extension)}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
         prompts_root = _resolve_prompts_root(prompts_dir)
@@ -1398,7 +1399,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
-    run_report_pattern = f"{_safe_basename(basename)}_{language.lower()}_run"
+    run_report_pattern = f"{glob.escape(_safe_basename(basename))}_{language.lower()}_run"
     for file in meta_dir.glob(f"{run_report_pattern}*.json"):
         try:
             with open(file, 'r') as f:
