@@ -1,3 +1,10 @@
+## v0.0.196 (2026-04-02)
+
+### Fix
+
+- add 'error' key to one-session sync result dict (#826)
+- check package.json for TS import validation fallback (#826)
+
 ## v0.0.195 (2026-04-01)
 
 ### Fix
