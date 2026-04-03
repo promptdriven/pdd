@@ -469,8 +469,13 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "4" ]; then
 
         if grep -q -E "===+ (FAILURES|ERRORS) ===+" "$PYTEST_LOG"; then
             log "Errors found, running 'fix' command"
-            run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
-                                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
+            if ! run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
+                                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"; then
+                log "Fix command failed, retrying after 5s..."
+                sleep 5
+                run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
+                                    "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "$MATH_TEST_SCRIPT" "$PYTEST_LOG"
+            fi
         else
             log "No errors found in pytest run, creating a simple error scenario for fix test"
             # Create a test file with an intentional error to test fix command
@@ -483,8 +488,13 @@ def test_add_intentional_fail():
     assert add(2, 2) == 5, "Intentional failure for testing fix"
 PYEOF
             python -m pytest "broken_${MATH_TEST_SCRIPT}" > "$PYTEST_LOG" 2>&1 || true
-            run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
-                                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"
+            if ! run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
+                                "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"; then
+                log "Fix command failed, retrying after 5s..."
+                sleep 5
+                run_pdd_command_noexit fix --output-test "$FIXED_MATH_TEST_SCRIPT" --output-code "$FIXED_MATH_SCRIPT" \
+                                    "$FIXTURES_PATH/$MATH_PROMPT" "$MATH_SCRIPT" "broken_${MATH_TEST_SCRIPT}" "$PYTEST_LOG"
+            fi
         fi
     fi
 fi

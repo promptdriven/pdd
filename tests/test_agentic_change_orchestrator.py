@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -4047,3 +4047,61 @@ class TestSyncOrderPddPromptsPath:
             call_args = mock_get_affected.call_args
             detected_modules = call_args[0][1]
             assert "foo" in detected_modules
+
+
+class TestValidateArchitectureFilepaths:
+    """Tests for _validate_architecture_filepaths correcting wrong filepath entries."""
+
+    def test_valid_filepath_unchanged(self, tmp_path):
+        """An entry whose filepath points to an existing file stays unchanged."""
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "foo.py").write_text("# foo module")
+
+        arch_data = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Foo"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        warnings = _validate_architecture_filepaths(tmp_path)
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["filepath"] == "pdd/foo.py"
+        assert warnings == []
+
+    def test_wrong_filepath_corrected(self, tmp_path):
+        """Entry with filepath 'ci/drift_heal.py' is corrected to 'pdd/ci_drift_heal.py' when that file exists."""
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "ci_drift_heal.py").write_text("# ci drift heal module")
+
+        arch_data = [
+            {"filename": "ci_drift_heal_python.prompt", "filepath": "ci/drift_heal.py", "reason": "CI"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        warnings = _validate_architecture_filepaths(tmp_path)
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["filepath"] == "pdd/ci_drift_heal.py"
+        assert len(warnings) == 1
+        assert "ci/drift_heal.py" in warnings[0]
+        assert "pdd/ci_drift_heal.py" in warnings[0]
+
+    def test_missing_file_logged(self, tmp_path):
+        """Entry with filepath pointing to nonexistent file produces a warning."""
+        arch_data = [
+            {"filename": "ghost_python.prompt", "filepath": "pdd/ghost.py", "reason": "Ghost"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        warnings = _validate_architecture_filepaths(tmp_path)
+
+        # filepath should remain unchanged (no better path found)
+        result = json.loads(arch_path.read_text())
+        assert result[0]["filepath"] == "pdd/ghost.py"
+        assert len(warnings) == 1
+        assert "ghost_python.prompt" in warnings[0] or "pdd/ghost.py" in warnings[0]

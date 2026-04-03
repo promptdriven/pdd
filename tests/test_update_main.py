@@ -395,7 +395,8 @@ def mock_get_language_for_repo(monkeypatch):
         if str(file_path).endswith(".js"):
             return "javascript"
         return None
-    monkeypatch.setattr('pdd.update_main.get_language', mock_func)
+    _update_main_mod = sys.modules['pdd.update_main']
+    monkeypatch.setattr(_update_main_mod, 'get_language', mock_func)
 
 @pytest.fixture
 def temp_git_repo(tmp_path, mock_get_language_for_repo):
@@ -430,8 +431,9 @@ def temp_git_repo(tmp_path, mock_get_language_for_repo):
 
 def test_create_and_find_prompt_code_pairs(temp_git_repo):
     """
-    Test that the helper function correctly finds code files and creates missing prompts.
+    Test that the helper function correctly finds code files and resolves prompt paths.
     With structure preservation, prompts mirror the source directory structure.
+    Scanning must NOT create empty prompt files on disk (side-effect-free).
     """
     repo_path_str = str(temp_git_repo)
 
@@ -443,13 +445,9 @@ def test_create_and_find_prompt_code_pairs(temp_git_repo):
     # Run the function
     pairs = find_and_resolve_all_pairs(repo_path_str)
 
-    # Assert that prompts were created in the prompts/src directory
-    assert module1_prompt_path.exists()
-    assert module1_prompt_path.read_text() == ""
-    assert module2_prompt_path.exists()
-    assert module2_prompt_path.read_text() == ""
-    assert existing_prompt_path_nested.exists()
-    assert existing_prompt_path_nested.read_text() == ""
+    # Scanning should NOT create empty prompt files on disk
+    assert not module1_prompt_path.exists(), "Scan should not create empty prompt files"
+    assert not module2_prompt_path.exists(), "Scan should not create empty prompt files"
 
     # Assert that the returned pairs are correct
     expected_pairs = [
@@ -609,7 +607,18 @@ def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_lan
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
-def test_update_main_repo_mode_orchestration(mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, _mock_example_gen, _mock_auto_submit, temp_git_repo, capsys):
+@patch('pdd.pddrc_initializer.ensure_pddrc_for_scan')
+def test_update_main_repo_mode_orchestration(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    _mock_example_gen,
+    _mock_auto_submit,
+    temp_git_repo,
+    capsys,
+):
     """
     Test the main orchestration logic of update_main in --repo mode.
     """
@@ -2268,3 +2277,536 @@ class TestDataFileExclusion:
         code_files = [p[1] for p in pairs]
         assert any("module.py" in f for f in code_files)
         assert not any(".txt" in f for f in code_files)
+
+
+# --- Tests for get_git_changed_files ---
+
+from pdd.update_main import get_git_changed_files
+
+
+class TestGetGitChangedFiles:
+    """Tests for get_git_changed_files."""
+
+    def test_combines_committed_uncommitted_and_untracked(self, tmp_path, monkeypatch):
+        """Should combine all three sources of changed files."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        repo = git.Repo.init(repo_path)
+
+        # Create and commit initial file
+        (repo_path / "init.py").write_text("# init\n")
+        repo.index.add(["init.py"])
+        repo.index.commit("init")
+        # Rename default branch
+        repo.git.branch("-M", "main")
+
+        # Create untracked file
+        (repo_path / "new_file.py").write_text("def new(): pass\n")
+
+        changed = get_git_changed_files(str(repo_path), base_branch="main")
+        # Should at least find the untracked file
+        assert any("new_file.py" in f for f in changed)
+
+    def test_empty_repo_returns_empty_set(self, tmp_path):
+        """Should handle repos with no commits gracefully."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        git.Repo.init(repo_path)
+
+        changed = get_git_changed_files(str(repo_path), base_branch="main")
+        assert isinstance(changed, set)
+
+    def test_returns_absolute_paths(self, tmp_path, monkeypatch):
+        """All returned paths should be absolute."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        repo = git.Repo.init(repo_path)
+
+        (repo_path / "init.py").write_text("pass\n")
+        repo.index.add(["init.py"])
+        repo.index.commit("init")
+        repo.git.branch("-M", "main")
+
+        (repo_path / "new.py").write_text("pass\n")
+
+        changed = get_git_changed_files(str(repo_path), base_branch="main")
+        for f in changed:
+            assert os.path.isabs(f), f"Path is not absolute: {f}"
+
+
+# --- Tests for is_code_changed ---
+
+from pdd.update_main import is_code_changed
+
+
+class TestIsCodeChanged:
+    """Tests for is_code_changed with fingerprint and git fallback."""
+
+    @pytest.fixture(autouse=True)
+    def mock_get_language(self):
+        """Mock get_language to avoid PDD_PATH dependency."""
+        with patch("pdd.update_main.get_language", return_value="python"):
+            yield
+
+    def test_no_fingerprint_in_git_changed(self, tmp_path):
+        """No fingerprint + file in git changed set -> changed=True."""
+        code_file = tmp_path / "module.py"
+        code_file.write_text("def foo(): pass\n")
+
+        with patch("pdd.update_main.read_fingerprint", return_value=None):
+            changed, reason = is_code_changed(
+                str(code_file), str(tmp_path), {str(code_file)}
+            )
+        assert changed is True
+        assert "git changed set" in reason
+
+    def test_no_fingerprint_not_in_git_changed(self, tmp_path):
+        """No fingerprint + file NOT in git changed set -> changed=False."""
+        code_file = tmp_path / "module.py"
+        code_file.write_text("def foo(): pass\n")
+
+        with patch("pdd.update_main.read_fingerprint", return_value=None):
+            changed, reason = is_code_changed(
+                str(code_file), str(tmp_path), set()
+            )
+        assert changed is False
+
+    def test_fingerprint_code_hash_matches(self, tmp_path):
+        """Fingerprint with matching code hash -> changed=False."""
+        from pdd.sync_determine_operation import calculate_sha256
+
+        code_file = tmp_path / "module.py"
+        code_file.write_text("def foo(): pass\n")
+        current_hash = calculate_sha256(code_file)
+
+        mock_fp = MagicMock()
+        mock_fp.code_hash = current_hash
+        mock_fp.include_deps = {}
+
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+            changed, reason = is_code_changed(
+                str(code_file), str(tmp_path), set()
+            )
+        assert changed is False
+        assert "matches" in reason
+
+    def test_fingerprint_code_hash_differs(self, tmp_path):
+        """Fingerprint with different code hash -> changed=True."""
+        code_file = tmp_path / "module.py"
+        code_file.write_text("def foo(): pass\n")
+
+        mock_fp = MagicMock()
+        mock_fp.code_hash = "old_hash_that_differs"
+        mock_fp.include_deps = {}
+
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+            changed, reason = is_code_changed(
+                str(code_file), str(tmp_path), set()
+            )
+        assert changed is True
+        assert "differs" in reason
+
+    def test_fingerprint_include_deps_changed(self, tmp_path):
+        """Include dependency changed on disk -> changed=True."""
+        from pdd.sync_determine_operation import calculate_sha256
+
+        code_file = tmp_path / "module.py"
+        code_file.write_text("def foo(): pass\n")
+        current_hash = calculate_sha256(code_file)
+
+        dep_file = tmp_path / "preamble.md"
+        dep_file.write_text("updated preamble content\n")
+
+        mock_fp = MagicMock()
+        mock_fp.code_hash = current_hash
+        mock_fp.include_deps = {str(dep_file): "old_hash_of_preamble"}
+
+        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
+            changed, reason = is_code_changed(
+                str(code_file), str(tmp_path), set()
+            )
+        assert changed is True
+        assert "include dependency changed" in reason
+
+    def test_uses_prompt_file_path_for_identity(self, tmp_path):
+        """When prompt_file_path is provided, uses infer_module_identity."""
+        code_file = tmp_path / "module.py"
+        code_file.write_text("def foo(): pass\n")
+
+        with patch("pdd.update_main.read_fingerprint", return_value=None) as mock_rf, \
+             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")) as mock_imi:
+            changed, reason = is_code_changed(
+                str(code_file), str(tmp_path), set(),
+                prompt_file_path="prompts/module_python.prompt"
+            )
+            mock_imi.assert_called_once_with("prompts/module_python.prompt")
+
+
+# --- Tests for _find_prd_file ---
+
+from pdd.update_main import _find_prd_file
+
+
+class TestFindPrdFile:
+    """Tests for _find_prd_file convention-based PRD discovery."""
+
+    def test_finds_prd_md(self, tmp_path):
+        (tmp_path / "PRD.md").write_text("# PRD")
+        result = _find_prd_file(tmp_path)
+        assert result is not None
+        assert result.name == "PRD.md"
+
+    def test_finds_lowercase_prd(self, tmp_path):
+        (tmp_path / "prd.md").write_text("# prd")
+        result = _find_prd_file(tmp_path)
+        assert result is not None
+        assert result.name == "prd.md"
+
+    def test_finds_prefixed_prd(self, tmp_path):
+        (tmp_path / "myproject_prd.md").write_text("# PRD")
+        result = _find_prd_file(tmp_path)
+        assert result is not None
+        assert "prd" in result.name.lower()
+
+    def test_returns_none_when_no_prd(self, tmp_path):
+        (tmp_path / "README.md").write_text("# README")
+        result = _find_prd_file(tmp_path)
+        assert result is None
+
+
+# --- Tests for strength/temperature resolution ---
+
+
+class TestStrengthTemperatureResolution:
+    """Tests for strength/temperature parameter resolution."""
+
+    def test_explicit_params_override_ctx(self):
+        """Explicit strength/temperature should override ctx.obj values."""
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+            "force": True,
+            "context": None,
+            "confirm_callback": None,
+        }
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
+             patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
+             patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file="/tmp/test.py",
+                input_code_file=None,
+                output=None,
+                strength=0.9,
+                temperature=0.5,
+                simple=True,
+            )
+
+        # ctx.obj should be updated with resolved values
+        assert ctx.obj["strength"] == 0.9
+        assert ctx.obj["temperature"] == 0.5
+
+    def test_ctx_values_used_when_params_none(self):
+        """When strength/temperature are None, ctx.obj values should be used."""
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.7,
+            "temperature": 0.3,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+            "force": True,
+            "context": None,
+            "confirm_callback": None,
+        }
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
+             patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
+             patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file="/tmp/test.py",
+                input_code_file=None,
+                output=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+
+        assert ctx.obj["strength"] == 0.7
+        assert ctx.obj["temperature"] == 0.3
+
+
+# --- Tests for empty prompt validation ---
+
+
+class TestEmptyPromptValidation:
+    """Tests for defense-in-depth empty prompt validation."""
+
+    def test_empty_prompt_from_llm_returns_none(self):
+        """If LLM returns empty prompt, update_main should return None."""
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+            "force": True,
+            "context": None,
+            "confirm_callback": None,
+        }
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.construct_paths") as mock_cp, \
+             patch("pdd.update_main.git_update", return_value=("", 0.01, "model")):
+            mock_cp.return_value = (
+                {},
+                {"input_prompt_file": "existing prompt", "modified_code_file": "def foo(): pass"},
+                {"output": "/tmp/output.prompt"},
+                "python",
+            )
+
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file="/tmp/test.prompt",
+                modified_code_file="/tmp/test.py",
+                input_code_file=None,
+                output=None,
+                use_git=True,
+                simple=True,
+            )
+
+        assert result is None
+
+
+# --- Tests for update_file_pair ---
+
+
+class TestUpdateFilePair:
+    """Tests for update_file_pair wrapper."""
+
+    def test_agentic_success(self, tmp_path):
+        """Agentic path succeeds -> returns success result."""
+        from pdd.update_main import update_file_pair
+
+        prompt_file = tmp_path / "test.prompt"
+        prompt_file.write_text("updated by agent\n")
+        code_file = tmp_path / "test.py"
+        code_file.write_text("def foo(): pass\n")
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+        }
+
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = str(tmp_path)
+
+        with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
+             patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
+             patch("pdd.update_main.run_agentic_update", return_value=(True, "ok", 0.05, "claude", [])):
+            result = update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=False)
+
+        assert "Success" in result["status"]
+        assert "agentic" in result["status"]
+        assert result["cost"] == 0.05
+
+    def test_legacy_git_update_path(self, tmp_path):
+        """Legacy path for tracked files with existing prompt."""
+        from pdd.update_main import update_file_pair
+
+        prompt_file = tmp_path / "test.prompt"
+        prompt_file.write_text("existing prompt content\n")
+        code_file = tmp_path / "test.py"
+        code_file.write_text("def foo(): pass\n")
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+        }
+
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = str(tmp_path)
+        mock_repo.untracked_files = []
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.git_update", return_value=("updated prompt", 0.02, "gemini")):
+            result = update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=True)
+
+        assert "Success" in result["status"]
+        assert result["cost"] == 0.02
+        # Verify the prompt was written
+        assert prompt_file.read_text() == "updated prompt"
+
+    def test_exception_returns_error_result(self, tmp_path):
+        """Exceptions should be caught and returned as error results."""
+        from pdd.update_main import update_file_pair
+
+        prompt_file = tmp_path / "test.prompt"
+        prompt_file.write_text("prompt\n")
+        code_file = tmp_path / "test.py"
+        code_file.write_text("def foo(): pass\n")
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+        }
+
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = str(tmp_path)
+        mock_repo.untracked_files = []
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.git_update", side_effect=RuntimeError("LLM error")):
+            result = update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=True)
+
+        assert "Failed" in result["status"]
+        assert "LLM error" in result["error"]
+
+    def test_click_abort_reraised(self, tmp_path):
+        """click.Abort should be re-raised, not caught."""
+        from pdd.update_main import update_file_pair
+
+        prompt_file = tmp_path / "test.prompt"
+        prompt_file.write_text("prompt\n")
+        code_file = tmp_path / "test.py"
+        code_file.write_text("def foo(): pass\n")
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+        }
+
+        mock_repo = MagicMock()
+        mock_repo.working_tree_dir = str(tmp_path)
+        mock_repo.untracked_files = []
+
+        with patch("pdd.update_main.get_available_agents", return_value=[]), \
+             patch("pdd.update_main.git_update", side_effect=click.Abort()):
+            with pytest.raises(click.Abort):
+                update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=True)
+
+
+# --- Tests for repo mode: empty prompts always included ---
+
+
+class TestRepoModeEmptyPrompts:
+    """Tests that empty (0-byte) prompt files trigger updates regardless of code changes."""
+
+    def test_empty_prompt_included_regardless_of_code_changes(self, tmp_path, monkeypatch):
+        """Empty prompt files should always be included in changed pairs."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        repo = git.Repo.init(repo_path)
+
+        # Create code and empty prompt
+        (repo_path / "module.py").write_text("def foo(): pass\n")
+        (repo_path / "prompts").mkdir()
+        (repo_path / "prompts" / "module_python.prompt").write_text("")  # empty
+
+        repo.index.add(["module.py", "prompts/module_python.prompt"])
+        repo.index.commit("init")
+        repo.git.branch("-M", "main")
+
+        monkeypatch.chdir(repo_path)
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {
+            "strength": 0.5,
+            "temperature": 0.0,
+            "verbose": False,
+            "quiet": True,
+            "time": 0.25,
+            "force": True,
+            "context": None,
+            "confirm_callback": None,
+        }
+
+        mock_result = {
+            "prompt_file": str(repo_path / "prompts" / "module_python.prompt"),
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+
+        with patch("pdd.update_main.get_language", return_value="python"), \
+             patch("pdd.update_main.update_file_pair", return_value=mock_result) as mock_ufp, \
+             patch("pdd.update_main.is_code_changed", return_value=(False, "matches fingerprint")), \
+             patch("pdd.update_main.get_git_changed_files", return_value=set()), \
+             patch("pdd.architecture_registry.find_architecture_for_project", return_value=[]), \
+             patch("pdd.operation_log.save_fingerprint"), \
+             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")):
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                repo=True,
+                simple=True,
+            )
+
+        # Should have been called even though is_code_changed returned False
+        assert mock_ufp.called
+
+
+class TestFindAndResolveAllPairsNoTouch:
+    """find_and_resolve_all_pairs must NOT create empty prompt files on disk."""
+
+    def test_scan_does_not_create_prompt_files(self, tmp_path, monkeypatch):
+        """Scanning a repo should resolve paths without creating empty .prompt files."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "src").mkdir()
+        (repo / "src" / "module.py").write_text("def main(): pass\n")
+        (repo / "src" / "helper.py").write_text("def help(): pass\n")
+
+        # Init git so git ls-files works
+        import subprocess
+        env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True, env=env)
+
+        monkeypatch.chdir(repo)
+
+        with patch("pdd.update_main.get_language", side_effect=lambda ext: "python" if ext == ".py" else None):
+            pairs = find_and_resolve_all_pairs(str(repo), quiet=True)
+
+        # Should find the code files
+        assert len(pairs) >= 2
+
+        # The prompt paths should be resolved but NOT created on disk
+        for prompt_path, code_path in pairs:
+            assert not Path(prompt_path).exists(), (
+                f"Scanning should not create prompt files, but {prompt_path} exists on disk"
+            )
+

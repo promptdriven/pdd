@@ -231,6 +231,79 @@ def test_fast_track_skips_steps_4_and_5(mock_dependencies, default_args):
     assert mock_run.call_count == 10, f"Expected 10 calls (12 - 2 skipped), got {mock_run.call_count}"
 
 
+@pytest.mark.parametrize("fast_track_summary", [
+    "{test_user_id}-approve-{8hex} is not validated",
+    '{"key": "value", "nested": {"a": 1}}',
+    "f-string bug: value was {:.2f} instead of {:d}",
+])
+def test_fast_track_with_curly_braces_does_not_crash(mock_dependencies, default_args, fast_track_summary):
+    """
+    Issue #974: FAST_TRACK summary containing curly braces must not cause
+    KeyError/IndexError. The old code used .format() on a string containing
+    LLM output, which interpreted braces as named placeholders.
+    """
+    mock_run, _, _ = mock_dependencies
+    calls = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        calls.append(label)
+        if label == 'step3':
+            return (True, f"Status: Fast-Track\nFAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, f"Should not crash on curly braces in FAST_TRACK summary: {msg}"
+    assert 'step4' not in calls
+    assert 'step5' not in calls
+    assert mock_run.call_count == 10
+
+
+def test_fast_track_curly_braces_preserved_in_step_outputs(mock_dependencies, default_args):
+    """
+    Issue #974: Curly braces from FAST_TRACK summary must appear verbatim in
+    step4/step5 outputs — not escaped, stripped, or mangled. Downstream steps
+    depend on accurate root-cause context.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    fast_track_summary = "Bug in {user_handler} parsing {json_payload}"
+
+    def side_effect_load(name):
+        # Step 6 template references step4_output so we can verify braces flow through
+        if "step6" in name:
+            return "Previous root cause: {step4_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step3':
+            return (True, f"FAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+
+    # Step 6 is the first step after the skip — its prompt should contain the braces verbatim
+    step6_call = [c for c in mock_run.call_args_list if c.kwargs.get('label') == 'step6']
+    assert len(step6_call) == 1
+    step6_prompt = step6_call[0].kwargs.get('instruction', '')
+    assert "{user_handler}" in step6_prompt, \
+        f"Curly braces should be preserved verbatim in downstream prompts, got: {step6_prompt[:300]}"
+
+
 def test_hard_stop_step_5_5_prompt_review(mock_dependencies, default_args):
     """
     Test early exit at Step 5.5 if prompt needs human review.
@@ -2944,17 +3017,11 @@ def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create a test file with a structural violation (assert hasattr)
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
     test_file = worktree_path / "tests" / "test_bug_fix.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
     # The violating code line we expect to see in the retry addendum
     violating_code_line = 'assert hasattr(some_module, "target_func")'
-    test_file.write_text(
-        "from pdd import some_module\n"
-        "\n"
-        "def test_bug():\n"
-        f"    {violating_code_line}\n"
-    )
 
     captured_retry_instruction = None
     first_step9 = True
@@ -2966,6 +3033,13 @@ def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                test_file.write_text(
+                    "from pdd import some_module\n"
+                    "\n"
+                    "def test_bug():\n"
+                    f"    {violating_code_line}\n"
+                )
                 # First step9 call: return output pointing to the violating file
                 return (
                     True,
@@ -3041,23 +3115,13 @@ def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create a test file with source-string-matching violations
-    # Build the file content line-by-line to avoid triggering the structural
-    # pattern detector on THIS test file (the detector does line-by-line regex)
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
     test_file = worktree_path / "tests" / "test_bug_fix.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
-    file_lines = [
-        "from pathlib import Path",
-        "",
-        "def test_function_exists():",
-    ]
     # Construct the violating lines using concatenation so the detector
     # doesn't see "content = ....read_text()" on a single line in THIS file
     src_read = 'content = Path("pdd/module.py").read' + '_text()'
     src_assertion = 'assert "def target_func" in content'
-    file_lines.append(f"    {src_read}")
-    file_lines.append(f"    {src_assertion}")
-    test_file.write_text("\n".join(file_lines) + "\n")
 
     captured_retry_instruction = None
     first_step9 = True
@@ -3069,6 +3133,15 @@ def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                file_lines = [
+                    "from pathlib import Path",
+                    "",
+                    "def test_function_exists():",
+                    f"    {src_read}",
+                    f"    {src_assertion}",
+                ]
+                test_file.write_text("\n".join(file_lines) + "\n")
                 return (
                     True,
                     "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
@@ -3139,16 +3212,10 @@ def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create a test file with a structural violation (assert hasattr)
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
     test_file = worktree_path / "tests" / "test_bug_fix.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
     violating_code_line = 'assert hasattr(module, "func_a")'
-    test_file.write_text(
-        "from pdd import module\n"
-        "\n"
-        "def test_one():\n"
-        f"    {violating_code_line}\n"
-    )
 
     captured_retry_instruction = None
     first_step9 = True
@@ -3160,6 +3227,13 @@ def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                test_file.write_text(
+                    "from pdd import module\n"
+                    "\n"
+                    "def test_one():\n"
+                    f"    {violating_code_line}\n"
+                )
                 return (
                     True,
                     "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
@@ -3248,27 +3322,15 @@ def test_step9_retry_includes_code_from_multiple_files(tmp_path):
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     worktree_path.mkdir(parents=True, exist_ok=True)
 
-    # Create two test files with different hasattr violations
+    # Prepare directory — files written inside mock (after pre-step9 snapshot).
     tests_dir = worktree_path / "tests"
     tests_dir.mkdir(parents=True, exist_ok=True)
 
     violation_a = 'assert hasattr(alpha, "run_pipeline")'
     file_a = tests_dir / "test_fix_a.py"
-    file_a.write_text(
-        "from pdd import alpha\n"
-        "\n"
-        "def test_alpha():\n"
-        f"    {violation_a}\n"
-    )
 
     violation_b = 'assert hasattr(beta, "execute_task")'
     file_b = tests_dir / "test_fix_b.py"
-    file_b.write_text(
-        "from pdd import beta\n"
-        "\n"
-        "def test_beta():\n"
-        f"    {violation_b}\n"
-    )
 
     captured_retry_instruction = None
     first_step9 = True
@@ -3280,6 +3342,19 @@ def test_step9_retry_includes_code_from_multiple_files(tmp_path):
         if label == "step9":
             if first_step9:
                 first_step9 = False
+                # Simulate Step 9 writing both files during execution
+                file_a.write_text(
+                    "from pdd import alpha\n"
+                    "\n"
+                    "def test_alpha():\n"
+                    f"    {violation_a}\n"
+                )
+                file_b.write_text(
+                    "from pdd import beta\n"
+                    "\n"
+                    "def test_beta():\n"
+                    f"    {violation_b}\n"
+                )
                 return (
                     True,
                     "Generated tests\nFILES_CREATED: tests/test_fix_a.py, tests/test_fix_b.py",
@@ -4195,7 +4270,7 @@ def test_structural_guard_and_cross_validation_both_fire(mock_dependencies, defa
 
     # Need to patch detect_structural_test_patterns to detect the violation
     with patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns") as mock_detect:
-        def detect_side_effect(path):
+        def detect_side_effect(path, start_line=None):
             content = Path(path).read_text() if Path(path).exists() else ""
             if "FLAGGED_STRUCTURAL_PATTERN" in content:
                 return ["Uses structural pattern to test code shape"]
@@ -6363,3 +6438,141 @@ class TestMissingFixLocationsMarkerWarning:
             f"Expected warning about missing FIX_LOCATIONS marker. "
             f"Warning calls: {warning_calls}"
         )
+
+
+# -----------------------------------------------------------------------
+# Issue #1026: Content regression guard for structural retry
+# -----------------------------------------------------------------------
+
+from pdd.agentic_bug_orchestrator import _cleanup_backups_with_regression_guard
+
+
+class TestIssue1026ContentRegressionGuard:
+    """Tests for _cleanup_backups_with_regression_guard — the safety net
+    that restores from .bak when a retry loses >50% of lines (#1026).
+
+    These tests exercise the extracted function directly with real files
+    on disk — no orchestrator mocking required.
+    """
+
+    def _make_pair(self, tmp_path, name, backup_content, current_content):
+        """Helper: create an original file and its .bak, return the pair."""
+        original = tmp_path / name
+        backup = original.with_suffix(".py.bak")
+        original.write_text(current_content)
+        backup.write_text(backup_content)
+        return original, backup
+
+    def test_restores_on_major_loss(self, tmp_path):
+        """100-line backup, 2-line current → restore from backup."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "def test_clean():\n    assert True\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_large.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == [original]
+        assert original.read_text() == backup_content
+        assert not backup.exists()  # consumed by rename
+
+    def test_boundary_exactly_50_percent_no_restore(self, tmp_path):
+        """100-line backup, 50-line current (exactly 50%) → no restore."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "\n".join(f"# kept {i}" for i in range(50)) + "\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_boundary.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert original.read_text() == current_content  # unchanged
+        assert not backup.exists()  # cleaned up
+
+    def test_boundary_49_percent_triggers_restore(self, tmp_path):
+        """100-line backup, 49-line current (49%) → restore."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "\n".join(f"# kept {i}" for i in range(49)) + "\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_b49.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == [original]
+        assert original.read_text() == backup_content
+
+    def test_zero_line_backup_no_crash(self, tmp_path):
+        """Empty backup (0 lines) must not crash and should not restore."""
+        original, backup = self._make_pair(
+            tmp_path, "test_empty.py", "", "def test_ok(): assert True\n",
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert not backup.exists()  # cleaned up
+
+    def test_multi_file_selective_restore(self, tmp_path):
+        """Two files backed up — only the regressed one is restored."""
+        good_backup = "\n".join(f"# good {i}" for i in range(100)) + "\n"
+        good_current = "\n".join(f"# kept {i}" for i in range(80)) + "\n"
+        good_orig, good_bak = self._make_pair(
+            tmp_path, "test_good.py", good_backup, good_current,
+        )
+
+        bad_backup = "\n".join(f"# bad {i}" for i in range(100)) + "\n"
+        bad_current = "\n".join(f"# shrunk {i}" for i in range(10)) + "\n"
+        bad_orig, bad_bak = self._make_pair(
+            tmp_path, "test_bad.py", bad_backup, bad_current,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(good_orig, good_bak), (bad_orig, bad_bak)], quiet=True,
+        )
+
+        assert restored == [bad_orig]
+        # good: kept as-is, .bak cleaned up
+        assert good_orig.read_text() == good_current
+        assert not good_bak.exists()
+        # bad: restored from backup
+        assert bad_orig.read_text() == bad_backup
+        assert not bad_bak.exists()
+
+    def test_backup_missing_original_exists(self, tmp_path):
+        """If backup doesn't exist, nothing happens (no crash)."""
+        original = tmp_path / "test_no_bak.py"
+        backup = original.with_suffix(".py.bak")
+        original.write_text("def test_ok(): pass\n")
+        # backup intentionally not created
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert original.read_text() == "def test_ok(): pass\n"
+
+    def test_original_missing_backup_cleaned_up(self, tmp_path):
+        """If original is gone but .bak exists, .bak is cleaned up."""
+        original = tmp_path / "test_gone.py"
+        backup = original.with_suffix(".py.bak")
+        backup.write_text("# old content\n")
+        # original intentionally not created
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert not backup.exists()

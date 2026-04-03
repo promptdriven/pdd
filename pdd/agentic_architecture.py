@@ -302,10 +302,10 @@ def _extract_target_dir(issue_body: str) -> Optional[str]:
     Parse target directory from issue body.
 
     Matches patterns like:
-      - in `video_editor_pdd/`   (backtick-quoted with trailing slash)
-      - in `video_editor_pdd`    (backtick-quoted)
-      - in "video_editor_pdd"    (double-quoted)
-      - in video_editor_pdd/     (unquoted with trailing slash — underscore required)
+      - in `src/my_app/`         (backtick-quoted with trailing slash)
+      - in `src/my_app`          (backtick-quoted)
+      - in "src/my_app"          (double-quoted)
+      - in src/my_app/           (unquoted with trailing slash)
 
     Uses tight patterns to avoid matching natural English like "in Python",
     "in the", "in a new directory", etc.

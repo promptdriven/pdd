@@ -307,7 +307,7 @@ def resolve_prompt_code_pair(
     code_file_path: str,
     quiet: bool = False,
     output_dir: Optional[str] = None,
-    create_missing_prompt: bool = True,
+    create_missing: bool = True,
 ) -> Tuple[str, str]:
     """
     Derives the corresponding prompt file path from a code file path.
@@ -356,20 +356,21 @@ def resolve_prompt_code_pair(
         template_path = _resolve_prompt_from_pddrc(code_file_path, repo_root, language)
         if template_path:
             prompt_path = Path(template_path)
-            if create_missing_prompt and not prompt_path.parent.exists():
-                try:
-                    prompt_path.parent.mkdir(parents=True, exist_ok=True)
-                    if not quiet:
-                        console.print(f"[success]Created prompts directory:[/success] [path]{prompt_path.parent}[/path]")
-                except OSError as e:
-                    console.print(f"[error]Failed to create prompts directory: {e}[/error]")
-            if create_missing_prompt and not prompt_path.exists():
-                try:
-                    prompt_path.touch()
-                    if not quiet:
-                        console.print(f"[success]Created missing prompt file:[/success] [path]{template_path}[/path]")
-                except OSError as e:
-                    console.print(f"[error]Failed to create file {template_path}: {e}[/error]")
+            if create_missing:
+                if not prompt_path.parent.exists():
+                    try:
+                        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+                        if not quiet:
+                            console.print(f"[success]Created prompts directory:[/success] [path]{prompt_path.parent}[/path]")
+                    except OSError as e:
+                        console.print(f"[error]Failed to create prompts directory: {e}[/error]")
+                if not prompt_path.exists():
+                    try:
+                        prompt_path.touch()
+                        if not quiet:
+                            console.print(f"[success]Created missing prompt file:[/success] [path]{template_path}[/path]")
+                    except OSError as e:
+                        console.print(f"[error]Failed to create file {template_path}: {e}[/error]")
             return str(prompt_path), code_file_path
 
     # Determine the base prompts directory
@@ -414,24 +415,25 @@ def resolve_prompt_code_pair(
     prompt_path_str = os.path.join(final_prompts_dir, prompt_filename)
     prompt_path = Path(prompt_path_str)
 
-    # Ensure prompts directory exists
-    prompts_path = Path(final_prompts_dir)
-    if create_missing_prompt and not prompts_path.exists():
-        try:
-            prompts_path.mkdir(parents=True, exist_ok=True)
-            if not quiet:
-                console.print(f"[success]Created prompts directory:[/success] [path]{final_prompts_dir}[/path]")
-        except OSError as e:
-            console.print(f"[error]Failed to create prompts directory {final_prompts_dir}: {e}[/error]")
+    # Create directory and empty prompt file only when requested
+    if create_missing:
+        prompts_path = Path(final_prompts_dir)
+        if not prompts_path.exists():
+            try:
+                prompts_path.mkdir(parents=True, exist_ok=True)
+                if not quiet:
+                    console.print(f"[success]Created prompts directory:[/success] [path]{final_prompts_dir}[/path]")
+            except OSError as e:
+                console.print(f"[error]Failed to create prompts directory {final_prompts_dir}: {e}[/error]")
 
-    if create_missing_prompt and not prompt_path.exists():
-        try:
-            prompt_path.touch()
-            if not quiet:
-                console.print(f"[success]Created missing prompt file:[/success] [path]{prompt_path_str}[/path]")
-        except OSError as e:
-            console.print(f"[error]Failed to create file {prompt_path_str}: {e}[/error]")
-            # Even if creation fails, return the intended path
+        if not prompt_path.exists():
+            try:
+                prompt_path.touch()
+                if not quiet:
+                    console.print(f"[success]Created missing prompt file:[/success] [path]{prompt_path_str}[/path]")
+            except OSError as e:
+                console.print(f"[error]Failed to create file {prompt_path_str}: {e}[/error]")
+                # Even if creation fails, return the intended path
 
     return prompt_path_str, code_file_path
 
@@ -507,7 +509,7 @@ def find_and_resolve_all_pairs(
             file_path,
             quiet,
             output_dir,
-            create_missing_prompt=create_missing_prompts,
+            create_missing=create_missing_prompts,
         )
         pairs.append((prompt_path, code_path))
         
