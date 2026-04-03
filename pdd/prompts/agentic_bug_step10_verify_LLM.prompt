@@ -84,14 +84,21 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    - If any mock assumes behavior that contradicts the investigation findings, report: FAIL: Test does not work as expected — mock assumptions contradict investigation findings
    - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
 
-5. **Classify E2E test necessity**
+5. **Scope completeness verification**
+   Verify that the generated tests cover Step 6's full scope, not just the issue's proposed scope:
+   - Re-read Step 6's "Proposed Fix Validation" section, specifically the "Step 6 full scope" and "Expansion items" lists
+   - For each item in Step 6's full scope, confirm there is at least one test that exercises it
+   - If Step 6 classified the scope as `SCOPE_EXPANSION` and the tests only cover the issue-proposed subset (not Step 6's expanded scope), report: **FAIL: Tests only cover issue-proposed scope, not Step 6's full expanded scope.** List the specific items from Step 6's scope that lack test coverage.
+   - This check prevents the pattern where issue authors propose partial fixes and downstream tests only validate the partial fix, missing the broader problem Step 6 identified.
+
+6. **Classify E2E test necessity**
    Determine whether an E2E test would add value beyond the unit test created in Step 9.
    - Answer: "Is there a user-facing behavior or integration path NOT already covered by the unit test?"
    - Output `E2E_NEEDED: yes` if the bug has user-facing symptoms (CLI output, API response, UI behavior) that the unit test cannot verify because it mocks the integration boundary.
    - Output `E2E_NEEDED: no` if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path.
    - Include a one-line justification after the marker (e.g., `E2E_NEEDED: no — unit test covers the full code path from input to output with no mocked boundaries`).
 
-6. **Summarize the investigation**
+7. **Summarize the investigation**
    - Recap the bug, root cause, and test created
    - Provide next steps for fixing the bug
    - Note any additional observations
