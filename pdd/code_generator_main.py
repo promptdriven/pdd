@@ -1,4 +1,5 @@
 import ast
+import glob
 import os
 import re
 import json
@@ -371,7 +372,7 @@ def _find_default_test_files(tests_dir: Optional[str], code_file_path: Optional[
     # Look for files starting with test_{code_stem}
     # We look for test_{code_stem}*.{code_suffix}
     # e.g., hello.py -> test_hello.py, test_hello_1.py
-    pattern = f"test_{code_stem}*{code_suffix}"
+    pattern = f"test_{glob.escape(code_stem)}*{glob.escape(code_suffix)}"
     found_files = list(tests_path.glob(pattern))
 
     return [str(p) for p in sorted(found_files)]

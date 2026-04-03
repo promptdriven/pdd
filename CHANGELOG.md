@@ -1,18 +1,39 @@
+## v0.0.196 (2026-04-02)
+
+### Fix
+
+- add 'error' key to one-session sync result dict (#826)
+- check package.json for TS import validation fallback (#826)
+
 ## v0.0.195 (2026-04-01)
 
 ### Fix
 
-- move identical-patch check to incremental_code_generator root cause (#1043)
-- repair test fixtures and assertions for #1043 incremental fallback tests
-- incremental generator falls back to full gen when patch produces no changes (#1043)
-- centralize prompts_dir prefix extraction for extension directories (#1049)
-- content regression guard for structural retry (#1026) (#1042)
-- add 'code' fallback in _generate_paths_from_templates (#826)
-- match basenames against filepath when filename differs (#826)
+- **incremental patch no-op detection** (#1043): `incremental_code_generator` now returns `None` when the patched code is identical to the input, signaling the caller to fall back to full generation; `code_generator_main` adds a defense-in-depth check for the same condition in case a different generator function is passed
+- **content regression guard for structural retry** (#1026, #1042): new `_cleanup_backups_with_regression_guard` in `agentic_bug_orchestrator` restores `.bak` files when a retry loses >50% of lines, preventing silent content destruction during Step 9 structural retries
+- **centralize prompts_dir prefix extraction** (#1049): extracted `_extract_prefix_from_prompts_dir()` in `construct_paths` replaces duplicated prefix-stripping logic across four modules (`construct_paths`, `sync_determine_operation`, `sync_main`, `agentic_sync`); correctly handles nested extension paths like `extensions/app/prompts/frontend` by splitting on the exact `prompts` segment
+- **add 'code' fallback in `_generate_paths_from_templates`** (#826): `sync_determine_operation` now ensures a `code` key is always present in the path dict, since `sync_orchestration.py` accesses `pdd_files['code']` in 20+ places — previously this could `KeyError` when templates omitted a code entry
+- **match basenames against filepath when filename differs** (#826): `_filter_invalid_basenames` in `agentic_sync` now also extracts the stem from the `filepath` field (e.g. `src/app/dashboard/page.tsx` → `page`), so architecture entries whose `filename` uses a different convention (e.g. `dashboardPage.tsx`) are no longer incorrectly filtered out
 
 ### Refactor
 
-- improve architecture discovery, CI validation, and test robustness, and introduce Z3 formal verification for prompt-test correspondence.
+- **centralize prompts_dir prefix extraction to private helper** (#1049): rename to `_extract_prefix_from_prompts_dir` with leading underscore to follow internal-API convention; updated imports in all consuming modules
+
+### Build
+
+- **exclude `.py.bak` files from version control**: added `*.py.bak` to `.gitignore` to prevent backup files created by the structural retry regression guard from being committed
+
+### Docs
+
+- **update prompts for new behavior**: `code_generator_main_python.prompt`, `construct_paths_python.prompt`, `sync_determine_operation_python.prompt`, and `sync_main_python.prompt` updated to document incremental no-op fallback, nested extension prefix extraction, and `_extract_prefix_from_prompts_dir` usage
+
+### Test
+
+- **Z3 formal verification for prompt-test correspondence**: new `test_z3_prompt_test_correspondence.py` uses the Z3 SMT solver to prove determinism (no ambiguous rules), soundness (every test assertion follows from prompt rules), and completeness (every prompt mode is covered) for `comment_line_python.prompt`
+- add regression tests for content regression guard (#1026)
+- add tests for incremental generator no-change fallback (#1043)
+- add tests for centralized prefix extraction with extension directories (#1049)
+- add tests for `code` key fallback and filepath-based basename matching (#826)
 
 ## v0.0.194 (2026-03-31)
 
