@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shlex
 import shutil
@@ -10,7 +11,7 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Set
+from typing import List, Tuple, Dict, Any, Optional, Set, NamedTuple
 
 from rich.console import Console
 
@@ -81,6 +82,7 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
 }
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility with tests that import from this module
 _detect_control_token = detect_control_token
@@ -216,6 +218,150 @@ def _handle_verification_failure(
         return failure_type, import_error_retries + 1, True
     console.print(f"[yellow][VERIFICATION] Failure classified as {failure_type} — proceeding with fallback workflow[/yellow]")
     return failure_type, import_error_retries, False
+
+
+def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[str]:
+    """Resolve Step 9 loop-control token (tiers 1–3 + tier-4 fallback).
+
+    Maps ALL_TESTS_PASS at step 9 to LOCAL_TESTS_PASS for downstream handling.
+    Tier-4 CLASSIFICATION_ERROR is treated as CONTINUE_CYCLE (transient classifier).
+    """
+    tok = _classify_step_output(step_output, step_num=9)
+    if tok:
+        return tok
+    tier4 = classify_step_output(
+        step_output, ["ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"]
+    )
+    if tier4 and tier4.token in ("ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"):
+        console.print(
+            "[yellow]Loop control token detected via LLM classification (tier 4)[/yellow]"
+        )
+        return "LOCAL_TESTS_PASS" if tier4.token == "ALL_TESTS_PASS" else tier4.token
+    if tier4 and tier4.token == "CLASSIFICATION_ERROR":
+        console.print(
+            "[yellow]Step 9 classification unavailable (tier 4 error); "
+            "starting next cycle.[/yellow]"
+        )
+        return "CONTINUE_CYCLE"
+    return None
+
+
+class _Step9TokenApplyResult(NamedTuple):
+    """Outcome of applying a resolved Step 9 loop token (shared initial + retry paths)."""
+
+    break_inner: bool
+    import_error_retries: int
+    success: Optional[bool] = None
+    final_message: Optional[str] = None
+    last_completed_step: Optional[int] = None
+    step_outputs_9: Optional[str] = None
+    verification_failure_context_update: Optional[str] = None  # None = no change; str = set
+
+
+def _apply_step9_resolved_token(
+    resolved_token: str,
+    step_output: str,
+    *,
+    issue_content: str,
+    changed_files: List[str],
+    cwd: Path,
+    initial_file_hashes: Dict[str, Optional[str]],
+    cycle_start_hashes: Dict[str, Optional[str]],
+    import_error_retries: int,
+    console: Console,
+    step_num: int,
+    current_cycle: int,
+    is_retry_path: bool = False,
+) -> _Step9TokenApplyResult:
+    """Handle ALL_TESTS_PASS verification, MAX_CYCLES_REACHED, CONTINUE_CYCLE (+ hash guard).
+
+    Single implementation for the primary Step 9 path and the one-shot Step 9 retry
+    so verification and convergence logic cannot diverge.
+    """
+    tag = "Step 9 retry" if is_retry_path else "Step 9"
+
+    if resolved_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+        test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+        if test_files:
+            verified, verify_output = _verify_tests_independently(test_files, cwd)
+            if verified:
+                console.print(
+                    f"[green]LOCAL_TESTS_PASS verified by independent pytest run ({tag}).[/green]"
+                )
+                return _Step9TokenApplyResult(
+                    break_inner=True,
+                    import_error_retries=import_error_retries,
+                    success=True,
+                    final_message="All tests passed after fixes (independently verified).",
+                )
+            console.print(
+                f"[bold red]LLM claimed tests pass at {tag} but independent "
+                "verification FAILED.[/bold red]"
+            )
+            _, new_retries, should_retry = _handle_verification_failure(
+                verify_output, import_error_retries, console
+            )
+            failed_body = (
+                f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
+            )
+            full_failed = f"FAILED: {failed_body}"
+            if should_retry:
+                return _Step9TokenApplyResult(
+                    break_inner=True,
+                    import_error_retries=new_retries,
+                    step_outputs_9=full_failed,
+                    verification_failure_context_update=verify_output,
+                    last_completed_step=0,
+                )
+            return _Step9TokenApplyResult(
+                break_inner=False,
+                import_error_retries=new_retries,
+                step_outputs_9=full_failed,
+                last_completed_step=step_num - 1,
+            )
+        console.print(f"[green]LOCAL_TESTS_PASS detected in {tag}.[/green]")
+        return _Step9TokenApplyResult(
+            break_inner=True,
+            import_error_retries=import_error_retries,
+            success=True,
+            final_message="All tests passed after fixes.",
+        )
+
+    if resolved_token == "MAX_CYCLES_REACHED":
+        console.print(f"[yellow]MAX_CYCLES_REACHED detected in {tag}.[/yellow]")
+        return _Step9TokenApplyResult(
+            break_inner=True,
+            import_error_retries=import_error_retries,
+            final_message="Max cycles reached.",
+        )
+
+    if resolved_token == "CONTINUE_CYCLE":
+        cycle_changed = _detect_changed_files(cwd, cycle_start_hashes)
+        if not cycle_changed:
+            console.print(
+                f"[yellow]Warning: No file changes detected in cycle {current_cycle}. "
+                "Stopping to avoid infinite loop.[/yellow]"
+            )
+            return _Step9TokenApplyResult(
+                break_inner=True,
+                import_error_retries=import_error_retries,
+                final_message=f"No progress made in cycle {current_cycle} (no file changes).",
+            )
+        return _Step9TokenApplyResult(
+            break_inner=True,
+            import_error_retries=import_error_retries,
+        )
+
+    console.print(
+        "[yellow]Warning: No recognized loop control token found in Step 9. "
+        "Stopping workflow — missing or unknown token treated as terminal "
+        "condition.[/yellow]"
+    )
+    return _Step9TokenApplyResult(
+        break_inner=True,
+        import_error_retries=import_error_retries,
+        final_message="Workflow stopped: no recognized loop control token in Step 9 output.",
+    )
 
 
 def _check_e2e_environment(cwd: Path) -> Tuple[bool, str]:
@@ -1623,73 +1769,49 @@ def run_agentic_e2e_fix_orchestrator(
 
                 # Check Loop Control (Step 9)
                 if step_num == 9:
-                    _step9_token = _classify_step_output(step_output, step_num=9)
-                    if not _step9_token:
-                        # Tier 4: LLM classification fallback when exact/case/semantic
-                        # matching did not detect a loop-control token (Issue #695).
-                        # Distinguish classifier failure from confident NONE.
-                        tier4 = classify_step_output(
-                            step_output, ["ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"]
-                        )
-                        if tier4 and tier4.token in ("ALL_TESTS_PASS", "CONTINUE_CYCLE", "MAX_CYCLES_REACHED"):
-                            console.print(
-                                "[yellow]Loop control token detected via LLM classification (tier 4)[/yellow]"
-                            )
-                            _step9_token = "LOCAL_TESTS_PASS" if tier4.token == "ALL_TESTS_PASS" else tier4.token
-                        elif tier4 and tier4.token == "CLASSIFICATION_ERROR":
-                            console.print(
-                                "[yellow]Step 9 classification unavailable (tier 4 error); "
-                                "starting next cycle.[/yellow]"
-                            )
-                            _step9_token = "CONTINUE_CYCLE"
-                    if _step9_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
-                        # Independent verification: don't trust LLM output alone
-                        test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
-                        if test_files:
-                            verified, verify_output = _verify_tests_independently(test_files, cwd)
-                            if verified:
-                                console.print("[green]LOCAL_TESTS_PASS verified by independent pytest run (Step 9).[/green]")
-                                success = True
-                                final_message = "All tests passed after fixes (independently verified)."
-                                break
-                            else:
-                                console.print("[bold red]LLM claimed tests pass at Step 9 but independent verification FAILED.[/bold red]")
-                                _, import_error_retries, should_retry = _handle_verification_failure(verify_output, import_error_retries, console)
-                                step_output = f"VERIFICATION_FAILED: LLM claimed tests pass but pytest failed.\n{verify_output}"
-                                step_outputs[str(step_num)] = f"FAILED: {step_output}"
-                                if should_retry:
-                                    verification_failure_context = verify_output
-                                    last_completed_step = 0
-                                    break
-                                last_completed_step = step_num - 1
-                                # Don't break — fall through to cycle increment
-                        else:
-                            console.print("[green]LOCAL_TESTS_PASS detected in Step 9.[/green]")
-                            success = True
-                            final_message = "All tests passed after fixes."
-                            break
-                    elif _step9_token == "MAX_CYCLES_REACHED":
-                        console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9.[/yellow]")
-                        final_message = "Max cycles reached."
-                        break
-                    elif _step9_token == "CONTINUE_CYCLE":
-                        # Check for progress before starting next cycle (5b)
-                        cycle_changed = _detect_changed_files(cwd, cycle_start_hashes)
-                        # Stop if NO progress was made this cycle (no file changes)
-                        if not cycle_changed:
-                            console.print(f"[yellow]Warning: No file changes detected in cycle {current_cycle}. Stopping to avoid infinite loop.[/yellow]")
-                            final_message = f"No progress made in cycle {current_cycle} (no file changes)."
-                            break
-                        break  # Break inner loop — outer loop will start next cycle
-                    elif _step9_token is None:
-                        if not step_success:
-                            # Provider/timeout failure with no control token: treat as transient, start next cycle.
-                            console.print(
-                                "[yellow]Step 9 failed with no parseable loop-control token; "
-                                "starting next cycle.[/yellow]"
-                            )
-                            break
+                    _step9_token = _resolve_step9_loop_token(step_output, console)
 
+                    def _merge_step9_apply(r: _Step9TokenApplyResult) -> None:
+                        nonlocal import_error_retries, success, final_message
+                        nonlocal last_completed_step, verification_failure_context
+                        import_error_retries = r.import_error_retries
+                        if r.step_outputs_9 is not None:
+                            step_outputs[str(step_num)] = r.step_outputs_9
+                        if r.success is not None:
+                            success = r.success
+                        if r.final_message is not None:
+                            final_message = r.final_message
+                        if r.last_completed_step is not None:
+                            last_completed_step = r.last_completed_step
+                        if r.verification_failure_context_update is not None:
+                            verification_failure_context = r.verification_failure_context_update
+
+                    if _step9_token is not None:
+                        r9 = _apply_step9_resolved_token(
+                            _step9_token,
+                            step_output,
+                            issue_content=issue_content,
+                            changed_files=changed_files,
+                            cwd=cwd,
+                            initial_file_hashes=initial_file_hashes,
+                            cycle_start_hashes=cycle_start_hashes,
+                            import_error_retries=import_error_retries,
+                            console=console,
+                            step_num=step_num,
+                            current_cycle=current_cycle,
+                            is_retry_path=False,
+                        )
+                        _merge_step9_apply(r9)
+                        if r9.break_inner:
+                            break
+                    elif not step_success:
+                        # Provider/timeout failure with no control token: treat as transient, start next cycle.
+                        console.print(
+                            "[yellow]Step 9 failed with no parseable loop-control token; "
+                            "starting next cycle.[/yellow]"
+                        )
+                        break
+                    else:
                         # Step 9 succeeded but emitted no token: retry once to get an explicit loop-control signal.
                         console.print(
                             "[yellow]No loop control token in Step 9 output; retrying Step 9 once.[/yellow]"
@@ -1730,57 +1852,21 @@ def run_agentic_e2e_fix_orchestrator(
                             if new_gh_id:
                                 github_comment_id = new_gh_id
                                 state_data["github_comment_id"] = github_comment_id
-                        except Exception:
-                            # Best-effort: state persistence should not break the workflow.
-                            pass
-
-                        retry_token = _classify_step_output(retry_output, step_num=9)
-                        if retry_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
-                            test_files = _extract_test_files(
-                                issue_content, changed_files, cwd, initial_file_hashes
+                        except Exception as e:
+                            logger.debug(
+                                "Best-effort Step 9 retry state save failed: %s",
+                                e,
+                                exc_info=True,
                             )
-                            if test_files:
-                                verified, verify_output = _verify_tests_independently(test_files, cwd)
-                                if verified:
-                                    console.print(
-                                        "[green]LOCAL_TESTS_PASS verified by independent pytest run "
-                                        "(Step 9 retry).[/green]"
-                                    )
-                                    success = True
-                                    final_message = "All tests passed after fixes (independently verified)."
-                                    break
-                                else:
-                                    console.print(
-                                        "[bold red]LLM claimed tests pass at Step 9 retry but independent "
-                                        "verification FAILED.[/bold red]"
-                                    )
-                                    step_outputs[str(step_num)] = (
-                                        "FAILED: VERIFICATION_FAILED: "
-                                        "LLM claimed tests pass at Step 9 retry but independent "
-                                        "verification FAILED.\n"
-                                        f"{verify_output}"
-                                    )
-                                    last_completed_step = step_num - 1
-                            else:
-                                console.print("[green]LOCAL_TESTS_PASS detected in Step 9 retry.[/green]")
-                                success = True
-                                final_message = "All tests passed after fixes."
-                                break
-                        elif retry_token == "MAX_CYCLES_REACHED":
-                            console.print("[yellow]MAX_CYCLES_REACHED detected in Step 9 retry.[/yellow]")
-                            final_message = "Max cycles reached."
-                            break
-                        elif retry_token == "CONTINUE_CYCLE":
-                            # Let the outer loop start the next cycle.
-                            break
-                        elif retry_token is None and not retry_success:
-                            # Provider/timeout failure with no control token: treat as transient.
+
+                        retry_token = _resolve_step9_loop_token(retry_output, console)
+                        if retry_token is None and not retry_success:
                             console.print(
                                 "[yellow]Step 9 retry failed with no parseable loop-control token; "
                                 "starting next cycle.[/yellow]"
                             )
                             break
-                        else:
+                        if retry_token is None:
                             console.print(
                                 "[bold yellow]Step 9 did not emit a loop control token after retry; "
                                 "stopping.[/bold yellow]"
@@ -1789,17 +1875,23 @@ def run_agentic_e2e_fix_orchestrator(
                                 "Workflow stopped: Step 9 did not emit a loop control token after retry."
                             )
                             break
-                    else:
-                        # Unexpected non-None token: keep current terminal behavior but with clear message.
-                        console.print(
-                            "[yellow]Warning: No recognized loop control token found in Step 9. "
-                            "Stopping workflow — missing or unknown token treated as terminal "
-                            "condition.[/yellow]"
+                        r_retry = _apply_step9_resolved_token(
+                            retry_token,
+                            retry_output,
+                            issue_content=issue_content,
+                            changed_files=changed_files,
+                            cwd=cwd,
+                            initial_file_hashes=initial_file_hashes,
+                            cycle_start_hashes=cycle_start_hashes,
+                            import_error_retries=import_error_retries,
+                            console=console,
+                            step_num=step_num,
+                            current_cycle=current_cycle,
+                            is_retry_path=True,
                         )
-                        final_message = (
-                            "Workflow stopped: no recognized loop control token in Step 9 output."
-                        )
-                        break
+                        _merge_step9_apply(r_retry)
+                        if r_retry.break_inner:
+                            break
 
             # Check if we should exit the outer loop
             if success:
