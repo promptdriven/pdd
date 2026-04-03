@@ -443,10 +443,14 @@ def find_and_resolve_all_pairs(
     quiet: bool = False,
     extensions: Optional[str] = None,
     output_dir: Optional[str] = None,
-    create_missing_prompts: bool = True,
+    create_missing_prompts: bool = False,
 ) -> List[Tuple[str, str]]:
     """
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
+
+    By default does not create missing prompt files on disk (scan-only). Pass
+    ``create_missing_prompts=True`` when the caller will run updates next (e.g. ``update_main``
+    with ``not dry_run``).
     """
     pairs = []
 

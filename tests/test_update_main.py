@@ -601,12 +601,24 @@ def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_lan
         os.chdir(original_cwd)
 
 
+@patch("pdd.sync_main._auto_submit_example")
+@patch("pdd.context_generator_main.context_generator_main", return_value=("example", 0.1, "mock"))
 @patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
 @patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
 @patch('pdd.update_main.update_file_pair')
 @patch('pdd.pddrc_initializer.ensure_pddrc_for_scan')
-def test_update_main_repo_mode_orchestration(mock_pddrc, mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
+def test_update_main_repo_mode_orchestration(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    _mock_example_gen,
+    _mock_auto_submit,
+    temp_git_repo,
+    capsys,
+):
     """
     Test the main orchestration logic of update_main in --repo mode.
     """
@@ -2750,7 +2762,9 @@ class TestRepoModeEmptyPrompts:
              patch("pdd.update_main.get_git_changed_files", return_value=set()), \
              patch("pdd.architecture_registry.find_architecture_for_project", return_value=[]), \
              patch("pdd.operation_log.save_fingerprint"), \
-             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")):
+             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")), \
+             patch("pdd.context_generator_main.context_generator_main", return_value=("ex", 0.0, "m")), \
+             patch("pdd.sync_main._auto_submit_example"):
             result = update_main(
                 ctx=ctx,
                 input_prompt_file=None,
