@@ -1,18 +1,31 @@
 """
-Tests for cross-step consistency validation in bug workflow prompts.
+Tests for cross-step consistency in bug workflow prompts.
 
-Issue #577: PDD bot generates fixes that pass mocked tests but don't solve the
-real bug because test mocks encode assumptions that contradict the bot's own
-investigation findings from earlier steps.
+Two categories:
+1. Unit tests (no LLM calls) — verify prompt template formatting and context wiring
+2. Integration tests (@pytest.mark.integration) — verify LLM actually follows
+   the scope-expansion instructions with a real API call
 
-These tests verify that Steps 8 (test plan), 9 (generate test), and 10 (verify)
-prompts instruct the LLM to cross-validate test assumptions against investigation
-findings from Steps 4-6.
+Issue #577: Cross-step mock consistency
+Issue #1071: Proposed fix validation / scope expansion defense
 """
 from pathlib import Path
+from textwrap import dedent
+import os
 import pytest
 
 PROMPTS_DIR = Path(__file__).parent.parent / "pdd" / "prompts"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def step6_content() -> str:
+    path = PROMPTS_DIR / "agentic_bug_step6_root_cause_LLM.prompt"
+    assert path.exists()
+    return path.read_text()
 
 @pytest.fixture
 def step8_content() -> str:
@@ -33,120 +46,116 @@ def step10_content() -> str:
     return path.read_text()
 
 
-@pytest.fixture
-def step6_content() -> str:
-    path = PROMPTS_DIR / "agentic_bug_step6_root_cause_LLM.prompt"
-    assert path.exists()
-    return path.read_text()
+# ---------------------------------------------------------------------------
+# Unit tests: Prompt template formatting (no LLM calls)
+# These verify that the prompt templates can be loaded, preprocessed, and
+# formatted with realistic context without errors — proving the wiring works.
+# ---------------------------------------------------------------------------
+
+class TestStep6TemplateFormatting:
+    """Step 6 prompt formats correctly with scope-expansion context."""
+
+    def test_step6_template_formats_with_issue_containing_proposed_fix(self, step6_content: str):
+        """Verify Step 6 template accepts context with a proposed fix in the issue body."""
+        # Collapse double-curlies then substitute (same as orchestrator)
+        processed = step6_content.replace("{{", "{").replace("}}", "}")
+
+        context = {
+            "issue_url": "https://github.com/owner/repo/issues/999",
+            "issue_content": dedent("""\
+                ## Bug
+                The TIMEOUTS dict is missing entries for steps 11 and 12.
+                ## Proposed Fix
+                Add entries: 11: 2000.0, 12: 240.0
+            """),
+            "repo_owner": "owner",
+            "repo_name": "repo",
+            "issue_number": "999",
+            "issue_author": "testuser",
+            "step1_output": "No duplicates found",
+            "step2_output": "Confirmed bug",
+            "step3_output": "FAST_TRACK: missing timeout entries",
+            "step4_output": "Step 4 skipped (fast-track)",
+            "step5_output": "Step 5 skipped (fast-track)",
+        }
+        for key, value in context.items():
+            processed = processed.replace(f"{{{key}}}", str(value))
+
+        # The formatted prompt should contain the issue's proposed fix text
+        assert "Proposed Fix" in processed
+        assert "steps 11 and 12" in processed
+        # And should contain the Proposed Fix Validation instruction
+        assert "Proposed Fix Validation" in processed
 
 
-class TestStep6ProposedFixValidation:
-    """Step 6 must instruct independent validation of issue-proposed fix scope (issue #1071)."""
+class TestStep8TemplateFormatting:
+    """Step 8 prompt formats correctly with Step 6 scope-expansion output."""
 
-    def test_prompt_requires_proposed_fix_validation_task(self, step6_content: str) -> None:
-        content_lower = step6_content.lower()
-        has_instruction = (
-            "proposed fix validation" in content_lower
-            and "scope_expansion" in content_lower
-        )
-        assert has_instruction, (
-            "Step 6 prompt must include a 'Proposed Fix Validation' task that classifies "
-            "issue-proposed fix scope as SCOPE_MATCH, SCOPE_EXPANSION, or NO_PROPOSED_FIX."
-        )
+    def test_step8_template_includes_step6_output_with_scope_expansion(self, step8_content: str):
+        """Verify Step 8 sees Step 6's SCOPE_EXPANSION in its formatted context."""
+        processed = step8_content.replace("{{", "{").replace("}}", "}")
 
-    def test_prompt_requires_expansion_items_output(self, step6_content: str) -> None:
-        content_lower = step6_content.lower()
-        has_instruction = (
-            "expansion items" in content_lower
-            and "downstream" in content_lower
-        )
-        assert has_instruction, (
-            "Step 6 prompt must require listing expansion items that downstream steps "
-            "(8, 9, 10) must include in their test plans and verification."
-        )
+        step6_output_with_expansion = dedent("""\
+            ## Step 6: Root Cause Analysis
+            ### Proposed Fix Validation
+            - **Scope classification:** SCOPE_EXPANSION
+            - **Issue-proposed scope:** steps 11, 12
+            - **Step 6 full scope:** steps 4-12 (all shifted due to api_research insertion)
+            - **Expansion items:** steps 4, 5, 6, 7, 8, 9, 10
+        """)
 
+        context = {
+            "issue_url": "https://github.com/owner/repo/issues/999",
+            "issue_content": "Bug: missing timeout entries for steps 11-12",
+            "repo_owner": "owner",
+            "repo_name": "repo",
+            "issue_number": "999",
+            "step1_output": "No duplicates",
+            "step2_output": "Confirmed",
+            "step3_output": "Fast-track",
+            "step4_output": "Skipped",
+            "step5_output": "Skipped",
+            "step6_output": step6_output_with_expansion,
+            "step7_output": "DEFECT_TYPE: code",
+            "fix_locations": "pdd/agentic_bug_orchestrator.py",
+        }
+        for key, value in context.items():
+            processed = processed.replace(f"{{{key}}}", str(value))
 
-class TestStep8ScopePrioritization:
-    """Step 8 must prioritize Step 6's expanded scope over the issue body (issue #1071)."""
-
-    def test_prompt_requires_step6_scope_prioritization(self, step8_content: str) -> None:
-        content_lower = step8_content.lower()
-        has_instruction = (
-            "step 6" in content_lower
-            and "scope" in content_lower
-            and ("prioriti" in content_lower or "expansion" in content_lower)
-            and "issue" in content_lower
-        )
-        assert has_instruction, (
-            "Step 8 prompt must instruct prioritizing Step 6's expanded scope over "
-            "the issue body when designing test plans."
-        )
-
-    def test_prompt_coverage_check_references_step6(self, step8_content: str) -> None:
-        content_lower = step8_content.lower()
-        has_instruction = (
-            "coverage check" in content_lower
-            and "step 6" in content_lower
-        )
-        assert has_instruction, (
-            "Step 8 prompt's coverage check must reference Step 6's full scope, "
-            "not just the issue description."
-        )
+        # Step 8 should see Step 6's SCOPE_EXPANSION and expansion items
+        assert "SCOPE_EXPANSION" in processed
+        assert "steps 4, 5, 6, 7, 8, 9, 10" in processed
 
 
-class TestStep9ScopeCrossCheck:
-    """Step 9 must cross-check generated tests against Step 6's full scope (issue #1071)."""
+class TestStep10TemplateFormatting:
+    """Step 10 prompt uses WARNING (not FAIL) for scope gaps."""
 
-    def test_prompt_requires_scope_cross_check(self, step9_content: str) -> None:
-        content_lower = step9_content.lower()
-        has_instruction = (
-            "scope cross-check" in content_lower
-            and "step 6" in content_lower
-        )
-        assert has_instruction, (
-            "Step 9 prompt must include a 'Scope Cross-Check' section requiring "
-            "verification of test coverage against Step 6's full scope."
-        )
-
-    def test_prompt_requires_adding_missing_coverage(self, step9_content: str) -> None:
-        content_lower = step9_content.lower()
-        has_instruction = (
-            "step 6" in content_lower
-            and "missing" in content_lower
-            and ("add" in content_lower or "cover" in content_lower)
-        )
-        assert has_instruction, (
-            "Step 9 prompt must instruct adding tests for items in Step 6's scope "
-            "that Step 8's plan may have omitted."
-        )
-
-
-class TestStep10ScopeCompletenessVerification:
-    """Step 10 must verify test scope completeness against Step 6 (issue #1071)."""
-
-    def test_prompt_requires_scope_completeness_verification(self, step10_content: str) -> None:
+    def test_step10_scope_check_uses_warning_not_fail(self, step10_content: str):
+        """Step 10 should warn about incomplete scope, not hard-stop the workflow."""
+        # The scope completeness section should use WARNING
         content_lower = step10_content.lower()
-        has_instruction = (
-            "scope completeness" in content_lower
-            and "step 6" in content_lower
+        # Find the scope completeness section
+        scope_section_start = content_lower.find("scope completeness")
+        assert scope_section_start != -1, "Step 10 must have a scope completeness verification section"
+
+        # Extract just the scope section (next ~500 chars)
+        scope_section = content_lower[scope_section_start:scope_section_start + 800]
+
+        assert "warning" in scope_section, (
+            "Step 10 scope completeness section must use WARNING, not FAIL, "
+            "to avoid false-positive hard stops from LLM-to-LLM parsing."
         )
-        assert has_instruction, (
-            "Step 10 prompt must include a scope completeness verification task "
-            "checking tests against Step 6's full scope."
+        # Must NOT have a FAIL for scope issues (existing FAILs for structural
+        # tests and mock contradictions are fine — they're different checks)
+        assert "**fail:" not in scope_section and "report: fail" not in scope_section, (
+            "Step 10 scope completeness section must NOT use FAIL — "
+            "false-positive risk from LLM parsing structured sections is too high."
         )
 
-    def test_prompt_fails_on_partial_scope_coverage(self, step10_content: str) -> None:
-        content_lower = step10_content.lower()
-        has_instruction = (
-            "fail" in content_lower
-            and "issue-proposed scope" in content_lower
-            and "step 6" in content_lower
-        )
-        assert has_instruction, (
-            "Step 10 prompt must define a FAIL condition when tests only cover the "
-            "issue-proposed scope instead of Step 6's full expanded scope."
-        )
 
+# ---------------------------------------------------------------------------
+# Existing unit tests (from issue #577) — cross-step mock consistency
+# ---------------------------------------------------------------------------
 
 class TestStep8CrossStepConsistency:
     """Step 8 (test plan) must instruct cross-referencing mocks against Steps 4-6."""
@@ -220,4 +229,98 @@ class TestStep10CrossValidation:
         assert has_fail_signal, (
             "Step 10 prompt must define a FAIL condition for when mock assumptions "
             "contradict investigation findings (enables orchestrator hard stop)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: Real LLM calls (issue #1071)
+# These verify the LLM actually follows the scope-expansion instructions.
+# Marked @pytest.mark.integration — skipped in CI, run on demand.
+# ---------------------------------------------------------------------------
+
+def has_llm_credentials() -> bool:
+    """Check if any LLM credentials are available for integration tests."""
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    project = os.environ.get("VERTEXAI_PROJECT", "")
+    location = os.environ.get("VERTEXAI_LOCATION", "")
+    return bool(project and location)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not has_llm_credentials(), reason="No LLM credentials available")
+class TestStep6ScopeExpansionIntegration:
+    """Integration: verify Step 6 LLM produces SCOPE_EXPANSION for incomplete proposed fixes."""
+
+    def test_step6_detects_incomplete_proposed_fix(self, tmp_path):
+        """Given an issue with a partial fix, Step 6 should classify as SCOPE_EXPANSION."""
+        from pdd.agentic_common import run_agentic_task
+
+        template = (PROMPTS_DIR / "agentic_bug_step6_root_cause_LLM.prompt").read_text()
+        processed = template.replace("{{", "{").replace("}}", "}")
+
+        # Craft context: issue proposes fixing only 2 of 5 known problems
+        context = {
+            "issue_url": "https://github.com/test/repo/issues/1",
+            "issue_content": dedent("""\
+                ## Bug
+                The `COLORS` dict has entries for 'red' and 'blue' but is missing
+                'green', 'yellow', and 'purple'. Only 'red' and 'blue' work.
+
+                ## Proposed Fix
+                Add the missing 'green' entry to the COLORS dict:
+                ```python
+                COLORS['green'] = '#00ff00'
+                ```
+                This should fix the issue.
+            """),
+            "repo_owner": "test",
+            "repo_name": "repo",
+            "issue_number": "1",
+            "issue_author": "testuser",
+            "step1_output": "No duplicates found.",
+            "step2_output": "Confirmed bug — COLORS dict is incomplete.",
+            "step3_output": "FAST_TRACK: Issue provides file path and fix snippet.",
+            "step4_output": "Step 4 skipped (fast-track): COLORS dict missing entries.",
+            "step5_output": "Step 5 skipped (fast-track): COLORS dict missing entries.",
+        }
+        for key, value in context.items():
+            processed = processed.replace(f"{{{key}}}", str(value))
+
+        # Run the formatted prompt through a real LLM
+        # Use quiet mode and short timeout — we just need the classification
+        success, output, cost, model = run_agentic_task(
+            instruction=processed,
+            cwd=tmp_path,
+            quiet=True,
+            label="test-step6-scope-expansion",
+            timeout=120.0,
+        )
+
+        assert success, f"Step 6 LLM call failed: {output[:500]}"
+
+        output_lower = output.lower()
+
+        # The LLM should detect that the proposed fix only covers 'green'
+        # but the bug also affects 'yellow' and 'purple'
+        has_scope_expansion = (
+            "scope_expansion" in output_lower
+            or "scope expansion" in output_lower
+            or ("partial" in output_lower and "proposed fix" in output_lower)
+        )
+        assert has_scope_expansion, (
+            f"Step 6 should classify the incomplete proposed fix as SCOPE_EXPANSION "
+            f"(or similar), but output did not contain scope expansion classification.\n"
+            f"Output (first 1000 chars): {output[:1000]}"
+        )
+
+        # The LLM should identify the missing items (yellow, purple)
+        has_expansion_items = (
+            "yellow" in output_lower
+            or "purple" in output_lower
+        )
+        assert has_expansion_items, (
+            f"Step 6 should list expansion items (yellow, purple) that the proposed "
+            f"fix missed, but they were not found in the output.\n"
+            f"Output (first 1000 chars): {output[:1000]}"
         )

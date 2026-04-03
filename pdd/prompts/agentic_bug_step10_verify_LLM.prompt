@@ -88,7 +88,7 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    Verify that the generated tests cover Step 6's full scope, not just the issue's proposed scope:
    - Re-read Step 6's "Proposed Fix Validation" section, specifically the "Step 6 full scope" and "Expansion items" lists
    - For each item in Step 6's full scope, confirm there is at least one test that exercises it
-   - If Step 6 classified the scope as `SCOPE_EXPANSION` and the tests only cover the issue-proposed subset (not Step 6's expanded scope), report: **FAIL: Tests only cover issue-proposed scope, not Step 6's full expanded scope.** List the specific items from Step 6's scope that lack test coverage.
+   - If Step 6 classified the scope as `SCOPE_EXPANSION` and the tests only cover the issue-proposed subset (not Step 6's expanded scope), note this as a **WARNING** in your verification output: "WARNING: Tests may have incomplete scope — Step 6 identified additional items beyond the issue's proposed fix that lack dedicated test coverage: [list items]." This is informational for reviewers, not a workflow-stopping condition.
    - This check prevents the pattern where issue authors propose partial fixes and downstream tests only validate the partial fix, missing the broader problem Step 6 identified.
 
 6. **Classify E2E test necessity**
