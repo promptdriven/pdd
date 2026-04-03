@@ -13,6 +13,7 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _extract_json_from_output,
     _find_cli_binary,
+    _is_permanent_error,
     _log_agentic_interaction,
     ANTHROPIC_PRICING_BY_FAMILY,
     GEMINI_PRICING_BY_FAMILY,
@@ -4324,4 +4325,101 @@ class TestRevertOutOfScopeChanges:
 
         reverted = _revert_out_of_scope_changes(proj, allowed)
         assert reverted == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #1060: _is_permanent_error() misses Claude OAuth failures
+# ---------------------------------------------------------------------------
+
+class TestIsPermanentErrorClaudeOAuth:
+    """Tests for _is_permanent_error() detecting Claude CLI OAuth error formats."""
+
+    def test_authentication_error_with_underscore(self):
+        """authentication_error with underscore separator should be detected as permanent.
+
+        Claude CLI returns 'authentication_error' (underscore) but the pattern
+        r'authentication\\s+error' requires whitespace.
+        """
+        error_msg = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
+        assert _is_permanent_error(error_msg) is True
+
+    def test_failed_to_authenticate_reversed_word_order(self):
+        """'Failed to authenticate' (reversed word order) should be detected as permanent.
+
+        Claude CLI returns 'Failed to authenticate' but the existing pattern
+        r'authentication\\s+failed' expects the opposite word order.
+        """
+        error_msg = (
+            'Failed to authenticate. API Error: 401 '
+            '{"type":"error","error":{"type":"authentication_error",'
+            '"message":"Invalid bearer token"}}'
+        )
+        assert _is_permanent_error(error_msg) is True
+
+    def test_invalid_bearer_token(self):
+        """'Invalid bearer token' should be detected as permanent.
+
+        No existing pattern matches 'invalid bearer'.
+        """
+        assert _is_permanent_error("Invalid bearer token") is True
+
+    def test_full_claude_cli_oauth_error_verbatim(self):
+        """Full verbatim Claude CLI OAuth error from issue #1060 should be permanent.
+
+        This is the exact error format reported in the issue.
+        """
+        error_msg = (
+            'Failed to authenticate. API Error: 401 '
+            '{"type":"error","error":{"type":"authentication_error",'
+            '"message":"Invalid bearer token"}}'
+        )
+        assert _is_permanent_error(error_msg) is True
+
+    def test_existing_permanent_patterns_still_work(self):
+        """Existing permanent error patterns must not regress."""
+        assert _is_permanent_error("Authentication error: invalid key") is True
+        assert _is_permanent_error("Invalid parameter: model_name") is True
+        assert _is_permanent_error("Model not found: gpt-5") is True
+        assert _is_permanent_error("Permission denied: access denied") is True
+
+    def test_transient_errors_still_return_false(self):
+        """Transient errors must still be retried (return False)."""
+        assert _is_permanent_error("Rate limit exceeded") is False
+        assert _is_permanent_error("Timeout expired") is False
+        assert _is_permanent_error("500 Internal Server Error") is False
+
+    def test_run_agentic_task_skips_retries_on_oauth_permanent_error(self, tmp_path):
+        """run_agentic_task should not retry when _is_permanent_error detects OAuth failure.
+
+        Mocks _run_with_provider to return a Claude OAuth error and verifies
+        that it is called only once per provider (no retries) and time.sleep
+        is never called for backoff.
+        """
+        oauth_error = (
+            'Failed to authenticate. API Error: 401 '
+            '{"type":"error","error":{"type":"authentication_error",'
+            '"message":"Invalid bearer token"}}'
+        )
+
+        with patch("pdd.agentic_common.get_available_agents", return_value={"claude"}), \
+             patch("pdd.agentic_common.get_agent_provider_preference", return_value=["claude"]), \
+             patch("pdd.agentic_common._run_with_provider", return_value=(False, oauth_error, 0.0)) as mock_run, \
+             patch("pdd.agentic_common.time") as mock_time, \
+             patch("pdd.agentic_common.get_job_deadline", return_value=None):
+            # time.time() needs to return increasing values for budget checks;
+            # called multiple times: task_start, aggregate_deadline calc, budget checks, etc.
+            mock_time.time.return_value = 1000.0
+
+            success, output, cost, provider = run_agentic_task(
+                instruction="test",
+                cwd=tmp_path,
+                max_retries=3,
+                quiet=True,
+            )
+
+            assert success is False
+            # Should be called only once — permanent error skips retries
+            assert mock_run.call_count == 1
+            # time.sleep should never be called for retry backoff
+            mock_time.sleep.assert_not_called()
 
