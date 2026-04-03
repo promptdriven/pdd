@@ -4,7 +4,7 @@ You are an expert Python developer. Your task is to implement the core decision-
 
 ### Requirements:
 
-1.  **Authoritative Fingerprints**: Compare current file SHA256 hashes against `.pdd/meta/{safe_basename}_{lang}.json`. Sanitize basenames containing `/` (e.g., `core/cloud` → `core_cloud`) for metadata filenames.
+1.  **Authoritative Fingerprints**: Compare current file SHA256 hashes against `.pdd/meta/{safe_basename}_{lang}.json`. Sanitize basenames containing `/` (e.g., `core/cloud` → `core_cloud`) for metadata filenames. When using sanitized basenames in glob patterns (e.g., in `_check_example_success_history`), apply `glob.escape()` so that special characters like `[`, `]`, `(`, `)` in basenames are treated as literals, not glob metacharacters.
 2.  **Robust Locking**: `SyncLock` context manager using `fcntl`/`msvcrt` file-descriptor locking. Handle re-entrancy (same PID), stale locks (`psutil.pid_exists`), and cleanup on failure. `log_mode=True` bypasses locking entirely.
 3.  **Deterministic Decision Priority** (strict ordering):
     1.  Auto-deps completion → always `generate` after `auto-deps` (prevents infinite loop).

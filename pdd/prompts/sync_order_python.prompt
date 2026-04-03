@@ -48,7 +48,7 @@ A utility module that parses <include> tags from prompt files, builds a dependen
    - Generate executable .sh file with ordered pdd sync commands
    - Include header comments: script purpose, module count, generation timestamp
    - Use "set -e" to fail on first error
-   - For each module, add: echo "[N/total] Syncing module_name..." and pdd sync module_name
+   - For each module, add: echo "[N/total] Syncing module_name..." and pdd sync with the module name properly shell-quoted via `shlex.quote()` to handle special characters (brackets, parentheses, etc.) in basenames
    - Make file executable (chmod 0o755)
    - Return script content as string
 

@@ -68,9 +68,10 @@
     - Python prioritized first, then remaining languages sorted alphabetically
     - Raise `click.UsageError` if no valid development prompt files found
 
-6. **Basename Validation**:
-    - Regex: `^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*$` (alphanumeric, underscore, hyphen, forward slash for subdirs)
-    - Reject empty, path traversal (..), absolute paths, trailing slashes, double slashes
+6. **Basename Validation** (blocklist approach):
+    - Structural checks: reject empty, `..` or `.` path segments, absolute paths, trailing `/`, double `//`
+    - Blocklist regex `DANGEROUS_BASENAME_CHARS`: reject shell-dangerous characters (`;|&$\`><!\'"~{}*?#\\%`, whitespace, control chars)
+    - Everything else is allowed — frameworks use `[]`, `()`, `+`, `@`, dots, unicode, etc.
     - Raise `click.UsageError` for invalid basenames
 
 7. **Budget/Attempts Validation**:
@@ -112,7 +113,7 @@
 % Helper Functions (implement as internal functions):
 
 1. **`_validate_basename(basename: str) -> None`**:
-   - Use VALID_BASENAME_CHARS regex to validate
+   - Structural checks (empty, `.`/`..` segments, absolute, trailing `/`, `//`) then DANGEROUS_BASENAME_CHARS blocklist
    - Raise click.UsageError for invalid basenames
 
 2. **`_python_first_sorted(lang_to_path: Dict[str, Path]) -> Dict[str, Path]`**:
@@ -154,6 +155,7 @@
 
 10. **`_detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]`**:
     - Scan prompts directory for files matching `{basename}_{language}.prompt`
+    - **Glob escaping**: Use `glob.escape()` on the basename portion before constructing glob patterns, so that special characters like `[`, `]`, `(`, `)` in basenames (e.g., Next.js `[id]`) are treated as literals, not glob metacharacters
     - Support subdirectory basenames (adjust pattern based on prompts_dir parts)
     - Normalize language names to lowercase
     - Exclude LLM language
