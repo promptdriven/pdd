@@ -1790,3 +1790,77 @@ def test_success_gate_false_on_actual_failures(mock_pytest, mock_files):
         )
 
     assert success is False, "success should be False when there are actual test failures"
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+@patch("pdd.fix_error_loop.rprint")
+@patch("pdd.fix_error_loop.subprocess.run")
+@patch("pdd.fix_error_loop.default_verify_cmd_for")
+@patch("pdd.fix_error_loop.get_language")
+def test_fix_error_loop_non_python_subprocess_has_cwd(
+    mock_get_lang, mock_verify_cmd, mock_subprocess, mock_rprint, tmp_path
+):
+    """Bug #1080: fix_error_loop subprocess.run for non-Python files must include cwd.
+
+    Before fix: subprocess.run(verify_cmd, ...) has no cwd kwarg — inherits process cwd
+    After fix: subprocess.run(verify_cmd, ..., cwd=<config_dir>) — runs from correct directory
+
+    The fix_error_loop function runs the verification program via subprocess.run at line 447
+    without a cwd parameter. For non-Python monorepos, this means Jest/Vitest run from
+    whatever directory the process happens to be in, rather than the config directory.
+    """
+    # Create non-Python test and code files
+    project_dir = tmp_path / "project" / "frontend"
+    project_dir.mkdir(parents=True)
+    test_file = project_dir / "api.test.ts"
+    test_file.write_text("test('api', () => {});")
+    code_file = project_dir / "api.ts"
+    code_file.write_text("export function fetchApi() { return 'ok'; }")
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("Create API module")
+
+    # Mock language detection
+    mock_get_lang.return_value = "typescript"
+    mock_verify_cmd.return_value = "npx jest api.test.ts"
+
+    # Mock subprocess.run to succeed (initial test passes → early exit)
+    mock_subprocess.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+    success, final_test, final_code, attempts, cost, model = fix_error_loop(
+        str(test_file), str(code_file), str(prompt_file),
+        "Create API module", "npx jest api.test.ts",
+        0.5, 0.1, 5, 1.0,
+        agentic_fallback=False
+    )
+
+    # Verify subprocess.run was called (for the verification command)
+    mock_subprocess.assert_called()
+
+    # Find the verification subprocess call (shell=True with the verify command)
+    verify_calls = [
+        c for c in mock_subprocess.call_args_list
+        if c.args and c.args[0] == "npx jest api.test.ts"
+        or (c.kwargs.get('args') == "npx jest api.test.ts" if 'args' in c.kwargs else False)
+    ]
+    # Fallback: look for any shell=True call
+    if not verify_calls:
+        verify_calls = [
+            c for c in mock_subprocess.call_args_list
+            if c.kwargs.get('shell') is True or (len(c.args) > 0 and isinstance(c.args[0], str))
+        ]
+
+    assert len(verify_calls) > 0, (
+        f"Expected at least one verification subprocess call. "
+        f"All calls: {mock_subprocess.call_args_list}"
+    )
+
+    # Bug #1080: subprocess.run at line 447 has no cwd parameter
+    verify_call = verify_calls[0]
+    assert 'cwd' in verify_call.kwargs, (
+        f"Bug #1080: subprocess.run for non-Python verification has no cwd parameter. "
+        f"The subprocess inherits process cwd, which breaks monorepos. "
+        f"Got kwargs: {verify_call.kwargs}"
+    )

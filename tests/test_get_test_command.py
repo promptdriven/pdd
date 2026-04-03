@@ -7,7 +7,7 @@ import sys
 import os
 
 # Import the module under test
-from pdd.get_test_command import get_test_command_for_file
+from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner
 
 
 class TestGetTestCommandForFilePython:
@@ -509,5 +509,267 @@ class TestMultipleFileTypes:
         mock_smart_detect.return_value = 'mvn test -Dtest=ExampleTest'
         
         result = get_test_command_for_file('/test/ExampleTest.java')
-        
+
         assert result == 'mvn test -Dtest=ExampleTest'
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _detect_ts_test_runner must return config directory alongside command.
+
+    Bug: _detect_ts_test_runner() finds the config directory (e.g., frontend/ containing
+    jest.config.js) but only returns the command string, discarding the config directory.
+    All 6 callers then use wrong cwd when running subprocess.run(), breaking monorepos.
+    """
+
+    # --- Test 1: Jest returns (command, config_dir) ---
+
+    def test_detect_ts_test_runner_jest_returns_config_dir(self, tmp_path):
+        """_detect_ts_test_runner must return the config directory alongside the Jest command.
+
+        Before fix: returns bare string 'npx jest --no-coverage --'
+        After fix: returns ('npx jest --no-coverage --', Path('frontend/'))
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        # Bug #1080: string can't unpack to 2 values → ValueError
+        cmd, returned_dir = result
+        assert "npx jest" in cmd
+        assert returned_dir == config_dir
+
+    # --- Test 2: Vitest returns (command, config_dir) ---
+
+    def test_detect_ts_test_runner_vitest_returns_config_dir(self, tmp_path):
+        """_detect_ts_test_runner must return the config directory for Vitest."""
+        config_dir = tmp_path / "packages" / "app"
+        config_dir.mkdir(parents=True)
+        (config_dir / "vitest.config.ts").write_text("export default {};")
+
+        test_dir = config_dir / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "utils.test.ts"
+        test_file.write_text("test('utils', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        assert "npx vitest" in cmd
+        assert returned_dir == config_dir
+
+    # --- Test 3: Playwright returns (command, config_dir) ---
+
+    def test_detect_ts_test_runner_playwright_returns_config_dir(self, tmp_path):
+        """_detect_ts_test_runner must return the config directory for Playwright."""
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "playwright.config.ts").write_text("export default {};")
+
+        test_dir = config_dir / "e2e" / "tests"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "login.spec.ts"
+        test_file.write_text("test('login', async () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        assert "npx playwright" in cmd
+        assert returned_dir == config_dir
+
+    # --- Test 4: No config returns None (regression guard) ---
+
+    def test_detect_ts_test_runner_no_config_returns_none(self, tmp_path):
+        """_detect_ts_test_runner returns None when no config found (unchanged behavior)."""
+        test_dir = tmp_path / "src"
+        test_dir.mkdir()
+        test_file = test_dir / "foo.test.ts"
+        test_file.write_text("test('foo', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is None
+
+    # --- Test 5: get_test_command_for_file returns TestCommand with cwd for monorepo Jest ---
+
+    def test_get_test_command_monorepo_jest_returns_cwd(self, tmp_path):
+        """get_test_command_for_file must return a result with cwd for monorepo Jest.
+
+        Before fix: returns bare string (no .cwd attribute)
+        After fix: returns TestCommand(command=..., cwd=config_dir)
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd == config_dir
+
+    # --- Test 6: CSV returns TestCommand with cwd=None ---
+
+    @patch('pdd.get_test_command._load_language_format')
+    @patch('pdd.get_test_command.get_language')
+    def test_csv_command_returns_testcommand_with_none_cwd(self, mock_get_lang, mock_load_csv):
+        """CSV commands should return a result with cwd=None (caller decides cwd)."""
+        mock_load_csv.return_value = {
+            '.js': {'extension': '.js', 'run_test_command': 'node {file}'}
+        }
+        mock_get_lang.return_value = 'javascript'
+
+        result = get_test_command_for_file('/test/example.js')
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd is None
+
+    # --- Test 7: Smart detection returns TestCommand with cwd=None ---
+
+    @patch('pdd.get_test_command._load_language_format')
+    @patch('pdd.get_test_command.default_verify_cmd_for')
+    @patch('pdd.get_test_command.get_language')
+    def test_smart_detection_returns_testcommand_with_none_cwd(self, mock_get_lang, mock_smart, mock_csv):
+        """Smart detection fallback should return a result with cwd=None."""
+        mock_csv.return_value = {}
+        mock_get_lang.return_value = 'ruby'
+        mock_smart.return_value = 'ruby test_example.rb'
+
+        result = get_test_command_for_file('/test/example.rb')
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd is None
+
+    # --- Test 8: Config directory 3 levels up from test file ---
+
+    def test_detect_ts_test_runner_config_three_levels_up(self, tmp_path):
+        """Walk-up logic must find config multiple directories up from the test file."""
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        # 4 levels deep: frontend/src/components/__test__/deep/
+        test_dir = config_dir / "src" / "components" / "__test__" / "deep"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "Widget.test.tsx"
+        test_file.write_text("test('widget', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        assert returned_dir == config_dir
+
+    # --- Test 14: pin_example_hack uses config dir cwd ---
+
+    def test_pin_example_hack_uses_config_dir_for_non_python(self, tmp_path, monkeypatch):
+        """pin_example_hack._execute_tests_and_create_run_report must use config dir as cwd.
+
+        Before fix: cwd=str(test_file.parent) (test's immediate parent = __test__/)
+        After fix: cwd=str(config_dir) (where jest.config.js lives = frontend/)
+        """
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.pin_example_hack import _execute_tests_and_create_run_report as pin_execute
+
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        subprocess_calls = []
+
+        def capture_run(cmd, **kwargs):
+            subprocess_calls.append({'cmd': cmd, 'kwargs': kwargs})
+            return MagicMock(returncode=0, stdout="Tests: 5 passed", stderr="")
+
+        with patch('pdd.pin_example_hack.subprocess.run', side_effect=capture_run), \
+             patch('pdd.pin_example_hack.calculate_sha256', return_value="abc123"), \
+             patch('pdd.pin_example_hack.save_run_report'):
+            try:
+                pin_execute(
+                    test_file=test_file,
+                    basename="api",
+                    language="typescript"
+                )
+            except Exception:
+                pass
+
+        # Find the non-Python shell command (string, not list)
+        non_python_calls = [c for c in subprocess_calls if isinstance(c['cmd'], str)]
+        assert len(non_python_calls) > 0, "Expected at least one shell command for non-Python test"
+        actual_cwd = non_python_calls[0]['kwargs'].get('cwd')
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir}, got cwd={actual_cwd}. "
+            f"pin_example_hack uses test_file.parent instead of config dir."
+        )
+
+    # --- Test 16: Exact monorepo scenario from the issue ---
+
+    def test_exact_monorepo_scenario_from_issue(self, tmp_path):
+        """Reproduce the exact scenario from issue pdd_cloud#900.
+
+        Structure: frontend/jest.config.js, frontend/src/lib/__test__/api.test.ts
+        Expected: cwd=frontend/ so Jest can find jest-environment-jsdom
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+        (config_dir / "node_modules").mkdir()
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        # Bug #1080: str has no .cwd → AttributeError
+        assert result.cwd == config_dir, (
+            f"Bug #1080: Expected cwd={config_dir}, got {getattr(result, 'cwd', 'N/A (string)')}"
+        )
+
+    # --- Test 17: Flat repo (config at root) ---
+
+    def test_flat_repo_config_at_root_returns_root_as_cwd(self, tmp_path):
+        """For flat repos, config dir should be the repo root."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = tmp_path / "src"
+        test_dir.mkdir()
+        test_file = test_dir / "utils.test.ts"
+        test_file.write_text("test('utils', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        # Config at root → cwd should be root
+        assert returned_dir == tmp_path
+
+    # --- Test 18: Python regression guard ---
+
+    def test_python_returns_testcommand_with_none_cwd(self):
+        """Python files should return a result with cwd=None (uses _find_project_root separately).
+
+        This verifies the TestCommand change doesn't break the Python code path.
+        """
+        result = get_test_command_for_file('/tmp/test_example.py', language='python')
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd is None

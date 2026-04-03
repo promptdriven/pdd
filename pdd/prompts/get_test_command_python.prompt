@@ -6,18 +6,29 @@
   A utility module responsible for determining the correct test runner command for any given test file. It provides a layered resolution strategy: CSV configuration → smart detection → agentic fallback.
 
 % Requirements
-  1) Function `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[str]`:
-     - Returns the resolved test command with the `{file}` placeholder replaced by the actual file path, or `None` if no command can be determined.
-     - Resolution order (first match wins):
-       a) CSV `run_test_command` column from `language_format.csv` (if non-empty after stripping)
-       b) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`
-       c) `None` (signals to caller that agentic fallback is needed)
+  1) Dataclass `TestCommand`:
+     - `command: str` — the resolved test command string.
+     - `cwd: Optional[Path] = None` — the working directory where the test runner config was found. `None` means the caller decides (backward compatible with repo root).
 
-  2) Language resolution:
+  2) Function `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[TestCommand]`:
+     - Returns a `TestCommand` with the resolved command (and optional cwd), or `None` if no command can be determined.
+     - Resolution order (first match wins):
+       a) For TS/TSX: smart runner detection via `_detect_ts_test_runner()` which walks up from the test file to find Jest/Vitest/Playwright config — returns both the command and the directory where the config was found (the `cwd`). This is critical for monorepos where test runner configs live in subdirectories (e.g., `frontend/jest.config.js`).
+       b) CSV `run_test_command` column from `language_format.csv` (if non-empty after stripping). `cwd` is `None` for CSV commands.
+       c) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`. `cwd` is `None`.
+       d) `None` (signals to caller that agentic fallback is needed)
+
+  3) Language resolution:
      - If `language` parameter is provided, use it directly.
      - Otherwise, infer from the file extension using `get_language()`.
 
-  3) CSV lookup via a private `_load_language_format()` helper that returns a dict keyed by extension. Try package-relative then project-root-relative paths; return empty dict if CSV not found.
+  4) CSV lookup via a private `_load_language_format()` helper that returns a dict keyed by extension. Try package-relative then project-root-relative paths; return empty dict if CSV not found.
+
+  5) `_detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]`:
+     - Walk up from the test file (max 5 levels) looking for test runner config files (jest.config.*, vitest.config.*, playwright.config.*).
+     - Return `(command, config_directory)` — the config_directory is the directory where the config file was found (used as cwd by callers).
+     - For `.spec.ts`/`.spec.tsx` files, check Playwright config before Jest/Vitest.
+     - Return `None` if no config found.
 
 % Dependencies
   <get_language>
