@@ -16,7 +16,7 @@ from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
 from pdd.code_generator_main import code_generator_main, _verify_architecture_conformance
-from pdd.core.cloud import CloudConfig, get_cloud_timeout
+from pdd.core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
 # Get the cloud URL for assertions in tests
@@ -463,7 +463,7 @@ def test_full_gen_cloud_success(
             "verbose": mock_ctx.obj['verbose']
         },
         headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
-        timeout=get_cloud_timeout()
+        timeout=get_cloud_request_timeout()
     )
     assert (temp_dir_setup["output_dir"] / output_file_name).exists()
 
@@ -3093,3 +3093,273 @@ class TestIssue687ExampleOutputPath:
         assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
             "${EXAMPLE_OUTPUT_PATH} was not expanded — front-matter default not applied"
         )
+
+
+# === Tests for Issue #1043: Incremental patch identical code fallback ===
+# The root-cause fix lives in incremental_code_generator (returns
+# is_incremental=False when patched code == existing code). A defense-in-depth
+# check in code_generator_main also catches this at the caller level.
+
+def test_incremental_identical_code_falls_back_to_full_generation(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When incremental patch returns identical code, full generation should run."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_identical_prompt.prompt"
+    create_file(prompt_file_path, "New prompt content")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_identical_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_identical_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt content", "original_prompt_file": "Original prompt content"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    # Incremental returns identical code with is_incremental=True — the bug scenario
+    mock_incremental_generator_fixture.return_value = (existing_code, True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    # After the fix: was_incremental_operation should be False (fallback triggered)
+    assert not incremental, (
+        "was_incremental_operation should be False when incremental patch produces identical code"
+    )
+
+
+def test_incremental_identical_code_verbose_prints_fallback_warning(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    mock_rich_console_fixture, mock_env_vars
+):
+    """Verbose mode should print a fallback warning, not 'Incremental Success'."""
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['verbose'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_verbose_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_verbose_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_verbose_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    mock_incremental_generator_fixture.return_value = (existing_code, True, 0.002, "inc_model")
+
+    code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    # Check that a fallback warning was printed (not "Incremental Success")
+    all_print_args = [str(call) for call in mock_rich_console_fixture.call_args_list]
+    combined_output = " ".join(all_print_args)
+
+    # The fix should print a warning about falling back
+    assert "no changes" in combined_output.lower() or "falling back" in combined_output.lower(), (
+        f"Expected fallback warning in verbose output, got: {combined_output[:500]}"
+    )
+    # "Incremental Success" should NOT appear when code was identical
+    assert "Incremental Success" not in combined_output, (
+        "Should not print 'Incremental Success' when incremental patch produced identical code"
+    )
+
+
+def test_incremental_different_code_no_fallback(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When incremental produces genuinely different code, no fallback should occur (regression guard)."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+    updated_code = "Updated code that is different"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_diff_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_diff_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_diff_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    mock_incremental_generator_fixture.return_value = (updated_code, True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    assert incremental, "was_incremental_operation should remain True when code actually changed"
+    assert code == updated_code
+    mock_local_generator_fixture.assert_not_called()
+
+
+def test_incremental_returns_none_code_does_not_crash(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_pdd_preprocess_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """When incremental returns None code with is_incremental=True, the None guard
+    in the fallback check must skip the comparison without crashing."""
+    mock_ctx.obj['local'] = True
+    existing_code = "Existing code content"
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_none_prompt.prompt"
+    create_file(prompt_file_path, "New prompt")
+    output_file_path = temp_dir_setup["output_dir"] / "inc_none_output.py"
+    create_file(output_file_path, existing_code)
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "inc_none_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "New prompt", "original_prompt_file": "Original prompt"},
+        {"output": str(output_file_path)},
+        "python"
+    )
+    mock_incremental_generator_fixture.return_value = (None, True, 0.002, "inc_model")
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), str(original_prompt_file_path), False
+    )
+
+    # None guard skips the comparison, so was_incremental_operation stays True
+    assert incremental, "None code should not trigger the identical-code fallback"
+
+
+# === Root-cause test: incremental_code_generator returns is_incremental=False
+#     when patched code is identical to existing code (issue #1043) ===
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template")
+def test_incremental_code_generator_returns_false_when_patch_is_identical(
+    mock_load_template, mock_llm_invoke
+):
+    """The incremental_code_generator itself should return is_incremental=False
+    when the LLM patcher produces code identical to the existing code."""
+    from pdd.incremental_code_generator import (
+        incremental_code_generator, DiffAnalysis, CodePatchResult,
+    )
+
+    existing_code = "def hello():\n    print('hello')\n"
+
+    # First llm_invoke call: diff analyzer says small change
+    diff_result = DiffAnalysis(
+        is_big_change=False,
+        change_description="Minor wording change",
+        analysis="Small change, incremental patching appropriate",
+    )
+    # Second llm_invoke call: patcher returns identical code (the bug scenario)
+    patch_result = CodePatchResult(
+        patched_code=existing_code,
+        analysis="No changes needed",
+        planned_modifications="None",
+    )
+    mock_llm_invoke.side_effect = [
+        {"result": diff_result, "cost": 0.001, "model_name": "mock_diff_model"},
+        {"result": patch_result, "cost": 0.001, "model_name": "mock_patch_model"},
+    ]
+
+    code, is_incremental, cost, model = incremental_code_generator(
+        original_prompt="Original prompt",
+        new_prompt="Slightly modified prompt",
+        existing_code=existing_code,
+        language="python",
+        preprocess_prompt=False,
+    )
+
+    assert not is_incremental, (
+        "incremental_code_generator should return is_incremental=False "
+        "when patched code is identical to existing code"
+    )
+    assert code is None, "Should return None code to signal full regeneration needed"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template")
+def test_incremental_code_generator_returns_true_when_patch_differs(
+    mock_load_template, mock_llm_invoke
+):
+    """Regression guard: incremental_code_generator should still return
+    is_incremental=True when the patcher produces genuinely different code."""
+    from pdd.incremental_code_generator import (
+        incremental_code_generator, DiffAnalysis, CodePatchResult,
+    )
+
+    existing_code = "def hello():\n    print('hello')\n"
+    patched_code = "def hello():\n    print('hello world')\n"
+
+    diff_result = DiffAnalysis(
+        is_big_change=False,
+        change_description="Added world to greeting",
+        analysis="Small change",
+    )
+    patch_result = CodePatchResult(
+        patched_code=patched_code,
+        analysis="Updated greeting",
+        planned_modifications="Changed print string",
+    )
+    mock_llm_invoke.side_effect = [
+        {"result": diff_result, "cost": 0.001, "model_name": "mock_diff_model"},
+        {"result": patch_result, "cost": 0.001, "model_name": "mock_patch_model"},
+    ]
+
+    code, is_incremental, cost, model = incremental_code_generator(
+        original_prompt="Original prompt",
+        new_prompt="Modified prompt",
+        existing_code=existing_code,
+        language="python",
+        preprocess_prompt=False,
+    )
+
+    assert is_incremental, "Should return is_incremental=True when code actually changed"
+    assert code == patched_code
+
+
+# =============================================================================
+# Issue #1048: _find_default_test_files glob must escape brackets in code_stem
+# =============================================================================
+
+
+def test_issue_1048_find_default_test_files_bracket_stem(tmp_path):
+    """_find_default_test_files: glob 'test_[id]_page*.py' must escape brackets.
+
+    Bug: When code_path has stem '[id]_page', the glob pattern 'test_[id]_page*.py'
+    interprets [id] as a character class matching 'i' or 'd'.
+    """
+    from pdd.code_generator_main import _find_default_test_files
+    from pathlib import Path
+
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+
+    target_file = tests_dir / "test_[id]_page.py"
+    target_file.write_text("def test_bracket(): pass")
+    decoy_file = tests_dir / "test_i_page.py"
+    decoy_file.write_text("def test_decoy(): pass")
+
+    code_path = Path(tmp_path / "src" / "[id]_page.py")
+
+    result = _find_default_test_files(tests_dir, code_path)
+    result_names = [Path(f).name for f in result]
+
+    assert "test_[id]_page.py" in result_names, \
+        f"Bug #1048: _find_default_test_files can't find test_[id]_page.py because " \
+        f"glob treats [id] as char class. Found: {result_names}"
+    assert "test_i_page.py" not in result_names, \
+        f"Bug #1048: Matched decoy test_i_page.py via [id] char class. Found: {result_names}"

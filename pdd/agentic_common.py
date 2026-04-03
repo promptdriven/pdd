@@ -952,6 +952,71 @@ def run_agentic_task(
             except OSError:
                 pass
 
+
+import logging as _logging
+_scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
+
+
+def _revert_out_of_scope_changes(
+    cwd: Path,
+    allowed_paths: set[Path],
+) -> List[Path]:
+    """
+    Revert any git-tracked file changes outside the allowed set.
+
+    After an agentic task, this function detects deletions and modifications
+    to files not in *allowed_paths* and restores them to their ``HEAD`` state.
+
+    Skips silently when *cwd* is not a git repo, when git is unavailable,
+    or when none of the *allowed_paths* reside under *cwd*.
+
+    Args:
+        cwd: Root of the git repository.
+        allowed_paths: Set of resolved absolute paths the agent is permitted
+            to modify.
+
+    Returns:
+        List of paths that were reverted.
+    """
+    cwd_str = str(cwd.resolve())
+    if not any(str(p).startswith(cwd_str) for p in allowed_paths):
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), "status", "--porcelain", "-uno"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+    if result.returncode != 0:
+        return []
+    reverted: List[Path] = []
+    to_restore: List[str] = []
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        rel_path = line[3:].strip()
+        full_path = (cwd / rel_path).resolve()
+        if full_path not in allowed_paths:
+            to_restore.append(rel_path)
+            reverted.append(full_path)
+    if to_restore:
+        try:
+            subprocess.run(
+                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
+                capture_output=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+        else:
+            if reverted:
+                _scope_guard_logger.info(
+                    "Scope guard reverted %d out-of-scope file(s): %s",
+                    len(reverted),
+                    ", ".join(str(p.name) for p in reverted[:10]),
+                )
+    return reverted
+
 def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
                     text=False, timeout=None, start_new_session=False, **kwargs):
     """Wrapper around subprocess that uses Popen for proper process group cleanup.

@@ -27,6 +27,8 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES,
     detect_control_token,
     classify_step_output,
+    GITHUB_STATE_MARKER_START,
+    GITHUB_STATE_MARKER_END,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -527,6 +529,24 @@ def _is_test_file(filename: str) -> bool:
     return False
 
 
+def _extract_marker_files(text: str) -> List[str]:
+    """Extract test file paths from E2E_FILES_CREATED/FILES_CREATED markers in text.
+
+    Scans each line for marker prefixes. Returns raw paths (not deduplicated,
+    not existence-checked) — the caller handles that via _add().
+    """
+    paths: List[str] = []
+    for line in text.splitlines():
+        for prefix in ("E2E_FILES_CREATED:", "FILES_CREATED:"):
+            if line.strip().startswith(prefix):
+                content = line.split(":", 1)[1].strip()
+                for p in content.split(","):
+                    p = p.strip()
+                    if _is_test_file(p):
+                        paths.append(p)
+    return paths
+
+
 def _extract_test_files(
     issue_content: str,
     changed_files: List[str],
@@ -537,7 +557,7 @@ def _extract_test_files(
 
     Looks for:
     - E2E_FILES_CREATED: markers from pdd bug output
-    - FILES_CREATED: markers
+    - FILES_CREATED: markers (including inside PDD_WORKFLOW_STATE JSON)
     - File paths matching test conventions (Python test_*.py, Jest *.test.ts/tsx,
       Playwright *.spec.ts/tsx) in changed_files
     - Test files actually created/modified on disk (hash comparison)
@@ -553,25 +573,55 @@ def _extract_test_files(
             seen.add(path)
             test_files.append(path)
 
-    # Parse markers from issue content
-    for line in issue_content.splitlines():
-        for prefix in ("E2E_FILES_CREATED:", "FILES_CREATED:"):
-            if line.strip().startswith(prefix):
-                content = line.split(":", 1)[1].strip()
-                for p in content.split(","):
-                    p = p.strip()
-                    if _is_test_file(p):
-                        _add(p)
+    # Parse markers from issue content (plain text lines)
+    for p in _extract_marker_files(issue_content):
+        _add(p)
+
+    # Parse markers from PDD_WORKFLOW_STATE JSON comments (pdd-issue fresh-clone
+    # context). In fresh-clone runs, step outputs are JSON-serialized inside
+    # <!-- PDD_WORKFLOW_STATE:... --> HTML comments, turning embedded newlines
+    # into \n escape sequences that splitlines() above cannot see. We find all
+    # workflow state blocks, deserialize the JSON to restore real newlines, then
+    # run the same marker parser on each step output value.
+    # This is safe from issue #633 false positives because it only parses
+    # structured workflow state data, not free-form narrative.
+    marker_start = GITHUB_STATE_MARKER_START
+    marker_end = GITHUB_STATE_MARKER_END
+    search_start = 0
+    while True:
+        idx = issue_content.find(marker_start, search_start)
+        if idx == -1:
+            break
+        # JSON begins after the first newline following the marker tag
+        json_start = issue_content.find("\n", idx)
+        if json_start == -1:
+            break
+        json_start += 1  # skip the newline itself
+        end_idx = issue_content.find(marker_end, json_start)
+        if end_idx == -1:
+            break
+        json_str = issue_content[json_start:end_idx].strip()
+        search_start = end_idx + len(marker_end)
+        try:
+            state = json.loads(json_str)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        step_outputs = state.get("step_outputs", {})
+        if not isinstance(step_outputs, dict):
+            continue
+        for value in step_outputs.values():
+            if isinstance(value, str):
+                for p in _extract_marker_files(value):
+                    _add(p)
 
     # Include test files from changed_files list
     for f in changed_files:
         if _is_test_file(f):
             _add(f)
 
-    # NOTE: Inline regex scan of issue content was removed (issue #633).
-    # The regex matched file paths mentioned as *examples* in narrative text,
-    # pulling unrelated tests into verification. The four remaining discovery
-    # paths (markers, changed_files, disk hashes, git modified) are sufficient.
+    # NOTE: Raw regex scan of issue content was removed (issue #633) because it
+    # matched file paths mentioned as examples in narrative text. The JSON-aware
+    # PDD_WORKFLOW_STATE parser above is safe: it only parses structured data.
 
     # Detect test files actually created/modified on disk during workflow
     if initial_file_hashes is not None:
@@ -847,7 +897,11 @@ def _push_with_retry(
     repo_name: str,
 ) -> Tuple[bool, str]:
     """
-    Pushes to remote, retrying with PDD_GH_TOKEN_FILE on auth failure.
+    Pushes to remote, retrying on non-fast-forward or auth failure.
+
+    On non-fast-forward error (branch diverged after rebase):
+    - Retry with --force-with-lease, which safely overwrites the remote only
+      if it hasn't changed since the last fetch.
 
     On push auth failure (Authentication failed, HTTP 401, could not read Username,
     or HTTP Basic: Access denied):
@@ -873,6 +927,30 @@ def _push_with_retry(
         return True, ""
 
     stderr = push_result.stderr
+
+    # Non-fast-forward: branch diverged (e.g. after rebase onto main).
+    # Retry with --force-with-lease which is safe — it only overwrites
+    # the remote if it matches what we last fetched.
+    # Only match specific non-ff markers — avoid generic "[rejected]" which
+    # could be protected branches, pre-receive hooks, etc.
+    non_ff_markers = ["non-fast-forward", "tip of your current branch is behind"]
+    is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
+
+    if is_non_fast_forward:
+        console.print(
+            "[yellow]WARNING: Push rejected (non-fast-forward). "
+            "Retrying with --force-with-lease...[/yellow]"
+        )
+        retry_result = subprocess.run(
+            ["git", "push", "--force-with-lease", "-u", "origin", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True
+        )
+        if retry_result.returncode == 0:
+            return True, ""
+        return False, retry_result.stderr
+
     auth_errors = ["Authentication failed", "HTTP 401", "could not read Username", "HTTP Basic: Access denied"]
     is_auth_failure = any(err in stderr for err in auth_errors)
 

@@ -7,6 +7,7 @@ raising KeyError on undefined placeholders.
 Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
+import json
 import re
 import subprocess
 import sys
@@ -1414,6 +1415,214 @@ class TestPushWithRetryTokenFile:
 
         # Verify _push_with_retry was called with correct repo params
         mock_push.assert_called_once_with(tmp_path, "myowner", "myrepo")
+
+
+class TestPushWithRetryNonFastForward:
+    """Tests for _push_with_retry handling non-fast-forward push errors.
+
+    When checkout_existing_issue_branch() rebases an issue branch onto
+    origin/main, commit SHAs diverge from the remote branch. A plain
+    `git push` fails with non-fast-forward. The fix should detect this
+    and retry with --force-with-lease (safe force push).
+
+    Regression test for issue #608 pdd fix failure.
+    """
+
+    def test_non_fast_forward_retries_with_force_with_lease(self, tmp_path):
+        """Non-fast-forward push error should trigger --force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    "To https://github.com/owner/repo.git\n"
+                    " ! [rejected]        HEAD -> fix/issue-608 (non-fast-forward)\n"
+                    "error: failed to push some refs to 'https://github.com/owner/repo.git'\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind\n"
+                    "hint: its remote counterpart."
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True, f"Expected success after --force-with-lease retry, got error: {err}"
+        # Should have retried with --force-with-lease
+        force_push_calls = [c for c in calls if "--force-with-lease" in c]
+        assert len(force_push_calls) == 1, (
+            f"Expected exactly one --force-with-lease retry, got {len(force_push_calls)}. "
+            f"All calls: {calls}"
+        )
+
+    def test_non_fast_forward_logs_warning(self, tmp_path):
+        """Non-fast-forward retry should log a warning via console.print."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect), \
+             patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console:
+            _push_with_retry(tmp_path, "owner", "repo")
+
+        mock_console.print.assert_called()
+        warning_text = mock_console.print.call_args[0][0]
+        assert "yellow" in warning_text.lower() or "[yellow]" in warning_text
+        assert "force-with-lease" in warning_text.lower() or "non-fast-forward" in warning_text.lower()
+
+    def test_non_fast_forward_fetch_first_not_detected(self, tmp_path):
+        """'fetch first' rejection (without non-fast-forward) should NOT trigger force-with-lease.
+
+        Only specific non-fast-forward markers should trigger the retry,
+        not generic [rejected] which could be protected branches or hooks.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> main (fetch first)\n"
+                    "error: failed to push some refs\n"
+                    "hint: Updates were rejected because the remote contains work that you do not\n"
+                    "hint: have locally."
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        # Should NOT retry — "fetch first" means remote has new work, force-push would lose it
+        assert success is False
+
+    def test_protected_branch_rejection_not_detected(self, tmp_path):
+        """Protected branch rejection should NOT trigger force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [remote rejected] HEAD -> main (protected branch hook declined)\n"
+                    "error: failed to push some refs"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "protected branch" in err
+
+    def test_non_fast_forward_force_with_lease_also_fails(self, tmp_path):
+        """If --force-with-lease also fails, return the error."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if "push" in cmd:
+                result.returncode = 1
+                if "--force-with-lease" in cmd:
+                    result.stderr = (
+                        "! [rejected]        HEAD -> fix/issue-1 (stale info)\n"
+                        "error: failed to push some refs (--force-with-lease)"
+                    )
+                else:
+                    result.stderr = (
+                        " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                        "hint: Updates were rejected because the tip of your current branch is behind"
+                    )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "force-with-lease" in err
+
+    def test_non_fast_forward_takes_precedence_over_auth_retry(self, tmp_path, monkeypatch):
+        """Non-fast-forward should be detected before auth failure check.
+
+        An error containing both non-ff markers and auth-like text should
+        be handled as non-fast-forward, not as an auth failure.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        # Set up a token file that should NOT be used for non-ff errors
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("ghp_should_not_be_used")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind\n"
+                    "hint: its remote counterpart.\n"
+                    "remote: HTTP 401: Unauthorized\n"
+                    "fatal: Authentication failed for 'https://example.com/owner/repo.git'\n"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+        # Should NOT have called git remote set-url (auth retry path)
+        set_url_calls = [c for c in calls if "set-url" in c]
+        assert len(set_url_calls) == 0, (
+            f"Non-fast-forward should not trigger auth retry. set-url calls: {set_url_calls}"
+        )
+
+    def test_commit_and_push_surfaces_force_push_success(self, tmp_path):
+        """_commit_and_push should return success when _push_with_retry uses --force-with-lease."""
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._push_with_retry") as mock_push, \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+
+            # Simulate a file that changed during workflow
+            mock_hashes.return_value = {"backend/functions/get_waitlist_status.py": "new_hash"}
+            # Simulate _push_with_retry succeeding via --force-with-lease
+            mock_push.return_value = (True, "")
+            mock_run.return_value = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            success, message = _commit_and_push(
+                cwd=tmp_path, issue_number=608,
+                issue_title="Add fallback in get_waitlist_status.py",
+                repo_owner="promptdriven", repo_name="pdd_cloud",
+                initial_file_hashes={
+                    "backend/functions/get_waitlist_status.py": "old_hash"
+                },
+                quiet=True
+            )
+
+        assert success is True
+        assert "1 file(s)" in message
+        mock_push.assert_called_once_with(tmp_path, "promptdriven", "pdd_cloud")
 
 
 class TestProviderFailureAbort:
@@ -4570,3 +4779,158 @@ class TestReviewFix4ConsistentRetryState:
                 "Step 2 main-path retry should save state with VERIFICATION_FAILED "
                 "or IMPORT_ERROR_RETRY in step_outputs['2']"
             )
+
+
+class TestIssue1031WorkflowStateMarkers:
+    """Tests for issue #1031: _extract_test_files misses FILES_CREATED markers
+    embedded inside PDD_WORKFLOW_STATE JSON comments.
+
+    Bug: When pdd-issue chains bug → fix in separate Cloud Run Jobs, the fix
+    executor runs in a fresh clone. FILES_CREATED markers from pdd bug are
+    embedded inside a JSON-serialized PDD_WORKFLOW_STATE HTML comment where
+    newlines become \\n escape sequences. splitlines() misses them, causing
+    _extract_test_files to fall back to scanning all test files (multi-hour stall).
+
+    These tests use the exact production format from _serialize_state_comment:
+    indent=2 JSON, <!-- PDD_WORKFLOW_STATE:{type}:issue-{N} --> markers.
+    """
+
+    @staticmethod
+    def _make_workflow_comment(
+        step_output: str,
+        workflow_type: str = "bug",
+        issue_number: int = 1026,
+        step_key: str = "9",
+    ) -> str:
+        """Build a PDD_WORKFLOW_STATE comment matching production format exactly.
+
+        Uses json.dumps(indent=2) and the real marker format from
+        agentic_common._serialize_state_comment.
+        """
+        state = {"step_outputs": {step_key: step_output}}
+        json_str = json.dumps(state, indent=2)
+        return (
+            f"<!-- PDD_WORKFLOW_STATE:{workflow_type}:issue-{issue_number}\n"
+            f"{json_str}\n"
+            f"-->"
+        )
+
+    def test_json_embedded_files_created_marker(self, tmp_path):
+        """FILES_CREATED: inside a PDD_WORKFLOW_STATE JSON must be found.
+
+        This is the core bug: pdd bug produces step output with a real newline
+        before FILES_CREATED:. json.dumps() serializes it as \\n in JSON text.
+        splitlines() on the raw HTML comment never sees it as a line start.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_webhook.py").write_text("def test_x(): pass")
+        # Decoy files — if the directory scan fallback fires, these get included
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Analysis complete.\nFILES_CREATED: tests/test_webhook.py"
+        issue_content = (
+            "Bug description here.\n"
+            + self._make_workflow_comment(step_output)
+            + "\nMore text."
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_webhook.py"], (
+            f"Expected ['tests/test_webhook.py'] from JSON-embedded marker, "
+            f"got {result!r}"
+        )
+
+    def test_json_embedded_e2e_files_created_marker(self, tmp_path):
+        """E2E_FILES_CREATED: inside a PDD_WORKFLOW_STATE JSON must also be found."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_login.py").write_text("def test_x(): pass")
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Done.\nE2E_FILES_CREATED: tests/test_e2e_login.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_e2e_login.py"], (
+            f"Expected ['tests/test_e2e_login.py'] from JSON-embedded E2E marker, "
+            f"got {result!r}"
+        )
+
+    def test_json_embedded_comma_separated_markers(self, tmp_path):
+        """Multiple comma-separated files in a JSON-embedded marker are all found."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_alpha.py").write_text("def test_a(): pass")
+        (tmp_path / "tests" / "test_beta.py").write_text("def test_b(): pass")
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Created.\nFILES_CREATED: tests/test_alpha.py, tests/test_beta.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert sorted(result) == ["tests/test_alpha.py", "tests/test_beta.py"], (
+            f"Expected both test files from comma-separated marker, got {result!r}"
+        )
+
+    def test_json_embedded_marker_prevents_directory_scan_fallback(self, tmp_path):
+        """When a JSON-embedded marker is found, the directory scan must NOT fire.
+
+        Without the fix, the marker is invisible to splitlines(), no files are
+        found by any discovery path, and the ultimate fallback scans the entire
+        tests/ directory — returning hundreds of files.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_target.py").write_text("def test_t(): pass")
+        # Decoy files that the directory scan fallback would pick up
+        for i in range(10):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Fix applied.\nFILES_CREATED: tests/test_target.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_target.py"], (
+            f"Expected only ['tests/test_target.py'] but got {len(result)} files — "
+            f"directory scan fallback likely fired: {result!r}"
+        )

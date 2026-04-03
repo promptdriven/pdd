@@ -30,7 +30,7 @@ import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -3753,3 +3753,355 @@ class TestSetupWorktreePreservesRemote:
         assert len(worktree_add_calls) == 1
         # Must NOT use origin/change/issue-99 (no remote branch to reuse)
         assert "origin/change/issue-99" not in worktree_add_calls[0]
+
+# -----------------------------------------------------------------------------
+# _scope_architecture_to_changed_files Tests (TDD for Issue #922)
+# -----------------------------------------------------------------------------
+
+class TestScopeArchitectureToChangedFiles:
+    """Tests for reverting out-of-scope architecture.json mutations after Step 10."""
+
+    def test_out_of_scope_entries_reverted(self, tmp_path):
+        """Entries for files NOT in changed_files must be reverted to previous state."""
+        previous = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py",
+             "reason": "Original reason", "interface": {"type": "module", "module": {"functions": [{"name": "foo", "signature": "(x: int)", "returns": "str"}]}}},
+            {"filename": "bar_python.prompt", "filepath": "pdd/bar.py",
+             "reason": "Bar original", "interface": {"type": "module", "module": {"functions": [{"name": "bar", "signature": "(a: str, b: int)", "returns": "bool"}]}}},
+        ]
+        # LLM mutated bar's reason and signature even though only foo was changed
+        current = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py",
+             "reason": "Updated reason for foo", "interface": {"type": "module", "module": {"functions": [{"name": "foo", "signature": "(x: int, y: int)", "returns": "str"}]}}},
+            {"filename": "bar_python.prompt", "filepath": "pdd/bar.py",
+             "reason": "LLM changed this", "interface": {"type": "module", "module": {"functions": [{"name": "bar", "signature": "(a: str)", "returns": "bool"}]}}},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        changed_files = ["pdd/prompts/foo_python.prompt"]
+        _scope_architecture_to_changed_files(tmp_path, previous, changed_files)
+
+        result = json.loads(arch_path.read_text())
+        # foo was in changed_files — its mutations should survive
+        assert result[0]["reason"] == "Updated reason for foo"
+        assert result[0]["interface"]["module"]["functions"][0]["signature"] == "(x: int, y: int)"
+        # bar was NOT in changed_files — must be reverted to previous
+        assert result[1]["reason"] == "Bar original"
+        assert result[1]["interface"]["module"]["functions"][0]["signature"] == "(a: str, b: int)"
+
+    def test_new_entries_for_changed_files_preserved(self, tmp_path):
+        """Brand new architecture entries for changed files should be kept."""
+        previous = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Foo"},
+        ]
+        current = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Foo"},
+            {"filename": "embed_retrieve_python.prompt", "filepath": "pdd/embed_retrieve.py",
+             "reason": "New module", "interface": {"type": "module"}},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        changed_files = ["pdd/prompts/embed_retrieve_python.prompt"]
+        _scope_architecture_to_changed_files(tmp_path, previous, changed_files)
+
+        result = json.loads(arch_path.read_text())
+        filenames = [e["filename"] for e in result]
+        assert "embed_retrieve_python.prompt" in filenames
+
+    def test_hallucinated_entries_removed(self, tmp_path):
+        """New entries for files NOT in changed_files should be removed (hallucinations)."""
+        previous = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Foo"},
+        ]
+        current = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Foo"},
+            {"filename": "phantom_python.prompt", "filepath": "pdd/phantom.py",
+             "reason": "LLM hallucinated this", "interface": {"type": "module"}},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        changed_files = ["pdd/prompts/foo_python.prompt"]
+        _scope_architecture_to_changed_files(tmp_path, previous, changed_files)
+
+        result = json.loads(arch_path.read_text())
+        filenames = [e["filename"] for e in result]
+        assert "phantom_python.prompt" not in filenames
+
+    def test_no_changed_files_reverts_all(self, tmp_path):
+        """When changed_files is empty, all entries should match previous exactly."""
+        previous = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Original"},
+        ]
+        current = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Mutated"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        _scope_architecture_to_changed_files(tmp_path, previous, [])
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["reason"] == "Original"
+
+    def test_noop_when_no_previous(self, tmp_path):
+        """Gracefully handles None previous_architecture."""
+        current = [{"filename": "foo_python.prompt", "reason": "New"}]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        _scope_architecture_to_changed_files(tmp_path, None, ["prompts/foo_python.prompt"])
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["reason"] == "New"  # unchanged
+
+    def test_dependencies_field_reverted_for_out_of_scope(self, tmp_path):
+        """Non-interface fields like dependencies must also be reverted."""
+        previous = [
+            {"filename": "bar_python.prompt", "filepath": "pdd/bar.py",
+             "dependencies": ["a_python.prompt", "b_python.prompt"]},
+        ]
+        current = [
+            {"filename": "bar_python.prompt", "filepath": "pdd/bar.py",
+             "dependencies": ["a_python.prompt"]},  # LLM dropped b
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        _scope_architecture_to_changed_files(tmp_path, previous, [])
+
+        result = json.loads(arch_path.read_text())
+        assert "b_python.prompt" in result[0]["dependencies"]
+
+    def test_matches_by_filepath_when_filename_missing(self, tmp_path):
+        """Should match entries by filepath if filename is absent."""
+        previous = [
+            {"filepath": "pdd/bar.py", "reason": "Original"},
+        ]
+        current = [
+            {"filepath": "pdd/bar.py", "reason": "LLM mutated"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        _scope_architecture_to_changed_files(tmp_path, previous, [])
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["reason"] == "Original"
+
+    def test_changed_files_with_various_path_formats(self, tmp_path):
+        """changed_files may contain paths like pdd/prompts/X.prompt or prompts/X.prompt."""
+        previous = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Old"},
+            {"filename": "bar_python.prompt", "filepath": "pdd/bar.py", "reason": "Old bar"},
+        ]
+        current = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "New foo"},
+            {"filename": "bar_python.prompt", "filepath": "pdd/bar.py", "reason": "New bar"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        # Both path formats should work
+        changed_files = ["pdd/prompts/foo_python.prompt", "prompts/bar_python.prompt"]
+        _scope_architecture_to_changed_files(tmp_path, previous, changed_files)
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["reason"] == "New foo"  # in scope
+        assert result[1]["reason"] == "New bar"  # in scope
+
+    def test_subdirectory_prompts_in_scope(self, tmp_path):
+        """Prompts in subdirectories (e.g. commands/maintenance_python.prompt)
+        must be recognized as in-scope when changed_files has the full path."""
+        previous = [
+            {"filename": "commands/maintenance_python.prompt", "filepath": "pdd/commands/maintenance.py", "reason": "Old"},
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Old foo"},
+        ]
+        current = [
+            {"filename": "commands/maintenance_python.prompt", "filepath": "pdd/commands/maintenance.py", "reason": "New maintenance"},
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "LLM mutated foo"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(current, indent=2))
+
+        changed_files = ["pdd/prompts/commands/maintenance_python.prompt"]
+        _scope_architecture_to_changed_files(tmp_path, previous, changed_files)
+
+        result = json.loads(arch_path.read_text())
+        # maintenance was in scope — keep LLM's update
+        assert result[0]["reason"] == "New maintenance"
+        # foo was NOT in scope — revert to previous
+        assert result[1]["reason"] == "Old foo"
+
+
+# -----------------------------------------------------------------------------
+# Sync Order Path Prefix Tests (TDD for Issue #733 Bug #5)
+# -----------------------------------------------------------------------------
+
+class TestSyncOrderPddPromptsPath:
+    """Tests that sync order detection works with pdd/prompts/ path prefix."""
+
+    def test_pdd_prompts_path_detected_as_module(self, tmp_path):
+        """FILES_MODIFIED with pdd/prompts/ prefix should be detected for sync order."""
+        mocks = {}
+        with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_change_orchestrator.load_workflow_state") as mock_load, \
+             patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+             patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
+             patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+             patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
+             patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
+             patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
+
+            mock_load.return_value = (None, None)
+            mock_save.return_value = 12345
+            mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
+            mock_subprocess.return_value.stdout = str(tmp_path)
+            mock_subprocess.return_value.returncode = 0
+            mock_topo_sort.return_value = (["embed_retrieve", "auto_include"], [])
+            mock_get_affected.return_value = ["embed_retrieve", "auto_include"]
+
+            worktree_dir = tmp_path / "wt"
+            prompts_dir = worktree_dir / "prompts"
+            prompts_dir.mkdir(parents=True)
+            (prompts_dir / "embed_retrieve_python.prompt").write_text("% embed module")
+            (prompts_dir / "auto_include_python.prompt").write_text("% auto include")
+
+            # Step 9 reports files with pdd/prompts/ prefix (as git does with real paths)
+            existing_state = {
+                "last_completed_step": 12,
+                "step_outputs": {str(i): "out" for i in range(1, 13)},
+                "worktree_path": str(worktree_dir),
+            }
+            existing_state["step_outputs"]["9"] = (
+                "FILES_CREATED: pdd/prompts/embed_retrieve_python.prompt\n"
+                "FILES_MODIFIED: pdd/prompts/auto_include_python.prompt"
+            )
+            mock_load.return_value = (existing_state, 123)
+            mock_run.return_value = (True, "PR Created", 0.1, "gpt-4")
+
+            success, msg, cost, model, files = run_agentic_change_orchestrator(
+                issue_url="http://issue", issue_content="Add embed retrieve",
+                repo_owner="o", repo_name="r", issue_number=733,
+                issue_author="bot", issue_title="Agentic auto deps",
+                cwd=tmp_path, quiet=True,
+            )
+
+            # build_dependency_graph should have been called (modules were detected)
+            mock_build_graph.assert_called()
+            # get_affected_modules should have received the detected modules
+            call_args = mock_get_affected.call_args
+            detected_modules = call_args[0][1]  # second positional arg
+            assert "embed_retrieve" in detected_modules, (
+                f"embed_retrieve not detected from pdd/prompts/ path. Got: {detected_modules}"
+            )
+            assert "auto_include" in detected_modules
+
+    def test_prompts_slash_path_still_works(self, tmp_path):
+        """The original prompts/ prefix should continue to work."""
+        with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_change_orchestrator.load_workflow_state") as mock_load, \
+             patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+             patch("pdd.agentic_change_orchestrator.clear_workflow_state") as mock_clear, \
+             patch("pdd.agentic_change_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_change_orchestrator.build_dependency_graph") as mock_build_graph, \
+             patch("pdd.agentic_change_orchestrator.topological_sort") as mock_topo_sort, \
+             patch("pdd.agentic_change_orchestrator.get_affected_modules") as mock_get_affected, \
+             patch("pdd.agentic_change_orchestrator.generate_sync_order_script") as mock_gen_script:
+
+            mock_load.return_value = (None, None)
+            mock_save.return_value = 12345
+            mock_template.return_value = MagicMock(format=lambda **kwargs: "Formatted Prompt")
+            mock_subprocess.return_value.stdout = str(tmp_path)
+            mock_subprocess.return_value.returncode = 0
+            mock_topo_sort.return_value = (["foo"], [])
+            mock_get_affected.return_value = ["foo"]
+
+            worktree_dir = tmp_path / "wt"
+            prompts_dir = worktree_dir / "prompts"
+            prompts_dir.mkdir(parents=True)
+            (prompts_dir / "foo_python.prompt").write_text("% foo module")
+
+            existing_state = {
+                "last_completed_step": 12,
+                "step_outputs": {str(i): "out" for i in range(1, 13)},
+                "worktree_path": str(worktree_dir),
+            }
+            existing_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo_python.prompt"
+            mock_load.return_value = (existing_state, 123)
+            mock_run.return_value = (True, "PR Created", 0.1, "gpt-4")
+
+            run_agentic_change_orchestrator(
+                issue_url="http://issue", issue_content="Fix",
+                repo_owner="o", repo_name="r", issue_number=1,
+                issue_author="me", issue_title="Fix",
+                cwd=tmp_path, quiet=True,
+            )
+
+            mock_build_graph.assert_called()
+            call_args = mock_get_affected.call_args
+            detected_modules = call_args[0][1]
+            assert "foo" in detected_modules
+
+
+class TestValidateArchitectureFilepaths:
+    """Tests for _validate_architecture_filepaths correcting wrong filepath entries."""
+
+    def test_valid_filepath_unchanged(self, tmp_path):
+        """An entry whose filepath points to an existing file stays unchanged."""
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "foo.py").write_text("# foo module")
+
+        arch_data = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py", "reason": "Foo"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        warnings = _validate_architecture_filepaths(tmp_path)
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["filepath"] == "pdd/foo.py"
+        assert warnings == []
+
+    def test_wrong_filepath_corrected(self, tmp_path):
+        """Entry with filepath 'ci/drift_heal.py' is corrected to 'pdd/ci_drift_heal.py' when that file exists."""
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "ci_drift_heal.py").write_text("# ci drift heal module")
+
+        arch_data = [
+            {"filename": "ci_drift_heal_python.prompt", "filepath": "ci/drift_heal.py", "reason": "CI"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        warnings = _validate_architecture_filepaths(tmp_path)
+
+        result = json.loads(arch_path.read_text())
+        assert result[0]["filepath"] == "pdd/ci_drift_heal.py"
+        assert len(warnings) == 1
+        assert "ci/drift_heal.py" in warnings[0]
+        assert "pdd/ci_drift_heal.py" in warnings[0]
+
+    def test_missing_file_logged(self, tmp_path):
+        """Entry with filepath pointing to nonexistent file produces a warning."""
+        arch_data = [
+            {"filename": "ghost_python.prompt", "filepath": "pdd/ghost.py", "reason": "Ghost"},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch_data, indent=2))
+
+        warnings = _validate_architecture_filepaths(tmp_path)
+
+        # filepath should remain unchanged (no better path found)
+        result = json.loads(arch_path.read_text())
+        assert result[0]["filepath"] == "pdd/ghost.py"
+        assert len(warnings) == 1
+        assert "ghost_python.prompt" in warnings[0] or "pdd/ghost.py" in warnings[0]

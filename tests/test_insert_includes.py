@@ -662,3 +662,161 @@ class TestEdgeCases:
         insert_includes("prompt", "dir", str(csv_path))
 
         mock_llm.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Dedup tests
+# ---------------------------------------------------------------------------
+
+class TestDedup:
+    """Tests for dedup parameter and redundant content removal."""
+
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_dedup_enabled_calls_remove_redundant(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """When dedup=True and dependencies contain <include> tags, dedup runs."""
+        directives = "<new><include>somefile.py</include></new>"
+        mock_ai.return_value = (directives, "csv", 0.02, "model")
+        mock_llm.return_value = {
+            "cost": 0.01,
+            "model_name": "m",
+            "result": InsertIncludesOutput(output_prompt="prompt with content"),
+        }
+        csv_path = tmp_path / "deps.csv"
+
+        with patch("pdd.insert_includes._remove_redundant_content", return_value="cleaned prompt") as mock_dedup:
+            output_prompt, _, _, _ = insert_includes("prompt", "dir", str(csv_path), dedup=True)
+
+        mock_dedup.assert_called_once()
+        assert output_prompt == "cleaned prompt"
+
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_dedup_disabled_skips_remove_redundant(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """When dedup=False, _remove_redundant_content is never called."""
+        directives = "<new><include>somefile.py</include></new>"
+        mock_ai.return_value = (directives, "csv", 0.02, "model")
+        mock_llm.return_value = {
+            "cost": 0.01,
+            "model_name": "m",
+            "result": InsertIncludesOutput(output_prompt="prompt with content"),
+        }
+        csv_path = tmp_path / "deps.csv"
+
+        with patch("pdd.insert_includes._remove_redundant_content") as mock_dedup:
+            insert_includes("prompt", "dir", str(csv_path), dedup=False)
+
+        mock_dedup.assert_not_called()
+
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_dedup_noop_when_no_include_tags(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """Dedup is a no-op when dependencies have no <include> tags."""
+        mock_ai.return_value = ("raw text no tags", "csv", 0.01, "model")
+        mock_llm.return_value = {
+            "cost": 0.01,
+            "model_name": "m",
+            "result": InsertIncludesOutput(output_prompt="output"),
+        }
+        csv_path = tmp_path / "deps.csv"
+
+        with patch("pdd.insert_includes._remove_redundant_content") as mock_dedup:
+            insert_includes("prompt", "dir", str(csv_path), dedup=True)
+
+        mock_dedup.assert_not_called()
+
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_dedup_skipped_when_empty_directives(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """Dedup is skipped when auto_include returns empty directives."""
+        mock_ai.return_value = ("", "csv", 0.01, "model")
+        csv_path = tmp_path / "deps.csv"
+
+        with patch("pdd.insert_includes._remove_redundant_content") as mock_dedup:
+            insert_includes("prompt", "dir", str(csv_path), dedup=True)
+
+        mock_dedup.assert_not_called()
+
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_dedup_extracts_paths_from_all_include_tags(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """Dedup should extract file paths from all <include> tags in directives."""
+        directives = (
+            "<update><include select='fn'>existing.py</include></update>\n"
+            "<new><include>brand_new.py</include></new>"
+        )
+        mock_ai.return_value = (directives, "csv", 0.02, "model")
+        mock_llm.return_value = {
+            "cost": 0.01,
+            "model_name": "m",
+            "result": InsertIncludesOutput(output_prompt="output"),
+        }
+        csv_path = tmp_path / "deps.csv"
+
+        with patch("pdd.insert_includes._remove_redundant_content", return_value="cleaned") as mock_dedup:
+            insert_includes("prompt\n<include>existing.py</include>", "dir", str(csv_path), dedup=True)
+
+        # Should be called with both file paths extracted from directives
+        call_args = mock_dedup.call_args
+        include_paths = call_args[0][1]
+        assert "existing.py" in include_paths
+        assert "brand_new.py" in include_paths
+
+    @patch("pdd.insert_includes.llm_invoke")
+    @patch("pdd.insert_includes.auto_include")
+    @patch("pdd.insert_includes.preprocess", return_value="processed")
+    @patch("pdd.insert_includes.load_prompt_template", return_value="template")
+    def test_dedup_default_is_true(self, mock_lpt, mock_pp, mock_ai, mock_llm, tmp_path):
+        """Dedup defaults to True when not specified."""
+        directives = "<new><include>somefile.py</include></new>"
+        mock_ai.return_value = (directives, "csv", 0.02, "model")
+        mock_llm.return_value = {
+            "cost": 0.01,
+            "model_name": "m",
+            "result": InsertIncludesOutput(output_prompt="output"),
+        }
+        csv_path = tmp_path / "deps.csv"
+
+        with patch("pdd.insert_includes._remove_redundant_content", return_value="cleaned") as mock_dedup:
+            # No dedup parameter — should default to True
+            insert_includes("prompt", "dir", str(csv_path))
+
+        mock_dedup.assert_called_once()
+
+
+def test_include_docs_and_max_workers_passed_to_auto_include():
+    """include_docs and max_workers must be forwarded to auto_include."""
+    with patch("pdd.insert_includes.auto_include") as mock_ai, \
+         patch("pdd.insert_includes.load_prompt_template", return_value="template"), \
+         patch("pdd.insert_includes.llm_invoke") as mock_llm, \
+         patch("builtins.open", mock_open(read_data="full_path,file_summary\n")):
+        mock_ai.return_value = ("", "full_path,file_summary\n", 0.0, "model")
+        mock_llm.return_value = {"result": InsertIncludesOutput(
+            explanation="none", output_prompt="prompt"
+        ), "cost": 0.0, "model_name": "m"}
+
+        insert_includes(
+            input_prompt="test prompt",
+            directory_path="dir",
+            csv_filename="deps.csv",
+            include_docs=True,
+            max_workers=8,
+        )
+
+        kw = mock_ai.call_args.kwargs
+        assert kw.get("include_docs") is True, (
+            f"include_docs not passed to auto_include. Got kwargs: {list(kw.keys())}"
+        )
+        assert kw.get("max_workers") == 8, (
+            f"max_workers not passed to auto_include. Got kwargs: {list(kw.keys())}"
+        )

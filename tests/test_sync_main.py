@@ -1246,3 +1246,197 @@ class TestSyncSkipsLLMOnlyBasenames:
         assert results["overall_success"] is True
         assert "python" in results["results_by_language"]
         assert total_cost == pytest.approx(0.5)
+
+
+# =============================================================================
+# Issue #1048: pdd sync rejects brackets in basenames — breaks framework dynamic routes
+# =============================================================================
+
+
+class TestIssue1048ValidateBasenameAcceptsFrameworkPaths:
+    """_validate_basename should accept brackets, parentheses, and dots used by
+    frontend frameworks for dynamic routes (Next.js, SvelteKit, Nuxt, Astro)."""
+
+    def test_nextjs_dynamic_route_bracket_id(self, mock_project_dir, mock_construct_paths):
+        """Exact reproduction from issue: basename with Next.js [id] dynamic route."""
+        # Create prompt file at the bracket path
+        bracket_dir = mock_project_dir / "prompts" / "frontend" / "app" / "jobs" / "solving" / "[id]"
+        bracket_dir.mkdir(parents=True, exist_ok=True)
+        (bracket_dir / "page_python.prompt").write_text("# page prompt")
+
+        ctx = create_mock_context({})
+        # Should NOT raise UsageError about invalid characters
+        try:
+            sync_main(
+                ctx, "frontend/app/jobs/solving/[id]/page",
+                max_attempts=3, budget=10.0, skip_verify=False,
+                skip_tests=False, target_coverage=90.0, dry_run=False
+            )
+        except click.UsageError as e:
+            assert "invalid characters" not in str(e).lower(), \
+                f"Bug #1048: _validate_basename rejects brackets: {e}"
+
+    @pytest.mark.parametrize("basename", [
+        "frontend/app/[...slug]/page",
+        "frontend/app/[[...catchAll]]/page",
+    ])
+    def test_nextjs_catch_all_and_optional_catch_all_routes(self, basename, mock_project_dir, mock_construct_paths):
+        """Next.js catch-all [...slug] and optional catch-all [[...catchAll]] routes."""
+        ctx = create_mock_context({})
+        try:
+            sync_main(
+                ctx, basename,
+                max_attempts=3, budget=10.0, skip_verify=False,
+                skip_tests=False, target_coverage=90.0, dry_run=False
+            )
+        except click.UsageError as e:
+            assert "invalid characters" not in str(e).lower(), \
+                f"Bug #1048: _validate_basename rejects catch-all brackets: {e}"
+
+    def test_sveltekit_group_route_parentheses(self, mock_project_dir, mock_construct_paths):
+        """SvelteKit route group parentheses (auth) should pass validation."""
+        ctx = create_mock_context({})
+        try:
+            sync_main(
+                ctx, "frontend/routes/(auth)/login/page",
+                max_attempts=3, budget=10.0, skip_verify=False,
+                skip_tests=False, target_coverage=90.0, dry_run=False
+            )
+        except click.UsageError as e:
+            assert "invalid characters" not in str(e).lower(), \
+                f"Bug #1048: _validate_basename rejects parentheses: {e}"
+
+    def test_basename_with_dots(self, mock_project_dir, mock_construct_paths):
+        """Dotted basenames like users.[id] (Nuxt/Astro) should pass validation."""
+        ctx = create_mock_context({})
+        try:
+            sync_main(
+                ctx, "frontend/pages/users.[id]",
+                max_attempts=3, budget=10.0, skip_verify=False,
+                skip_tests=False, target_coverage=90.0, dry_run=False
+            )
+        except click.UsageError as e:
+            assert "invalid characters" not in str(e).lower(), \
+                f"Bug #1048: _validate_basename rejects dots: {e}"
+
+
+class TestIssue1048ValidateBasenameStillRejectsUnsafe:
+    """Structural path violations must still be rejected after removing the character whitelist."""
+
+    @pytest.mark.parametrize("invalid_path", [
+        "../escape",      # Path traversal
+        "/absolute",      # Absolute path
+        "trailing/",      # Trailing slash
+        "double//slash",  # Double slashes
+        "..",             # Just dotdot
+        "",               # Empty string
+    ])
+    def test_rejects_structural_violations(self, invalid_path):
+        """Security validation must remain: path traversal, absolute paths, malformed paths."""
+        ctx = create_mock_context({})
+        with pytest.raises(click.UsageError):
+            sync_main(
+                ctx, invalid_path,
+                max_attempts=3, budget=10.0, skip_verify=False,
+                skip_tests=False, target_coverage=90.0, dry_run=False
+            )
+
+
+class TestIssue1048DetectLanguagesGlobEscaping:
+    """_detect_languages must use glob.escape() on basename portions so that
+    brackets are treated as literal characters, not glob character classes."""
+
+    def test_detect_languages_flat_bracket_basename(self, tmp_path):
+        """Flat basename [id] — glob pattern [id]_*.prompt interprets [id] as char class."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "[id]_python.prompt").write_text("# bracket prompt")
+
+        result = _detect_languages("[id]", prompts_dir)
+        assert "python" in result, \
+            f"Bug #1048: _detect_languages can't find [id]_python.prompt because glob treats [id] as char class. Got: {result}"
+
+    def test_detect_languages_with_bracket_subdirectory(self, tmp_path):
+        """Subdirectory basename [id]/page — brackets in path break glob."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        bracket_dir = prompts_dir / "[id]"
+        bracket_dir.mkdir(parents=True, exist_ok=True)
+        (bracket_dir / "page_python.prompt").write_text("# bracket subdir prompt")
+
+        result = _detect_languages("[id]/page", prompts_dir)
+        assert "python" in result, \
+            f"Bug #1048: _detect_languages can't find [id]/page_python.prompt due to glob metachar. Got: {result}"
+
+    def test_llm_detection_glob_with_brackets(self, tmp_path, monkeypatch):
+        """LLM-only detection glob [id]_[Ll][Ll][Mm].prompt fails with bracket basename."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "[id]_LLM.prompt").write_text("LLM template")
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".pddrc").write_text("")
+        (tmp_path / "src").mkdir(exist_ok=True)
+        (tmp_path / "tests").mkdir(exist_ok=True)
+
+        from pdd.sync_main import sync_main as sm
+        from unittest.mock import patch as mock_patch
+
+        ctx = create_mock_context({})
+        with mock_patch("pdd.sync_main.construct_paths") as mock_cp:
+            mock_cp.return_value = (
+                {"prompts_dir": str(prompts_dir)},
+                {},
+                {"generate_output_path": str(tmp_path / "src")},
+                "",
+            )
+            try:
+                results, _, _ = sm(
+                    ctx, "[id]",
+                    max_attempts=3, budget=10.0, skip_verify=False,
+                    skip_tests=False, target_coverage=90.0, dry_run=False
+                )
+                assert results.get("overall_success") is True
+            except click.UsageError as e:
+                error_msg = str(e)
+                if "invalid characters" in error_msg.lower():
+                    pytest.fail(f"Bug #1048 primary: _validate_basename rejects brackets: {e}")
+                elif "no prompt files found" in error_msg.lower():
+                    pytest.fail(
+                        f"Bug #1048 secondary: LLM detection glob fails with bracket basename — "
+                        f"glob pattern [id]_[Ll][Ll][Mm].prompt interprets [id] as char class: {e}"
+                    )
+
+
+class TestIssue1048SyncMainIntegration:
+    """End-to-end: sync_main with bracket basename should reach orchestration."""
+
+    def test_sync_main_accepts_bracket_basename(self, mock_project_dir, mock_construct_paths, mock_sync_orchestration):
+        """sync_main should accept [id] basename and call sync_orchestration."""
+        bracket_dir = mock_project_dir / "prompts" / "frontend" / "app" / "[id]"
+        bracket_dir.mkdir(parents=True, exist_ok=True)
+        (bracket_dir / "page_python.prompt").write_text("# bracket page prompt")
+
+        mock_sync_orchestration.return_value = {
+            "success": True,
+            "total_cost": 0.5,
+            "model_name": "gpt-4",
+            "summary": "Sync OK.",
+        }
+
+        ctx = create_mock_context({})
+        results, total_cost, model = sync_main(
+            ctx, "frontend/app/[id]/page",
+            max_attempts=3, budget=10.0, skip_verify=False,
+            skip_tests=False, target_coverage=90.0, dry_run=False
+        )
+
+        assert results["overall_success"] is True, \
+            "Bug #1048: sync_main should accept bracket basename and complete successfully"
+        assert mock_sync_orchestration.called, \
+            "Bug #1048: sync_orchestration should have been called (validation passed)"
