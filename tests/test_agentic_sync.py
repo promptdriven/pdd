@@ -1050,6 +1050,55 @@ class TestDetectModulesFromBranchDiff:
             result = _detect_modules_from_branch_diff(Path("/fake/project"))
         assert result == ["commands/fix", "commands/sync"]
 
+    def test_preserves_context_prefix_for_multi_context_prompts(self):
+        """Prompts under context-specific dirs like prompts/frontend/ preserve the full path.
+
+        When pdd_cloud has multiple contexts (frontend, backend, etc.), the diff
+        output contains paths like 'prompts/frontend/app/dashboard/page_TypescriptReact.prompt'.
+        The basename must include the context prefix ('frontend/app/dashboard/page') so that
+        pdd sync can resolve the correct .pddrc context. Stripping to just 'page' causes
+        sync to pick the wrong context or fail with 'No prompt files found'.
+
+        Regression test for GitHub issue promptdriven/pdd_cloud#826.
+        """
+        diff_output = (
+            "prompts/frontend/app/dashboard/page_TypescriptReact.prompt\n"
+            "prompts/frontend/components/layout/Sidebar_TypescriptReact.prompt\n"
+            "prompts/frontend/components/dashboard/GitHubAppCTA_TypescriptReact.prompt\n"
+            "prompts/backend/utils/credit_helpers_python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == [
+            "frontend/app/dashboard/page",
+            "frontend/components/layout/Sidebar",
+            "frontend/components/dashboard/GitHubAppCTA",
+            "backend/utils/credit_helpers",
+        ]
+
+    def test_handles_extension_prompts_with_nested_prompts_dir(self):
+        """Prompts under extension dirs like extensions/github_pdd_app/prompts/ are handled.
+
+        Extension prompts have a different structure: the 'prompts/' directory is nested
+        inside the extension, not at the repo root. The function should still extract
+        correct basenames relative to the prompts/ directory.
+        """
+        diff_output = (
+            "extensions/github_pdd_app/prompts/pdd_executor_Python.prompt\n"
+            "extensions/github_pdd_app/prompts/solving_orchestrator_Python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            result = _detect_modules_from_branch_diff(Path("/fake/project"))
+        assert result == ["pdd_executor", "solving_orchestrator"]
+
 
 class TestBranchDiffSkipsLlm:
     """Verify run_agentic_sync uses branch diff and skips LLM when modules found."""
@@ -1250,25 +1299,27 @@ class TestFilterInvalidBasenames:
         assert len(valid) == 2
         assert len(invalid) == 1
 
-    def test_rejects_ambiguous_tail_match(self):
-        """When multiple architecture entries share the same basename (e.g.
-        commands/auth and server/routes/auth both extract to 'auth'),
-        a path-qualified name like 'commands/auth' must NOT tail-match
-        because it's ambiguous which module it refers to."""
+    def test_accepts_path_qualified_even_with_ambiguous_tail(self):
+        """Path-qualified basenames are accepted even when the bare tail appears
+        multiple times in architecture — the path itself disambiguates.
+
+        Previously this rejected 'commands/auth' because 'auth' appeared twice,
+        but the directory path already tells pdd sync which module is meant.
+        Changed in #826 fix: path qualification IS disambiguation."""
         architecture = [
             {"filename": "auth_python.prompt"},   # could be commands/auth
             {"filename": "auth_python.prompt"},   # could be server/routes/auth
             {"filename": "cli_python.prompt"},    # unique basename
         ]
         modules = [
-            "commands/auth",        # ambiguous — 'auth' appears twice
-            "core/cli",             # unambiguous — 'cli' appears once
+            "commands/auth",        # path-qualified — disambiguated by path
+            "core/cli",             # path-qualified — also fine
         ]
 
         valid, invalid = _filter_invalid_basenames(modules, architecture)
 
-        assert "commands/auth" in invalid, (
-            "Ambiguous tail-match should be rejected when basename appears multiple times"
+        assert "commands/auth" in valid, (
+            "Path-qualified basenames should be accepted — the path disambiguates"
         )
         assert "core/cli" in valid, (
             "Unambiguous tail-match should still be accepted"
@@ -1427,3 +1478,195 @@ class TestAugmentArchitectureFromPrBranch:
             result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 733)
 
         assert result == local_arch
+
+    def test_discovers_entries_from_nested_architecture_files(self, tmp_path):
+        """New entries in nested architecture files (e.g. frontend/architecture.json)
+        on the PR branch should be merged into the combined architecture.
+
+        Regression test for promptdriven/pdd_cloud#826: pdd change created
+        GitHubAppCTA in frontend/architecture.json but _augment_architecture only
+        fetched root architecture.json, so the new module was rejected as invalid.
+        """
+        local_arch = [
+            {"filename": "Sidebar_TypescriptReact.prompt", "filepath": "src/components/layout/Sidebar.tsx"},
+        ]
+        root_pr_arch = [
+            {"filename": "Sidebar_TypescriptReact.prompt", "filepath": "src/components/layout/Sidebar.tsx"},
+        ]
+        frontend_pr_arch = [
+            {"filename": "Sidebar_TypescriptReact.prompt", "filepath": "src/components/layout/Sidebar.tsx"},
+            {"filename": "GitHubAppCTA_TypescriptReact.prompt", "filepath": "src/components/dashboard/GitHubAppCTA.tsx"},
+        ]
+
+        # Create a frontend/architecture.json on disk so find_architecture_for_project discovers it
+        (tmp_path / "architecture.json").write_text(json.dumps(root_pr_arch))
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "architecture.json").write_text(json.dumps(frontend_pr_arch))
+
+        def fake_git_show(args, **kwargs):
+            """Return different architecture.json content based on the git show path."""
+            ref_path = args[2]  # e.g. "origin/change/issue-836:architecture.json"
+            if ref_path.endswith(":architecture.json"):
+                mock = MagicMock(returncode=0, stdout=json.dumps(root_pr_arch), stderr="")
+                return mock
+            elif ref_path.endswith(":frontend/architecture.json"):
+                mock = MagicMock(returncode=0, stdout=json.dumps(frontend_pr_arch), stderr="")
+                return mock
+            raise subprocess.CalledProcessError(128, "git show")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_git_show):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 836)
+
+        filenames = [e["filename"] for e in result]
+        assert "Sidebar_TypescriptReact.prompt" in filenames, "Existing entry should be preserved"
+        assert "GitHubAppCTA_TypescriptReact.prompt" in filenames, (
+            "New entry from frontend/architecture.json on PR branch must be discovered — "
+            "currently only root architecture.json is fetched"
+        )
+
+
+class TestFilterInvalidBasenamesCodeExtensions:
+    """_filter_invalid_basenames must strip code file extensions (.tsx, .ts, .py, etc.)
+    from architecture.json filename entries before matching against sync basenames.
+
+    Regression test for promptdriven/pdd_cloud#826: frontend/architecture.json uses
+    filename: "GitHubAppCTA.tsx" but sync expects basename "GitHubAppCTA".
+    """
+
+    def test_strips_tsx_extension_for_tail_match(self):
+        """Architecture entries with .tsx filenames should match bare basenames."""
+        architecture = [
+            {"filename": "GitHubAppCTA.tsx", "filepath": "src/components/dashboard/GitHubAppCTA.tsx"},
+        ]
+        modules = ["frontend/components/dashboard/GitHubAppCTA"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "frontend/components/dashboard/GitHubAppCTA" in valid, (
+            f"Expected GitHubAppCTA to be valid but got invalid={invalid} — "
+            ".tsx extension not stripped from architecture filename"
+        )
+
+    def test_strips_ts_extension_for_tail_match(self):
+        """Architecture entries with .ts filenames should match bare basenames."""
+        architecture = [
+            {"filename": "github-app-api.ts", "filepath": "src/lib/github-app-api.ts"},
+        ]
+        modules = ["lib/github-app-api"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "lib/github-app-api" in valid
+
+    def test_prompt_filenames_still_use_extract_module(self):
+        """Standard .prompt filenames should still use extract_module_from_include."""
+        architecture = [
+            {"filename": "Sidebar_TypescriptReact.prompt"},
+        ]
+        modules = ["frontend/components/layout/Sidebar"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "frontend/components/layout/Sidebar" in valid
+
+    def test_matches_filepath_when_filename_differs(self):
+        """Architecture entries where filename differs from filepath basename.
+
+        Regression test for pdd_cloud#826: dashboard page has
+        filename='dashboardPage.tsx' but filepath='src/app/dashboard/page.tsx'.
+        The sync basename 'page' should match via the filepath.
+        """
+        architecture = [
+            {"filename": "dashboardPage.tsx", "filepath": "src/app/dashboard/page.tsx"},
+            {"filename": "dashboardConnectPage.tsx", "filepath": "src/app/dashboard/connect/page.tsx"},
+        ]
+        modules = ["frontend/app/dashboard/page"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "frontend/app/dashboard/page" in valid, (
+            f"Expected page to match via filepath 'src/app/dashboard/page.tsx', got invalid={invalid}"
+        )
+
+    def test_path_qualified_basename_accepted_despite_ambiguous_tail(self):
+        """Path-qualified basenames are inherently unambiguous — the path disambiguates."""
+        architecture = [
+            {"filename": "utils.py"},
+            {"filename": "utils.ts"},
+        ]
+        # Path-qualified basename should be accepted even if tail is ambiguous
+        # because the directory path already tells us which module is meant
+        modules = ["lib/utils"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "lib/utils" in valid, (
+            "Path-qualified basenames should be accepted — the path disambiguates"
+        )
+
+    def test_bare_basename_still_needs_known_match(self):
+        """Bare basenames (no path) must exist in known_basenames."""
+        architecture = [
+            {"filename": "Auth_python.prompt"},
+        ]
+        modules = ["NonExistent"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "NonExistent" in invalid
+
+    def test_extension_stripping_does_not_create_false_positives(self):
+        """Stripping .tsx should not match unrelated modules with same stem."""
+        architecture = [
+            {"filename": "Auth.tsx"},  # a React component
+        ]
+        # A Python module named "Auth" should still match via tail
+        # (this is correct — Auth is unambiguous with count=1)
+        modules = ["backend/services/Auth"]
+        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        assert "backend/services/Auth" in valid
+
+
+class TestAugmentAndFilterIntegration:
+    """Integration test: _augment_architecture_from_pr_branch + _filter_invalid_basenames
+    working together for multi-context repos with nested architecture files.
+
+    Reproduces the exact scenario from pdd_cloud#826 where pdd-change created
+    GitHubAppCTA in frontend/architecture.json but sync rejected it.
+    """
+
+    def test_new_module_in_nested_arch_passes_filter(self, tmp_path):
+        """Full pipeline: augment from nested arch on PR branch, then filter basenames."""
+        # Simulate main-branch architecture (no GitHubAppCTA)
+        # Root arch uses prompt filenames; frontend arch uses code filenames
+        root_arch_main = [
+            {"filename": "components/layout/Sidebar_TypescriptReact.prompt"},
+        ]
+        frontend_arch_main = [
+            {"filename": "Sidebar.tsx", "filepath": "src/components/layout/Sidebar.tsx"},
+        ]
+
+        # Simulate PR branch architecture (GitHubAppCTA added in frontend/)
+        root_arch_pr = root_arch_main[:]
+        frontend_arch_pr = frontend_arch_main + [
+            {"filename": "GitHubAppCTA.tsx", "filepath": "src/components/dashboard/GitHubAppCTA.tsx"},
+        ]
+
+        # Set up disk structure for find_architecture_for_project
+        (tmp_path / "architecture.json").write_text(json.dumps(root_arch_main))
+        (tmp_path / "frontend").mkdir()
+        (tmp_path / "frontend" / "architecture.json").write_text(json.dumps(frontend_arch_main))
+
+        # Combined architecture from _load_architecture_json (main branch)
+        combined_arch = root_arch_main + frontend_arch_main
+
+        # Step 1: Augment from PR branch
+        def fake_git_show(args, **kwargs):
+            ref_path = args[2]
+            if ref_path.endswith(":architecture.json"):
+                return MagicMock(returncode=0, stdout=json.dumps(root_arch_pr), stderr="")
+            elif ref_path.endswith(":frontend/architecture.json"):
+                return MagicMock(returncode=0, stdout=json.dumps(frontend_arch_pr), stderr="")
+            raise subprocess.CalledProcessError(128, "git show")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_git_show):
+            augmented = _augment_architecture_from_pr_branch(combined_arch, tmp_path, 836)
+
+        # Step 2: Filter basenames (as branch diff would produce them)
+        modules = ["frontend/components/layout/Sidebar", "frontend/components/dashboard/GitHubAppCTA"]
+        valid, invalid = _filter_invalid_basenames(modules, augmented)
+
+        assert "frontend/components/layout/Sidebar" in valid, (
+            f"Existing module should pass filter, got invalid={invalid}"
+        )
+        assert "frontend/components/dashboard/GitHubAppCTA" in valid, (
+            f"New module from PR branch should pass filter after augmentation, got invalid={invalid}"
+        )

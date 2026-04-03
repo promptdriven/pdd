@@ -19,7 +19,7 @@ from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .fix_error_loop import fix_error_loop, run_pytest_on_file
 from .get_jwt_token import get_jwt_token
 from .get_language import get_language
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 
 # Import DEFAULT_STRENGTH from the package
 from . import DEFAULT_STRENGTH
@@ -53,6 +53,7 @@ def fix_main(
     temperature: Optional[float] = None,
     protect_tests: bool = False,
     test_files: list[str] | None = None,
+    failure_aware_retries: bool = True,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -72,6 +73,7 @@ def fix_main(
         budget: Maximum cost allowed for fixing
         auto_submit: Whether to auto-submit example if tests pass
         agentic_fallback: Whether the cli agent fallback is triggered
+        failure_aware_retries: Whether loop mode uses failure-aware early exits
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -183,7 +185,7 @@ def fix_main(
                         cloud_url,
                         json=payload,
                         headers=headers,
-                        timeout=get_cloud_timeout()
+                        timeout=get_cloud_request_timeout()
                     )
                     response.raise_for_status()
 
@@ -330,6 +332,7 @@ def fix_main(
                 use_cloud=use_cloud_for_loop,
                 protect_tests=protect_tests,
                 test_files=test_files,
+                failure_aware_retries=failure_aware_retries,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)

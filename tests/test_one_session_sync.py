@@ -1068,3 +1068,56 @@ class TestPostSyncFingerprintAndAutoSubmit:
         )
 
         mock_submit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bug: one-session sync result dict uses "errors" but summary uses "error" (#826)
+# ---------------------------------------------------------------------------
+
+class TestOneSessionResultErrorKey:
+    """run_one_session_sync returns {"errors": [...]} but sync_main's summary
+    table reads result.get("error") — the key mismatch causes all one-session
+    errors to display as 'No details.' instead of the actual error message."""
+
+    def test_result_dict_has_error_singular_key_on_failure(self):
+        """Failed one-session result must include 'error' (singular) key
+        so sync_main's summary table can display the error message."""
+        from pdd.one_session_sync import run_one_session_sync
+        from unittest.mock import patch, MagicMock
+        import tempfile, os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = os.path.join(tmp, "test.prompt")
+            code_file = os.path.join(tmp, "test.tsx")
+            with open(prompt_file, "w") as f:
+                f.write("test prompt")
+
+            pdd_files = {
+                "prompt": MagicMock(exists=MagicMock(return_value=True)),
+                "code": MagicMock(),
+                "test": MagicMock(),
+                "example": MagicMock(),
+            }
+            pdd_files["prompt"].__str__ = lambda self: prompt_file
+            pdd_files["prompt"].read_text = MagicMock(return_value="test prompt")
+            pdd_files["code"].__str__ = lambda self: code_file
+
+            with patch("pdd.one_session_sync.run_agentic_task") as mock_agent:
+                mock_agent.return_value = (False, "Agent failed: no providers", 0.0, "")
+                from pathlib import Path
+                result = run_one_session_sync(
+                    basename="test_module",
+                    language="typescriptreact",
+                    pdd_files=pdd_files,
+                    project_root=Path(tmp),
+                    verbose=False,
+                    quiet=True,
+                )
+
+            assert not result["success"]
+            assert "error" in result, (
+                f"One-session result must have 'error' (singular) key for sync_main summary table. "
+                f"Got keys: {list(result.keys())}. The summary table reads result.get('error') "
+                f"and falls back to 'No details.' when this key is missing."
+            )
+            assert result["error"], "Error message should not be empty"

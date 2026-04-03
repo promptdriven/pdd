@@ -1,24 +1,137 @@
+## v0.0.196 (2026-04-02)
+
+### Fix
+
+- add 'error' key to one-session sync result dict (#826)
+- check package.json for TS import validation fallback (#826)
+
+## v0.0.195 (2026-04-01)
+
+### Fix
+
+- **incremental patch no-op detection** (#1043): `incremental_code_generator` now returns `None` when the patched code is identical to the input, signaling the caller to fall back to full generation; `code_generator_main` adds a defense-in-depth check for the same condition in case a different generator function is passed
+- **content regression guard for structural retry** (#1026, #1042): new `_cleanup_backups_with_regression_guard` in `agentic_bug_orchestrator` restores `.bak` files when a retry loses >50% of lines, preventing silent content destruction during Step 9 structural retries
+- **centralize prompts_dir prefix extraction** (#1049): extracted `_extract_prefix_from_prompts_dir()` in `construct_paths` replaces duplicated prefix-stripping logic across four modules (`construct_paths`, `sync_determine_operation`, `sync_main`, `agentic_sync`); correctly handles nested extension paths like `extensions/app/prompts/frontend` by splitting on the exact `prompts` segment
+- **add 'code' fallback in `_generate_paths_from_templates`** (#826): `sync_determine_operation` now ensures a `code` key is always present in the path dict, since `sync_orchestration.py` accesses `pdd_files['code']` in 20+ places — previously this could `KeyError` when templates omitted a code entry
+- **match basenames against filepath when filename differs** (#826): `_filter_invalid_basenames` in `agentic_sync` now also extracts the stem from the `filepath` field (e.g. `src/app/dashboard/page.tsx` → `page`), so architecture entries whose `filename` uses a different convention (e.g. `dashboardPage.tsx`) are no longer incorrectly filtered out
+
+### Refactor
+
+- **centralize prompts_dir prefix extraction to private helper** (#1049): rename to `_extract_prefix_from_prompts_dir` with leading underscore to follow internal-API convention; updated imports in all consuming modules
+
+### Build
+
+- **exclude `.py.bak` files from version control**: added `*.py.bak` to `.gitignore` to prevent backup files created by the structural retry regression guard from being committed
+
+### Docs
+
+- **update prompts for new behavior**: `code_generator_main_python.prompt`, `construct_paths_python.prompt`, `sync_determine_operation_python.prompt`, and `sync_main_python.prompt` updated to document incremental no-op fallback, nested extension prefix extraction, and `_extract_prefix_from_prompts_dir` usage
+
+### Test
+
+- **Z3 formal verification for prompt-test correspondence**: new `test_z3_prompt_test_correspondence.py` uses the Z3 SMT solver to prove determinism (no ambiguous rules), soundness (every test assertion follows from prompt rules), and completeness (every prompt mode is covered) for `comment_line_python.prompt`
+- add regression tests for content regression guard (#1026)
+- add tests for incremental generator no-change fallback (#1043)
+- add tests for centralized prefix extraction with extension directories (#1049)
+- add tests for `code` key fallback and filepath-based basename matching (#826)
+
+## v0.0.194 (2026-03-31)
+
+### Fix
+
+- **architecture_json.prompt path corruption** (#686): use single braces in post-processed prompt paths to prevent Python `.format()` from mangling `{filename}` placeholders
+- **FAST_TRACK KeyError on curly braces in LLM output** (#974): escape curly braces in LLM-generated text before string formatting to avoid `KeyError` on brace-like substrings
+- **nested architecture.json discovery in sync** (#826): `_augment_architecture_from_pr_branch` now discovers all architecture files (root + nested like `frontend/architecture.json`) via `find_architecture_for_project` instead of only reading the root file; basename filter strips code extensions (`.tsx`, `.ts`, `.jsx`, `.js`, `.py`) so entries from frontend architecture files are no longer rejected as unknown
+- **path-qualified basename matching relaxed**: sync basename filter no longer requires `count == 1` for path-qualified entries (e.g. `frontend/components/Sidebar`) — the directory prefix already disambiguates
+- **parse PDD_WORKFLOW_STATE JSON to find test file markers** (#1031): `_extract_test_files` now deserializes `<!-- PDD_WORKFLOW_STATE:... -->` HTML comments to extract `E2E_FILES_CREATED:` / `FILES_CREATED:` markers that are invisible to plain `splitlines()` parsing in fresh-clone runs
+- **deterministic subprocess verification for Step 9 tests** (#960): Step 9 generated E2E tests are now executed via `_verify_e2e_tests` before proceeding to Step 10, catching broken imports and setup errors that structural pattern scanning alone could not detect; verification output is passed to the Step 10 LLM prompt
+- **CI validation misinterprets 'no required checks' as failure** (#1025): `_poll_required_checks` now inspects stderr for the `gh` "no required checks" phrase to distinguish "no checks configured" from ambiguous errors (auth/network), preventing premature `no_checks` classification during transient failures
+
+### Build
+
+- **explicit setuptools package list**: replaced `find` with an explicit `packages` list in `pyproject.toml` to prevent stale sub-packages from being included in sdist/wheel builds
+- **auto-skip InsufficientCreditsError in test runner**: `conftest.py` now converts `InsufficientCreditsError` failures to pytest skips so cloud-batch runs don't report infrastructure credit exhaustion as test failures
+
+### Test
+
+- add E2E tests for Step 9 subprocess verification (#960)
+- add unit tests for JSON-embedded workflow state marker extraction (#1031)
+- add unit tests for CI validation `no required checks` handling (#1025)
+- add regression test for `architecture_json.prompt` brace escaping (#686)
+
+## v0.0.193 (2026-03-30)
+
+### Feat
+
+- **CI auto-heal drift detection** (#1001): new `pdd/ci_drift_heal.py` module automatically detects prompt-code drift and heals it by running `pdd update` (stale prompts) or `pdd sync` (stale examples), with budget caps and per-module scoping. Includes GitHub Actions workflow (`.github/workflows/auto-heal-drift.yml`) that triggers on PRs and pushes to main with infinite-loop prevention
+- **failure-aware retries for `pdd fix`** (#734): new `failure_classification` module classifies test output into syntax/import, assertion/logic, and timeout/flaky categories. The fix error loop now short-circuits retries when the failure signature is unchanged (e.g. repeated SyntaxError), avoiding wasted LLM budget. New `--failure-aware-retries / --no-failure-aware-retries` CLI flag on `pdd fix` — thanks @vishalramvelu
+
+### Fix
+
+- **scope structural test validator to new lines only** (#990): `detect_structural_test_patterns()` now accepts a `start_line` parameter to suppress violations on pre-existing lines, fixing false positives when appending tests to files that already contained flagged patterns
+- **nested architecture.json discovery** (#1010): `find_architecture_for_project()` now recursively walks subdirectories (up to depth 4) instead of only scanning immediate children, with expanded exclusions (`node_modules`, `__pycache__`, `.git`, `venv`, `.venv`, `env`)
+- **log warning on architecture scan errors**: architecture discovery now logs warnings on `OSError`/`IOError` instead of silently swallowing exceptions
+- **add depth limit and expanded exclusions to recursive architecture discovery**: recursive walk is bounded to 4 levels and skips common non-project directories
+- **separate connect and read timeouts for cloud API requests**: new `get_cloud_request_timeout()` returns a `(connect=30s, read=PDD_CLOUD_TIMEOUT)` tuple so requests fail fast on unreachable servers while still allowing long LLM processing times
+- **don't create empty prompt files during repo scan**: `resolve_prompt_code_pair()` gains a `create_missing=False` option used by scan-only callers to avoid creating empty `.prompt` files as a side effect
+- **increase cloud batch PDD_CLOUD_TIMEOUT** from 480s to 720s for cloud batch test runs
+
+### Test
+
+- add regression tests for multi-context basename resolution in `pdd update`
+- add failing tests for nested architecture.json discovery (#1010)
+- add comprehensive test suite for `ci_drift_heal` (610 lines), `failure_classification`, `fix_error_loop` failure-aware behavior, and structural test guard scoping
+
+### Docs
+
+- add `docs/ci-auto-heal.md` with full setup, configuration, and troubleshooting guide
+- update README with CI drift detection & auto-heal workflow integration section
+
+## v0.0.192 (2026-03-29)
+
+### Feat
+
+- pdd update handles include-referenced docs + scope guard (#732)
+
+### Fix
+
+- harden remotion hook-order safety
+- add scope guard to agentic_update prompt, unit tests, fix PDD_PATH test
+- instruct research steps to use WebSearch/WebFetch tools (#1000)
+- add retry for cloud fix command in cloud_regression case_4
+- hide stage 9 empty state while loading
+- harden LLM-as-judge to prevent flaky contradictory verdicts
+
+### Refactor
+
+- overhaul Part 1 Economics video components by updating layouts, adding new visual elements, and removing deprecated modules.
+- update PDD explainer audit specifications and synchronize pipeline route and test configurations
+- update PDD explainer audit specifications and remotion constants for improved project consistency
+
 ## v0.0.191 (2026-03-28)
 
 ### Feat
 
-- add manual audio sync acceptance locks
-- agentic auto deps (#733) (#751)
+- **auto-deps embedding retrieval**: new `embed_retrieve` module pre-filters candidates by cosine similarity before LLM reranking when >50 candidates (`PDD_EMBEDDING_MODEL` env var, defaults to `text-embedding-3-small`)
+- **auto-deps documentation support**: `--include-docs` flag discovers `.md`/`.txt`/`.rst` documentation files alongside code as dependency candidates
+- **auto-deps inline dedup**: post-processing pass removes prompt content that duplicates included files via `difflib.SequenceMatcher` (disable with `--no-dedup`)
+- **auto-deps parallel summarization**: `--concurrency N` flag parallelizes LLM summarization calls via `ThreadPoolExecutor`
+- **agentic change scope enforcement**: architecture.json edits after Step 10 are scoped to changed files only; unrelated entries are reverted as hallucinations
+- **agentic sync PR branch augmentation**: architecture.json is augmented from the PR branch before basename validation, preventing new-module entries from being rejected
 
 ### Fix
 
-- harden stage 5 transcript validation
-- handle non-fast-forward push errors in _push_with_retry (#999)
-- flag transcript boundary hallucinations
-- harden veo chain staging and stale detection
+- handle non-fast-forward push errors in `_push_with_retry` by retrying with `--force-with-lease`
 
 ### Refactor
 
-- update and clean up Remotion animation components across multiple economics and paradigm shift modules
-- consolidate code editor components, update chart styles, and refresh narration assets across Remotion scenes
-- update CI validation prompt instructions and refine cold open audit specifications
-- update PDD explainer specifications and optimize Remotion cold open components and layouts
-- update PDD explainer specifications and reorganize Remotion video components
+- add `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>` metadata tags across auto-deps prompt files for architecture sync
+- rewrite auto-deps example files (`auto_deps_main`, `insert_includes`, `maintenance`, `embed_retrieve`) with comprehensive mock-based test scenarios
+
+### Docs
+
+- update README with auto-deps documentation support, dedup, two-stage retrieval, new CLI flags, and `PDD_EMBEDDING_MODEL` / `PDD_AUTO_DEPS_CONCURRENCY` env vars
+- add "Documentation as Dependencies" section to prompting guide
 
 ## v0.0.190 (2026-03-27)
 

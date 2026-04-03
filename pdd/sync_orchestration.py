@@ -914,6 +914,19 @@ def _validate_typescript_imports(
 
     node_modules = project_root / 'node_modules'
 
+    # Read package.json dependencies as fallback when node_modules doesn't exist
+    # (common in CI/git-clone environments where npm install hasn't been run).
+    package_json_deps: set[str] = set()
+    package_json_path = project_root / 'package.json'
+    if package_json_path.exists():
+        try:
+            import json as _json
+            pkg = _json.loads(package_json_path.read_text(encoding='utf-8'))
+            for dep_key in ('dependencies', 'devDependencies', 'peerDependencies'):
+                package_json_deps.update(pkg.get(dep_key, {}).keys())
+        except Exception:
+            pass
+
     unresolved: list[str] = []
 
     for import_path in sorted(import_paths):
@@ -976,6 +989,8 @@ def _validate_typescript_imports(
             pkg_name = '/'.join(import_path.split('/')[:2])
             if node_modules.exists() and (node_modules / pkg_name).exists():
                 continue
+            if pkg_name in package_json_deps:
+                continue
             unresolved.append(import_path)
             continue
 
@@ -983,8 +998,10 @@ def _validate_typescript_imports(
         top_level = import_path.split('/')[0]
         if node_modules.exists() and (node_modules / top_level).exists():
             continue
+        if top_level in package_json_deps:
+            continue
 
-        # No node_modules found — module is unresolved
+        # Neither node_modules nor package.json lists this module
         unresolved.append(import_path)
 
     return unresolved

@@ -3198,6 +3198,38 @@ PDD can be integrated into various development workflows. Here are the conceptua
 
 **Key Insight**: Feature additions should flow from prompt changes rather than direct code modifications.
 
+### CI Drift Detection & Auto-Heal
+
+**Conceptual Flow**: `detect drift → heal (update/sync) → commit → push`
+
+**Purpose**: Automatically detect and fix prompt/example drift in CI pipelines.
+
+**Process**:
+1. Scan modules for drift using `sync_determine_operation` (no LLM calls)
+2. For stale prompts: run `pdd update` to sync code changes back to prompts
+3. For stale examples: run `pdd sync` with example+verify operations
+4. Stage and commit healed files with a descriptive message
+5. Push changes to the current branch
+
+**Usage:**
+```bash
+# Scan all modules (main branch trigger)
+python -m pdd.ci_drift_heal
+
+# Scan specific modules (PR trigger)
+python -m pdd.ci_drift_heal --modules module_a module_b
+
+# With budget cap and skip-ci flag
+python -m pdd.ci_drift_heal --budget-cap 5.00 --skip-ci
+```
+
+**Key Options:**
+- `--modules`: Limit detection to specific modules (for PR-scoped checks)
+- `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
+- `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
+
+**Key Insight**: This workflow automates the Code-to-Prompt Update pattern for CI, ensuring prompts stay in sync with code changes without manual intervention.
+
 ### Critical Dependencies
 
 When using these workflows, remember these crucial tool dependencies:
@@ -3207,8 +3239,25 @@ When using these workflows, remember these crucial tool dependencies:
 - 'fix' requires runnable code created/verified by 'crash'
 - 'test' must be created before using 'fix'
 - Always update 'example' after major prompt interface changes
+- 'ci_drift_heal' requires modules to have existing prompts and code files
 
 For detailed command examples for each workflow, see the respective command documentation sections.
+
+### CI Auto-Heal
+
+**Workflow File**: `.github/workflows/auto-heal-drift.yml`
+
+**Purpose**: Automatically detect and fix prompt-code drift in CI.
+
+**Triggers**:
+- **Pull requests**: Heals only modules changed by the PR, commits fixes to the PR branch
+- **Push to main**: Heals all modules, commits fixes directly to main
+
+**Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
+
+**Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
+
+For full details, see [docs/ci-auto-heal.md](docs/ci-auto-heal.md).
 
 ## Integrations
 
@@ -3221,6 +3270,10 @@ A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighti
 ### MCP Server (for Agentic Clients)
 
 The `pdd-mcp-server` (`utils/mcp`) acts as a bridge using the Model Context Protocol (MCP). This allows agentic clients like Cursor, Claude Desktop, Continue.dev, and others to invoke `pdd-cli` commands programmatically. See the [MCP Server README](utils/mcp/README.md) for configuration and usage instructions.
+
+### CI Drift Detection
+
+PDD includes a CI-ready drift detection and auto-heal script (`pdd/ci_drift_heal.py`) that can be integrated into GitHub Actions or other CI systems. It scans for prompt/example drift, heals it using `pdd update` and `pdd sync`, and commits the results. See the [Workflow Integration](#ci-drift-detection--auto-heal) section for usage details.
 
 ## Utilities
 
