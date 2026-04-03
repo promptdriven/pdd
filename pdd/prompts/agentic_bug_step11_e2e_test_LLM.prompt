@@ -85,33 +85,37 @@ Playwright browsers (chromium) may or may not be pre-installed. If you write a P
 
 % API Mocking Best Practices
 
-Before writing Playwright API mocks, read the actual API implementation in source code.
-- Find the real `fetch`/`axios`/API-client call path and read the implementation.
-- Use the exact HTTP method from source code; do not assume REST conventions.
-- Match the real request body shape and response shape from source, not plausible mock data.
+When using `page.route()` or similar API mocking in E2E tests:
 
-Playwright route handlers stack in LIFO order (last registered runs first), so route stacking can silently bypass earlier handlers.
-- Never register two `page.route()` handlers for the same URL pattern.
-- Use one handler per URL pattern and switch behavior by method inside that handler.
+1. **Read the actual API call implementation before writing mocks:**
+   - Find the fetch/axios/API client call in the source code
+   - Use the exact HTTP method (GET, POST, PUT, PATCH, DELETE) — do NOT assume REST conventions (e.g., updates may use POST not PUT)
+   - Match the request body shape and response shape from the source
+   - Trace error handling: follow thrown errors through catch blocks to find the exact UI text displayed to users
 
-Example method-switching pattern:
-```typescript
-await page.route("**/api/boards/**", async (route) => {
-  const method = route.request().method();
-  if (method === "GET") {
-    return route.fulfill({ status: 200, body: JSON.stringify({ boards: [] }) });
-  }
-  if (method === "POST") {
-    return route.fulfill({ status: 500, body: JSON.stringify({ message: "Save failed (500)" }) });
-  }
-  return route.continue();
-});
-```
+2. **Playwright `page.route()` gotcha — use a single handler per URL pattern:**
+   - Playwright stacks route handlers; the LAST registered handler for a URL runs FIRST
+   - If the last handler calls `route.continue()`, the previous handler for the same URL is skipped entirely
+   - ALWAYS use ONE `page.route()` call per URL pattern that switches on request method:
+     ```typescript
+     await page.route("**/api/boards/**", async (route) => {
+       const method = route.request().method();
+       if (method === "GET") {
+         return route.fulfill({ status: 200, body: JSON.stringify({ boards: [] }) });
+       }
+       if (method === "POST") {
+         return route.fulfill({ status: 500, body: JSON.stringify({ message: "Save failed (500)" }) });
+       }
+       return route.continue();
+     });
+     ```
+   - NEVER register two `page.route()` calls for the same URL pattern — the second silently overrides the first
 
-Trace error messages through catch blocks before writing assertions.
-- Follow thrown errors through catch block handling to the final UI text.
-- Verify exact text against source (for example what `setError` or `setState` receives).
-- Assert the exact UI text from source, not a guessed regex.
+3. **Verify error message assertions against source code:**
+   - Read the component's catch block to find what `setError`/`setState` receives
+   - Read the API function's error throw to find the `Error` message text
+   - Trace the full path: API function throw → component catch → state setter → rendered text
+   - Use the exact text (or a regex that matches it) in test assertions — do NOT guess error wording
 
 % CRITICAL: Discover E2E Test Environment First
 
@@ -183,6 +187,17 @@ Before writing any E2E test, you MUST understand the existing test infrastructur
    - Note how they handle auth, env vars, and external services
    - Copy their test structure and patterns exactly
 
+7. **Determine if the bug requires authentication to reproduce**
+   - Analyze the bug's code path: is it inside an auth guard, `onAuthStateChanged` callback, auth context provider, protected route, or middleware that checks authentication state?
+   - If the bug only triggers for authenticated users (e.g., the buggy code is inside an auth-gated branch), the E2E test MUST use an authenticated browser context or session
+   - If auth is required, look for existing auth setup:
+     - `auth.setup.ts`, `global-setup.ts`, or similar auth setup files
+     - `storageState` files or directories (e.g., `playwright/.auth/`)
+     - Test account configuration in env vars or fixture files
+     - Auth helper utilities in the test infrastructure
+   - **If auth is required and auth fixtures exist:** Use them (e.g., `storageState: 'playwright/.auth/user.json'`) to create an authenticated browser context
+   - **If auth is required but no auth fixtures or credentials are available:** Output `E2E_SKIP: Bug requires authentication but no auth fixtures/credentials are available in the test infrastructure` rather than writing a misleading unauthenticated test that cannot reproduce the bug
+
 **If you cannot find sufficient E2E infrastructure:**
 - Check if E2E tests require manual setup steps documented elsewhere
 - Output `E2E_SKIP: E2E infrastructure not found - manual setup required` with details
@@ -248,6 +263,7 @@ Before writing any E2E test, you MUST understand the existing test infrastructur
 4. **Generate the E2E test**
    - Create a test that exercises the full code path from user input to output
    - Import and use existing fixtures for auth, database, environment setup
+   - **If the bug requires authentication** (determined in discovery step 7): use an authenticated browser context or session — do NOT use `storageState: undefined` or unauthenticated contexts for auth-gated bugs, as the test would pass trivially without exercising the bug path
    - Do NOT mock the buggy component - the E2E test should hit the real code
    - The test should fail on the current buggy code
    - Include clear assertions about expected behavior

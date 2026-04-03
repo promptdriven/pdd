@@ -4,6 +4,7 @@ Runs each step as a separate agentic task, accumulates context, tracks progress/
 and supports resuming from saved state. Includes a review loop (steps 11-12).
 """
 
+import glob
 import json
 import os
 import re
@@ -114,6 +115,170 @@ def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
                 json.dump(data, f, indent=2)
     except (json.JSONDecodeError, OSError):
         pass
+
+
+def _scope_architecture_to_changed_files(
+    worktree_path: Path,
+    previous_architecture: Optional[List[Dict[str, Any]]],
+    changed_files: List[str],
+) -> None:
+    """Revert architecture.json entries for files not in changed_files to their previous state.
+
+    After Step 10, the LLM may mutate entries for modules it was never asked to
+    touch (reason, dependencies, interface signatures, etc.). This function
+    enforces scope by replacing out-of-scope entries with their pre-Step-10
+    versions and removing entries that didn't exist before and aren't in scope.
+    """
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists() or previous_architecture is None:
+        return
+
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            current_architecture = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+
+    # Build a set of filenames that are in scope from changed_files.
+    # changed_files may contain paths like "pdd/prompts/foo_python.prompt",
+    # "prompts/foo_python.prompt", "pdd/prompts/commands/foo_python.prompt",
+    # or "architecture.json".
+    #
+    # We add both the basename and the relative path under "prompts/"
+    # so that subdirectory prompts (e.g. "commands/maintenance_python.prompt")
+    # match their architecture.json filename field.
+    in_scope_filenames: set = set()
+    for fp in changed_files:
+        normalized = fp.replace("\\", "/")
+        prompts_idx = normalized.rfind("prompts/")
+        if prompts_idx != -1:
+            rel = normalized[prompts_idx + len("prompts/"):]
+        else:
+            rel = normalized
+        basename = rel.rsplit("/", 1)[-1] if "/" in rel else rel
+        if basename.endswith(".prompt"):
+            in_scope_filenames.add(basename)
+            if rel != basename:
+                in_scope_filenames.add(rel)
+
+    # Build lookup from previous architecture by filename and filepath
+    prev_by_filename: Dict[str, Dict[str, Any]] = {}
+    prev_by_filepath: Dict[str, Dict[str, Any]] = {}
+    for entry in previous_architecture:
+        if not isinstance(entry, dict):
+            continue
+        fn = entry.get("filename")
+        fp = entry.get("filepath")
+        if fn:
+            prev_by_filename[fn] = entry
+        if fp:
+            prev_by_filepath[fp] = entry
+
+    scoped: List[Dict[str, Any]] = []
+    for entry in current_architecture:
+        if not isinstance(entry, dict):
+            scoped.append(entry)
+            continue
+
+        filename = entry.get("filename", "")
+        filepath = entry.get("filepath", "")
+
+        # Determine if this entry is in scope
+        entry_in_scope = filename in in_scope_filenames
+
+        if entry_in_scope:
+            # Changed file — keep LLM's mutations
+            scoped.append(entry)
+        else:
+            # Out of scope — look up previous version
+            prev_entry = prev_by_filename.get(filename)
+            if prev_entry is None and filepath:
+                prev_entry = prev_by_filepath.get(filepath)
+            if prev_entry is not None:
+                # Revert to previous
+                scoped.append(prev_entry)
+            # else: entry didn't exist before AND isn't in scope — drop it (hallucination)
+
+    try:
+        with open(arch_path, "w", encoding="utf-8") as f:
+            json.dump(scoped, f, indent=2)
+    except OSError:
+        pass
+
+def _validate_architecture_filepaths(
+    worktree_path: Path,
+) -> List[str]:
+    """Validate and auto-correct architecture.json filepath entries.
+
+    For each entry with a ``filepath`` field, checks whether the file exists
+    relative to *worktree_path*.  When a file is not found at the declared
+    path but *is* found at the PDD-conventional location
+    (``pdd/<module_name>.py`` derived from the ``filename`` field), the
+    filepath is corrected in-place.  Returns a list of human-readable
+    warning strings describing any mismatches (corrected or not).
+    """
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists():
+        return []
+
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    warnings: List[str] = []
+    changed = False
+
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        filepath = entry.get("filepath")
+        if not filepath:
+            continue
+
+        full_path = worktree_path / filepath
+        if full_path.exists():
+            continue  # filepath is valid
+
+        # Try to derive the conventional PDD path from the filename field.
+        # filename is like "ci_drift_heal_python.prompt" -> module "ci_drift_heal" -> "pdd/ci_drift_heal.py"
+        # Only Python modules can be reliably mapped to pdd/<name>.py; other
+        # languages (shell, typescript, etc.) have different conventions.
+        filename = entry.get("filename", "")
+        conventional_path = None
+        if filename.endswith(".prompt"):
+            # Strip the language suffix (e.g. "_python.prompt", "_shell.prompt")
+            stem = filename[:-len(".prompt")]
+            # Remove the last _<language> suffix
+            parts = stem.rsplit("_", 1)
+            if len(parts) == 2:
+                module_name, lang_suffix = parts
+                # Only derive pdd/<module>.py for Python modules
+                if lang_suffix == "python":
+                    conventional_path = f"pdd/{module_name}.py"
+
+        if conventional_path and (worktree_path / conventional_path).exists():
+            warnings.append(
+                f"architecture.json: filepath '{filepath}' does not exist; "
+                f"corrected to '{conventional_path}'"
+            )
+            entry["filepath"] = conventional_path
+            changed = True
+        else:
+            warnings.append(
+                f"architecture.json: filepath '{filepath}' for entry "
+                f"'{filename}' does not exist on disk"
+            )
+
+    if changed:
+        try:
+            with open(arch_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError:
+            pass
+
+    return warnings
 
 
 def _sanitize_architecture_interfaces(
@@ -836,6 +1001,7 @@ def run_agentic_change_orchestrator(
             context["worktree_path"] = str(worktree_path)
 
     consecutive_provider_failures = 0
+    previous_architecture = None
 
     for step_num, name, description in steps_config:
         if step_num < start_step:
@@ -892,6 +1058,7 @@ def run_agentic_change_orchestrator(
         if not quiet:
             console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
 
+        # Snapshot architecture.json before Step 10 so we can revert out-of-scope mutations
         if step_num == 10 and worktree_path:
             arch_path = worktree_path / "architecture.json"
             if arch_path.exists():
@@ -1021,19 +1188,24 @@ def run_agentic_change_orchestrator(
             changed_files.extend(new_files)
             context["files_to_stage"] = ", ".join(changed_files)
             if worktree_path:
+                _scope_architecture_to_changed_files(
+                    worktree_path, previous_architecture, changed_files
+                )
                 _sanitize_architecture_dependencies(worktree_path)
+                filepath_warnings = _validate_architecture_filepaths(worktree_path)
                 interface_warnings = _sanitize_architecture_interfaces(
                     worktree_path,
                     previous_architecture,
                 )
-                if interface_warnings:
+                all_warnings = filepath_warnings + interface_warnings
+                if all_warnings:
                     if not quiet:
-                        for warning in interface_warnings:
+                        for warning in all_warnings:
                             console.print(f"[yellow]Warning: {warning}[/yellow]")
                     step_output = (
                         step_output.rstrip()
                         + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
-                        + "\n".join(f"- {warning}" for warning in interface_warnings)
+                        + "\n".join(f"- {warning}" for warning in all_warnings)
                     )
 
         context[f"step{step_num}_output"] = step_output
@@ -1166,7 +1338,7 @@ def run_agentic_change_orchestrator(
                     basename = basename[: -len(suffix)]
                     break
             # Look for matching test files
-            for test_file in test_base.glob(f"test_{basename}*"):
+            for test_file in test_base.glob(f"test_{glob.escape(basename)}*"):
                 rel = str(test_file.relative_to(cwd))
                 if rel not in impacted_tests:
                     impacted_tests.append(rel)

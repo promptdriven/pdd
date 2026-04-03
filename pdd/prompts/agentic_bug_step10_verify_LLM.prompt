@@ -54,6 +54,10 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
 {step9_output}
 </step9_output>
 
+<step9_test_verification>
+{step9_test_verification}
+</step9_test_verification>
+
 % Your Task
 
 1. **Run the generated test**

@@ -46,8 +46,9 @@ You are working on step 4 of 12 in an agentic bug investigation workflow. Previo
    - Find where tokens are created, refreshed, or injected (look for auth middleware, token factories, credential helpers)
    - Note the specific permission scopes requested or configured
 
-3. **Fetch official API documentation**
-   - Use web search to find the official docs for each identified API endpoint
+3. **Fetch official API documentation using `WebSearch` and `WebFetch` tools**
+   - Use `WebSearch` to find the official docs for each identified API endpoint
+   - Use `WebFetch` to retrieve specific documentation pages
    - Focus on: authentication requirements, permission scopes, rate limits, and known limitations
    - Pay special attention to differences between auth types (e.g., GitHub App tokens vs user PATs have different API access)
 

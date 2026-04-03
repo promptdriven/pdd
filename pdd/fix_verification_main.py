@@ -23,7 +23,7 @@ from .fix_verification_errors_loop import fix_verification_errors_loop
 # Import DEFAULT_STRENGTH from the main package
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 
 # Default values from the README
 DEFAULT_TEMPERATURE = 0.0
@@ -407,7 +407,7 @@ def fix_verification_main(
                             cloud_url,
                             json=payload,
                             headers=headers,
-                            timeout=get_cloud_timeout()
+                            timeout=get_cloud_request_timeout()
                         )
                         response.raise_for_status()
 

@@ -105,6 +105,8 @@ def summarize_directory(
     verbose: bool = False,
     csv_file: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    max_workers: int = 1,
     csv_path: Optional[str] = None,
 ) -> Tuple[str, float, str]:
     """
@@ -118,6 +120,8 @@ def summarize_directory(
         verbose: Whether to print detailed logs.
         csv_file: Existing CSV content string to check for cache hits.
         progress_callback: Optional callback for progress updates (current, total).
+        include_docs: When True, also discover and summarize doc files (.md, .txt, .rst).
+        max_workers: When > 1, parallelize LLM calls via ThreadPoolExecutor.
         csv_path: Optional file path to flush CSV results to disk after each file,
             so partial progress survives if the user interrupts mid-run.
 
@@ -171,6 +175,9 @@ def summarize_directory(
     if files is None:
         files = _get_files_from_glob(directory_path)
 
+    # Documentation extensions — included only when include_docs is True
+    doc_extensions = {'.md', '.txt', '.rst'}
+
     # Filter out binary files and prompt files that can't be summarized
     filtered_files = []
     for f in files:
@@ -182,6 +189,9 @@ def summarize_directory(
         # Skip .prompt files — they are the consumers of dependencies, not
         # dependencies themselves.  Including them adds noise to auto-deps.
         if ext.lower() == '.prompt':
+            continue
+        # Skip doc files unless include_docs is True
+        if not include_docs and ext.lower() in doc_extensions:
             continue
         filtered_files.append(f)
 
@@ -212,10 +222,30 @@ def summarize_directory(
     # Step 6: Iterate through files with progress reporting
     total_files = len(files)
 
-    if progress_callback:
-        for i, file_path in enumerate(files):
-            progress_callback(i + 1, total_files)
+    def _process_file(i: int, file_path: str) -> Tuple[float, str]:
+        """Process a single file and accumulate results."""
+        rel_path = os.path.relpath(file_path, base_dir)
+        return _process_single_file_logic(
+            file_path,
+            rel_path,
+            existing_data,
+            prompt_template,
+            strength,
+            temperature,
+            time,
+            verbose,
+            results_data
+        )
+
+    if max_workers > 1:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        cost_lock = threading.Lock()
+
+        def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str]:
+            """Thread-safe wrapper that returns index for ordering."""
             rel_path = os.path.relpath(file_path, base_dir)
+            local_results: List[Dict[str, str]] = []
             cost, model = _process_single_file_logic(
                 file_path,
                 rel_path,
@@ -225,8 +255,33 @@ def summarize_directory(
                 temperature,
                 time,
                 verbose,
-                results_data
+                local_results
             )
+            return i, cost, model, local_results[0] if local_results else None
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_threaded_process, i, fp): i
+                for i, fp in enumerate(files)
+            }
+            completed = 0
+            for future in as_completed(futures):
+                idx, cost, model, result_row = future.result()
+                with cost_lock:
+                    total_cost += cost
+                    if model != "cached":
+                        last_model_name = model
+                    if result_row:
+                        results_data.append(result_row)
+                    if csv_path:
+                        _flush_csv_to_disk(results_data, csv_path)
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, total_files)
+    elif progress_callback:
+        for i, file_path in enumerate(files):
+            progress_callback(i + 1, total_files)
+            cost, model = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
@@ -242,19 +297,8 @@ def summarize_directory(
             console=console
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
-            for file_path in files:
-                rel_path = os.path.relpath(file_path, base_dir)
-                cost, model = _process_single_file_logic(
-                    file_path,
-                    rel_path,
-                    existing_data,
-                    prompt_template,
-                    strength,
-                    temperature,
-                    time,
-                    verbose,
-                    results_data
-                )
+            for i, file_path in enumerate(files):
+                cost, model = _process_file(i, file_path)
                 total_cost += cost
                 if model != "cached":
                     last_model_name = model
@@ -262,19 +306,8 @@ def summarize_directory(
                     _flush_csv_to_disk(results_data, csv_path)
                 progress.advance(task)
     else:
-        for file_path in files:
-            rel_path = os.path.relpath(file_path, base_dir)
-            cost, model = _process_single_file_logic(
-                file_path,
-                rel_path,
-                existing_data,
-                prompt_template,
-                strength,
-                temperature,
-                time,
-                verbose,
-                results_data
-            )
+        for i, file_path in enumerate(files):
+            cost, model = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model

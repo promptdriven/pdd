@@ -31,11 +31,13 @@ You are working on step 3 of 12 in an agentic change workflow. Previous steps co
    - Are there industry standards or best practices to consider?
    - Are there existing libraries, tools, or patterns that could inform the implementation?
 
-2. **Conduct web research**
-   - Search for relevant documentation, tutorials, or examples
+2. **Conduct web research using the `WebSearch` and `WebFetch` tools**
+   - Use `WebSearch` to find relevant documentation, tutorials, or examples
+   - Use `WebFetch` to retrieve specific documentation pages or API references
    - Look for similar implementations in other projects
    - Find best practices for the type of feature being requested
    - Check for any security considerations or common pitfalls
+   - **Verify version numbers and model IDs** — look up the latest/current versions via WebSearch rather than relying on training data, which may be outdated
 
 3. **Synthesize findings**
    - Summarize the key insights from your research
@@ -124,3 +126,4 @@ Based on the research, here are clarified requirements:
 - Prioritize authoritative sources (official docs, established libraries)
 - If the issue is already well-specified, acknowledge this and proceed
 - Always post your findings as a GitHub comment before completing
+- **Do not guess** version numbers, model IDs, API signatures, or library names from training data — your training data may be outdated. Always verify these via `WebSearch` or `WebFetch`

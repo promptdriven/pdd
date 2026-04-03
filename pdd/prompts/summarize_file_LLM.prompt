@@ -1,4 +1,7 @@
+<pdd-reason>LLM prompt template for summarizing code and documentation files in ~200 words.</pdd-reason>
+
 % Review the input file and provide a structured summary of its contents.
+% For documentation files (`.md`, `.txt`, `.rst`), focus on the document's topic, key sections/headings, and the main concepts or specifications it defines.
 
 % Here are the Inputs/Outputs:
     - input:

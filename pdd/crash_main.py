@@ -13,7 +13,7 @@ import os
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .fix_code_loop import fix_code_loop
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .get_language import get_language
 
 # Import fix_code_module_errors conditionally or ensure it's always available
@@ -204,7 +204,7 @@ def crash_main(
                             cloud_url,
                             json=payload,
                             headers=headers,
-                            timeout=get_cloud_timeout()
+                            timeout=get_cloud_request_timeout()
                         )
                         response.raise_for_status()
 

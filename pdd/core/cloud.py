@@ -34,6 +34,7 @@ PDD_CLOUD_TIMEOUT_ENV = "PDD_CLOUD_TIMEOUT"
 
 # Default cloud request timeout (seconds)
 DEFAULT_CLOUD_TIMEOUT = 900  # 15 minutes
+CLOUD_CONNECT_TIMEOUT = 30   # seconds — fail fast if server is unreachable
 
 
 def get_cloud_timeout() -> int:
@@ -56,6 +57,19 @@ def get_cloud_timeout() -> int:
         return int(os.environ.get(PDD_CLOUD_TIMEOUT_ENV, str(DEFAULT_CLOUD_TIMEOUT)))
     except ValueError:
         return DEFAULT_CLOUD_TIMEOUT
+
+
+def get_cloud_request_timeout() -> tuple[int, int]:
+    """Get cloud request timeout as (connect, read) tuple for the requests library.
+
+    Separates connect timeout (short — fail fast if unreachable) from read timeout
+    (long — server needs time to process LLM calls before sending a response).
+
+    Returns:
+        Tuple of (connect_timeout, read_timeout) in seconds.
+    """
+    return (CLOUD_CONNECT_TIMEOUT, get_cloud_timeout())
+
 
 # Default cloud endpoints
 DEFAULT_BASE_URL = "https://us-central1-prompt-driven-development.cloudfunctions.net"
@@ -287,4 +301,6 @@ __all__ = [
     'DEFAULT_CLOUD_TIMEOUT',
     'CLOUD_ENDPOINTS',
     'get_cloud_timeout',
+    'get_cloud_request_timeout',
+    'CLOUD_CONNECT_TIMEOUT',
 ]

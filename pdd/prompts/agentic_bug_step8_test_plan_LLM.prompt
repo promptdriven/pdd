@@ -1,4 +1,4 @@
-<pdd-reason>Guides LLM to design append-first, observable-behavior test plans during pdd bug step 8.</pdd-reason>
+<pdd-reason>Guides LLM to design observable-behavior test plans with full execution-path coverage during pdd bug step 8.</pdd-reason>
 
 % You are an expert software engineer investigating a bug report. Your task is to design a test plan that will detect this bug.
 
@@ -67,13 +67,22 @@ You are working on step 8 of 12 in an agentic bug investigation workflow. Previo
    - **Configuration bugs**: Don't just test one config source. Check env vars, config files, CLI flags, defaults, and their interaction.
    For each channel, plan at least one test that verifies the bug is fixed through that specific pathway.
 
-4. **Plan test location (append to existing file by default)**
+4. **Enumerate ALL execution paths**
+   Before designing tests, identify every distinct code path that exercises the root cause:
+   - **First-run / normal execution**: The standard path where the operation runs from scratch
+   - **Resume / reload from saved state**: If the code saves checkpoints and can resume, the re-extraction path may handle data differently
+   - **Retry loops**: If the operation retries on failure, the retry path may skip initialization steps
+   - **Error recovery**: If the operation catches errors and attempts recovery, the recovery path may reconstruct state incompletely
+   - **Different entry points**: If the same logic is reachable from multiple callers (CLI, API, orchestrator resume), each entry point may set up context differently
+   For each path identified, require **at least one test case**. Cross-reference Step 6's sibling bugs — if Step 6 found independent bugs in parallel paths, each must have dedicated test coverage.
+
+5. **Plan test location (append to existing file by default)**
    - Search for existing test files covering the affected module (e.g., `test_<module>.py`, `test_<module>_bug.py`)
    - **Default: append to an existing test file** — only create a new file when no relevant test file exists for the affected module
    - **Never use issue-specific filenames** like `test_issue_123.py`, `test_bug_456.py`, or `test_e2e_issue_789.py` — these create file bloat and duplicate assertions
    - Follow the project's testing conventions for naming and organization
 
-5. **Define test cases**
+6. **Define test cases**
    - Primary test: reproduces the exact bug (always required)
    - Edge cases: related scenarios that should also work (use your judgement)
    - Regression prevention: ensure the fix doesn't break other behavior (use your judgement)
@@ -149,6 +158,8 @@ Your test plan must verify **observable behavior**, not code structure.
 - Tests should not be so brittle they break with valid changes
 - **Coverage check**: Before finalizing, re-read the issue description and list every distinct symptom mentioned. Your test plan must cover ALL of them — not just the easiest ones. If the issue lists 4 symptoms and your plan only covers 2, go back and add tests for the missing ones.
 - **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
+- **Code path check**: For each root cause, ask "through which code paths can this be reached?" (first-run execution, resume from checkpoint, retry after failure, error recovery, different entry points). If the same data is processed in multiple paths, test each one. A fix that corrects the first-run path but leaves the resume path broken is incomplete — the tests should catch that. Cross-reference Step 6's sibling bugs to ensure every independently-discovered bug has test coverage.
+- **Call-boundary coverage check**: The fix locations are: `{fix_locations}`. If there are multiple files, the test plan MUST include tests for BOTH sides of the call boundary — mock the callee and verify the caller passes the right arguments, AND test the callee directly.
 - Always post your findings as a GitHub comment before completing
 
 % CRITICAL: Machine-Readable Output (REQUIRED)

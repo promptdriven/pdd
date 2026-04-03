@@ -14,7 +14,7 @@ from .get_run_command import get_run_command_for_file
 from .llm_invoke import _load_model_data
 from .load_prompt_template import load_prompt_template
 from .agentic_langtest import default_verify_cmd_for
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES, _revert_out_of_scope_changes
 
 console = Console()
 
@@ -384,6 +384,9 @@ def run_agentic_fix(
             label="agentic_fix",
             max_retries=DEFAULT_MAX_RETRIES,
         )
+
+        # Scope guard: revert out-of-scope file changes
+        _revert_out_of_scope_changes(working_dir, {code_path.resolve(), test_path.resolve()})
 
         # Snapshot mtimes after and detect changes
         after_mtimes = _snapshot_mtimes(working_dir)

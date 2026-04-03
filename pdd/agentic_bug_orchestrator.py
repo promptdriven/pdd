@@ -347,6 +347,67 @@ def _parse_changed_files(output: str, marker: str) -> List[str]:
     return files
 
 
+def _parse_fix_locations(step6_output: str) -> List[str]:
+    """Extract fix locations from Step 6's FIX_LOCATIONS marker.
+
+    Returns a deduplicated list of file paths (stripped of whitespace and backticks).
+    Reuses _parse_changed_files for the core parsing logic.
+    """
+    raw = _parse_changed_files(step6_output, "FIX_LOCATIONS")
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for f in raw:
+        cleaned = f.strip("`")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return deduped
+
+
+def _verify_fix_location_coverage(
+    fix_locations: List[str], test_files: List[str], work_dir: Path
+) -> List[str]:
+    """Check that generated test files reference all fix_location modules.
+
+    Converts each fix_location path to a dotted module path and checks if any
+    test file contains a reference to it (import, patch target, string literal).
+
+    Returns a list of fix_locations that have NO coverage in any test file.
+    """
+    if len(fix_locations) <= 1:
+        return []  # Single-file bugs don't need cross-file coverage
+
+    uncovered: List[str] = []
+    # Read all test file contents once
+    test_contents: List[str] = []
+    for tf in test_files:
+        abs_path = (work_dir / tf) if not Path(tf).is_absolute() else Path(tf)
+        try:
+            test_contents.append(abs_path.read_text())
+        except OSError:
+            continue
+
+    for fix_loc in fix_locations:
+        # Convert path to module: pdd/commands/generate.py -> pdd.commands.generate
+        module_path = fix_loc.replace("/", ".").removesuffix(".py")
+        # Also check for the slash-separated path without extension
+        path_no_ext = fix_loc.removesuffix(".py")
+        # Word-boundary regex for the bare filename — avoids false positives
+        # where e.g. "generate" matches "generate_report" or "generated"
+        basename = Path(fix_loc).stem
+        basename_re = re.compile(r"\b" + re.escape(basename) + r"\b")
+
+        found = False
+        for content in test_contents:
+            if module_path in content or path_no_ext in content or basename_re.search(content):
+                found = True
+                break
+        if not found:
+            uncovered.append(fix_loc)
+
+    return uncovered
+
+
 def _validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]:
     """Validate a REPRO_FILES_CREATED path is safe (no traversal/absolute paths).
 
@@ -436,11 +497,27 @@ def _get_state_dir(cwd: Path) -> Path:
     return root / ".pdd" / "bug-state"
 
 
-def detect_structural_test_patterns(file_path: str) -> List[str]:
+def detect_structural_test_patterns(
+    file_path: str,
+    start_line: Optional[int] = None,
+) -> List[str]:
     """Scan a test file for structural/non-behavioral test patterns.
 
     Returns a list of human-readable violation descriptions. Empty list means
     the file is clean.
+
+    Args:
+        file_path: Path to the test file to scan.
+        start_line: If provided, only report violations on lines at or after
+            this 1-based line number.  Lines before ``start_line`` are still
+            scanned for source-variable tracking (so a ``read_text()`` call
+            in old code followed by ``assert "x" in var`` in new code is
+            caught), but violations on those pre-existing lines are
+            suppressed.  If ``start_line`` exceeds the file length (e.g. the
+            file was rewritten shorter than the snapshot), it is clamped to 1
+            so the entire file is scanned.  Used to avoid false positives
+            when appending new tests to a file that already contains flagged
+            patterns (issue #990).
 
     Detected patterns:
     - inspect.getsource / inspect.signature used to read source or signatures
@@ -464,9 +541,21 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
 
     lines = content.splitlines()
 
-    # Track whether inspect.getsource or inspect.signature is used
-    has_getsource = False
-    has_signature = False
+    # Effective start line for reporting violations.  Lines before this are
+    # still scanned for variable tracking but violations are suppressed.
+    # If start_line exceeds the file length (file was rewritten/truncated
+    # rather than appended to), clamp to 1 to scan everything.
+    if start_line is not None and start_line > 1:
+        effective_start = 1 if start_line > len(lines) else start_line
+    else:
+        effective_start = 1
+
+    # Track whether inspect.getsource or inspect.signature is used in
+    # reportable lines (at or after ``effective_start``).  These flags gate
+    # source-string-matching violations so a pre-existing getsource before
+    # ``effective_start`` does not suppress new violations after it.
+    has_getsource_reportable = False
+    has_signature_reportable = False
 
     for i, line in enumerate(lines, 1):
         stripped = line.strip()
@@ -475,27 +564,30 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
         if "inspect.getsource" in stripped:
             # Exclude comments
             if not stripped.startswith("#"):
-                has_getsource = True
-                violations.append(
-                    f"Line {i}: inspect.getsource — reads source code as string "
-                    f"for structural assertion instead of testing behavior"
-                )
+                if i >= effective_start:
+                    has_getsource_reportable = True
+                    violations.append(
+                        f"Line {i}: inspect.getsource — reads source code as string "
+                        f"for structural assertion instead of testing behavior"
+                    )
 
         # Detect inspect.signature usage
         if "inspect.signature" in stripped:
             if not stripped.startswith("#"):
-                has_signature = True
-                violations.append(
-                    f"Line {i}: inspect.signature — inspects function signature "
-                    f"instead of calling the function and asserting on behavior"
-                )
+                if i >= effective_start:
+                    has_signature_reportable = True
+                    violations.append(
+                        f"Line {i}: inspect.signature — inspects function signature "
+                        f"instead of calling the function and asserting on behavior"
+                    )
 
         # Detect hasattr as the primary assertion
         if re.match(r"\s*assert\s+hasattr\s*\(", line):
-            violations.append(
-                f"Line {i}: assert hasattr() — checks attribute existence "
-                f"instead of calling and asserting on behavior"
-            )
+            if i >= effective_start:
+                violations.append(
+                    f"Line {i}: assert hasattr() — checks attribute existence "
+                    f"instead of calling and asserting on behavior"
+                )
 
     # Detect source-string-matching patterns:
     # Look for read_text()/read()/getsource() result being used in `assert ... in ...`
@@ -614,6 +706,8 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
 
     if source_var_names:
         for i, line in enumerate(lines, 1):
+            if i < effective_start:
+                continue
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
@@ -623,7 +717,8 @@ def detect_structural_test_patterns(file_path: str) -> List[str]:
                     rf'assert\s+.*\bin\s+{re.escape(var)}\b', stripped
                 ):
                     # Only flag if not already flagged by getsource/signature
-                    if not has_getsource and not has_signature:
+                    # in the reportable range (not pre-existing lines).
+                    if not has_getsource_reportable and not has_signature_reportable:
                         violations.append(
                             f"Line {i}: source string matching — asserts keyword "
                             f"presence in file/source content instead of testing behavior"
@@ -685,6 +780,45 @@ def _extract_violation_snippets(
             else:
                 snippets.append(f"  - {v}")
     return "\n\n".join(snippets)
+
+
+def _cleanup_backups_with_regression_guard(
+    backed_up: List[Tuple[Path, Path]],
+    quiet: bool = False,
+) -> List[Path]:
+    """Clean up .bak files after successful retry, restoring any that show
+    content-size regression (>50% line loss).
+
+    Returns list of paths that were restored from backup.
+    """
+    restored: List[Path] = []
+    for original, backup in backed_up:
+        try:
+            if backup.exists() and original.exists():
+                backup_lines = len(backup.read_text().splitlines())
+                new_lines = len(original.read_text().splitlines())
+                if backup_lines > 0 and new_lines < backup_lines * 0.5:
+                    backup.rename(original)
+                    logger.warning(
+                        "Content regression in %s (%d→%d lines), "
+                        "restored from backup — original structural "
+                        "violations may still be present",
+                        original.name, backup_lines, new_lines,
+                    )
+                    if not quiet:
+                        console.print(
+                            f"[red]  → Content regression detected in {original.name} "
+                            f"({new_lines} lines < {backup_lines * 0.5:.0f} threshold), "
+                            f"restoring from backup.[/red]"
+                        )
+                    restored.append(original)
+                else:
+                    backup.unlink()
+            elif backup.exists():
+                backup.unlink()
+        except (OSError, UnicodeDecodeError):
+            pass  # Best-effort cleanup
+    return restored
 
 
 def run_agentic_bug_orchestrator(
@@ -749,6 +883,8 @@ def run_agentic_bug_orchestrator(
         "issue_author": issue_author,
         "issue_title": issue_title,
         "step5_reproduction_tests": "",
+        "fix_locations": "none",
+        "step9_test_verification": "",
     }
     
     # Populate context with previous step outputs
@@ -771,17 +907,30 @@ def run_agentic_bug_orchestrator(
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
         changed_files.extend(prompt_fixed)
 
+    # Step 6: re-extract fix locations for downstream steps
+    if "step6_output" in context:
+        fix_locs = _parse_fix_locations(context["step6_output"])
+        context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
+
     # Step 7
     if "step7_output" in context:
         s7_out = context["step7_output"]
+        prompt_fixed = _parse_changed_files(s7_out, "PROMPT_FIXED")
         created = _parse_changed_files(s7_out, "FILES_CREATED")
         modified = _parse_changed_files(s7_out, "FILES_MODIFIED")
-        changed_files.extend(created + modified)
-    
+        changed_files.extend(prompt_fixed + created + modified)
+
     # Step 9
     if "step9_output" in context:
         s9_out = context["step9_output"]
-        e2e_created = _parse_changed_files(s9_out, "E2E_FILES_CREATED")
+        created = _parse_changed_files(s9_out, "FILES_CREATED")
+        modified = _parse_changed_files(s9_out, "FILES_MODIFIED")
+        changed_files.extend(created + modified)
+
+    # Step 11
+    if "step11_output" in context:
+        s11_out = context["step11_output"]
+        e2e_created = _parse_changed_files(s11_out, "E2E_FILES_CREATED")
         changed_files.extend(e2e_created)
 
     changed_files = list(set(changed_files))  # Deduplicate
@@ -936,10 +1085,27 @@ def run_agentic_bug_orchestrator(
         if not quiet:
             console.print(f"[bold][Step {step_index}/{total_steps}][/bold] {description}...")
 
+        # Snapshot filesystem BEFORE step 7 (prompt classification) runs (for fallback detection)
+        pre_step7_prompt_files: List[str] = []
+        if step_num == 7:
+            pre_step7_prompt_files = _get_modified_and_untracked(current_work_dir)
+
         # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
         pre_step7_files: List[str] = []
+        pre_step9_line_counts: Dict[str, int] = {}
         if step_num == 9:
             pre_step7_files = _get_modified_and_untracked(current_work_dir)
+            # Snapshot line counts for existing test files so the structural
+            # test guard can skip pre-existing patterns (issue #990).
+            tests_dir = current_work_dir / "tests"
+            if tests_dir.is_dir():
+                for py_file in tests_dir.rglob("*.py"):
+                    try:
+                        pre_step9_line_counts[str(py_file.resolve())] = len(
+                            py_file.read_text().splitlines()
+                        )
+                    except (OSError, UnicodeDecodeError):
+                        pass
 
         # Pre-Step 12: deterministic file staging (#912)
         # Stage all tracked changed_files before Step 12 dispatch so the LLM
@@ -1009,9 +1175,8 @@ def run_agentic_bug_orchestrator(
         if step_num == 3 and "FAST_TRACK:" in step_output:
             fast_track_match = re.search(r"FAST_TRACK:\s*(.+)", step_output)
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
-            skip_msg = f"Step {{}} skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
-            context["step4_output"] = skip_msg.format(4)
-            context["step5_output"] = skip_msg.format(5)
+            context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             state["step_outputs"]["4"] = context["step4_output"]
             state["step_outputs"]["5"] = context["step5_output"]
             state["last_completed_step"] = 5
@@ -1034,6 +1199,17 @@ def run_agentic_bug_orchestrator(
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
 
+        if step_num == 6:
+            fix_locs = _parse_fix_locations(step_output)
+            if fix_locs:
+                context["fix_locations"] = ", ".join(fix_locs)
+            else:
+                context["fix_locations"] = "none"
+                logger.warning(
+                    "Step 6 output missing FIX_LOCATIONS marker — "
+                    "downstream call-boundary checks will be skipped"
+                )
+
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
             if defect_type_match:
@@ -1042,8 +1218,25 @@ def run_agentic_bug_orchestrator(
                     prompt_fixed = _parse_changed_files(step_output, "PROMPT_FIXED")
                     if prompt_fixed:
                         changed_files.extend(prompt_fixed)
+                        changed_files = list(set(changed_files))
                         context["files_to_stage"] = ", ".join(changed_files)
                         files_extracted = True
+                    else:
+                        # Filesystem fallback: detect modified .prompt files (#966)
+                        post_step7_files = _get_modified_and_untracked(current_work_dir)
+                        new_prompt_files = [
+                            f for f in post_step7_files
+                            if f not in pre_step7_prompt_files and f.endswith(".prompt")
+                        ]
+                        if new_prompt_files:
+                            changed_files.extend(new_prompt_files)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+                            files_extracted = True
+                    # Warn if DEFECT_TYPE is prompt but no .prompt files detected
+                    prompt_in_changed = any(f.endswith(".prompt") for f in changed_files)
+                    if not prompt_in_changed and not quiet:
+                        console.print("[yellow]Warning: DEFECT_TYPE is 'prompt' but no .prompt files detected in changed_files[/yellow]")
 
         if step_num == 8:
             # Parse planned test count for Step 9 prompt injection
@@ -1065,13 +1258,18 @@ def run_agentic_bug_orchestrator(
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
 
-            # Structural test guard: scan generated files for banned patterns
+            # Structural test guard: scan generated files for banned patterns.
+            # Only check lines added by Step 9, not pre-existing content (#990).
             file_violations: dict = {}  # fpath -> [violations]
             retry_extracted: List[str] = []
+            cv_extracted: List[str] = []
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
-                violations = detect_structural_test_patterns(str(abs_path))
+                pre_count = pre_step9_line_counts.get(str(abs_path.resolve()), 0)
+                violations = detect_structural_test_patterns(
+                    str(abs_path), start_line=pre_count + 1
+                )
                 if violations:
                     file_violations[fpath] = violations
                     all_violations.extend(violations)
@@ -1184,13 +1382,11 @@ def run_agentic_bug_orchestrator(
                             "[red]  → Retry of step 9 failed; original files restored.[/red]"
                         )
                 else:
-                    # Retry succeeded — clean up backup files
-                    for _original, backup in backed_up:
-                        try:
-                            if backup.exists():
-                                backup.unlink()
-                        except OSError:
-                            pass  # Best-effort cleanup
+                    # Retry succeeded — check for content-size regression
+                    # before cleanup (#1026).
+                    _cleanup_backups_with_regression_guard(
+                        backed_up, quiet=quiet,
+                    )
                     # Re-extract files from retry
                     retry_created = _parse_changed_files(retry_output, "FILES_CREATED")
                     retry_modified = _parse_changed_files(retry_output, "FILES_MODIFIED")
@@ -1200,7 +1396,9 @@ def run_agentic_bug_orchestrator(
                         changed_files = list(set(changed_files))
                         context["files_to_stage"] = ", ".join(changed_files)
 
-                    # Re-scan retry output for structural patterns
+                    # Re-scan retry output for structural patterns.
+                    # Retry files were backed up (.bak) and rewritten from scratch,
+                    # so scan from line 1 — there is no pre-existing content to skip.
                     retry_violations: List[str] = []
                     for fpath in retry_extracted:
                         abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
@@ -1282,6 +1480,100 @@ def run_agentic_bug_orchestrator(
                             f"[yellow]  → After retry: {final_real} of "
                             f"{planned_count} tests (proceeding with warning)[/yellow]"
                         )
+
+            # Deterministic fix-location coverage check (replaces LLM-based Step 10 check)
+            fix_locs_str = context.get("fix_locations", "none")
+            if fix_locs_str != "none":
+                fix_locs_list = [f.strip() for f in fix_locs_str.split(",") if f.strip()]
+                # Gather all test files generated so far (including retries)
+                all_test_files = list(set(extracted + retry_extracted + cv_extracted))
+                uncovered = _verify_fix_location_coverage(
+                    fix_locs_list, all_test_files, current_work_dir
+                )
+                if uncovered:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]  → Fix-location coverage gap: no tests reference "
+                            f"{', '.join(uncovered)}, retrying Step 9[/yellow]"
+                        )
+                    coverage_addendum = (
+                        "\n\n% IMPORTANT — MISSING FIX-LOCATION COVERAGE\n"
+                        "Your previous attempt only generated tests for SOME of the fix locations.\n"
+                        f"The fix locations are: {fix_locs_str}\n"
+                        f"Missing test coverage for: {', '.join(uncovered)}\n\n"
+                        "You MUST generate tests that cover ALL fix locations. For multi-file bugs, "
+                        "mock the callee and verify the caller passes correct arguments, AND test "
+                        "the callee directly. Each fix location file must appear in at least one "
+                        "test (via import, patch target, or direct invocation)."
+                    )
+                    cov_success, cov_output, cov_cost, cov_model = run_agentic_task(
+                        instruction=formatted_prompt + coverage_addendum,
+                        cwd=current_work_dir,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label="step9",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += cov_cost
+                    model_used = cov_model
+                    state["total_cost"] = total_cost
+                    state["model_used"] = model_used
+
+                    cov_retry_extracted: List[str] = []
+                    if cov_success:
+                        cov_created = _parse_changed_files(cov_output, "FILES_CREATED")
+                        cov_modified = _parse_changed_files(cov_output, "FILES_MODIFIED")
+                        cov_retry_extracted = cov_created + cov_modified
+                        if cov_retry_extracted:
+                            changed_files.extend(cov_retry_extracted)
+                            changed_files = list(set(changed_files))
+                            context["files_to_stage"] = ", ".join(changed_files)
+
+                        # Scan coverage-retry files for structural test patterns (#990: skip pre-existing)
+                        cov_violations: List[str] = []
+                        for fpath in cov_retry_extracted:
+                            abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
+                            pre_count = pre_step9_line_counts.get(str(abs_path.resolve()), 0)
+                            v = detect_structural_test_patterns(str(abs_path), start_line=pre_count + 1)
+                            if v:
+                                cov_violations.extend(v)
+                        if cov_violations and not quiet:
+                            console.print(
+                                "[yellow]  → Coverage retry contains structural patterns "
+                                "(proceeding with warning):[/yellow]"
+                            )
+                            for v in cov_violations:
+                                console.print(f"[yellow]    • {v}[/yellow]")
+
+                        step_output = cov_output
+                        context["step9_output"] = cov_output
+
+                    # Log whether retry fixed the gap
+                    still_uncovered = _verify_fix_location_coverage(
+                        fix_locs_list,
+                        list(set(all_test_files + cov_retry_extracted)),
+                        current_work_dir,
+                    )
+                    if still_uncovered and not quiet:
+                        console.print(
+                            f"[yellow]  → After retry, still missing coverage for: "
+                            f"{', '.join(still_uncovered)} (proceeding with warning)[/yellow]"
+                        )
+
+        # Deterministic subprocess verification for Step 9 generated tests (#960).
+        # _verify_e2e_tests already has correct TDD semantics: failures = expected
+        # (tests should fail on buggy code), setup/import errors = bad.
+        # Without this, Step 9 tests only get structural pattern scanning but are
+        # never actually executed — broken tests ship to the PR undetected.
+        if step_num == 9 and extracted:
+            verify_ok, verify_output = _verify_e2e_tests(extracted, current_work_dir)
+            context["step9_test_verification"] = verify_output
+            if not quiet:
+                if verify_ok:
+                    console.print(f"  → Step 9 test verification passed: {verify_output}")
+                else:
+                    console.print(f"[yellow]  → Step 9 test verification issue: {verify_output}[/yellow]")
 
         if step_num == 10:
             # Check for E2E classification marker in step output.

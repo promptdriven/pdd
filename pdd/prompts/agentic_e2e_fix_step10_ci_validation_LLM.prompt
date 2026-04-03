@@ -45,8 +45,18 @@ This step fixes CI failures that were detected after pushing code changes.
 </ci_system>
 
 % Your Task
-1. Analyze the CI failure logs to identify root cause(s).
-2. Common CI failure categories:
+1. Get the CI failure logs so you can diagnose the root cause.
+   - Pre-fetched logs are provided in `ci_failure_logs` above. If they contain
+     useful content, use them directly.
+   - If the pre-fetched logs are empty or say "No failed run logs were available",
+     you MUST fetch the logs yourself using the check URLs from `ci_check_results`.
+     Inspect each failing check's link to determine the CI provider and use the
+     appropriate CLI tool:
+     - `console.cloud.google.com/cloud-build/...` → run `gcloud builds log <BUILD_ID> --project=<PROJECT_ID> --region=<REGION>` (extract build ID, project, and region from the URL)
+     - `github.com/.../actions/runs/...` → run `gh run view <RUN_ID> --log-failed`
+     - Other providers → use whatever CLI or API is available to fetch the logs
+   - Do not give up without attempting to fetch logs yourself.
+2. Analyze the logs to identify root cause(s). Common CI failure categories:
    - Lint errors (formatting, unused imports, style violations)
    - Import errors (missing dependencies, circular imports)
    - Debug artifacts committed (test_errors_*.txt, *.bak, *_fixed.py)

@@ -819,6 +819,10 @@ E   AssertionError: assert '/tmp/random_data.json' in []
 
     update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, cost, model = result
 
+    # Skip if cloud LLM call failed due to insufficient credits
+    if cost == 0.0 and "InsufficientCredits" in str(model):
+        pytest.skip("Cloud LLM call failed: insufficient credits")
+
     # Verify LLM understood prompt is authoritative
     assert cost > 0, "Should have made LLM API call"
     assert model != "", "Should return model name"

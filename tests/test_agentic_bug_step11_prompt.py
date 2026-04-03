@@ -711,3 +711,165 @@ class TestStep11AgenticIntegration:
             "misses bugs like leaked fields.\n"
             f"Generated code:\n{all_generated_code[:1000]}"
         )
+
+
+# --- Auth Guidance Tests (Issue #884) ---
+
+
+class TestStep11AuthAnalysisGuidance:
+    """
+    Test that the Step 11 prompt instructs the LLM to analyze whether the
+    bug requires authentication to reproduce, and to adjust test generation
+    accordingly.
+
+    Issue #884: The prompt discovered auth infrastructure but never connected
+    that discovery to test generation decisions, producing unauthenticated
+    tests (storageState: undefined) for auth-gated bugs.
+    """
+
+    def test_prompt_contains_auth_analysis_discovery_step(
+        self, step11_prompt_content: str
+    ) -> None:
+        """
+        Verify the prompt instructs analyzing whether the bug's code path
+        requires authentication (auth guards, onAuthStateChanged, protected routes).
+
+        Without this step, the LLM has no instruction to check if the bug
+        is inside an auth-gated branch, and defaults to unauthenticated tests.
+        """
+        content_lower = step11_prompt_content.lower()
+        has_auth_analysis = any([
+            "auth guard" in content_lower
+            and "onauthstatechanged" in content_lower,
+            "determine if the bug requires authentication" in content_lower,
+            "bug's code path" in content_lower
+            and "auth" in content_lower
+            and "protected route" in content_lower,
+        ])
+        assert has_auth_analysis, (
+            "Step 11 prompt should instruct the LLM to analyze whether the bug's "
+            "code path is inside an auth guard, onAuthStateChanged callback, auth "
+            "context provider, or protected route. Without this, the LLM defaults "
+            "to unauthenticated tests for auth-gated bugs (issue #884)."
+        )
+
+    def test_prompt_instructs_finding_auth_fixtures(
+        self, step11_prompt_content: str
+    ) -> None:
+        """
+        Verify the prompt instructs searching for existing auth fixtures
+        (auth.setup.ts, storageState files, test account config) when auth
+        is required.
+
+        Without this, even if the LLM identifies an auth requirement, it has
+        no guidance on how to set up an authenticated browser context.
+        """
+        content_lower = step11_prompt_content.lower()
+        has_auth_fixture_search = (
+            "auth.setup.ts" in content_lower
+            and "storagestate" in content_lower
+        )
+        assert has_auth_fixture_search, (
+            "Step 11 prompt should instruct searching for auth.setup.ts, "
+            "storageState files/directories, and test account configuration "
+            "when auth is required. This connects auth discovery to test generation."
+        )
+
+    def test_prompt_instructs_e2e_skip_when_auth_unavailable(
+        self, step11_prompt_content: str
+    ) -> None:
+        """
+        Verify the prompt instructs outputting E2E_SKIP when auth is required
+        but no auth fixtures or credentials are available.
+
+        Without this, the LLM writes a misleading unauthenticated test that
+        passes trivially without exercising the auth-gated bug path.
+        """
+        has_skip_instruction = (
+            "E2E_SKIP" in step11_prompt_content
+            and "auth" in step11_prompt_content.lower()
+            and "no auth fixtures" in step11_prompt_content.lower()
+        )
+        assert has_skip_instruction, (
+            "Step 11 prompt should instruct outputting E2E_SKIP when auth is "
+            "required but no auth fixtures/credentials are available, rather "
+            "than writing a misleading unauthenticated test."
+        )
+
+    def test_prompt_prohibits_storagestate_undefined_for_auth_bugs(
+        self, step11_prompt_content: str
+    ) -> None:
+        """
+        Verify the test generation section explicitly prohibits storageState:
+        undefined for auth-gated bugs.
+
+        This is the concrete anti-pattern from issue #884: the generated test
+        used `storageState: undefined` which created an unauthenticated context
+        that never triggered the auth-gated bug path.
+        """
+        content_lower = step11_prompt_content.lower()
+        has_prohibition = (
+            "storagestate: undefined" in content_lower
+            and "auth-gated" in content_lower
+        )
+        assert has_prohibition, (
+            "Step 11 prompt should explicitly prohibit using "
+            "'storageState: undefined' for auth-gated bugs. This is the exact "
+            "anti-pattern from issue #884 — unauthenticated tests pass trivially "
+            "without exercising the bug path."
+        )
+
+    def test_auth_guidance_survives_preprocess_pipeline(
+        self, step11_prompt_content: str
+    ) -> None:
+        """
+        Verify that auth analysis instructions, auth fixture discovery,
+        E2E_SKIP guidance, and storageState prohibition all survive the
+        preprocess() pipeline used by the orchestrator.
+
+        Follows the pattern from TestStep11PreprocessedPromptRetainsMockingGuidance.
+        """
+        try:
+            from pdd.preprocess import preprocess
+        except ImportError:
+            pytest.skip("pdd.preprocess not available in this environment")
+
+        context_keys = [
+            "issue_url", "repo_owner", "repo_name", "issue_number",
+            "issue_content", "step1_output", "step2_output", "step3_output",
+            "step4_output", "step5_output", "step6_output", "step7_output",
+            "step8_output", "step9_output", "step10_output",
+            "worktree_path", "files_to_stage",
+        ]
+        processed = preprocess(
+            step11_prompt_content,
+            recursive=True,
+            double_curly_brackets=True,
+            exclude_keys=context_keys,
+        )
+        rendered = processed.replace("{{", "{").replace("}}", "}")
+        rendered_lower = rendered.lower()
+
+        # Auth analysis step survives
+        assert "auth guard" in rendered_lower and "onauthstatechanged" in rendered_lower, (
+            "Auth analysis instructions (auth guard, onAuthStateChanged) missing "
+            "after preprocessing. The preprocess() pipeline may have stripped them."
+        )
+
+        # Auth fixture discovery survives
+        assert "auth.setup.ts" in rendered_lower and "storagestate" in rendered_lower, (
+            "Auth fixture discovery (auth.setup.ts, storageState) missing after "
+            "preprocessing. The preprocess() pipeline may have stripped them."
+        )
+
+        # E2E_SKIP for auth survives
+        assert "e2e_skip" in rendered_lower and "no auth fixtures" in rendered_lower, (
+            "E2E_SKIP instruction for missing auth fixtures missing after "
+            "preprocessing. The preprocess() pipeline may have stripped it."
+        )
+
+        # storageState: undefined prohibition survives
+        assert "storagestate: undefined" in rendered_lower and "auth-gated" in rendered_lower, (
+            "storageState: undefined prohibition for auth-gated bugs missing after "
+            "preprocessing. The preprocess() pipeline may have stripped it."
+        )

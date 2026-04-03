@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Optional, Tuple, Callable
 import click
 from rich import print as rprint
-from filelock import FileLock
 
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
@@ -18,7 +17,10 @@ def auto_deps_main(
     auto_deps_csv_path: Optional[str],
     output: Optional[str],
     force_scan: Optional[bool] = False,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    include_docs: bool = False,
+    no_dedup: bool = False,
+    concurrency: int = 1,
 ) -> Tuple[str, float, str]:
     """
     Main function to analyze a prompt file and insert dependencies found in a directory.
@@ -30,8 +32,13 @@ def auto_deps_main(
     :param output: File path (or directory) to save the modified prompt file.
     :param force_scan: Flag to force a rescan by deleting the existing CSV cache.
     :param progress_callback: Optional callback for progress updates (current, total).
+    :param include_docs: Flag to include documentation files (.md, .txt, .rst) in dependency discovery.
+    :param no_dedup: Flag to disable redundant inline content removal.
+    :param concurrency: Number of parallel workers for file summarization.
     :return: A tuple containing the modified prompt, total cost, and model name used.
     """
+    from filelock import FileLock
+
     try:
         # Construct file paths
         input_file_paths = {
@@ -55,21 +62,22 @@ def auto_deps_main(
         # Resolve CSV path
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
 
-        # Handle force scan option
-        if force_scan and Path(csv_path).exists():
-            if not ctx.obj.get('quiet', False):
-                rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
-            try:
-                Path(csv_path).unlink()
-            except OSError as e:
-                if not ctx.obj.get('quiet', False):
-                    rprint(f"[yellow]Warning: Could not delete CSV file: {e}[/yellow]")
-
-        # Acquire lock to prevent concurrent access to the CSV cache
+        # Acquire lock to prevent concurrent access to the CSV cache.
+        # The lock is held for the entire operation (from CSV read through CSV write).
         lock_path = f"{csv_path}.lock"
         lock = FileLock(lock_path)
         
         with lock:
+            # Handle force scan option
+            if force_scan and Path(csv_path).exists():
+                if not ctx.obj.get('quiet', False):
+                    rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
+                try:
+                    Path(csv_path).unlink()
+                except OSError as e:
+                    if not ctx.obj.get('quiet', False):
+                        rprint(f"[yellow]Warning: Could not delete CSV file: {e}[/yellow]")
+
             # Load input file
             prompt_content = input_strings["prompt_file"]
 
@@ -89,7 +97,10 @@ def auto_deps_main(
                 temperature=temperature,
                 time=time_budget,
                 verbose=verbose,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                include_docs=include_docs,
+                dedup=(not no_dedup),
+                max_workers=concurrency,
             )
 
             # Save the modified prompt

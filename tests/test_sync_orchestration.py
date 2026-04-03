@@ -7271,3 +7271,74 @@ def test_e2e_typescript_real_execution_detects_failures(tmp_path):
         f"This means sync_determine_operation would never recommend 'fix'."
     )
     assert real.tests_passed == 0 or real.tests_failed > 0, "At least some tests must fail"
+
+
+# ---------------------------------------------------------------------------
+# _validate_typescript_imports: package.json fallback (#826)
+# ---------------------------------------------------------------------------
+
+class TestValidateTypescriptImportsPackageJsonFallback:
+    """When node_modules doesn't exist, _validate_typescript_imports should
+    check package.json dependencies before flagging imports as hallucinated.
+
+    Regression test for pdd_cloud#826: generated code imports next/link and
+    lucide-react which are real deps in package.json, but flagged as
+    hallucinated because node_modules wasn't installed in the git clone.
+    """
+
+    def test_bare_import_resolved_via_package_json(self, tmp_path):
+        """Imports of packages listed in package.json should not be flagged."""
+        from pdd.sync_orchestration import _validate_typescript_imports
+        import json
+
+        # Create project structure without node_modules
+        (tmp_path / "package.json").write_text(json.dumps({
+            "dependencies": {"next": "^15.0.0", "react": "^19.0.0"},
+            "devDependencies": {"lucide-react": "^0.509.0"},
+        }))
+        code_file = tmp_path / "src" / "components" / "Test.tsx"
+        code_file.parent.mkdir(parents=True)
+        code_file.write_text(
+            "import Link from 'next/link';\n"
+            "import { Github } from 'lucide-react';\n"
+            "import React from 'react';\n"
+        )
+
+        unresolved = _validate_typescript_imports(code_file)
+        assert "next/link" not in unresolved, (
+            f"next/link should resolve via package.json deps, got unresolved={unresolved}"
+        )
+        assert "lucide-react" not in unresolved, (
+            f"lucide-react should resolve via package.json devDeps, got unresolved={unresolved}"
+        )
+        assert "react" not in unresolved
+
+    def test_truly_hallucinated_import_still_flagged(self, tmp_path):
+        """Imports NOT in package.json or node_modules should still be flagged."""
+        from pdd.sync_orchestration import _validate_typescript_imports
+        import json
+
+        (tmp_path / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "^19.0.0"},
+        }))
+        code_file = tmp_path / "src" / "Test.tsx"
+        code_file.parent.mkdir(parents=True)
+        code_file.write_text("import { foo } from 'nonexistent-package';\n")
+
+        unresolved = _validate_typescript_imports(code_file)
+        assert "nonexistent-package" in unresolved
+
+    def test_scoped_package_resolved_via_package_json(self, tmp_path):
+        """Scoped packages (@org/pkg) in package.json should not be flagged."""
+        from pdd.sync_orchestration import _validate_typescript_imports
+        import json
+
+        (tmp_path / "package.json").write_text(json.dumps({
+            "dependencies": {"@radix-ui/react-dialog": "^1.0.0"},
+        }))
+        code_file = tmp_path / "src" / "Test.tsx"
+        code_file.parent.mkdir(parents=True)
+        code_file.write_text("import { Dialog } from '@radix-ui/react-dialog';\n")
+
+        unresolved = _validate_typescript_imports(code_file)
+        assert "@radix-ui/react-dialog" not in unresolved

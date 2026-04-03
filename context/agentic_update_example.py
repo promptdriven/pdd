@@ -1,106 +1,221 @@
 from __future__ import annotations
 
-import sys
-import os
-from pathlib import Path
+"""
+Example demonstrating how to use pdd.agentic_update.run_agentic_update.
 
-# Add the project root to sys.path to allow importing the pdd package
-# This assumes the script is located in pdd/context/ relative to the package root
+run_agentic_update coordinates an agentic update of a prompt file using an
+external CLI agent (Claude, Gemini, Codex). It:
+  1. Validates that prompt and code files exist.
+  2. Checks for available agent CLIs.
+  3. Auto-discovers (or accepts explicit) test files.
+  4. Loads the 'agentic_update_LLM' prompt template and formats it.
+  5. Runs the agent via run_agentic_task.
+  6. Detects changed files via mtime comparison.
+  7. Returns (success, message, cost, model_used, changed_files).
+     - success is True only if the prompt file was modified.
+     - cost is in USD (e.g., 0.05 means $0.05).
+"""
+
+import os
+import sys
+import time
+import tempfile
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+# Ensure project root is importable
 project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+sys.path.insert(0, str(project_root))
 
 from pdd.agentic_update import run_agentic_update
 
 
+def example_no_agents_available() -> None:
+    """Show return value when no agentic CLI is available."""
+    print("=" * 60)
+    print("Example 1: No agents available")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt = tmp_path / "module.prompt"
+        code = tmp_path / "module.py"
+        prompt.write_text("% Prompt content\n")
+        code.write_text("def hello(): pass\n")
+
+        # Mock get_available_agents to return empty list
+        with patch("pdd.agentic_update.get_available_agents", return_value=[]):
+            success, message, cost, model, changed = run_agentic_update(
+                prompt_file=str(prompt),
+                code_file=str(code),
+                quiet=True,
+            )
+
+        print(f"  success      : {success}")        # False
+        print(f"  message      : {message}")         # "No agentic CLI available"
+        print(f"  cost (USD)   : {cost}")             # 0.0
+        print(f"  model_used   : '{model}'")          # ""
+        print(f"  changed_files: {changed}")          # []
+        print()
+
+
+def example_successful_update() -> None:
+    """Simulate a successful prompt update where the agent modifies the prompt."""
+    print("=" * 60)
+    print("Example 2: Successful prompt update")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt = tmp_path / "math_module.prompt"
+        code = tmp_path / "math_module.py"
+        test_file = tmp_path / "test_math_module.py"
+
+        # Outdated prompt (only mentions add)
+        prompt.write_text(
+            "% You are a Python math expert.\n"
+            "% Requirements\n"
+            "1. Create a function `add(a, b)` that returns the sum.\n"
+        )
+        # Updated code (has add and subtract)
+        code.write_text(
+            "def add(a, b):\n    return a + b\n\n"
+            "def subtract(a, b):\n    return a - b\n"
+        )
+        # Test file (tests both functions)
+        test_file.write_text(
+            "def test_add():\n    assert True\n\n"
+            "def test_subtract():\n    assert True\n"
+        )
+
+        # Set prompt mtime in the past so the agent's touch is detectable
+        old_time = time.time() - 100
+        os.utime(prompt, (old_time, old_time))
+
+        mock_template = MagicMock()
+        mock_template.format.return_value = "Formatted instruction for the agent"
+
+        def simulate_agent_modifying_prompt(*args, **kwargs):
+            """Side effect: agent touches the prompt file, simulating a real edit."""
+            prompt.write_text(
+                "% You are a Python math expert.\n"
+                "% Requirements\n"
+                "1. Create a function `add(a, b)` that returns the sum.\n"
+                "2. Create a function `subtract(a, b)` that returns the difference.\n"
+            )
+            return (True, "Updated prompt with subtract requirement", 0.05, "claude")
+
+        with patch("pdd.agentic_update.get_available_agents", return_value=["claude"]), \
+             patch("pdd.agentic_update.load_prompt_template", return_value=mock_template), \
+             patch("pdd.agentic_update.run_agentic_task", side_effect=simulate_agent_modifying_prompt):
+            success, message, cost, model, changed = run_agentic_update(
+                prompt_file=str(prompt),
+                code_file=str(code),
+                quiet=True,
+            )
+
+        print(f"  success      : {success}")        # True
+        print(f"  message      : {message}")         # contains "updated successfully"
+        print(f"  cost (USD)   : {cost}")             # 0.05
+        print(f"  model_used   : {model}")            # "claude"
+        print(f"  changed_files: {len(changed)} file(s)")
+        if changed:
+            print(f"    -> {changed[0]}")
+        print()
+
+
+def example_agent_runs_but_no_change() -> None:
+    """Show outcome when agent runs successfully but doesn't modify the prompt."""
+    print("=" * 60)
+    print("Example 3: Agent runs but prompt unchanged")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt = tmp_path / "module.prompt"
+        code = tmp_path / "module.py"
+        prompt.write_text("% Already up to date\n")
+        code.write_text("def foo(): pass\n")
+
+        mock_template = MagicMock()
+        mock_template.format.return_value = "Formatted instruction"
+
+        with patch("pdd.agentic_update.get_available_agents", return_value=["claude"]), \
+             patch("pdd.agentic_update.load_prompt_template", return_value=mock_template), \
+             patch("pdd.agentic_update.run_agentic_task", return_value=(True, "No changes needed", 0.02, "claude")):
+            success, message, cost, model, changed = run_agentic_update(
+                prompt_file=str(prompt),
+                code_file=str(code),
+                quiet=True,
+            )
+
+        print(f"  success      : {success}")        # False (prompt not modified)
+        print(f"  message      : {message}")         # "did not modify"
+        print(f"  cost (USD)   : {cost}")             # 0.02
+        print(f"  changed_files: {changed}")          # []
+        print()
+
+
+def example_explicit_test_files() -> None:
+    """Show how to pass explicit test file paths (with validation)."""
+    print("=" * 60)
+    print("Example 4: Explicit test files (missing file error)")
+    print("=" * 60)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        prompt = tmp_path / "module.prompt"
+        code = tmp_path / "module.py"
+        prompt.write_text("% Prompt\n")
+        code.write_text("pass\n")
+
+        missing_test = tmp_path / "nonexistent_test.py"
+
+        with patch("pdd.agentic_update.get_available_agents", return_value=["claude"]):
+            success, message, cost, model, changed = run_agentic_update(
+                prompt_file=str(prompt),
+                code_file=str(code),
+                test_files=[missing_test],
+                quiet=True,
+            )
+
+        print(f"  success      : {success}")        # False
+        print(f"  message      : {message}")         # "Test file(s) not found: ..."
+        print(f"  cost (USD)   : {cost}")             # 0.0
+        print()
+
+
+def example_missing_input_files() -> None:
+    """Show early failure when prompt or code file doesn't exist."""
+    print("=" * 60)
+    print("Example 5: Missing input files")
+    print("=" * 60)
+
+    success, message, cost, model, changed = run_agentic_update(
+        prompt_file="/tmp/does_not_exist.prompt",
+        code_file="/tmp/does_not_exist.py",
+        quiet=True,
+    )
+
+    print(f"  success      : {success}")        # False
+    print(f"  message      : {message}")         # "Prompt file not found: ..."
+    print(f"  cost (USD)   : {cost}")             # 0.0
+    print()
+
+
 def main() -> None:
-    """
-    Demonstrates how to use run_agentic_update to update a prompt file.
-    
-    This utility:
-    1. Identifies the prompt, code, and test files.
-    2. Constructs a task for an AI agent (Claude, Gemini, etc.) to read the code
-       and update the prompt to match the code's current state.
-    3. Executes the agent and reports costs and changes.
-    """
-    
-    # 1. Setup the environment
-    # We will use a local './output' directory for our example files.
-    output_dir = Path("./output")
-    output_dir.mkdir(exist_ok=True)
-    
-    print(f"Working directory: {output_dir.resolve()}")
+    """Run all examples demonstrating run_agentic_update behavior."""
+    print("pdd.agentic_update — Usage Examples")
+    print("=" * 60)
+    print()
 
-    # 2. Create dummy files to simulate a development scenario
-    # Scenario: The code has been updated (added 'subtract' function), 
-    # but the prompt only knows about 'add'. We want the agent to update the prompt.
-    
-    prompt_path = output_dir / "math_module.prompt"
-    code_path = output_dir / "math_module.py"
-    test_path = output_dir / "test_math_module.py"
+    example_no_agents_available()
+    example_successful_update()
+    example_agent_runs_but_no_change()
+    example_explicit_test_files()
+    example_missing_input_files()
 
-    # Initial Prompt (outdated)
-    prompt_content = (
-        "% You are a Python math expert.\n"
-        "% Requirements\n"
-        "1. Create a function `add(a, b)` that returns the sum.\n"
-    )
-    prompt_path.write_text(prompt_content, encoding="utf-8")
-
-    # Current Code (has new features)
-    code_content = (
-        "def add(a, b):\n"
-        "    return a + b\n\n"
-        "def subtract(a, b):\n"
-        "    return a - b\n"
-    )
-    code_path.write_text(code_content, encoding="utf-8")
-
-    # Tests (verifies both)
-    test_content = (
-        "from math_module import add, subtract\n\n"
-        "def test_add():\n"
-        "    assert add(1, 2) == 3\n\n"
-        "def test_subtract():\n"
-        "    assert subtract(5, 3) == 2\n"
-    )
-    test_path.write_text(test_content, encoding="utf-8")
-
-    print(f"Created files in {output_dir}")
-
-    # 3. Run the Agentic Update
-    # This function will:
-    # - Auto-discover tests (since we named them test_math_module.py)
-    # - Load the 'agentic_update_LLM' template
-    # - Call the available CLI agent to update 'math_module.prompt'
-    
-    print("\n--- Starting Agentic Update ---")
-    print("Goal: Update 'math_module.prompt' to reflect changes in 'math_module.py'")
-
-    success, message, cost, model_used, changed_files = run_agentic_update(
-        prompt_file=str(prompt_path),
-        code_file=str(code_path),
-        # test_files=None,  # Auto-discovery is enabled by default
-        verbose=True,       # Print agent logs to console
-        quiet=False         # Do not suppress summary output
-    )
-
-    # 4. Inspect Results
-    print("\n--- Update Results ---")
-    print(f"Success       : {success}")
-    print(f"Message       : {message}")
-    print(f"Cost          : ${cost:.6f}")
-    print(f"Model Used    : {model_used}")
-    print(f"Changed Files : {changed_files}")
-
-    if success:
-        print("\n[Verification] Prompt file was updated.")
-        new_prompt = prompt_path.read_text(encoding="utf-8")
-        print("-" * 40)
-        print(new_prompt)
-        print("-" * 40)
-    else:
-        print("\n[Verification] Prompt file was NOT updated (or agent failed).")
-        # This might happen if no agent CLI (claude, gemini) is installed/configured.
+    print("All examples completed successfully.")
 
 
 if __name__ == "__main__":

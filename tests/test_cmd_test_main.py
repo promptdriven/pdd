@@ -1566,3 +1566,171 @@ def test_python_agentic_merge_uses_native_path(mock_ctx_fixture, mock_files_fixt
     assert mock_generate.called, (
         "Native generate_test should be called for Python merge (test_extend)"
     )
+
+# ===========================================================================
+# Issue #717: pdd test --manual ignores --manual flag
+# ===========================================================================
+
+
+# Test 1 (parametrized): manual=True skips agentic for non-Python languages
+@pytest.mark.parametrize("language,output_path", [
+    ("shell", "tests/infra/test_deploy_script.sh"),
+    ("javascript", "tests/test_app.test.js"),
+    ("ruby", "tests/test_app_spec.rb"),
+    ("go", "tests/handler_test.go"),
+])
+def test_issue_717_manual_skips_agentic_for_non_python(
+    mock_ctx_fixture, language, output_path
+):
+    """
+    Issue #717: When manual=True, cmd_test_main must use the legacy single-LLM
+    path (generate_test) even for non-Python languages. The agentic pipeline
+    must NOT be invoked.
+
+    Parametrized across multiple non-Python languages to ensure the guard is
+    language-independent.
+    """
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic, \
+         patch("builtins.open", mock_open()):
+
+        mock_cp.return_value = (
+            {},
+            {"prompt_file": "prompt contents", "code_file": "code contents"},
+            {"output": output_path},
+            language,
+        )
+        mock_gen.return_value = ("legacy test code", 0.05, "test_model")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="fake.prompt",
+            code_file="fake.code",
+            output=output_path,
+            language=None,
+            manual=True,
+        )
+
+        # Legacy path called, agentic NOT called
+        mock_gen.assert_called_once()
+        mock_agentic.assert_not_called()
+        # Return tuple 4th element should be None (legacy path)
+        assert result[3] is None
+
+
+# Test 3: manual=True overrides agentic_mode=True
+def test_issue_717_manual_overrides_agentic_mode(mock_ctx_fixture):
+    """
+    Issue #717: When both manual=True and agentic_mode=True are set,
+    manual must take precedence — the legacy single-LLM path must be used.
+    """
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic, \
+         patch("builtins.open", mock_open()):
+
+        mock_cp.return_value = (
+            {},
+            {"prompt_file": "prompt contents", "code_file": "code contents"},
+            {"output": "tests/test_app.sh"},
+            "shell",
+        )
+        mock_gen.return_value = ("legacy test code", 0.04, "test_model")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="fake.prompt",
+            code_file="fake.sh",
+            output="tests/test_app.sh",
+            language=None,
+            manual=True,
+        )
+
+        # Manual takes precedence: legacy path, not agentic
+        mock_gen.assert_called_once()
+        mock_agentic.assert_not_called()
+        assert result[3] is None
+
+
+# Test 4: Default (no manual) still uses agentic for non-Python
+def test_issue_717_default_non_python_uses_agentic(mock_ctx_fixture, tmp_path):
+    """
+    Issue #717 backward compatibility: When manual is not passed (defaults to
+    False), non-Python languages must still use the agentic pipeline.
+    """
+    output_path = str(tmp_path / "test_deploy.sh")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen:
+
+        mock_cp.return_value = (
+            {},
+            {"prompt_file": "prompt contents", "code_file": "code contents"},
+            {"output": output_path},
+            "shell",
+        )
+        mock_agentic.return_value = ("agentic code", 0.10, "agentic_model", True)
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="fake.prompt",
+            code_file="fake.sh",
+            output=output_path,
+            language=None,
+            # manual not passed — defaults to False
+        )
+
+        mock_agentic.assert_called_once()
+        mock_gen.assert_not_called()
+
+
+# Test 5: CLI integration — test --manual forwards manual=True in kwargs
+def test_issue_717_cli_integration_manual_kwarg_forwarded():
+    """
+    Issue #717: End-to-end CLI integration test. Invoking `pdd test --manual`
+    must forward `manual=True` to cmd_test_main. We mock cmd_test_main and
+    verify the call_args contain manual=True.
+    """
+    from click.testing import CliRunner
+    from pdd.commands.generate import test as test_cmd
+
+    with patch("pdd.cmd_test_main.cmd_test_main") as mock_cmd_test:
+        mock_cmd_test.return_value = ("test code", 0.05, "model", None)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            test_cmd,
+            [
+                "--manual",
+                "prompts/deploy_Shell.prompt",
+                "src/deploy.sh",
+                "--output", "tests/test_deploy.sh",
+            ],
+            obj={
+                "verbose": False,
+                "strength": 0.5,
+                "temperature": 0.0,
+                "force": False,
+                "quiet": False,
+                "local": True,
+                "agentic_mode": False,
+                "context": None,
+                "confirm_callback": None,
+                "time": 0.25,
+            },
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, f"CLI exited with code {result.exit_code}: {result.output}"
+        mock_cmd_test.assert_called_once()
+        kwargs = mock_cmd_test.call_args.kwargs
+        assert "manual" in kwargs, (
+            f"'manual' not in cmd_test_main call kwargs: {kwargs}"
+        )
+        assert kwargs["manual"] is True, (
+            f"Expected manual=True, got manual={kwargs['manual']}"
+        )

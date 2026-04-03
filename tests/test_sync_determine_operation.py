@@ -4032,3 +4032,215 @@ class TestFingerprintIncludeDependencies:
             f"Expected regeneration when one of multiple included files changed, "
             f"got '{decision.operation}'."
         )
+
+
+# ---------------------------------------------------------------------------
+# Bug: _generate_paths_from_templates missing 'code' fallback (#826)
+# ---------------------------------------------------------------------------
+
+class TestGeneratePathsFromTemplatesCodeFallback:
+    """When .pddrc outputs config defines 'prompt' but not 'code', the returned
+    dict must still have a 'code' key. Otherwise sync_orchestration crashes with
+    KeyError: 'code'.
+
+    Regression test for promptdriven/pdd_cloud#826: the frontend catch-all
+    context has outputs.prompt but no outputs.code, causing page syncs to crash.
+    """
+
+    def test_code_key_always_present(self):
+        """_generate_paths_from_templates must return a 'code' key even when
+        outputs config only defines 'prompt'."""
+        from pdd.sync_determine_operation import _generate_paths_from_templates
+
+        outputs_config = {
+            "prompt": {"path": "prompts/frontend/{dir_prefix}{name}_{language}.prompt"},
+            # NOTE: no 'code' output defined — this is the bug trigger
+        }
+        result = _generate_paths_from_templates(
+            basename="app/dashboard/page",
+            language="typescriptreact",
+            extension="tsx",
+            outputs_config=outputs_config,
+            prompt_path="prompts/frontend/app/dashboard/page_TypescriptReact.prompt",
+        )
+
+        assert "code" in result, (
+            f"'code' key missing from result: {list(result.keys())}. "
+            "sync_orchestration accesses pdd_files['code'] directly and will "
+            "crash with KeyError if this key is absent."
+        )
+        assert "page" in str(result["code"]), (
+            f"Code path should contain the module name 'page', got: {result['code']}"
+        )
+
+    def test_code_key_present_with_generate_output_path(self):
+        """When generate_output_path is available, use it for the code fallback."""
+        from pdd.sync_determine_operation import _generate_paths_from_templates
+
+        outputs_config = {
+            "prompt": {"path": "prompts/frontend/{dir_prefix}{name}_{language}.prompt"},
+        }
+        result = _generate_paths_from_templates(
+            basename="app/dashboard/page",
+            language="typescriptreact",
+            extension="tsx",
+            outputs_config=outputs_config,
+            prompt_path="prompts/frontend/app/dashboard/page_TypescriptReact.prompt",
+        )
+
+        assert "code" in result
+        # Should use dir_prefix + name pattern
+        code_str = str(result["code"])
+        assert "page.tsx" in code_str, f"Expected page.tsx in code path, got: {code_str}"
+
+
+# =============================================================================
+# Issue #1048: Glob patterns must escape brackets in basenames
+# =============================================================================
+
+
+class TestIssue1048GlobEscapingInDetermineOperation:
+    """Tests that glob patterns in sync_determine_operation correctly handle
+    bracket characters in basenames by using glob.escape()."""
+
+    def test_check_example_success_history_with_bracket_basename(self, tmp_path):
+        """_check_example_success_history glob pattern must escape brackets in _safe_basename output.
+
+        Bug: _safe_basename('frontend/[id]') -> 'frontend_[id]', then
+        meta_dir.glob('frontend_[id]_python_run*.json') interprets [id] as char class.
+        """
+        from sync_determine_operation import _check_example_success_history, _safe_basename
+
+        assert _safe_basename("frontend/[id]") == "frontend_[id]"
+
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+
+        report_file = meta_dir / "frontend_[id]_python_run_001.json"
+        report_file.write_text('{"exit_code": 0}')
+
+        with patch("sync_determine_operation.get_meta_dir", return_value=meta_dir), \
+             patch("sync_determine_operation.read_fingerprint", return_value=None), \
+             patch("sync_determine_operation.read_run_report", return_value=None):
+
+            result = _check_example_success_history("frontend/[id]", "python")
+
+        assert result is True, \
+            "Bug #1048: _check_example_success_history can't find run report because " \
+            "glob interprets [id] as character class matching 'i' or 'd'"
+
+    def test_get_pdd_file_paths_primary_test_glob_with_brackets(self, tmp_path, monkeypatch):
+        """get_pdd_file_paths primary path: test glob must escape brackets in name_part.
+
+        Bug: _extract_name_part('[id]') returns ('', '[id]'), then
+        test_dir.glob('test_[id]*.py') interprets [id] as char class.
+        The fallback returns [test_path] (1 file) masking the glob failure.
+        We create 2 test files so only proper glob finds both.
+        """
+        monkeypatch.chdir(tmp_path)
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "[id]_python.prompt").write_text("# prompt")
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        # Create TWO matching test files — fallback only returns 1
+        test_file_1 = tests_dir / "test_[id].py"
+        test_file_1.write_text("def test_1(): pass")
+        test_file_2 = tests_dir / "test_[id]_extra.py"
+        test_file_2.write_text("def test_2(): pass")
+
+        with patch("sync_determine_operation.construct_paths") as mock_cp:
+            def side_effect(*args, **kwargs):
+                cmd = kwargs.get("command", "sync")
+                if cmd == "test":
+                    return (
+                        {"prompts_dir": str(prompts_dir), "tests_dir": str(tests_dir)},
+                        {"prompt_file": "content"},
+                        {"output": str(tests_dir / "test_[id].py")},
+                        "python",
+                    )
+                return (
+                    {"prompts_dir": str(prompts_dir), "tests_dir": str(tests_dir)},
+                    {"prompt_file": "content"},
+                    {
+                        "output": str(tmp_path / "src" / "[id].py"),
+                        "generate_output_path": str(tmp_path / "src" / "[id].py"),
+                        "test_output_path": str(tests_dir / "test_[id].py"),
+                        "example_output_path": str(tmp_path / "examples" / "[id]_example.py"),
+                    },
+                    "python",
+                )
+            mock_cp.side_effect = side_effect
+
+            result = get_pdd_file_paths("[id]", "python", prompts_dir=str(prompts_dir))
+
+        test_files = result.get("test_files", [])
+        test_file_names = [Path(f).name for f in test_files]
+
+        # Both test files should be found by glob. The fallback only returns 1.
+        assert "test_[id].py" in test_file_names, \
+            f"Bug #1048: glob missed test_[id].py. Found: {test_file_names}"
+        assert "test_[id]_extra.py" in test_file_names, \
+            f"Bug #1048: glob missed test_[id]_extra.py because [id] was treated as char class " \
+            f"(fallback masked the bug by returning only test_path). Found: {test_file_names}"
+
+    def test_get_pdd_file_paths_fallback_glob_with_brackets(self, tmp_path, monkeypatch):
+        """get_pdd_file_paths exception fallback: test glob must also escape brackets.
+
+        With construct_paths raising, the fallback globs in CWD.
+        We create 2 test files to detect the glob failure (fallback returns only 1).
+        """
+        monkeypatch.chdir(tmp_path)
+
+        # Create TWO test files in CWD
+        test_file_1 = tmp_path / "test_[id].py"
+        test_file_1.write_text("def test_1(): pass")
+        test_file_2 = tmp_path / "test_[id]_extra.py"
+        test_file_2.write_text("def test_2(): pass")
+
+        with patch("sync_determine_operation.construct_paths", side_effect=Exception("force fallback")):
+            result = get_pdd_file_paths("[id]", "python", prompts_dir=str(tmp_path))
+
+        test_files = result.get("test_files", [])
+        test_file_names = [Path(f).name for f in test_files]
+
+        assert "test_[id]_extra.py" in test_file_names, \
+            f"Bug #1048: fallback glob missed test_[id]_extra.py because [id] was treated as char class. Found: {test_file_names}"
+
+    def test_get_pdd_file_paths_prompt_missing_glob_with_brackets(self, tmp_path, monkeypatch):
+        """get_pdd_file_paths prompt-missing fallback: test glob must escape brackets.
+
+        When prompt doesn't exist on disk, the function still tries to find test files.
+        We create 2 test files to detect the glob failure.
+        """
+        monkeypatch.chdir(tmp_path)
+
+        # NO prompt file exists — triggers the prompt-missing path
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        test_file_1 = tests_dir / "test_[id].py"
+        test_file_1.write_text("def test_1(): pass")
+        test_file_2 = tests_dir / "test_[id]_extra.py"
+        test_file_2.write_text("def test_2(): pass")
+
+        with patch("sync_determine_operation.construct_paths") as mock_cp:
+            mock_cp.return_value = (
+                {"prompts_dir": str(tmp_path / "prompts"), "tests_dir": str(tests_dir)},
+                {"prompt_file": "content"},
+                {
+                    "generate_output_path": str(tmp_path / "src" / "[id].py"),
+                    "test_output_path": str(tests_dir / "test_[id].py"),
+                    "example_output_path": str(tmp_path / "examples" / "[id]_example.py"),
+                },
+                "python",
+            )
+
+            result = get_pdd_file_paths("[id]", "python", prompts_dir=str(tmp_path / "prompts"))
+
+        test_files = result.get("test_files", [])
+        test_file_names = [Path(f).name for f in test_files]
+
+        assert "test_[id]_extra.py" in test_file_names, \
+            f"Bug #1048: prompt-missing glob missed test_[id]_extra.py. Found: {test_file_names}"

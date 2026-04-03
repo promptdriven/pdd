@@ -8,7 +8,7 @@ from typing import Any, Iterable, Mapping
 
 from rich.console import Console
 
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES
+from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES, _revert_out_of_scope_changes
 from .get_run_command import get_run_command_for_file
 from .load_prompt_template import load_prompt_template
 
@@ -475,6 +475,9 @@ def run_agentic_crash(
             console.print(f"[red]{msg}[/red]")
         # No JSON to parse; no changes we can reliably detect beyond this point.
         return False, msg, 0.0, None, []
+
+    # 2b) Scope guard: revert out-of-scope file changes
+    _revert_out_of_scope_changes(project_root, {code_path.resolve(), program_path.resolve()})
 
     # 3) Snapshot mtimes after the agent completes
     after_mtimes = _snapshot_mtimes(project_root)
