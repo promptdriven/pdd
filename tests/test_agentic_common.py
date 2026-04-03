@@ -13,6 +13,7 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _extract_json_from_output,
     _find_cli_binary,
+    _is_permanent_error,
     _log_agentic_interaction,
     ANTHROPIC_PRICING_BY_FAMILY,
     GEMINI_PRICING_BY_FAMILY,
@@ -4324,4 +4325,79 @@ class TestRevertOutOfScopeChanges:
 
         reverted = _revert_out_of_scope_changes(proj, allowed)
         assert reverted == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #1060: _is_permanent_error() misses Claude OAuth failures
+# ---------------------------------------------------------------------------
+
+class TestIsPermanentErrorClaudeOAuth:
+    """Tests for _is_permanent_error() detecting Claude CLI OAuth error formats."""
+
+    def test_authentication_error_with_underscore(self):
+        """authentication_error with underscore separator should be detected as permanent.
+
+        Claude CLI returns 'authentication_error' (underscore) but the pattern
+        r'authentication\\s+error' requires whitespace.
+        """
+        error_msg = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
+        assert _is_permanent_error(error_msg) is True
+
+    def test_failed_to_authenticate_reversed_word_order(self):
+        """'Failed to authenticate' (reversed word order) should be detected as permanent.
+
+        Claude CLI returns 'Failed to authenticate' but the existing pattern
+        r'authentication\\s+failed' expects the opposite word order.
+        """
+        error_msg = (
+            'Failed to authenticate. API Error: 401 '
+            '{"type":"error","error":{"type":"authentication_error",'
+            '"message":"Invalid bearer token"}}'
+        )
+        assert _is_permanent_error(error_msg) is True
+
+    def test_invalid_bearer_token(self):
+        """'Invalid bearer token' should be detected as permanent.
+
+        No existing pattern matches 'invalid bearer'.
+        """
+        assert _is_permanent_error("Invalid bearer token") is True
+
+    def test_full_claude_cli_oauth_error_verbatim(self):
+        """JSON-only Claude CLI OAuth error body should be permanent.
+
+        This is just the JSON body without the 'Failed to authenticate' prefix,
+        ensuring the authentication_error pattern fires on JSON alone.
+        """
+        error_msg = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
+        assert _is_permanent_error(error_msg) is True
+
+    def test_existing_permanent_patterns_still_work(self):
+        """Existing permanent error patterns must not regress."""
+        assert _is_permanent_error("Authentication error: invalid key") is True
+        assert _is_permanent_error("Invalid parameter: model_name") is True
+        assert _is_permanent_error("Model not found: gpt-5") is True
+        assert _is_permanent_error("Permission denied: access denied") is True
+
+    def test_transient_errors_still_return_false(self):
+        """Transient errors must still be retried (return False)."""
+        assert _is_permanent_error("Rate limit exceeded") is False
+        assert _is_permanent_error("Timeout expired") is False
+        assert _is_permanent_error("500 Internal Server Error") is False
+
+    def test_401_status_code_detected_as_permanent(self):
+        """Bare 401 status code in error message should be permanent."""
+        assert _is_permanent_error("HTTP 401 Unauthorized") is True
+        assert _is_permanent_error("Error: 401") is True
+        # Should not match 4010 or other numbers containing 401
+        assert _is_permanent_error("Error code 4010") is False
+
+    def test_temperature_pattern_narrow(self):
+        """Only invalid-temperature errors should be permanent, not incidental mentions."""
+        # Should be flagged as permanent
+        assert _is_permanent_error("invalid value for temperature") is True
+        assert _is_permanent_error("temperature is not supported for this model") is True
+        assert _is_permanent_error("temperature out of range") is True
+        # Should NOT be flagged as permanent (transient/unrelated mention)
+        assert _is_permanent_error("server temperature threshold exceeded") is False
 

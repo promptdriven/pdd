@@ -297,12 +297,15 @@ def _is_permanent_error(error_message: str) -> bool:
     """
     msg = error_message.lower()
     permanent_patterns = [
-        r"authentication\s+error",
+        r"authentication[_\s]error",
         r"authentication\s+failed",
+        r"failed\s+to\s+authenticate",
+        r"invalid\s+bearer",
         r"invalid\s+api\s+key",
         r"invalid\s+key",
         r"invalid\s+parameter",
-        r"temperature",
+        r"invalid.*temperature|temperature.*(?:not supported|out of range)",
+        r"\b401\b",
         r"not\s+supported\s+for\s+this\s+model",
         r"model\s+not\s+found",
         r"access\s+denied",
