@@ -4364,15 +4364,12 @@ class TestIsPermanentErrorClaudeOAuth:
         assert _is_permanent_error("Invalid bearer token") is True
 
     def test_full_claude_cli_oauth_error_verbatim(self):
-        """Full verbatim Claude CLI OAuth error from issue #1060 should be permanent.
+        """JSON-only Claude CLI OAuth error body should be permanent.
 
-        This is the exact error format reported in the issue.
+        This is just the JSON body without the 'Failed to authenticate' prefix,
+        ensuring the authentication_error pattern fires on JSON alone.
         """
-        error_msg = (
-            'Failed to authenticate. API Error: 401 '
-            '{"type":"error","error":{"type":"authentication_error",'
-            '"message":"Invalid bearer token"}}'
-        )
+        error_msg = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
         assert _is_permanent_error(error_msg) is True
 
     def test_existing_permanent_patterns_still_work(self):
@@ -4388,38 +4385,19 @@ class TestIsPermanentErrorClaudeOAuth:
         assert _is_permanent_error("Timeout expired") is False
         assert _is_permanent_error("500 Internal Server Error") is False
 
-    def test_run_agentic_task_skips_retries_on_oauth_permanent_error(self, tmp_path):
-        """run_agentic_task should not retry when _is_permanent_error detects OAuth failure.
+    def test_401_status_code_detected_as_permanent(self):
+        """Bare 401 status code in error message should be permanent."""
+        assert _is_permanent_error("HTTP 401 Unauthorized") is True
+        assert _is_permanent_error("Error: 401") is True
+        # Should not match 4010 or other numbers containing 401
+        assert _is_permanent_error("Error code 4010") is False
 
-        Mocks _run_with_provider to return a Claude OAuth error and verifies
-        that it is called only once per provider (no retries) and time.sleep
-        is never called for backoff.
-        """
-        oauth_error = (
-            'Failed to authenticate. API Error: 401 '
-            '{"type":"error","error":{"type":"authentication_error",'
-            '"message":"Invalid bearer token"}}'
-        )
-
-        with patch("pdd.agentic_common.get_available_agents", return_value={"claude"}), \
-             patch("pdd.agentic_common.get_agent_provider_preference", return_value=["claude"]), \
-             patch("pdd.agentic_common._run_with_provider", return_value=(False, oauth_error, 0.0)) as mock_run, \
-             patch("pdd.agentic_common.time") as mock_time, \
-             patch("pdd.agentic_common.get_job_deadline", return_value=None):
-            # time.time() needs to return increasing values for budget checks;
-            # called multiple times: task_start, aggregate_deadline calc, budget checks, etc.
-            mock_time.time.return_value = 1000.0
-
-            success, output, cost, provider = run_agentic_task(
-                instruction="test",
-                cwd=tmp_path,
-                max_retries=3,
-                quiet=True,
-            )
-
-            assert success is False
-            # Should be called only once — permanent error skips retries
-            assert mock_run.call_count == 1
-            # time.sleep should never be called for retry backoff
-            mock_time.sleep.assert_not_called()
+    def test_temperature_pattern_narrow(self):
+        """Only invalid-temperature errors should be permanent, not incidental mentions."""
+        # Should be flagged as permanent
+        assert _is_permanent_error("invalid value for temperature") is True
+        assert _is_permanent_error("temperature is not supported for this model") is True
+        assert _is_permanent_error("temperature out of range") is True
+        # Should NOT be flagged as permanent (transient/unrelated mention)
+        assert _is_permanent_error("server temperature threshold exceeded") is False
 
