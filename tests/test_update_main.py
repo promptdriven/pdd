@@ -2762,7 +2762,9 @@ class TestRepoModeEmptyPrompts:
              patch("pdd.update_main.get_git_changed_files", return_value=set()), \
              patch("pdd.architecture_registry.find_architecture_for_project", return_value=[]), \
              patch("pdd.operation_log.save_fingerprint"), \
-             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")):
+             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")), \
+             patch("pdd.context_generator_main.context_generator_main", return_value=("ex", 0.0, "m")), \
+             patch("pdd.sync_main._auto_submit_example"):
             result = update_main(
                 ctx=ctx,
                 input_prompt_file=None,
