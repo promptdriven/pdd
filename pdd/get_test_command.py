@@ -104,7 +104,7 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
         runner_result = _detect_ts_test_runner(test_path)
         if runner_result:
             runner_cmd, config_dir = runner_result
-            return TestCommand(command=f"{runner_cmd} {test_file}", cwd=config_dir)
+            return TestCommand(command=f"{runner_cmd} {test_path.resolve()}", cwd=config_dir)
 
     # 2. Check CSV for run_test_command
     lang_formats = _load_language_format()
