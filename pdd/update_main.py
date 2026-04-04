@@ -963,9 +963,6 @@ def _order_changed_items_by_dependency(
 
 
 def _estimate_dry_run_cost_range(
-    ctx: click.Context,
-    repo_obj: git.Repo,
-    simple: bool,
     changed_items: List[Tuple[str, str, str]],
 ) -> Tuple[float, float]:
     """Flat heuristic total $ range for dry-run (not billed).
@@ -1137,9 +1134,7 @@ def update_main(
                 included_docs = _included_docs_for_drift_report(
                     repo_root, all_prompt_paths, drift_prompts
                 )
-                cost_low, cost_high = _estimate_dry_run_cost_range(
-                    ctx, repo_obj, simple, changed_items
-                )
+                cost_low, cost_high = _estimate_dry_run_cost_range(changed_items)
                 _print_repository_drift_report(
                     repo_root,
                     len(changed_items),
