@@ -4546,7 +4546,8 @@ class TestVerifyE2eTests:
     @patch("pdd.agentic_bug_orchestrator.subprocess.run")
     def test_non_python_test_failure(self, mock_subproc, mock_get_cmd, tmp_path):
         """Non-Python test file that fails (expected)."""
-        mock_get_cmd.return_value = "npx jest test_e2e.js"
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest test_e2e.js", cwd=None)
         mock_subproc.return_value = MagicMock(
             returncode=1,
             stdout="test failed output",
@@ -4568,7 +4569,8 @@ class TestVerifyE2eTests:
     @patch("pdd.agentic_bug_orchestrator.subprocess.run")
     def test_non_python_test_timeout(self, mock_subproc, mock_get_cmd, tmp_path):
         """Non-Python test file that times out."""
-        mock_get_cmd.return_value = "npx jest test_e2e.js"
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest test_e2e.js", cwd=None)
         import subprocess as sp
         mock_subproc.side_effect = sp.TimeoutExpired(cmd="npx jest", timeout=120)
         ok, output = _verify_e2e_tests(["test_e2e.js"], tmp_path)
@@ -6576,3 +6578,51 @@ class TestIssue1026ContentRegressionGuard:
 
         assert restored == []
         assert not backup.exists()
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _verify_e2e_tests must use config dir as cwd.
+
+    Bug: _verify_e2e_tests() runs non-Python tests from the repo root instead of
+    the directory containing the test runner config, breaking monorepos.
+    """
+
+    # --- Test 11: _verify_e2e_tests uses config dir cwd ---
+
+    @patch("pdd.agentic_bug_orchestrator.subprocess.run")
+    def test_verify_e2e_tests_uses_config_dir_not_repo_root(self, mock_subproc, tmp_path):
+        """_verify_e2e_tests must pass the test runner config directory as cwd.
+
+        Before fix: subprocess.run(cwd=str(repo_root)) — always repo root
+        After fix: subprocess.run(cwd=str(config_dir)) — where jest.config.js lives
+
+        Uses real filesystem so get_test_command_for_file finds the config naturally.
+        """
+        # Set up monorepo: frontend/jest.config.js + frontend/src/__test__/api.test.ts
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "api.test.ts").write_text("test('api', () => {});")
+
+        mock_subproc.return_value = MagicMock(
+            returncode=1, stdout="test failed output", stderr=""
+        )
+
+        ok, output = _verify_e2e_tests(
+            ["frontend/src/__test__/api.test.ts"], tmp_path
+        )
+
+        mock_subproc.assert_called_once()
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd} (repo root). _verify_e2e_tests uses wrong cwd, "
+            f"breaking monorepo test verification."
+        )

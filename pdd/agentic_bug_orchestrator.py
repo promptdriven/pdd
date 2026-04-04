@@ -272,11 +272,13 @@ def _verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]:
                 all_outputs.append(f"{test_file}: FAILED (no test runner available)")
                 continue
 
+            effective_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(cwd)
+
             try:
                 proc = subprocess.run(
-                    shlex.split(test_cmd),
+                    shlex.split(test_cmd.command),
                     shell=False,
-                    cwd=str(cwd),
+                    cwd=effective_cwd,
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -362,6 +364,28 @@ def _parse_fix_locations(step6_output: str) -> List[str]:
             seen.add(cleaned)
             deduped.append(cleaned)
     return deduped
+
+
+def _parse_expansion_items(step6_output: str) -> str:
+    """Extract expansion items from Step 6's EXPANSION_ITEMS marker.
+
+    Returns a deduplicated comma-separated string of expansion items, or "none"
+    if the marker is absent, empty, or explicitly "none" (SCOPE_MATCH / NO_PROPOSED_FIX).
+    """
+    match = re.search(r"EXPANSION_ITEMS:\s*(.+)", step6_output)
+    if not match:
+        return "none"
+    raw = match.group(1).strip()
+    if not raw or raw.lower() == "none":
+        return "none"
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for item in raw.split(","):
+        cleaned = item.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return ", ".join(deduped) if deduped else "none"
 
 
 def _verify_fix_location_coverage(
@@ -884,6 +908,7 @@ def run_agentic_bug_orchestrator(
         "issue_title": issue_title,
         "step5_reproduction_tests": "",
         "fix_locations": "none",
+        "step6_expansion_items": "none",
         "step9_test_verification": "",
     }
     
@@ -907,10 +932,11 @@ def run_agentic_bug_orchestrator(
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
         changed_files.extend(prompt_fixed)
 
-    # Step 6: re-extract fix locations for downstream steps
+    # Step 6: re-extract fix locations and expansion items for downstream steps
     if "step6_output" in context:
         fix_locs = _parse_fix_locations(context["step6_output"])
         context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
+        context["step6_expansion_items"] = _parse_expansion_items(context["step6_output"])
 
     # Step 7
     if "step7_output" in context:
@@ -1208,6 +1234,13 @@ def run_agentic_bug_orchestrator(
                 logger.warning(
                     "Step 6 output missing FIX_LOCATIONS marker — "
                     "downstream call-boundary checks will be skipped"
+                )
+            expansion = _parse_expansion_items(step_output)
+            context["step6_expansion_items"] = expansion
+            if expansion == "none" and "EXPANSION_ITEMS:" not in step_output:
+                logger.warning(
+                    "Step 6 output missing EXPANSION_ITEMS marker — "
+                    "scope expansion check will be skipped for downstream steps"
                 )
 
         if step_num == 7:

@@ -24,6 +24,7 @@ class DriftInfo:
     language: str
     operation: str  # 'update' (prompt stale) or 'example' (example stale)
     reason: str
+    code_path: Optional[str] = None  # resolved code file path for pdd update
 
 
 @dataclass
@@ -82,7 +83,7 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
         prompt_drifts have operation=='update', example_drifts have operation=='example'.
     """
     from pdd.operation_log import infer_module_identity
-    from pdd.sync_determine_operation import sync_determine_operation
+    from pdd.sync_determine_operation import get_pdd_file_paths, sync_determine_operation
     from pdd.user_story_tests import discover_prompt_files
 
     prompt_files = discover_prompt_files()
@@ -99,6 +100,9 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
             )
             continue
 
+        if basename is None or language is None:
+            continue
+
         # Scope control: skip modules not in the requested list
         if modules is not None and basename not in modules:
             continue
@@ -113,6 +117,21 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
             )
             continue
 
+        # Skip modules that are fully synced or in error state
+        if decision.operation in ("nothing", "all_synced", "error"):
+            continue
+
+        # Resolve code file path for update operations
+        code_path = None
+        if decision.operation == "update":
+            try:
+                paths = get_pdd_file_paths(basename, language)
+                code_file = paths.get("code")
+                if code_file and code_file.exists():
+                    code_path = str(code_file)
+            except Exception:
+                pass
+
         if decision.operation == "update":
             prompt_drifts.append(
                 DriftInfo(
@@ -120,15 +139,18 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
                     language=language,
                     operation="update",
                     reason=getattr(decision, "reason", "Prompt stale"),
+                    code_path=code_path,
                 )
             )
-        elif decision.operation == "example":
+        else:
+            # All other drift types (example, verify, generate, test, crash,
+            # auto-deps, etc.) are handled via pdd sync
             example_drifts.append(
                 DriftInfo(
                     basename=basename,
                     language=language,
                     operation="example",
-                    reason=getattr(decision, "reason", "Example stale"),
+                    reason=getattr(decision, "reason", "Needs sync"),
                 )
             )
 
@@ -164,7 +186,10 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
         True if healing succeeded, False otherwise.
     """
     if drift.operation == "update":
-        cmd = ["pdd", "update", drift.basename]
+        if drift.code_path:
+            cmd = ["pdd", "update", drift.code_path]
+        else:
+            cmd = ["pdd", "update"]
     elif drift.operation == "example":
         cmd = ["pdd", "sync", drift.basename]
     else:
@@ -223,34 +248,13 @@ def commit_and_push(healed_modules: List[str], skip_ci: bool = False) -> bool:
         console.print("[yellow]No modules to commit.[/yellow]")
         return True
 
-    # Configure git identity in CI environments where it may not be set
-    if os.environ.get("CI") == "1":
-        try:
-            subprocess.run(
-                ["git", "config", "user.name", "github-actions[bot]"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.email",
-                 "github-actions[bot]@users.noreply.github.com"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except Exception as e:
-            console.print(
-                f"[yellow]Warning: could not configure git identity: {e}[/yellow]"
-            )
-
     module_list = ", ".join(healed_modules)
     commit_msg = f"chore: auto-heal prompt/example drift for {module_list}"
     if skip_ci:
         commit_msg = f"[skip ci] {commit_msg}"
 
-    # Stage all changes – CI drift heal runs in a clean CI environment so
-    # git add -A is safe and avoids missing paths (e.g. pdd/, tests/, context/).
+    # Stage all changes. CI runs on a clean checkout so -A is safe, and healing
+    # may create new files (e.g. a missing example) that -u would miss.
     try:
         subprocess.run(
             ["git", "add", "-A"],

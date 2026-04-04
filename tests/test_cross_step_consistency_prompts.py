@@ -1,18 +1,25 @@
 """
-Tests for cross-step consistency validation in bug workflow prompts.
+Tests for cross-step consistency in bug workflow prompts.
 
-Issue #577: PDD bot generates fixes that pass mocked tests but don't solve the
-real bug because test mocks encode assumptions that contradict the bot's own
-investigation findings from earlier steps.
-
-These tests verify that Steps 8 (test plan), 9 (generate test), and 10 (verify)
-prompts instruct the LLM to cross-validate test assumptions against investigation
-findings from Steps 4-6.
+Issue #577: Cross-step mock consistency
+Issue #1071: Proposed fix validation / scope expansion defense
 """
 from pathlib import Path
+from unittest.mock import patch
 import pytest
 
 PROMPTS_DIR = Path(__file__).parent.parent / "pdd" / "prompts"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def step6_content() -> str:
+    path = PROMPTS_DIR / "agentic_bug_step6_root_cause_LLM.prompt"
+    assert path.exists()
+    return path.read_text()
 
 @pytest.fixture
 def step8_content() -> str:
@@ -32,6 +39,214 @@ def step10_content() -> str:
     assert path.exists()
     return path.read_text()
 
+
+# ---------------------------------------------------------------------------
+# Unit tests: _parse_expansion_items helper (orchestrator)
+# ---------------------------------------------------------------------------
+
+class TestParseExpansionItems:
+    """Unit tests for _parse_expansion_items helper."""
+
+    def test_parses_single_item(self):
+        """EXPANSION_ITEMS with one item returns it."""
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+        output = "Some analysis\nEXPANSION_ITEMS: step 6 wrong timeout\nMore text"
+        assert _parse_expansion_items(output) == "step 6 wrong timeout"
+
+    def test_parses_multiple_items(self):
+        """EXPANSION_ITEMS with comma-separated items returns full string."""
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+        output = "EXPANSION_ITEMS: step 6 timeout, step 7 timeout, step 8 timeout"
+        result = _parse_expansion_items(output)
+        assert "step 6 timeout" in result
+        assert "step 7 timeout" in result
+        assert "step 8 timeout" in result
+
+    def test_returns_none_when_no_marker(self):
+        """No EXPANSION_ITEMS marker returns 'none'."""
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+        output = "Root cause found. FIX_LOCATIONS: pdd/foo.py"
+        assert _parse_expansion_items(output) == "none"
+
+    def test_returns_none_for_scope_match(self):
+        """EXPANSION_ITEMS: none returns 'none' (SCOPE_MATCH case)."""
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+        output = "EXPANSION_ITEMS: none"
+        assert _parse_expansion_items(output) == "none"
+
+    def test_strips_whitespace(self):
+        """Leading/trailing whitespace in the value is stripped."""
+        from pdd.agentic_bug_orchestrator import _parse_expansion_items
+        output = "EXPANSION_ITEMS:   step 6 timeout, step 7 timeout   "
+        result = _parse_expansion_items(output)
+        assert result == "step 6 timeout, step 7 timeout"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Orchestrator injects step6_expansion_items into downstream steps
+# ---------------------------------------------------------------------------
+
+class TestExpansionItemsFlowToDownstreamSteps:
+    """Orchestrator parses EXPANSION_ITEMS from Step 6 and injects into Steps 8/9/10."""
+
+    STEP6_WITH_EXPANSION = (
+        "## Root Cause\nBUG_STEP_TIMEOUTS dict has stale step numbers.\n\n"
+        "FIX_LOCATIONS: pdd/agentic_bug_orchestrator.py\n"
+        "EXPANSION_ITEMS: step 6 timeout wrong, step 7 timeout wrong, step 8 timeout wrong\n"
+    )
+    STEP6_SCOPE_MATCH = (
+        "## Root Cause\nSingle function missing guard.\n\n"
+        "FIX_LOCATIONS: pdd/agentic_common.py\n"
+        "EXPANSION_ITEMS: none\n"
+    )
+
+    def _run_orchestrator_and_capture(self, tmp_path, step6_output: str) -> dict:
+        """Run orchestrator through step 6, return dict of label -> instruction."""
+        from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+        captured: dict = {}
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            captured[label] = kwargs.get("instruction", "")
+            if label == "step6":
+                return (True, step6_output, 0.1, "model")
+            if label == "step8":
+                return (True, "## Test Plan\nPLANNED_TEST_COUNT: 3", 0.1, "model")
+            if label == "step9":
+                return (True, "Generated tests\nFILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS: Tests correct\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        # Minimal template exposing both injection points
+        template = (
+            "Issue {issue_number}.\n"
+            "<step6_output>{step6_output}</step6_output>\n"
+            "<fix_locations>{fix_locations}</fix_locations>\n"
+            "<step6_expansion_items>{step6_expansion_items}</step6_expansion_items>\n"
+        )
+
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=mock_run_side_effect), \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value=template), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(worktree_path, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+            try:
+                run_agentic_bug_orchestrator(
+                    issue_url="https://github.com/owner/repo/issues/1",
+                    issue_content="Bug description",
+                    repo_owner="owner",
+                    repo_name="repo",
+                    issue_number=1,
+                    issue_author="user",
+                    issue_title="Bug Title",
+                    cwd=tmp_path,
+                    quiet=True,
+                )
+            except Exception as exc:
+                captured["_orchestrator_error"] = str(exc)
+        return captured
+
+    def test_expansion_items_injected_into_step8_when_scope_expansion(self, tmp_path):
+        """When Step 6 emits EXPANSION_ITEMS, Step 8 instruction contains the items."""
+        captured = self._run_orchestrator_and_capture(tmp_path, self.STEP6_WITH_EXPANSION)
+        step8_instruction = captured.get("step8", "")
+        assert "step 6 timeout wrong" in step8_instruction, (
+            "Orchestrator must inject EXPANSION_ITEMS value into Step 8's instruction. "
+            f"Step 8 instruction: {step8_instruction[:300]}"
+            f"{'; orchestrator error: ' + captured['_orchestrator_error'] if '_orchestrator_error' in captured else ''}"
+        )
+
+    def test_expansion_items_is_none_when_scope_match(self, tmp_path):
+        """When Step 6 emits EXPANSION_ITEMS: none, Step 8 sees 'none'."""
+        captured = self._run_orchestrator_and_capture(tmp_path, self.STEP6_SCOPE_MATCH)
+        step8_instruction = captured.get("step8", "")
+        assert "<step6_expansion_items>none</step6_expansion_items>" in step8_instruction, (
+            "Orchestrator must inject 'none' for SCOPE_MATCH into Step 8's instruction. "
+            f"Step 8 instruction: {step8_instruction[:300]}"
+            f"{'; orchestrator error: ' + captured['_orchestrator_error'] if '_orchestrator_error' in captured else ''}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Prompts contain {step6_expansion_items} placeholder
+# ---------------------------------------------------------------------------
+
+class TestExpansionItemsPlaceholderInPrompts:
+    """Steps 8, 9, 10 prompts must use {step6_expansion_items} placeholder."""
+
+    def test_step8_has_expansion_items_placeholder(self, step8_content: str):
+        """Step 8 prompt must reference {step6_expansion_items} so orchestrator injection works."""
+        assert "{step6_expansion_items}" in step8_content, (
+            "Step 8 prompt must contain {step6_expansion_items} placeholder — "
+            "this is the structured variable the orchestrator injects after parsing Step 6."
+        )
+
+    def test_step9_has_expansion_items_placeholder(self, step9_content: str):
+        """Step 9 prompt must reference {step6_expansion_items} so orchestrator injection works."""
+        assert "{step6_expansion_items}" in step9_content, (
+            "Step 9 prompt must contain {step6_expansion_items} placeholder — "
+            "this is the structured variable the orchestrator injects after parsing Step 6."
+        )
+
+    def test_step10_has_expansion_items_placeholder(self, step10_content: str):
+        """Step 10 prompt must reference {step6_expansion_items} so orchestrator injection works."""
+        assert "{step6_expansion_items}" in step10_content, (
+            "Step 10 prompt must contain {step6_expansion_items} placeholder — "
+            "this is the structured variable the orchestrator injects after parsing Step 6."
+        )
+
+    def test_step6_emits_expansion_items_marker_instruction(self, step6_content: str):
+        """Step 6 prompt must instruct the LLM to emit the EXPANSION_ITEMS: marker."""
+        assert "EXPANSION_ITEMS:" in step6_content, (
+            "Step 6 prompt must instruct the LLM to output an EXPANSION_ITEMS: marker — "
+            "this is what the orchestrator parses to populate {step6_expansion_items}."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: Step 10 uses WARNING not FAIL for scope gaps
+# ---------------------------------------------------------------------------
+
+class TestStep10ScopeWarning:
+    """Step 10 scope completeness check must use WARNING, not FAIL."""
+
+    def test_step10_scope_check_uses_warning_not_fail(self, step10_content: str):
+        """Step 10 scope section should warn about incomplete scope, not hard-stop."""
+        content_lower = step10_content.lower()
+        scope_section_start = content_lower.find("scope completeness")
+        assert scope_section_start != -1, "Step 10 must have a scope completeness verification section"
+
+        # Find the next numbered task heading (e.g. "6.") to bound the section,
+        # falling back to end-of-file if this is the last task.
+        next_task_start = content_lower.find("\n6.", scope_section_start)
+        scope_section = (
+            content_lower[scope_section_start:next_task_start]
+            if next_task_start != -1
+            else content_lower[scope_section_start:]
+        )
+
+        assert "warning" in scope_section, (
+            "Step 10 scope completeness section must use WARNING — "
+            "a FAIL would risk killing valid workflows via _check_hard_stop()."
+        )
+        assert "**fail:" not in scope_section and "report: fail" not in scope_section, (
+            "Step 10 scope completeness section must NOT use FAIL."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Existing unit tests (from issue #577) — cross-step mock consistency
+# ---------------------------------------------------------------------------
 
 class TestStep8CrossStepConsistency:
     """Step 8 (test plan) must instruct cross-referencing mocks against Steps 4-6."""
@@ -54,6 +269,24 @@ class TestStep8CrossStepConsistency:
         assert has_instruction, (
             "Step 8 prompt must instruct resolving contradictions between test "
             "assumptions and investigation findings, not silently proceeding."
+        )
+
+    def test_coverage_check_requires_issue_symptom_coverage(self, step8_content: str) -> None:
+        """Coverage check must still instruct covering issue symptoms, not just expansion items.
+
+        When step6_expansion_items is 'none' (SCOPE_MATCH / NO_PROPOSED_FIX — the majority
+        of bugs), the expansion-items check is a no-op. Without the issue-symptom baseline,
+        the LLM gets no coverage guidance at all for those cases.
+        """
+        content_lower = step8_content.lower()
+        has_instruction = (
+            "re-read the issue description" in content_lower
+            or "every distinct symptom" in content_lower
+        )
+        assert has_instruction, (
+            "Step 8 coverage check must instruct re-reading the issue description "
+            "to enumerate symptoms — otherwise SCOPE_MATCH and NO_PROPOSED_FIX cases "
+            "get no baseline coverage guidance."
         )
 
 

@@ -1,3 +1,5 @@
+<pdd-reason>Generates failing unit tests that detect the bug, with scope cross-check against Step 6 findings.</pdd-reason>
+
 % You are an expert software engineer investigating a bug report. Your task is to generate a failing unit test that detects the bug.
 
 % Context
@@ -146,6 +148,16 @@ Before writing any mock or stub, verify it against the investigation findings:
 2. If Step 4 found a limitation, do NOT write mocks that assume it doesn't exist or that a workaround avoids it — unless the workaround was explicitly validated in Step 5.
 
 3. If you cannot write a mock that is both consistent with Steps 4-6 findings AND demonstrates the fix working, this is a signal that the proposed fix direction may be wrong. It is better to flag an impossible test than to write a test with incorrect mocks.
+
+% Scope Expansion Items
+
+Step 6's independent analysis identified these items beyond what the issue proposes:
+
+```
+{step6_expansion_items}
+```
+
+If this value is not `none`, you MUST generate at least one test for each listed item. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
 
 % Worktree Setup
 
