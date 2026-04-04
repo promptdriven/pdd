@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.</pdd-reason>
+<pdd-reason>Orchestrates the 11-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation and code cleanup.</pdd-reason>
 
 <pdd-interface>
 {{
@@ -28,7 +28,7 @@
 Write the `pdd/agentic_e2e_fix_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence (GitHub + local) for resumption. This workflow fixes bugs by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units, followed by a post-push CI validation stage.
+Orchestrator for the 11-step agentic e2e fix workflow. Runs each step as a separate agentic task, iterates through an outer loop until all tests pass, and supports state persistence (GitHub + local) for resumption. This workflow fixes bugs by running unit tests, e2e tests, and `pdd fix` sequentially on failing dev units, followed by a post-push CI validation stage and a final code cleanup pass.
 
 % Requirements
 1. Function: `run_agentic_e2e_fix_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, timeout_adder: float = 0.0, max_cycles: int = 5, resume: bool = True, verbose: bool = False, quiet: bool = False, use_github_state: bool = True, protect_tests: bool = False, ci_retries: int = 3, skip_ci: bool = False) -> Tuple[bool, str, float, str, List[str]]`
@@ -48,7 +48,8 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 8. On failure/incomplete: Post final status comment to GitHub via `post_final_comment`.
 9. Include `<include>context/agentic_e2e_fix_orchestrator_example.py</include>` for orchestration patterns and `<include>context/ci_validation_example.py</include>` for CI loop integration.
 10. After successful commit/push (step 9 exit), run CI validation (step 10): poll external CI via `run_ci_validation_loop()`, iterate on failures up to `ci_retries` attempts, post PR comment on max retries exhausted.
-11. When `_verify_tests_independently` fails, use `_handle_verification_failure(output, retries, console)` to classify and act:
+11. After CI validation (step 10) completes or is skipped, run code cleanup (step 11): collect full diff and changed file contents, invoke cleanup LLM, re-run tests to verify, commit as separate commit if tests pass, revert if tests fail. Skip gracefully if no files changed.
+12. When `_verify_tests_independently` fails, use `_handle_verification_failure(output, retries, console)` to classify and act:
     - `"import_error"` (code not written/broken — missing modules, unresolved imports, compilation failures, undefined names, syntax errors in any language): retry from Step 1 (max 1 retry total via global `import_error_retries` counter). On retry, inject verification failure output into the Step 1 prompt so the LLM knows what it missed.
     - `"test_failure"` (code exists but produces wrong results): fall through to Steps 3-9 as normal.
     - Classification is deterministic pattern matching only (no LLM call): all patterns anchored to pytest `^E` traceback format (`^E\s+ImportError:`, etc.) for ImportError, ModuleNotFoundError, NameError, AttributeError, SyntaxError, Cannot find module, Module not found, ReferenceError. Bare line-start patterns are NOT matched to avoid false positives from log/print lines. Unrecognized patterns default to `"test_failure"`.
@@ -67,8 +68,8 @@ Orchestrator for the 10-step agentic e2e fix workflow. Runs each step as a separ
 - `_commit_and_push(...) -> Tuple[bool, str]`: Stage hash-detected changes, commit (`fix: {title}\n\nFixes #{number}`), and push with retry.
 
 % Step Execution & Logic
-- **Step Mapping**: 1:unit_tests, 2:e2e_tests, 3:root_cause, 4:fix_e2e_tests, 5:identify_devunits, 6:create_unit_tests, 7:verify_tests, 8:run_pdd_fix, 9:verify_all, 10:ci_validation.
-- **Timeouts**: Define `E2E_FIX_STEP_TIMEOUTS` (Step 8 is 1000s, Step 10 is 600s, others 240-600s). Step 1 retries once with 1.5x timeout if it times out.
+- **Step Mapping**: 1:unit_tests, 2:e2e_tests, 3:root_cause, 4:fix_e2e_tests, 5:identify_devunits, 6:create_unit_tests, 7:verify_tests, 8:run_pdd_fix, 9:verify_all, 10:ci_validation, 11:code_cleanup.
+- **Timeouts**: Define `E2E_FIX_STEP_TIMEOUTS` (Step 8 is 1000s, Step 10 is 600s, Step 11 is 600s, others 240-600s). Step 1 retries once with 1.5x timeout if it times out.
 - **Pre-flight (Step 2)**: Skip if `_check_e2e_environment` returns False. Store as `E2E_SKIP` in `skipped_steps` and `step_outputs`.
 - **Bug Analysis Reuse**: Check `_bug_state_candidates` (e.g., `.pdd/bug-state/bug_state_{issue_number}.json`) for successful Step 2/3 outputs to skip redundant diagnosis in Cycle 1.
 - **Resumption**: Load state via `load_workflow_state`. Use `validate_cached_state` to find the last *successful* step. Check staleness via `_check_staleness`.
@@ -112,6 +113,7 @@ skipped_steps persists across cycles and is NOT cleared when step_outputs is cle
 | 8 | agentic_e2e_fix_step8_run_pdd_fix_LLM | Run `pdd fix` on failing dev units |
 | 9 | agentic_e2e_fix_step9_verify_all_LLM | Run all tests and decide next cycle |
 | 10 | agentic_e2e_fix_step10_ci_validation_LLM | Interpret CI failures, apply fixes |
+| 11 | agentic_e2e_fix_step11_code_cleanup_LLM | Clean up code quality issues from workflow |
 
 % CI Validation Stage (Step 10)
 After `_commit_and_push()` succeeds and `skip_ci` is False:
@@ -120,6 +122,16 @@ After `_commit_and_push()` succeeds and `skip_ci` is False:
 3. On success: return normally.
 4. On max retries: post PR comment via `post_ci_failure_comment()` describing remaining failures.
 If `skip_ci` is True: skip step 10 entirely, log "[yellow]Skipping CI validation (--skip-ci)[/yellow]".
+
+% Code Cleanup Stage (Step 11)
+After CI validation (step 10) completes (or is skipped), run step 11 as the final step:
+1. Use `_detect_changed_files()` to identify files changed during the workflow. If no files changed, skip step 11.
+2. Compute the full diff (`git diff` from before workflow started to current state) and read the full content of each changed file.
+3. Load the step 11 prompt template (`agentic_e2e_fix_step11_code_cleanup_LLM`) and invoke it with the diff, changed file contents, and issue description.
+4. After cleanup edits are applied, re-run the same tests that Step 9 verified.
+5. If all tests pass: commit cleanup as a separate commit (e.g., `"chore: clean up code from fix for #{issue_number}"`).
+6. If any test fails: `git checkout` to revert ALL cleanup changes, keep the original working code, log a warning, and continue without cleanup.
+7. Use `_revert_out_of_scope_changes()` from `agentic_common.py` as a safety mechanism to ensure only files changed by the workflow are touched.
 
 % Context Variables
 - Common: `issue_url`, `repo_owner`, `repo_name`, `issue_number`, `cycle_number`, `max_cycles`, `issue_content`, `protect_tests`, `protect_tests_flag`, `ci_retries`, `skip_ci`.

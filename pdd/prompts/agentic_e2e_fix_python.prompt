@@ -1,4 +1,4 @@
-<pdd-reason>CLI entry point for the 10-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.</pdd-reason>
+<pdd-reason>CLI entry point for the 11-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.</pdd-reason>
 
 <pdd-interface>
 {
@@ -16,7 +16,7 @@
 <include>context/python_preamble.prompt</include>
 
 % Goal
-Write `pdd/agentic_e2e_fix.py`, the CLI entry point for the 10-step agentic E2E fix workflow.
+Write `pdd/agentic_e2e_fix.py`, the CLI entry point for the 11-step agentic E2E fix workflow.
 
 % Role & Scope
 Orchestrates the E2E fix by fetching GitHub issue data (body + comments), detecting the appropriate working directory (local worktree or branch safety check), and invoking the orchestrator with post-push CI validation options.

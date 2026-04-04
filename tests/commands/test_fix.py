@@ -148,6 +148,7 @@ def test_agentic_mode_passes_all_options(runner: CliRunner, mock_deps) -> None:
         "protect_tests": True,
         "ci_retries": 4,
         "skip_ci": True,
+        "skip_cleanup": False,
     }
 
 

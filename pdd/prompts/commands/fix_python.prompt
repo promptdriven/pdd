@@ -19,7 +19,7 @@
 
 % Role & Scope
   This module implements the `fix` command with three modes:
-  - Agentic E2E Fix: Orchestrates a 10-step GitHub issue fix with post-push CI validation.
+  - Agentic E2E Fix: Orchestrates an 11-step GitHub issue fix with post-push CI validation.
   - User Story Fix: Updates multiple prompts from a single `story__*.md` file.
   - Manual Mode: Iteratively fixes code and unit tests from explicit paths.
 

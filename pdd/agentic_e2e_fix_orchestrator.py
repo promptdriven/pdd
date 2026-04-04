@@ -28,6 +28,7 @@ from .agentic_common import (
     classify_step_output,
     GITHUB_STATE_MARKER_START,
     GITHUB_STATE_MARKER_END,
+    _revert_out_of_scope_changes,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -46,6 +47,8 @@ STEP_NAMES = {
     7: "verify_tests",
     8: "run_pdd_fix",
     9: "verify_all",
+    10: "ci_validation",
+    11: "code_cleanup",
 }
 
 STEP_DESCRIPTIONS = {
@@ -58,9 +61,11 @@ STEP_DESCRIPTIONS = {
     7: "Verifying tests detect bugs",
     8: "Running pdd fix",
     9: "Final verification",
+    10: "CI validation and remediation",
+    11: "Code cleanup",
 }
 
-# Per-step timeouts for the 10-step agentic e2e fix workflow
+# Per-step timeouts for the 11-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -72,6 +77,7 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
     9: 240.0,   # Final verification, loop control
     10: 600.0,  # Post-push CI validation and remediation
+    11: 600.0,  # Code cleanup pass
 }
 
 console = Console()
@@ -984,6 +990,172 @@ def _commit_and_push(
         return False, f"Push failed: {push_err}"
 
 
+def _run_step11_code_cleanup(
+    *,
+    cwd: Path,
+    issue_number: int,
+    issue_content: str,
+    issue_url: str = "",
+    repo_owner: str = "",
+    repo_name: str = "",
+    initial_file_hashes: Dict[str, Optional[str]],
+    initial_sha: str = "",
+    total_cost: float,
+    changed_files: List[str],
+    timeout_adder: float,
+    verbose: bool,
+    quiet: bool,
+) -> Tuple[float, List[str]]:
+    """Run Step 11: Code cleanup after CI validation.
+
+    Collects the full diff and changed file contents, invokes the cleanup LLM,
+    re-runs tests to verify, and commits as a separate commit if tests pass.
+    Reverts all cleanup changes if tests fail.
+
+    Args:
+        cwd: Working directory.
+        issue_number: GitHub issue number.
+        issue_content: Original issue content.
+        initial_file_hashes: File hashes from before workflow started.
+        total_cost: Running total cost.
+        changed_files: List of changed files.
+        timeout_adder: Additional timeout for steps.
+        verbose: Verbose output flag.
+        quiet: Quiet output flag.
+
+    Returns:
+        (updated_total_cost, updated_changed_files)
+    """
+    # Detect files changed during the workflow
+    cleanup_files = _detect_changed_files(cwd, initial_file_hashes)
+    if not cleanup_files:
+        if not quiet:
+            console.print("[bold][Step 11/11] Skipped: No files changed during workflow.[/bold]")
+        return total_cost, changed_files
+
+    if not quiet:
+        console.print("[bold][Step 11/11] Running code cleanup...[/bold]")
+
+    # Load the step 11 prompt template
+    step11_template = load_prompt_template("agentic_e2e_fix_step11_code_cleanup_LLM")
+    if not step11_template:
+        if not quiet:
+            console.print("[yellow]Step 11 skipped: Could not load cleanup prompt template.[/yellow]")
+        return total_cost, changed_files
+
+    # Compute the full diff since workflow started (covers all commits, not just last)
+    diff_ref = initial_sha if initial_sha else "HEAD~1"
+    diff_result = subprocess.run(
+        ["git", "diff", diff_ref],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    full_diff = diff_result.stdout if diff_result.returncode == 0 else ""
+
+    # Read changed file contents
+    file_contents: Dict[str, str] = {}
+    for filepath in cleanup_files:
+        fpath = cwd / filepath
+        if fpath.exists() and fpath.is_file():
+            try:
+                file_contents[filepath] = fpath.read_text(errors="replace")
+            except (IOError, OSError):
+                pass
+
+    # Format the cleanup prompt
+    changed_file_text = "\n\n".join(
+        f"### {fp}\n```\n{content}\n```"
+        for fp, content in file_contents.items()
+    )
+    context = {
+        "issue_url": issue_url,
+        "repo_owner": repo_owner,
+        "repo_name": repo_name,
+        "issue_number": issue_number,
+        "issue_description": issue_content,
+        "full_diff": full_diff,
+        "changed_files_content": changed_file_text,
+    }
+    formatted_prompt = step11_template
+    for key, value in context.items():
+        formatted_prompt = formatted_prompt.replace(f"{{{key}}}", str(value))
+
+    # Run the cleanup LLM task
+    cleanup_timeout = E2E_FIX_STEP_TIMEOUTS.get(11, 600.0) + timeout_adder
+    cleanup_success, cleanup_output, cleanup_cost, _ = run_agentic_task(
+        instruction=formatted_prompt,
+        cwd=cwd,
+        verbose=verbose,
+        quiet=quiet,
+        timeout=cleanup_timeout,
+        label="step11_code_cleanup",
+        max_retries=DEFAULT_MAX_RETRIES,
+    )
+    total_cost += cleanup_cost
+
+    if not cleanup_success:
+        if not quiet:
+            console.print("[yellow]Step 11: Cleanup LLM task failed. Skipping cleanup.[/yellow]")
+        return total_cost, changed_files
+
+    # Safety: revert out-of-scope changes BEFORE commit+push
+    try:
+        allowed = {(cwd / f).resolve() for f in cleanup_files}
+        _revert_out_of_scope_changes(cwd, allowed)
+    except (subprocess.SubprocessError, OSError) as e:
+        if not quiet:
+            console.print(f"[yellow]Step 11: revert out-of-scope failed: {e}[/yellow]")
+
+    # Re-run tests to verify cleanup didn't break anything
+    test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+    if test_files:
+        verified, verify_output = _verify_tests_independently(test_files, cwd)
+        if verified:
+            # Commit cleanup as a separate commit
+            cleanup_changed = _detect_changed_files(cwd, initial_file_hashes)
+            if cleanup_changed:
+                commit_msg = f"chore: clean up code from fix for #{issue_number}"
+                # Stage cleanup changes
+                for filepath in cleanup_changed:
+                    if not _is_intermediate_file(filepath):
+                        subprocess.run(
+                            ["git", "add", filepath],
+                            cwd=cwd,
+                            capture_output=True,
+                            text=True,
+                        )
+                commit_result = subprocess.run(
+                    ["git", "commit", "-m", commit_msg],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                )
+                if commit_result.returncode == 0:
+                    # Push the cleanup commit
+                    push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
+                    if push_ok and not quiet:
+                        console.print("  -> Step 11 cleanup committed and pushed.")
+                    elif not push_ok and not quiet:
+                        console.print(f"  [yellow]Step 11 cleanup committed but push failed: {push_err}[/yellow]")
+                changed_files = cleanup_changed or changed_files
+        else:
+            # Tests failed after cleanup — revert ALL cleanup changes
+            if not quiet:
+                console.print("[yellow]Step 11: Tests failed after cleanup. Reverting cleanup changes.[/yellow]")
+            subprocess.run(
+                ["git", "checkout", "."],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+    else:
+        if not quiet:
+            console.print("[yellow]Step 11: No test files found for verification. Skipping cleanup commit.[/yellow]")
+
+    return total_cost, changed_files
+
+
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -1003,9 +1175,10 @@ def run_agentic_e2e_fix_orchestrator(
     protect_tests: bool = False,
     ci_retries: int = 3,
     skip_ci: bool = False,
+    skip_cleanup: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 10-step agentic e2e fix workflow.
+    Orchestrator for the 11-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -1097,6 +1270,13 @@ def run_agentic_e2e_fix_orchestrator(
 
     # Snapshot file state before workflow (for hash-based commit detection)
     initial_file_hashes = _get_file_hashes(cwd)
+
+    # Capture initial commit SHA for full diff in Step 11
+    _initial_sha_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    initial_sha = _initial_sha_result.stdout.strip() if _initial_sha_result.returncode == 0 else ""
 
     success = False
     final_message = ""
@@ -1550,9 +1730,28 @@ def run_agentic_e2e_fix_orchestrator(
                 console.print(f"   [yellow]Warning: {commit_message}[/yellow]")
                 return False, final_message, total_cost, model_used, changed_files
 
+            # Step 11: Code Cleanup (runs BEFORE CI so cleanup is CI-validated)
+            if not skip_cleanup:
+                total_cost, changed_files = _run_step11_code_cleanup(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    issue_content=issue_content,
+                    issue_url=issue_url,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    initial_file_hashes=initial_file_hashes,
+                    initial_sha=initial_sha,
+                    total_cost=total_cost,
+                    changed_files=changed_files,
+                    timeout_adder=timeout_adder,
+                    verbose=verbose,
+                    quiet=quiet,
+                )
+
             if skip_ci:
                 if not quiet:
                     console.print("[yellow]Skipping CI validation (--skip-ci)[/yellow]")
+
                 clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
                 return True, final_message, total_cost, model_used, changed_files
 
@@ -1579,6 +1778,7 @@ def run_agentic_e2e_fix_orchestrator(
                     "No CI checks detected",
                 }:
                     final_message = ci_message
+
                 clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
                 return True, final_message, total_cost, model_used, changed_files
 
@@ -1603,7 +1803,7 @@ def run_agentic_e2e_fix_orchestrator(
                 reason=final_message,
                 total_cost=total_cost,
                 steps_completed=last_completed_step or step_num,
-                total_steps=10,
+                total_steps=11,
                 cwd=cwd,
             )
 

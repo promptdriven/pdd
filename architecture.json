@@ -8563,6 +8563,35 @@
     }
   },
   {
+    "reason": "Step 11 of the agentic E2E fix workflow: reviews all code changes from the bug+fix workflow and cleans up quality issues in a single pass.",
+    "description": "Step 11 of the agentic E2E fix workflow: reviews all code changes from the bug+fix workflow and cleans up quality issues in a single pass.",
+    "dependencies": [],
+    "priority": 223,
+    "filename": "agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
+    "filepath": "prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "fix"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          "issue_url",
+          "repo_owner",
+          "repo_name",
+          "issue_number",
+          "issue_description",
+          "full_diff",
+          "changed_files_content"
+        ]
+      }
+    }
+  },
+  {
     "reason": "Provides embedding-based coarse retrieval for ranking text candidates by semantic similarity.",
     "description": "Computes embeddings via litellm.embedding() and cosine similarity to pre-filter large candidate sets before LLM reranking.",
     "dependencies": [],

@@ -106,7 +106,7 @@ class TestIssue419CLIUnpushedCommitsE2E:
             """Mock LLM agent: Step 1 creates commit, Step 2 returns ALL_TESTS_PASS."""
             step_calls.append(label)
 
-            if "step1" in label:
+            if "_step1" in label:
                 generate_file = cwd / "pdd" / "commands" / "generate.py"
                 fixed_content = '''"""Generate command - fixed."""
 import os
@@ -125,7 +125,7 @@ def generate():
                 )
                 return (True, "Fixed pdd/commands/generate.py by removing os.environ.update()", 0.001, "mock-model")
 
-            elif "step2" in label:
+            elif "_step2" in label:
                 return (True, "ALL_TESTS_PASS", 0.001, "mock-model")
 
             return (True, f"Mock success for {label}", 0.001, "mock-model")
@@ -219,13 +219,13 @@ def generate():
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
         def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
-            if "step1" in label:
+            if "_step1" in label:
                 generate_file = cwd / "pdd" / "commands" / "generate.py"
                 generate_file.write_text('"""Fixed."""\ndef generate():\n    return "Fixed"\n')
                 subprocess.run(["git", "add", "pdd/commands/generate.py"], cwd=cwd, check=True)
                 subprocess.run(["git", "commit", "-m", "Fix"], cwd=cwd, check=True, capture_output=True)
                 return (True, "Fixed", 0.001, "mock-model")
-            elif "step2" in label:
+            elif "_step2" in label:
                 return (True, "ALL_TESTS_PASS", 0.001, "mock-model")
             return (True, "Success", 0.001, "mock-model")
 

@@ -31,18 +31,19 @@ console = Console()
 logger = logging.getLogger(__name__)
 
 # Per-Step Timeouts (Workflow specific)
-BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
     1: 240.0,    # Duplicate Check
     2: 400.0,    # Docs Check
     3: 400.0,    # Triage
-    4: 600.0,    # Reproduce (Complex)
-    5: 600.0,    # Root Cause (Complex)
-    5.5: 600.0,  # Prompt Classification (may auto-fix prompts)
-    6: 340.0,    # Test Plan
-    7: 1000.0,   # Generate Unit Test (Most Complex)
-    8: 600.0,    # Verify Unit Test
-    9: 2000.0,   # E2E Test (Complex - needs to discover env & run tests)
-    10: 240.0,   # Create PR
+    4: 400.0,    # API Research
+    5: 600.0,    # Reproduce (Complex)
+    6: 600.0,    # Root Cause (Complex)
+    7: 600.0,    # Prompt Classification (may auto-fix prompts)
+    8: 340.0,    # Test Plan
+    9: 1000.0,   # Generate Unit Test (Most Complex)
+    10: 600.0,   # Verify Unit Test
+    11: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
+    12: 240.0,   # Create PR
 }
 
 
@@ -989,7 +990,7 @@ def run_agentic_bug_orchestrator(
         except ValueError:
             start_step = 1
 
-    if last_completed_step > 0 and start_step <= 10 and not quiet:
+    if last_completed_step > 0 and start_step <= 12 and not quiet:
         console.print(f"Resuming bug investigation for issue #{issue_number}")
         console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
         console.print(f"   Starting from Step {start_step}")
@@ -1016,7 +1017,7 @@ def run_agentic_bug_orchestrator(
     skip_e2e = False
 
     # Worktree restoration for resume
-    if start_step >= 5.5 and start_step <= 10:
+    if start_step >= 5 and start_step <= 12:
         if worktree_path and worktree_path.exists():
             if not quiet:
                 console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")

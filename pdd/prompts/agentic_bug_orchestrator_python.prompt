@@ -35,23 +35,24 @@ Orchestrator for the 12-step agentic bug investigation workflow. Runs each step 
 % Per-Step Timeouts
 Define locally (workflow-specific configuration stays with the workflow):
 ```python
-BUG_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
     1: 240.0,    # Duplicate Check
     2: 400.0,    # Docs Check
     3: 400.0,    # Triage
-    4: 600.0,    # Reproduce (Complex)
-    5: 600.0,    # Root Cause (Complex)
-    5.5: 600.0,  # Prompt Classification (may auto-fix prompts)
-    6: 340.0,    # Test Plan
-    7: 1000.0,   # Generate Unit Test (Most Complex)
-    8: 600.0,    # Verify Unit Test
-    9: 2000.0,   # E2E Test (Complex - needs to discover env & run tests)
-    10: 240.0,   # Create PR
+    4: 400.0,    # API Research
+    5: 600.0,    # Reproduce (Complex)
+    6: 600.0,    # Root Cause (Complex)
+    7: 600.0,    # Prompt Classification (may auto-fix prompts)
+    8: 340.0,    # Test Plan
+    9: 1000.0,   # Generate Unit Test (Most Complex)
+    10: 600.0,   # Verify Unit Test
+    11: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
+    12: 240.0,   # Create PR
 }
 ```
 
 % Step Execution
-For each step (1-5, 5.5, 6-10), convert step number to suffix with dots replaced by underscores (5.5 → "5_5") for template names and context keys:
+For each step (1-12), convert step number to string suffix for template names and context keys:
 1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{step_suffix}_{name}_LLM")`
 2. Preprocess the template via `preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))` to expand `<include>` tags and escape curly braces
 3. Un-double braces (`{{` → `{`, `}}` → `}`), then substitute context keys using `str.replace()` (safe: unknown placeholders remain intact, JSON braces in values are preserved)
@@ -203,7 +204,7 @@ Use shared functions from agentic_common for state persistence. GitHub is primar
    - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
      - On success: Store output, set `last_completed_step = step_num`
      - On failure (not hard stop): Store "FAILED: {output}", keep `last_completed_step` unchanged (no ratchet effect)
-   - On successful completion (step 10): Call `clear_workflow_state()`
+   - On successful completion (step 12): Call `clear_workflow_state()`
 3. **Worktree restoration on resume**: If saved state has a `worktree_path`, reuse if exists on disk; otherwise recreate with `resume_existing=True`
 
 % Dependencies
