@@ -24,6 +24,7 @@ from .construct_paths import (
     _get_context_config,
     get_extension
 )
+from .sync_determine_operation import get_pdd_file_paths
 from .sync_orchestration import sync_orchestration
 from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
@@ -800,7 +801,6 @@ def sync_main(
 
                 from .one_session_sync import run_one_session_sync
                 from .sync_determine_operation import (
-                    get_pdd_file_paths,
                     sync_determine_operation,
                 )
 
@@ -927,6 +927,19 @@ def sync_main(
                     steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                     agentic_mode=agentic_mode,
                 )
+
+                # Post-sync: auto-submit example to cloud on success (multi-step path)
+                if sync_result.get("success") and not local:
+                    try:
+                        pdd_files = get_pdd_file_paths(
+                            basename, resolved_language,
+                            str(prompt_file_path.parent),
+                            context_override=context_override,
+                        )
+                        _auto_submit_example(basename, resolved_language, pdd_files, ctx)
+                    except Exception as e:
+                        if not quiet:
+                            rprint(f"[yellow]Warning: Example submission failed: {e}[/yellow]")
 
             lang_cost = sync_result.get("total_cost", 0.0)
             total_cost += lang_cost

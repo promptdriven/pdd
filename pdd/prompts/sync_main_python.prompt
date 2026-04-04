@@ -104,6 +104,7 @@
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
     - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
+    - **Auto-submit on success**: After sync_orchestration returns success for a language (and not local mode), call `_auto_submit_example()` to submit the prompt+code pair to PDD Cloud, same as one-session mode. Use `get_pdd_file_paths()` to resolve the module file paths needed for submission. Wrap in try/except and log warnings on failure (do not abort sync).
 
 11. **User Feedback** (unless quiet=True):
     - Show sync progress summary before starting (detected context, languages, settings)
