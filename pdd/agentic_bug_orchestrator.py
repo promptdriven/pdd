@@ -364,6 +364,19 @@ def _parse_fix_locations(step6_output: str) -> List[str]:
     return deduped
 
 
+def _parse_expansion_items(step6_output: str) -> str:
+    """Extract expansion items from Step 6's EXPANSION_ITEMS marker.
+
+    Returns a comma-separated string of expansion items, or "none" if the
+    marker is absent or empty (SCOPE_MATCH / NO_PROPOSED_FIX cases).
+    """
+    match = re.search(r"EXPANSION_ITEMS:\s*(.+)", step6_output)
+    if not match:
+        return "none"
+    items = match.group(1).strip()
+    return items if items else "none"
+
+
 def _verify_fix_location_coverage(
     fix_locations: List[str], test_files: List[str], work_dir: Path
 ) -> List[str]:
@@ -884,6 +897,7 @@ def run_agentic_bug_orchestrator(
         "issue_title": issue_title,
         "step5_reproduction_tests": "",
         "fix_locations": "none",
+        "step6_expansion_items": "none",
         "step9_test_verification": "",
     }
     
@@ -907,10 +921,11 @@ def run_agentic_bug_orchestrator(
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
         changed_files.extend(prompt_fixed)
 
-    # Step 6: re-extract fix locations for downstream steps
+    # Step 6: re-extract fix locations and expansion items for downstream steps
     if "step6_output" in context:
         fix_locs = _parse_fix_locations(context["step6_output"])
         context["fix_locations"] = ", ".join(fix_locs) if fix_locs else "none"
+        context["step6_expansion_items"] = _parse_expansion_items(context["step6_output"])
 
     # Step 7
     if "step7_output" in context:
@@ -1209,6 +1224,7 @@ def run_agentic_bug_orchestrator(
                     "Step 6 output missing FIX_LOCATIONS marker — "
                     "downstream call-boundary checks will be skipped"
                 )
+            context["step6_expansion_items"] = _parse_expansion_items(step_output)
 
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)

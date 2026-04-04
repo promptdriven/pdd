@@ -149,17 +149,15 @@ Before writing any mock or stub, verify it against the investigation findings:
 
 3. If you cannot write a mock that is both consistent with Steps 4-6 findings AND demonstrates the fix working, this is a signal that the proposed fix direction may be wrong. It is better to flag an impossible test than to write a test with incorrect mocks.
 
-% Scope Cross-Check Against Step 6
+% Scope Expansion Items
 
-After implementing Step 8's test plan, cross-check your generated tests against Step 6's full scope:
+Step 6's independent analysis identified these items beyond what the issue proposes:
 
-1. Re-read Step 6's "Proposed Fix Validation" section. If Step 6 classified the scope as `SCOPE_EXPANSION`, verify that your tests cover ALL items in Step 6's expanded scope — not just what Step 8's plan included.
+```
+{step6_expansion_items}
+```
 
-2. If Step 8's plan omitted items that Step 6 identified (because Step 8 itself anchored on the issue body), you MUST add additional tests to cover those missing items. Step 6's independent analysis is the authoritative scope.
-
-3. Compare your test count against Step 6's "Step 6 full scope" list. If Step 6 found N affected cases but your tests only cover a subset, add the missing coverage before finalizing.
-
-**Self-check:** Before writing tests to disk, list every item from Step 6's full scope and confirm each has at least one test. If any are missing, add them — even if Step 8's plan did not explicitly request them.
+If this value is not `none`, you MUST generate at least one test for each listed item — even if Step 8's plan did not include them. Step 6's independent analysis is the authoritative scope.
 
 % Worktree Setup
 

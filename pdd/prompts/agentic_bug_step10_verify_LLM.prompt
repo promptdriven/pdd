@@ -85,11 +85,9 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
 
 5. **Scope completeness verification**
-   Verify that the generated tests cover Step 6's full scope, not just the issue's proposed scope:
-   - Re-read Step 6's "Proposed Fix Validation" section, specifically the "Step 6 full scope" and "Expansion items" lists
-   - For each item in Step 6's full scope, confirm there is at least one test that exercises it
-   - If Step 6 classified the scope as `SCOPE_EXPANSION` and the tests only cover the issue-proposed subset (not Step 6's expanded scope), note this as a **WARNING** in your verification output: "WARNING: Tests may have incomplete scope — Step 6 identified additional items beyond the issue's proposed fix that lack dedicated test coverage: [list items]." This is informational for reviewers, not a workflow-stopping condition.
-   - This check prevents the pattern where issue authors propose partial fixes and downstream tests only validate the partial fix, missing the broader problem Step 6 identified.
+   Step 6's expansion items (injected by the orchestrator): `{step6_expansion_items}`
+   - If the value is not `none`, verify that the generated tests cover every listed item
+   - If any listed item lacks dedicated test coverage, note: "WARNING: Tests may have incomplete scope — the following expansion items lack coverage: [list items]." This is informational for reviewers, not a workflow-stopping condition.
 
 6. **Classify E2E test necessity**
    Determine whether an E2E test would add value beyond the unit test created in Step 9.

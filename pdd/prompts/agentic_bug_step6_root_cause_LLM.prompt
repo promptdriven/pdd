@@ -189,13 +189,15 @@ problematic_code_snippet()
 *Proceeding to Step 7: Prompt Classification*
 ```
 
-After posting your comment, output a machine-readable marker listing every file that needs to be modified to fix the bug. This is parsed by the orchestrator and injected into downstream steps:
+After posting your comment, output two machine-readable markers. Both are parsed by the orchestrator and injected into downstream steps as structured variables:
 
 ```
 FIX_LOCATIONS: path/to/file1.py, path/to/file2.py
+EXPANSION_ITEMS: description of item 1, description of item 2
 ```
 
-List ALL files from "File(s) to modify" above, comma-separated on one line. If only one file needs modification, list just that one file.
+- `FIX_LOCATIONS`: ALL files from "File(s) to modify" above, comma-separated on one line.
+- `EXPANSION_ITEMS`: If scope classification is `SCOPE_EXPANSION`, list every item your analysis found that the issue's proposed fix does NOT cover, comma-separated on one line. If `SCOPE_MATCH` or `NO_PROPOSED_FIX`, output: `EXPANSION_ITEMS: none`
 
 % Important
 

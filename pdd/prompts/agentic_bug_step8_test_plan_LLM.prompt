@@ -128,17 +128,15 @@ Your comment should follow this format:
 *Proceeding to Step 9: Generate Test*
 ```
 
-% Scope Prioritization — Use Step 6's Full Scope, Not Just the Issue Body
+% Scope Expansion Items
 
-When designing your test plan, prioritize Step 6's root cause analysis over the issue body for scoping:
+Step 6's independent analysis identified these items beyond what the issue proposes:
 
-1. Re-read Step 6's "Proposed Fix Validation" section. If Step 6 classified the scope as `SCOPE_EXPANSION`, your test plan MUST cover ALL items in Step 6's "Expansion items" list — not just the subset mentioned in the issue body.
+```
+{step6_expansion_items}
+```
 
-2. For each test case you plan, cross-reference it against Step 6's full scope. If your plan only covers items mentioned in the issue but omits items Step 6 independently found, your plan is incomplete.
-
-3. If the issue proposes a fix that covers 3 cases but Step 6 found 8 affected cases, you must plan tests for all 8 — the issue author may have identified only a subset of the problem.
-
-**Self-check:** Before finalizing, compare your planned test coverage against Step 6's "Step 6 full scope" list. Every item in that list must have at least one corresponding test. If any are missing, add them.
+If this value is not `none`, your test plan MUST include at least one test for each listed item. These were found by Step 6's root cause analysis independently of the issue body — the issue author identified only a subset of the problem.
 
 % Cross-Step Consistency Check
 
@@ -168,7 +166,7 @@ Your test plan must verify **observable behavior**, not code structure.
 
 - Tests should be specific enough to catch this exact bug
 - Tests should not be so brittle they break with valid changes
-- **Coverage check**: Before finalizing, re-read BOTH the issue description AND Step 6's full root cause analysis (especially the "Proposed Fix Validation" and "Step 6 full scope" sections). Your test plan must cover ALL items from Step 6's expanded scope — not just the symptoms or fixes mentioned in the issue body. If Step 6 found 8 affected cases but the issue only mentions 3, plan tests for all 8.
+- **Coverage check**: Before finalizing, verify every item in `{step6_expansion_items}` (above) has at least one planned test. If the value is not `none`, the issue only described a subset — cover the full list.
 - **Channel check**: For each symptom, ask "through which channel does this manifest?" (stdout, stderr, logging, Rich, click.echo, warnings, return value, side effect, state change). If a symptom can leak through multiple channels, test each one. The fix is only complete when ALL channels are covered — a fix that suppresses Rich output but leaves Python logging untouched is a partial fix, and the tests should catch that.
 - **Code path check**: For each root cause, ask "through which code paths can this be reached?" (first-run execution, resume from checkpoint, retry after failure, error recovery, different entry points). If the same data is processed in multiple paths, test each one. A fix that corrects the first-run path but leaves the resume path broken is incomplete — the tests should catch that. Cross-reference Step 6's sibling bugs to ensure every independently-discovered bug has test coverage.
 - **Call-boundary coverage check**: The fix locations are: `{fix_locations}`. If there are multiple files, the test plan MUST include tests for BOTH sides of the call boundary — mock the callee and verify the caller passes the right arguments, AND test the callee directly.
