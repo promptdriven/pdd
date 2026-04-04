@@ -20,6 +20,8 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
+from .architecture_include_validation import collect_architecture_include_validation_warnings
+from .architecture_registry import find_project_root as _find_project_root
 from .construct_paths import (
     _detect_context_from_basename,
     _extract_prefix_from_prompts_dir,
@@ -253,19 +255,6 @@ def _filter_invalid_basenames(
     return valid, invalid
 
 
-def _find_project_root(start: Path) -> Path:
-    """Walk up from start to find project root (directory containing .pddrc or .git)."""
-    current = start.resolve()
-    for _ in range(20):
-        if (current / ".pddrc").exists() or (current / ".git").exists():
-            return current
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return start.resolve()
-
-
 def _load_architecture_json(
     project_root: Path,
     issue_number: Optional[int] = None,
@@ -277,33 +266,15 @@ def _load_architecture_json(
 
     Args:
         project_root: Root directory of the project.
-        issue_number: Optional issue number for logging origin info.
+        issue_number: Optional issue number for logging origin info (reserved).
 
     Returns:
         Tuple of (parsed data or None, path to primary architecture.json).
     """
-    from .architecture_registry import find_architecture_for_project
+    from .architecture_registry import load_combined_architecture_data
 
-    arch_files = find_architecture_for_project(project_root)
-    if not arch_files:
-        return None, project_root / "architecture.json"
-
-    primary_path = arch_files[0]
-    combined: List[Dict[str, Any]] = []
-
-    for arch_path in arch_files:
-        try:
-            with open(arch_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                combined.extend(data)
-        except (json.JSONDecodeError, OSError):
-            continue
-
-    if not combined:
-        return None, primary_path
-
-    return combined, primary_path
+    _ = issue_number  # reserved for future origin-aware loading
+    return load_combined_architecture_data(project_root)
 
 
 def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
@@ -977,6 +948,9 @@ def run_agentic_sync(
         dep_graph = dep_graph_result.graph
         if dep_graph_result.warnings and not quiet:
             for w in dep_graph_result.warnings:
+                console.print(f"[yellow]Warning: {w}[/yellow]")
+        if not quiet:
+            for w in collect_architecture_include_validation_warnings(project_root):
                 console.print(f"[yellow]Warning: {w}[/yellow]")
     else:
         # Fallback: scan prompt files for <include> tags

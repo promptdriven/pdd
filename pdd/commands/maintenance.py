@@ -309,6 +309,42 @@ def auto_deps(
         return None
 
 
+@click.command("validate-arch-includes")
+@click.option(
+    "--project-root",
+    "project_root",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    default=".",
+    show_default=True,
+    help="Directory to scan for architecture.json files.",
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help="Also validate bundled sample trees (examples/, example_project/, …).",
+)
+@click.pass_context
+def validate_arch_includes(ctx: click.Context, project_root: Path, strict: bool) -> None:
+    """Fail if architecture.json dependencies disagree with module <include> tags."""
+    ctx.ensure_object(dict)
+    quiet = ctx.obj.get("quiet", False)
+    from ..architecture_include_validation import collect_architecture_include_validation_warnings
+
+    warnings = collect_architecture_include_validation_warnings(
+        project_root,
+        skip_bundled_sample_arch=not strict,
+    )
+    if not warnings:
+        if not quiet:
+            click.echo("No architecture / <include> mismatches found.")
+        return
+    for w in warnings:
+        if not quiet:
+            click.echo(click.style(f"Warning: {w}", fg="yellow"), err=True)
+    raise click.exceptions.Exit(1)
+
+
 @click.command("setup")
 @click.pass_context
 def setup(ctx: click.Context):
