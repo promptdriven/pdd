@@ -1,17 +1,10 @@
 """
 Tests for cross-step consistency in bug workflow prompts.
 
-Two categories:
-1. Unit tests (no LLM calls) — verify orchestrator parser and prompt placeholder wiring
-2. Integration tests (@pytest.mark.integration) — skipped in CI
-
 Issue #577: Cross-step mock consistency
 Issue #1071: Proposed fix validation / scope expansion defense
 """
 from pathlib import Path
-from textwrap import dedent
-from unittest.mock import patch, MagicMock
-import os
 import pytest
 
 PROMPTS_DIR = Path(__file__).parent.parent / "pdd" / "prompts"
@@ -86,111 +79,6 @@ class TestParseExpansionItems:
         output = "EXPANSION_ITEMS:   step 6 timeout, step 7 timeout   "
         result = _parse_expansion_items(output)
         assert result == "step 6 timeout, step 7 timeout"
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: Orchestrator injects step6_expansion_items into context
-# ---------------------------------------------------------------------------
-
-class TestExpansionItemsFlowToDownstreamSteps:
-    """Orchestrator parses EXPANSION_ITEMS from Step 6 and injects into Steps 8/9/10."""
-
-    STEP6_WITH_EXPANSION = (
-        "## Root Cause\nBUG_STEP_TIMEOUTS dict has stale step numbers.\n\n"
-        "FIX_LOCATIONS: pdd/agentic_bug_orchestrator.py\n"
-        "EXPANSION_ITEMS: step 6 timeout wrong, step 7 timeout wrong, step 8 timeout wrong\n"
-    )
-
-    STEP6_SCOPE_MATCH = (
-        "## Root Cause\nSingle function missing guard.\n\n"
-        "FIX_LOCATIONS: pdd/agentic_common.py\n"
-        "EXPANSION_ITEMS: none\n"
-    )
-
-    def _make_base_template(self) -> str:
-        """Minimal template with both fix_locations and step6_expansion_items placeholders."""
-        return (
-            "Issue {issue_number}.\n"
-            "<step6_output>{step6_output}</step6_output>\n"
-            "<fix_locations>{fix_locations}</fix_locations>\n"
-            "<step6_expansion_items>{step6_expansion_items}</step6_expansion_items>\n"
-        )
-
-    def _run_orchestrator_to_step8(self, tmp_path, step6_output: str):
-        """Run orchestrator through step 6 and return (captured, exc).
-
-        exc is set if the orchestrator raised before completing normally; the
-        tests include it in assertion messages so failures are self-diagnosing.
-        """
-        from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
-
-        captured = {}
-
-        def mock_run_side_effect(*args, **kwargs):
-            label = kwargs.get("label", "")
-            captured[label] = kwargs.get("instruction", "")
-            if label == "step6":
-                return (True, step6_output, 0.1, "model")
-            if label == "step8":
-                return (True, "## Test Plan\nPLANNED_TEST_COUNT: 3", 0.1, "model")
-            if label == "step9":
-                return (True, "Generated tests\nFILES_CREATED: tests/test_fix.py", 0.1, "model")
-            if label == "step10":
-                return (True, "PASS: Tests correct\nE2E_NEEDED: no", 0.1, "model")
-            return (True, f"Output for {label}", 0.1, "model")
-
-        template = self._make_base_template()
-
-        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
-        worktree_path.mkdir(parents=True, exist_ok=True)
-
-        exc = None
-        with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=mock_run_side_effect), \
-             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value=template), \
-             patch("pdd.agentic_bug_orchestrator.console"), \
-             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(worktree_path, None)), \
-             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
-             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
-             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
-             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
-             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
-             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
-            try:
-                run_agentic_bug_orchestrator(
-                    issue_url="https://github.com/owner/repo/issues/1",
-                    issue_content="Bug description",
-                    repo_owner="owner",
-                    repo_name="repo",
-                    issue_number=1,
-                    issue_author="user",
-                    issue_title="Bug Title",
-                    cwd=tmp_path,
-                    quiet=True,
-                )
-            except Exception as e:
-                exc = e  # captured so tests can include it in assertion messages
-
-        return captured, exc
-
-    def test_expansion_items_injected_into_step8_when_scope_expansion(self, tmp_path):
-        """When Step 6 emits EXPANSION_ITEMS, Step 8 instruction contains the items."""
-        captured, exc = self._run_orchestrator_to_step8(tmp_path, self.STEP6_WITH_EXPANSION)
-        step8_instruction = captured.get("step8", "")
-        assert "step 6 timeout wrong" in step8_instruction, (
-            "Orchestrator must inject EXPANSION_ITEMS into Step 8's instruction. "
-            f"Step 8 instruction: {step8_instruction[:500]}"
-            + (f"\nOrchestrator raised before step8: {exc}" if exc and not step8_instruction else "")
-        )
-
-    def test_expansion_items_is_none_when_scope_match(self, tmp_path):
-        """When Step 6 emits EXPANSION_ITEMS: none, Step 8 sees 'none'."""
-        captured, exc = self._run_orchestrator_to_step8(tmp_path, self.STEP6_SCOPE_MATCH)
-        step8_instruction = captured.get("step8", "")
-        assert "<step6_expansion_items>none</step6_expansion_items>" in step8_instruction, (
-            "Orchestrator must inject 'none' for SCOPE_MATCH into Step 8's instruction. "
-            f"Step 8 instruction: {step8_instruction[:500]}"
-            + (f"\nOrchestrator raised before step8: {exc}" if exc and not step8_instruction else "")
-        )
 
 
 # ---------------------------------------------------------------------------

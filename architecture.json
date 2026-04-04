@@ -4253,7 +4253,7 @@
   },
   {
     "reason": "Analyzes bug root cause with cross-cutting detection, variable reference audit, and state symmetry checks.",
-    "description": "Defines the prompt structure for agentic bug step5 root cause. Invoked by the corresponding Python module to format LLM requests.",
+    "description": "Defines the prompt structure for agentic bug step6 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 76,
     "filename": "agentic_bug_step6_root_cause_LLM.prompt",
@@ -4277,7 +4277,7 @@
   },
   {
     "reason": "Guides LLM to design observable-behavior test plans with full execution-path coverage during pdd bug step 8.",
-    "description": "Defines the prompt structure for agentic bug step6 test plan. Invoked by the corresponding Python module to format LLM requests.",
+    "description": "Defines the prompt structure for agentic bug step8 test plan. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 77,
     "filename": "agentic_bug_step8_test_plan_LLM.prompt",
@@ -4302,7 +4302,7 @@
   },
   {
     "reason": "Generates failing unit tests that detect the bug, with scope cross-check against Step 6 findings.",
-    "description": "Defines the prompt structure for agentic bug step7 generate. Invoked by the corresponding Python module to format LLM requests.",
+    "description": "Defines the prompt structure for agentic bug step9 generate. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 78,
     "filename": "agentic_bug_step9_generate_LLM.prompt",
@@ -4327,7 +4327,7 @@
   },
   {
     "reason": "Verifies unit test correctness and classifies whether E2E testing is needed.",
-    "description": "Defines the prompt structure for agentic bug step8 verify. Invoked by the corresponding Python module to format LLM requests.",
+    "description": "Defines the prompt structure for agentic bug step10 verify. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 79,
     "filename": "agentic_bug_step10_verify_LLM.prompt",

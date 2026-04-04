@@ -157,7 +157,7 @@ Step 6's independent analysis identified these items beyond what the issue propo
 {step6_expansion_items}
 ```
 
-If this value is not `none`, you MUST generate at least one test for each listed item — even if Step 8's plan did not include them. Step 6's independent analysis is the authoritative scope.
+If this value is not `none`, you MUST generate at least one test for each listed item. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
 
 % Worktree Setup
 
