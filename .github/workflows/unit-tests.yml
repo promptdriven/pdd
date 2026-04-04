@@ -53,13 +53,8 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 
-      # Non-blocking: reports drift between architecture.json and prompt <include> tags.
-      # Does not fail the job; use a warning annotation when the check exits non-zero.
-      - name: Validate architecture vs prompt includes (warning only)
-        run: |
-          if ! pdd validate-arch-includes; then
-            echo "::warning::validate-arch-includes reported mismatches (warning only; fix in a follow-up)"
-          fi
+      - name: Validate architecture vs prompt includes
+        run: pdd checkup --validate-arch-includes
 
       - name: Run unit tests
         run: >

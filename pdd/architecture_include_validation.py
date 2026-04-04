@@ -91,7 +91,6 @@ def resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path:
     """Public API for resolving an architecture ``filename`` to an on-disk path."""
     return _resolve_architecture_prompt_path(filename, project_root)
 
-
 def cross_validate_architecture_with_prompt_includes(
     arch_data: List[Dict[str, Any]],
     project_root: Path,
