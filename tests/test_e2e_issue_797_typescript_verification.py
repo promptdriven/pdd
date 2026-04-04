@@ -18,6 +18,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+from pdd.get_test_command import TestCommand
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def e2e_797_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
-         patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest {file}") as mock_get_cmd, \
+         patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value=TestCommand(command="npx jest {file}")) as mock_get_cmd, \
          patch("subprocess.run", return_value=mock_proc) as mock_subproc, \
          patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
 
@@ -254,7 +255,7 @@ class TestE2EIssue797TypeScriptVerification:
              patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
              patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
-             patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest {file}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value=TestCommand(command="npx jest {file}")), \
              patch("subprocess.run", return_value=mock_proc), \
              patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None):
 
