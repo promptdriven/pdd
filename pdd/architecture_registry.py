@@ -233,6 +233,52 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     return results
 
 
+def find_project_root(start: Optional[Path] = None) -> Path:
+    """Walk up from ``start`` (default: cwd) for a directory containing ``.pddrc`` or ``.git``."""
+    if start is None:
+        start = Path.cwd()
+    current = start.resolve()
+    for _ in range(20):
+        if (current / ".pddrc").exists() or (current / ".git").exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return start.resolve()
+
+
+def load_combined_architecture_data(
+    project_root: Path,
+) -> Tuple[Optional[List[Dict[str, Any]]], Path]:
+    """Load and merge all architecture.json lists under ``project_root`` (root + subdirs).
+
+    Returns:
+        ``(combined_entries_or_none, primary_arch_path)`` where primary is the first
+        file found (typically root ``architecture.json``).
+    """
+    arch_files = find_architecture_for_project(project_root)
+    if not arch_files:
+        return None, project_root / "architecture.json"
+
+    primary_path = arch_files[0]
+    combined: List[Dict[str, Any]] = []
+
+    for arch_path in arch_files:
+        try:
+            with open(arch_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                combined.extend(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    if not combined:
+        return None, primary_path
+
+    return combined, primary_path
+
+
 def get_modules_for_issue(arch_data: List[dict], issue_number: int) -> List[dict]:
     """Filter architecture entries by origin.issue_number."""
     return [
