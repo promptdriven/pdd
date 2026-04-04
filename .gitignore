@@ -245,6 +245,8 @@ ci/cloud-batch/test-durations.json
 # Ignore locally installed/compiled packages and binaries.
 # These should be managed via requirements.txt or setup.py, 
 # not tracked in version control to avoid OS compatibility issues.
+# uv.lock — project uses pip/setuptools; ignore if someone runs uv locally.
+uv.lock
 .local_pkgs/temp_workspace
 fake_test_output.py
 

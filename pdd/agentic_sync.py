@@ -20,7 +20,12 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir, _find_pddrc_file, _load_pddrc_config
+from .construct_paths import (
+    _detect_context_from_basename,
+    _extract_prefix_from_prompts_dir,
+    _find_pddrc_file,
+    _load_pddrc_config,
+)
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -968,7 +973,11 @@ def run_agentic_sync(
 
     # 11. Build dependency graph
     if architecture is not None:
-        dep_graph = build_dep_graph_from_architecture(arch_path, modules_to_sync)
+        dep_graph_result = build_dep_graph_from_architecture(arch_path, modules_to_sync)
+        dep_graph = dep_graph_result.graph
+        if dep_graph_result.warnings and not quiet:
+            for w in dep_graph_result.warnings:
+                console.print(f"[yellow]Warning: {w}[/yellow]")
     else:
         # Fallback: scan prompt files for <include> tags
         prompts_dir = project_root / "prompts"
