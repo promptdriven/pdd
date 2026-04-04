@@ -360,28 +360,16 @@ def test_included_docs_for_drift_report_excludes_mdx_not_regenerated_post_update
     assert agg == []
 
 
-def test_estimate_dry_run_cost_range_is_flat_per_pair(tmp_path, monkeypatch):
+def test_estimate_dry_run_cost_range_is_flat_per_pair():
     """Dry-run estimate is a flat $0.50–$1.00 per drifted pair."""
     from pdd.update_main import _estimate_dry_run_cost_range
 
-    repo = git.Repo.init(tmp_path)
-    (tmp_path / "small.py").write_text("a")
-    (tmp_path / "prompts").mkdir()
-    sp = tmp_path / "prompts" / "small_python.prompt"
-    sp.write_text("prompt")
-    repo.index.add([str(tmp_path / "small.py"), str(sp)])
-    repo.index.commit("init")
-    monkeypatch.chdir(tmp_path)
-
-    ctx = click.Context(click.Command("update"))
-    ctx.obj = {}
-    small_items = [(str(sp), str(tmp_path / "small.py"), "r")]
-
-    lo_s, hi_s = _estimate_dry_run_cost_range(ctx, repo, True, small_items)
+    small_items = [("prompts/small_python.prompt", "small.py", "r")]
+    lo_s, hi_s = _estimate_dry_run_cost_range(small_items)
     assert lo_s == 0.5
     assert hi_s == 1.0
 
-    lo_0, hi_0 = _estimate_dry_run_cost_range(ctx, repo, True, [])
+    lo_0, hi_0 = _estimate_dry_run_cost_range([])
     assert lo_0 == 0.0
     assert hi_0 == 0.0
 
