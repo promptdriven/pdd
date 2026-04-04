@@ -7,7 +7,7 @@ import sys
 import os
 
 # Import the module under test
-from pdd.get_test_command import get_test_command_for_file
+from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner, TestCommand
 
 
 class TestGetTestCommandForFilePython:
@@ -21,26 +21,26 @@ class TestGetTestCommandForFilePython:
         # Should return a command (either from CSV or smart detection)
         # For Python, smart detection returns pytest command
         assert result is not None
-        assert test_file in result or "test_example.py" in result
+        assert test_file in result.command or "test_example.py" in result.command
 
     def test_python_file_with_language_override(self):
         """Test Python file with explicit language parameter."""
         test_file = "/path/to/test_example.py"
         result = get_test_command_for_file(test_file, language="python")
-        
+
         assert result is not None
-        assert "pytest" in result.lower() or test_file in result
+        assert "pytest" in result.command.lower() or test_file in result.command
 
     def test_placeholder_replacement(self):
         """Test that {file} placeholder is replaced with actual file path."""
         test_file = "/my/test/file.py"
         result = get_test_command_for_file(test_file)
-        
+
         if result:
             # The {file} placeholder should be replaced
-            assert "{file}" not in result
+            assert "{file}" not in result.command
             # The actual file path should be in the command
-            assert test_file in result or "file.py" in result
+            assert test_file in result.command or "file.py" in result.command
 
 
 class TestGetTestCommandResolutionOrder:
@@ -58,8 +58,8 @@ class TestGetTestCommandResolutionOrder:
         mock_smart_detect.return_value = 'pytest command'
         
         result = get_test_command_for_file('/test/example.py')
-        
-        assert result == 'custom_runner /test/example.py'
+
+        assert result.command == 'custom_runner /test/example.py'
         # Smart detection should NOT be called when CSV has command
         mock_smart_detect.assert_not_called()
 
@@ -75,8 +75,8 @@ class TestGetTestCommandResolutionOrder:
         mock_smart_detect.return_value = 'pytest /test/example.py -q'
         
         result = get_test_command_for_file('/test/example.py')
-        
-        assert result == 'pytest /test/example.py -q'
+
+        assert result.command == 'pytest /test/example.py -q'
         mock_smart_detect.assert_called_once_with('python', '/test/example.py')
 
     @patch('pdd.get_test_command._load_language_format')
@@ -89,8 +89,8 @@ class TestGetTestCommandResolutionOrder:
         mock_smart_detect.return_value = 'pytest /test/example.py -q'
         
         result = get_test_command_for_file('/test/example.py')
-        
-        assert result == 'pytest /test/example.py -q'
+
+        assert result.command == 'pytest /test/example.py -q'
         mock_smart_detect.assert_called_once()
 
     @patch('pdd.get_test_command._load_language_format')
@@ -178,8 +178,8 @@ class TestEdgeCases:
         mock_get_lang.return_value = 'python'
         
         result = get_test_command_for_file('tests/test_example.py')
-        
-        assert result == 'pytest tests/test_example.py'
+
+        assert result.command == 'pytest tests/test_example.py'
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -192,8 +192,8 @@ class TestEdgeCases:
         mock_get_lang.return_value = 'python'
         
         result = get_test_command_for_file('/my path/test file.py')
-        
-        assert result == 'pytest /my path/test file.py'
+
+        assert result.command == 'pytest /my path/test file.py'
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -207,9 +207,9 @@ class TestEdgeCases:
         mock_smart_detect.return_value = 'smart cmd'
         
         result = get_test_command_for_file('/test/example.py')
-        
+
         # Whitespace-only command should be treated as empty
-        assert result == 'smart cmd'
+        assert result.command == 'smart cmd'
         mock_smart_detect.assert_called_once()
 
     @patch('pdd.get_test_command._load_language_format')
@@ -240,7 +240,7 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+        assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
     def test_vitest_config_overrides_csv_tsx_command(self, tmp_path):
         """When vitest.config.ts exists, TypeScript test files should use npx vitest."""
@@ -252,7 +252,7 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert result.startswith("npx vitest"), f"Expected command starting with 'npx vitest', got: {result}"
+        assert result.command.startswith("npx vitest"), f"Expected command starting with 'npx vitest', got: {result}"
 
     def test_no_config_falls_back_to_csv(self, tmp_path):
         """Without jest/vitest config, TypeScript should use the CSV command (npx tsx)."""
@@ -263,7 +263,7 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert result.startswith("npx tsx"), f"Expected command starting with 'npx tsx', got: {result}"
+        assert result.command.startswith("npx tsx"), f"Expected command starting with 'npx tsx', got: {result}"
 
     def test_jest_config_ts_also_detected(self, tmp_path):
         """jest.config.ts should also trigger Jest detection."""
@@ -274,7 +274,7 @@ class TestTypeScriptTestRunnerDetection:
 
         result = get_test_command_for_file(str(test_file), language="typescript")
 
-        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+        assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
     def test_tsx_files_also_use_jest_when_available(self, tmp_path):
         """TSX files should also detect Jest config."""
@@ -285,7 +285,7 @@ class TestTypeScriptTestRunnerDetection:
 
         result = get_test_command_for_file(str(test_file), language="typescriptreact")
 
-        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+        assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
 
 class TestPlaywrightDetection:
@@ -302,7 +302,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert result.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
+        assert result.command.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
 
     def test_spec_ts_without_playwright_config_falls_back_to_jest(self, tmp_path):
         """.spec.ts with only jest config (no playwright) should use Jest (Angular-style)."""
@@ -314,7 +314,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert "npx jest" in result, f"Expected jest command, got: {result}"
+        assert "npx jest" in result.command, f"Expected jest command, got: {result}"
 
     def test_test_ts_with_both_configs_uses_jest(self, tmp_path):
         """.test.ts files should use Jest even when playwright.config.ts exists."""
@@ -327,7 +327,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert "npx jest" in result, f"Expected jest command, got: {result}"
+        assert "npx jest" in result.command, f"Expected jest command, got: {result}"
 
     def test_spec_tsx_with_playwright_config_uses_playwright(self, tmp_path):
         """When playwright.config.ts exists, .spec.tsx files should also use playwright."""
@@ -339,7 +339,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescriptreact")
 
         assert result is not None
-        assert result.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
+        assert result.command.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
 
 
 class TestIntegrationWithRealCSV:
@@ -353,7 +353,7 @@ class TestIntegrationWithRealCSV:
         # Should get some command for Python
         assert result is not None
         # Should contain the file path
-        assert test_file in result
+        assert test_file in result.command
 
     def test_javascript_file_integration(self):
         """Integration test with real CSV for JavaScript file."""
@@ -362,8 +362,8 @@ class TestIntegrationWithRealCSV:
 
         # JavaScript should get a command from CSV run_test_command
         assert result is not None
-        assert "node" in result
-        assert test_file in result
+        assert "node" in result.command
+        assert test_file in result.command
 
     def test_unknown_extension_integration(self):
         """Integration test with unknown file extension."""
@@ -496,8 +496,8 @@ class TestMultipleFileTypes:
         mock_smart_detect.return_value = 'npx jest /test/example.ts'
         
         result = get_test_command_for_file('/test/example.ts')
-        
-        assert result == 'npx jest /test/example.ts'
+
+        assert result.command == 'npx jest /test/example.ts'
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -507,7 +507,221 @@ class TestMultipleFileTypes:
         mock_load_csv.return_value = {}
         mock_get_lang.return_value = 'java'
         mock_smart_detect.return_value = 'mvn test -Dtest=ExampleTest'
-        
+
         result = get_test_command_for_file('/test/ExampleTest.java')
-        
-        assert result == 'mvn test -Dtest=ExampleTest'
+
+        assert result.command == 'mvn test -Dtest=ExampleTest'
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _detect_ts_test_runner must return config directory alongside command.
+
+    Bug: _detect_ts_test_runner() finds the config directory (e.g., frontend/ containing
+    jest.config.js) but only returns the command string, discarding the config directory.
+    All 6 callers then use wrong cwd when running subprocess.run(), breaking monorepos.
+    """
+
+    # --- Test 1: Jest returns (command, config_dir) ---
+
+    def test_detect_ts_test_runner_jest_returns_config_dir(self, tmp_path):
+        """_detect_ts_test_runner must return the config directory alongside the Jest command.
+
+        Before fix: returns bare string 'npx jest --no-coverage --'
+        After fix: returns ('npx jest --no-coverage --', Path('frontend/'))
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        # Bug #1080: string can't unpack to 2 values → ValueError
+        cmd, returned_dir = result
+        assert "npx jest" in cmd
+        assert returned_dir == config_dir
+
+    # --- Test 2: Vitest returns (command, config_dir) ---
+
+    def test_detect_ts_test_runner_vitest_returns_config_dir(self, tmp_path):
+        """_detect_ts_test_runner must return the config directory for Vitest."""
+        config_dir = tmp_path / "packages" / "app"
+        config_dir.mkdir(parents=True)
+        (config_dir / "vitest.config.ts").write_text("export default {};")
+
+        test_dir = config_dir / "src" / "__tests__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "utils.test.ts"
+        test_file.write_text("test('utils', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        assert "npx vitest" in cmd
+        assert returned_dir == config_dir
+
+    # --- Test 3: Playwright returns (command, config_dir) ---
+
+    def test_detect_ts_test_runner_playwright_returns_config_dir(self, tmp_path):
+        """_detect_ts_test_runner must return the config directory for Playwright."""
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "playwright.config.ts").write_text("export default {};")
+
+        test_dir = config_dir / "e2e" / "tests"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "login.spec.ts"
+        test_file.write_text("test('login', async () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        assert "npx playwright" in cmd
+        assert returned_dir == config_dir
+
+    # --- Test 4: No config returns None (regression guard) ---
+
+    def test_detect_ts_test_runner_no_config_returns_none(self, tmp_path):
+        """_detect_ts_test_runner returns None when no config found (unchanged behavior)."""
+        test_dir = tmp_path / "src"
+        test_dir.mkdir()
+        test_file = test_dir / "foo.test.ts"
+        test_file.write_text("test('foo', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is None
+
+    # --- Test 5: get_test_command_for_file returns TestCommand with cwd for monorepo Jest ---
+
+    def test_get_test_command_monorepo_jest_returns_cwd(self, tmp_path):
+        """get_test_command_for_file must return a result with cwd for monorepo Jest.
+
+        Before fix: returns bare string (no .cwd attribute)
+        After fix: returns TestCommand(command=..., cwd=config_dir)
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd == config_dir
+
+    # --- Test 6: CSV returns TestCommand with cwd=None ---
+
+    @patch('pdd.get_test_command._load_language_format')
+    @patch('pdd.get_test_command.get_language')
+    def test_csv_command_returns_testcommand_with_none_cwd(self, mock_get_lang, mock_load_csv):
+        """CSV commands should return a result with cwd=None (caller decides cwd)."""
+        mock_load_csv.return_value = {
+            '.js': {'extension': '.js', 'run_test_command': 'node {file}'}
+        }
+        mock_get_lang.return_value = 'javascript'
+
+        result = get_test_command_for_file('/test/example.js')
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd is None
+
+    # --- Test 7: Smart detection returns TestCommand with cwd=None ---
+
+    @patch('pdd.get_test_command._load_language_format')
+    @patch('pdd.get_test_command.default_verify_cmd_for')
+    @patch('pdd.get_test_command.get_language')
+    def test_smart_detection_returns_testcommand_with_none_cwd(self, mock_get_lang, mock_smart, mock_csv):
+        """Smart detection fallback should return a result with cwd=None."""
+        mock_csv.return_value = {}
+        mock_get_lang.return_value = 'ruby'
+        mock_smart.return_value = 'ruby test_example.rb'
+
+        result = get_test_command_for_file('/test/example.rb')
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd is None
+
+    # --- Test 8: Config directory 3 levels up from test file ---
+
+    def test_detect_ts_test_runner_config_three_levels_up(self, tmp_path):
+        """Walk-up logic must find config multiple directories up from the test file."""
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        # 4 levels deep: frontend/src/components/__test__/deep/
+        test_dir = config_dir / "src" / "components" / "__test__" / "deep"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "Widget.test.tsx"
+        test_file.write_text("test('widget', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        assert returned_dir == config_dir
+
+    # --- Test 16: Exact monorepo scenario from the issue ---
+
+    def test_exact_monorepo_scenario_from_issue(self, tmp_path):
+        """Reproduce the exact scenario from issue pdd_cloud#900.
+
+        Structure: frontend/jest.config.js, frontend/src/lib/__test__/api.test.ts
+        Expected: cwd=frontend/ so Jest can find jest-environment-jsdom
+        """
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+        (config_dir / "node_modules").mkdir()
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        # Bug #1080: str has no .cwd → AttributeError
+        assert result.cwd == config_dir, (
+            f"Bug #1080: Expected cwd={config_dir}, got {getattr(result, 'cwd', 'N/A (string)')}"
+        )
+
+    # --- Test 17: Flat repo (config at root) ---
+
+    def test_flat_repo_config_at_root_returns_root_as_cwd(self, tmp_path):
+        """For flat repos, config dir should be the repo root."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = tmp_path / "src"
+        test_dir.mkdir()
+        test_file = test_dir / "utils.test.ts"
+        test_file.write_text("test('utils', () => {});")
+
+        result = _detect_ts_test_runner(test_file)
+        assert result is not None
+        cmd, returned_dir = result
+        # Config at root → cwd should be root
+        assert returned_dir == tmp_path
+
+    # --- Test 18: Python regression guard ---
+
+    def test_python_returns_testcommand_with_none_cwd(self):
+        """Python files should return a result with cwd=None (uses _find_project_root separately).
+
+        This verifies the TestCommand change doesn't break the Python code path.
+        """
+        result = get_test_command_for_file('/tmp/test_example.py', language='python')
+        assert result is not None
+        # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
+        assert result.cwd is None

@@ -2541,7 +2541,7 @@ class TestIssue797TypeScriptTestFiles:
         mock_pytest.assert_called_once()
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest src/__test__/Widget.test.tsx")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_tsx(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Jest .test.tsx files should NOT be run through pytest.
@@ -2550,6 +2550,8 @@ class TestIssue797TypeScriptTestFiles:
         which fails silently for TypeScript. The fix should use an appropriate
         runner (e.g., npx jest) for .test.tsx files.
         """
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest src/__test__/Widget.test.tsx", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "src" / "__test__"
@@ -2567,10 +2569,12 @@ class TestIssue797TypeScriptTestFiles:
         assert kwargs.get("shell") is False
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx playwright test e2e/login.spec.ts")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_spec_ts(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Playwright .spec.ts files should NOT be run through pytest."""
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx playwright test e2e/login.spec.ts", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "e2e"
@@ -4899,4 +4903,89 @@ class TestIssue1031WorkflowStateMarkers:
         assert result == ["tests/test_target.py"], (
             f"Expected only ['tests/test_target.py'] but got {len(result)} files — "
             f"directory scan fallback likely fired: {result!r}"
+        )
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _verify_tests_independently must use config dir as cwd.
+
+    Bug: _verify_tests_independently() runs non-Python tests (Jest, Vitest, Playwright)
+    from the repo root instead of the directory containing the test runner config.
+    This causes every monorepo with tests in a subdirectory to fail verification.
+    """
+
+    # --- Test 9: _verify_tests_independently uses config dir cwd ---
+
+    @patch("subprocess.run")
+    def test_verify_independently_uses_config_dir_not_repo_root(self, mock_subproc, tmp_path):
+        """_verify_tests_independently must pass the test runner config directory as cwd.
+
+        Before fix: subprocess.run(cwd=str(repo_root)) — always repo root
+        After fix: subprocess.run(cwd=str(config_dir)) — where jest.config.js lives
+
+        Uses real filesystem so get_test_command_for_file finds the config naturally.
+        """
+        # Set up monorepo: frontend/jest.config.js + frontend/src/lib/__test__/api.test.ts
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "api.test.ts").write_text("test('api', () => {});")
+
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+        passed, output = _verify_tests_independently(
+            ["frontend/src/lib/__test__/api.test.ts"], tmp_path
+        )
+
+        mock_subproc.assert_called_once()
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd} (repo root). Non-Python test verification uses "
+            f"wrong cwd, breaking all monorepos."
+        )
+
+    # --- Test 10: Backward compat — falls back to repo root when cwd=None ---
+
+    @patch("subprocess.run")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
+    def test_verify_independently_falls_back_to_repo_root_when_cwd_none(
+        self, mock_get_cmd, mock_subproc, tmp_path
+    ):
+        """When TestCommand.cwd is None, _verify_tests_independently falls back to repo root.
+
+        On buggy code: get_test_command_for_file returns str → caller does shlex.split(str)
+            which works, but this test returns a TestCommand-like object → crash (TypeError).
+        On fixed code: caller extracts .command and .cwd, falls back to repo root when cwd=None.
+        """
+        from types import SimpleNamespace
+
+        # Return a TestCommand-like object with cwd=None
+        mock_cmd = SimpleNamespace(
+            command="some_runner src/test.rb",
+            cwd=None
+        )
+        mock_get_cmd.return_value = mock_cmd
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+
+        passed, output = _verify_tests_independently(["src/test.rb"], tmp_path)
+
+        # On buggy code, shlex.split(SimpleNamespace) raises TypeError which is
+        # caught silently → subprocess.run never called. On fixed code, the caller
+        # extracts .command and .cwd from the TestCommand correctly.
+        assert mock_subproc.called, (
+            "subprocess.run was never called — the caller can't handle a TestCommand "
+            "return type from get_test_command_for_file. The fix must extract .command "
+            "from the result before passing to shlex.split()."
+        )
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(tmp_path), (
+            f"Expected fallback to repo root ({tmp_path}) when cwd=None, got {actual_cwd}"
         )
