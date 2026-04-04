@@ -117,7 +117,11 @@ class TestExpansionItemsFlowToDownstreamSteps:
         )
 
     def _run_orchestrator_to_step8(self, tmp_path, step6_output: str):
-        """Run orchestrator through step 6 and return captured step instructions."""
+        """Run orchestrator through step 6 and return (captured, exc).
+
+        exc is set if the orchestrator raised before completing normally; the
+        tests include it in assertion messages so failures are self-diagnosing.
+        """
         from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 
         captured = {}
@@ -140,6 +144,7 @@ class TestExpansionItemsFlowToDownstreamSteps:
         worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
         worktree_path.mkdir(parents=True, exist_ok=True)
 
+        exc = None
         with patch("pdd.agentic_bug_orchestrator.run_agentic_task", side_effect=mock_run_side_effect), \
              patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value=template), \
              patch("pdd.agentic_bug_orchestrator.console"), \
@@ -162,27 +167,29 @@ class TestExpansionItemsFlowToDownstreamSteps:
                     cwd=tmp_path,
                     quiet=True,
                 )
-            except Exception:
-                pass  # We only care about captured instructions
+            except Exception as e:
+                exc = e  # captured so tests can include it in assertion messages
 
-        return captured
+        return captured, exc
 
     def test_expansion_items_injected_into_step8_when_scope_expansion(self, tmp_path):
         """When Step 6 emits EXPANSION_ITEMS, Step 8 instruction contains the items."""
-        captured = self._run_orchestrator_to_step8(tmp_path, self.STEP6_WITH_EXPANSION)
+        captured, exc = self._run_orchestrator_to_step8(tmp_path, self.STEP6_WITH_EXPANSION)
         step8_instruction = captured.get("step8", "")
         assert "step 6 timeout wrong" in step8_instruction, (
             "Orchestrator must inject EXPANSION_ITEMS into Step 8's instruction. "
             f"Step 8 instruction: {step8_instruction[:500]}"
+            + (f"\nOrchestrator raised before step8: {exc}" if exc and not step8_instruction else "")
         )
 
     def test_expansion_items_is_none_when_scope_match(self, tmp_path):
         """When Step 6 emits EXPANSION_ITEMS: none, Step 8 sees 'none'."""
-        captured = self._run_orchestrator_to_step8(tmp_path, self.STEP6_SCOPE_MATCH)
+        captured, exc = self._run_orchestrator_to_step8(tmp_path, self.STEP6_SCOPE_MATCH)
         step8_instruction = captured.get("step8", "")
         assert "<step6_expansion_items>none</step6_expansion_items>" in step8_instruction, (
             "Orchestrator must inject 'none' for SCOPE_MATCH into Step 8's instruction. "
             f"Step 8 instruction: {step8_instruction[:500]}"
+            + (f"\nOrchestrator raised before step8: {exc}" if exc and not step8_instruction else "")
         )
 
 
@@ -271,6 +278,24 @@ class TestStep8CrossStepConsistency:
         assert has_instruction, (
             "Step 8 prompt must instruct resolving contradictions between test "
             "assumptions and investigation findings, not silently proceeding."
+        )
+
+    def test_coverage_check_requires_issue_symptom_coverage(self, step8_content: str) -> None:
+        """Coverage check must still instruct covering issue symptoms, not just expansion items.
+
+        When step6_expansion_items is 'none' (SCOPE_MATCH / NO_PROPOSED_FIX — the majority
+        of bugs), the expansion-items check is a no-op. Without the issue-symptom baseline,
+        the LLM gets no coverage guidance at all for those cases.
+        """
+        content_lower = step8_content.lower()
+        has_instruction = (
+            "re-read the issue description" in content_lower
+            or "every distinct symptom" in content_lower
+        )
+        assert has_instruction, (
+            "Step 8 coverage check must instruct re-reading the issue description "
+            "to enumerate symptoms — otherwise SCOPE_MATCH and NO_PROPOSED_FIX cases "
+            "get no baseline coverage guidance."
         )
 
 
