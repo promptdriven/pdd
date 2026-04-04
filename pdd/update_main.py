@@ -871,7 +871,10 @@ def _dependency_order_key(prompt_path: str) -> Optional[str]:
         if not basename or not language:
             return None
         return f"{basename}::{language}"
-    except Exception:
+    except Exception as e:
+        logger.debug(
+            "dependency order key failed for %s: %s", prompt_path, e, exc_info=True
+        )
         return None
 
 
@@ -894,6 +897,16 @@ def _order_changed_items_by_dependency(
         key = _dependency_order_key(prompt_path)
         if key is None:
             return changed_items  # If we can't identify modules, don't risk reordering.
+        if key in key_to_item:
+            prev_prompt = key_to_item[key][1][0]
+            logger.warning(
+                "Duplicate dependency-order key %r for prompts %r and %r; "
+                "keeping original update order.",
+                key,
+                prev_prompt,
+                prompt_path,
+            )
+            return changed_items
         key_to_item[key] = (idx, item)
 
     changed_keys = set(key_to_item.keys())
@@ -964,9 +977,9 @@ def _order_changed_items_by_dependency(
 
 
 def _estimate_dry_run_cost_range(
-    ctx: click.Context,
-    repo_obj: git.Repo,
-    simple: bool,
+    _ctx: click.Context,
+    _repo_obj: git.Repo,
+    _simple: bool,
     changed_items: List[Tuple[str, str, str]],
 ) -> Tuple[float, float]:
     """Flat heuristic total $ range for dry-run (not billed).
@@ -1435,15 +1448,25 @@ def update_main(
                     )
                     if arch_result.get("success") and arch_result.get("updated"):
                         arch_entries_updated += 1
-                except Exception:
-                    # Architecture sync is best-effort; don't fail the update
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "architecture sync from prompt failed (best-effort): %s",
+                        e,
+                        exc_info=True,
+                    )
 
         # --- Post-update: PRD sync (only if architecture changed) ---
         if arch_entries_updated > 0:
             prd_file = _find_prd_file(Path(repo_root))
             if prd_file is None:
                 prd_status = "not found"
+            elif not _budget_allows_post_update_llm(budget, total_repo_cost):
+                prd_status = "skipped (budget cap reached)"
+                if not quiet:
+                    rprint(
+                        f"[yellow]Skipping PRD sync: budget cap reached "
+                        f"(${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
+                    )
             else:
                 try:
                     from .agentic_common import run_agentic_task
@@ -1484,8 +1507,9 @@ def update_main(
                             prd_status = "unchanged"
                     else:
                         prd_status = "unchanged"
-                except Exception:
+                except Exception as e:
                     prd_status = "error"
+                    logger.warning("PRD sync failed: %s", e, exc_info=True)
         else:
             prd_status = "skipped (no arch changes)"
 

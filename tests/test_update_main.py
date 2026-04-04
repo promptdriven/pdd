@@ -8,7 +8,9 @@ from click.testing import CliRunner
 import git
 
 from pdd.update_main import (
+    _budget_allows_post_update_llm,
     _included_docs_for_drift_report,
+    _order_changed_items_by_dependency,
     find_and_resolve_all_pairs,
     update_main,
 )
@@ -384,6 +386,88 @@ def test_estimate_dry_run_cost_range_is_flat_per_pair(tmp_path, monkeypatch):
     lo_0, hi_0 = _estimate_dry_run_cost_range(ctx, repo, True, [])
     assert lo_0 == 0.0
     assert hi_0 == 0.0
+
+
+def test_budget_allows_post_update_llm_respects_cap():
+    assert _budget_allows_post_update_llm(None, 1e9) is True
+    assert _budget_allows_post_update_llm(5.0, 4.99) is True
+    assert _budget_allows_post_update_llm(5.0, 5.0) is False
+    assert _budget_allows_post_update_llm(5.0, 6.0) is False
+
+
+def test_order_changed_items_skips_reorder_on_duplicate_dependency_key():
+    """Same basename::language for two prompts must not drop an item (R3 review)."""
+    a = ("/tmp/dir1/foo_python.prompt", "/tmp/a.py", "r1")
+    b = ("/tmp/dir2/foo_python.prompt", "/tmp/b.py", "r2")
+    items = [a, b]
+    out = _order_changed_items_by_dependency(items)
+    assert out == items
+    assert len(out) == 2
+
+
+@patch("pdd.agentic_common.run_agentic_task")
+@patch("pdd.architecture_registry.find_architecture_for_project")
+@patch("pdd.architecture_sync.update_architecture_from_prompt")
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.update_main.is_code_changed", return_value=(True, "differs"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.find_and_resolve_all_pairs")
+@patch("pdd.update_main.git.Repo")
+def test_repo_prd_sync_skipped_when_budget_cap_reached_after_updates(
+    mock_repo_cls,
+    mock_find_pairs,
+    mock_git,
+    mock_changed,
+    mock_update,
+    mock_arch_sync,
+    mock_find_arch,
+    mock_run_agentic_task,
+    tmp_path,
+    monkeypatch,
+):
+    """PRD LLM step must honor --budget like other post-update steps."""
+    monkeypatch.chdir(tmp_path)
+    git.Repo.init(tmp_path)
+    (tmp_path / "architecture.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "PRD.md").write_text("# PRD", encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    prompt_p = tmp_path / "prompts" / "a_python.prompt"
+    code_p = tmp_path / "a.py"
+    prompt_p.write_text("prompt", encoding="utf-8")
+    code_p.write_text("code", encoding="utf-8")
+
+    root = str(tmp_path)
+    mock_repo = MagicMock()
+    mock_repo.working_tree_dir = root
+    mock_repo_cls.return_value = mock_repo
+
+    mock_find_pairs.return_value = [(str(prompt_p), str(code_p))]
+
+    mock_update.return_value = {
+        "prompt_file": str(prompt_p),
+        "status": "✅ Success",
+        "cost": 1.0,
+        "model": "m",
+        "error": "",
+    }
+    mock_arch_sync.return_value = {"success": True, "updated": True, "changes": {}}
+    mock_find_arch.return_value = [tmp_path / "architecture.json"]
+
+    ctx = click.Context(click.Command("update"))
+    ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+    result = update_main(
+        ctx,
+        input_prompt_file=None,
+        modified_code_file=None,
+        input_code_file=None,
+        output=None,
+        repo=True,
+        budget=0.5,
+    )
+
+    assert result is not None
+    mock_run_agentic_task.assert_not_called()
 
 
 @pytest.fixture
