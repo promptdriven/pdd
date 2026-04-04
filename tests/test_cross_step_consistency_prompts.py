@@ -152,8 +152,8 @@ class TestExpansionItemsFlowToDownstreamSteps:
                     cwd=tmp_path,
                     quiet=True,
                 )
-            except Exception:
-                pass  # We only care about captured instructions
+            except Exception as exc:
+                captured["_orchestrator_error"] = str(exc)
         return captured
 
     def test_expansion_items_injected_into_step8_when_scope_expansion(self, tmp_path):
@@ -163,6 +163,7 @@ class TestExpansionItemsFlowToDownstreamSteps:
         assert "step 6 timeout wrong" in step8_instruction, (
             "Orchestrator must inject EXPANSION_ITEMS value into Step 8's instruction. "
             f"Step 8 instruction: {step8_instruction[:300]}"
+            f"{'; orchestrator error: ' + captured['_orchestrator_error'] if '_orchestrator_error' in captured else ''}"
         )
 
     def test_expansion_items_is_none_when_scope_match(self, tmp_path):
@@ -172,6 +173,7 @@ class TestExpansionItemsFlowToDownstreamSteps:
         assert "<step6_expansion_items>none</step6_expansion_items>" in step8_instruction, (
             "Orchestrator must inject 'none' for SCOPE_MATCH into Step 8's instruction. "
             f"Step 8 instruction: {step8_instruction[:300]}"
+            f"{'; orchestrator error: ' + captured['_orchestrator_error'] if '_orchestrator_error' in captured else ''}"
         )
 
 
