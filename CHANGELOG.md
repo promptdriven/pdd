@@ -1,3 +1,27 @@
+## v0.0.197 (2026-04-03)
+
+### Feat
+
+- PDD enhancement changes for #1071
+- add scope-expansion directives to bug workflow prompts (#1071)
+
+### Fix
+
+- capture orchestrator errors in injection test assertions (#1071)
+- add step6_expansion_items to CALLER_BUG_SCENARIO fixture in step7 test
+- address adversarial review — dedup, missing warning, magic window, orchestrator test
+- review fixes for #1074 — stale architecture descriptions, mock-of-mock tests, step9 silent override
+- restore issue-symptom coverage baseline in step8, fix silent test swallow (#1071)
+- replace free-text scope directives with EXPANSION_ITEMS machine-readable marker (#1071)
+- Step 10 scope check uses WARNING not FAIL, replace keyword tests with real verification
+- use resolved absolute path in TestCommand to prevent double-prefix (#1080)
+- update e2e_797 test mocks and example to use TestCommand (#1080)
+- fix_error_loop uses TestCommand.cwd instead of test_file.parent (#1080)
+- non-Python test verification uses wrong cwd — breaks all monorepos (#1080)
+- auto-heal drift detection and healing bugs
+- address PR #1068 review feedback from Greg
+- bug: _is_permanent_error() misses Claude OAuth failures — wastes 9 retries per job
+
 ## v0.0.196 (2026-04-02)
 
 ### Fix

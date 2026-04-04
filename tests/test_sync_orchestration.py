@@ -2304,7 +2304,7 @@ class TestLanguageTestCommandResolution:
 
         result = get_test_command_for_file("/tmp/test_foo.py", "python")
         assert result is not None
-        assert "pytest" in result
+        assert "pytest" in result.command
 
 
 class TestHasCoverageConfig:
@@ -7137,3 +7137,193 @@ class TestValidateTypescriptImportsPackageJsonFallback:
 
         unresolved = _validate_typescript_imports(code_file)
         assert "@radix-ui/react-dialog" not in unresolved
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: Non-Python subprocess.run must use config dir as cwd.
+
+    Bug: _execute_tests_and_create_run_report() and the fix-operation path both run
+    non-Python tests with cwd=str(test_file.parent) instead of the config directory.
+    For monorepos, test_file.parent is the test's immediate directory (e.g., __test__/)
+    but Jest/Vitest need to run from where their config lives (e.g., frontend/).
+    """
+
+    # --- Test 12: _execute_tests_and_create_run_report uses config dir ---
+
+    def test_execute_tests_uses_config_dir_for_non_python(self, tmp_path, monkeypatch):
+        """_execute_tests_and_create_run_report must use the config dir, not test_file.parent.
+
+        Before fix: cwd=str(test_file.parent) = __test__/ directory
+        After fix: cwd=str(config_dir) = frontend/ where jest.config.js lives
+        """
+        monkeypatch.chdir(tmp_path)
+
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        subprocess_calls = []
+
+        def capture_run(cmd, **kwargs):
+            subprocess_calls.append({'cmd': cmd, 'kwargs': kwargs})
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "Tests: 5 passed"
+            result.stderr = ""
+            return result
+
+        with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_run), \
+             patch('pdd.sync_orchestration.calculate_sha256', return_value="abc123"), \
+             patch('pdd.sync_orchestration.save_run_report'):
+            try:
+                _execute_tests_and_create_run_report(
+                    test_file=test_file,
+                    basename="api",
+                    language="typescript",
+                    target_coverage=0.0
+                )
+            except Exception:
+                pass
+
+        # Find the non-Python shell command (string cmd, not list)
+        non_python_calls = [c for c in subprocess_calls if isinstance(c['cmd'], str)]
+        assert len(non_python_calls) > 0, (
+            "Expected at least one shell command for non-Python test. "
+            f"All calls: {subprocess_calls}"
+        )
+        actual_cwd = non_python_calls[0]['kwargs'].get('cwd')
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd}. _execute_tests_and_create_run_report uses "
+            f"test_file.parent instead of config dir."
+        )
+
+    # --- Test 13: sync_orchestration fix-operation path uses config dir ---
+
+    def test_fix_operation_uses_config_dir_for_non_python(self, tmp_path, monkeypatch):
+        """The fix-operation in sync_orchestration must use config dir for non-Python.
+
+        Before fix: cwd=str(pdd_files['test'].parent) = __test__/ directory
+        After fix: cwd=str(config_dir) = frontend/ where jest.config.js lives
+        """
+        import subprocess as sp
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        # Create monorepo structure
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "api_typescript.prompt").write_text("Create API tests.")
+
+        code_dir = config_dir / "src" / "lib"
+        code_dir.mkdir(parents=True)
+        (code_dir / "api.ts").write_text("export function fetchApi() { return 'ok'; }")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        examples_dir = tmp_path / "examples"
+        examples_dir.mkdir()
+        (examples_dir / "api_example.ts").write_text("// example")
+
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
+
+        # Capture all subprocess.run calls
+        subprocess_calls = []
+
+        def capture_subprocess_run(cmd, **kwargs):
+            cmd_info = [str(c) for c in cmd] if not isinstance(cmd, str) else [cmd]
+            subprocess_calls.append({'cmd': cmd_info, 'is_shell': isinstance(cmd, str), 'kwargs': kwargs})
+            mock_result = MagicMock()
+            mock_result.returncode = 1
+            mock_result.stdout = "1 failed"
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_subprocess_run), \
+             patch("pdd.sync_orchestration.sync_determine_operation") as mock_determine, \
+             patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             patch("pdd.sync_orchestration.SyncApp") as mock_sync_app_class, \
+             patch("pdd.sync_orchestration.fix_main") as mock_fix, \
+             patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths") as mock_get_paths, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure SyncApp to run worker synchronously
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.worker_func = worker_func
+
+                def mock_run():
+                    try:
+                        return worker_func()
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+                instance.run = mock_run
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure paths to point to monorepo TypeScript files
+            mock_get_paths.return_value = {
+                'prompt': prompts_dir / "api_typescript.prompt",
+                'code': code_dir / "api.ts",
+                'example': examples_dir / "api_example.ts",
+                'test': test_file,
+                'test_files': [test_file],
+            }
+
+            # Configure sync_determine_operation: 'fix' once, then 'all_synced'
+            call_count = [0]
+
+            def determine_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return SyncDecision(operation='fix', reason='Tests failing', confidence=0.9)
+                return SyncDecision(operation='all_synced', reason='Complete', confidence=1.0)
+            mock_determine.side_effect = determine_side_effect
+
+            mock_fix.return_value = {'success': True, 'cost': 0.1, 'model': 'mock-model'}
+
+            try:
+                sync_orchestration(
+                    basename="api",
+                    language="typescript",
+                    skip_verify=True,
+                    budget=10.0
+                )
+            except Exception:
+                pass
+
+        # Find non-Python shell commands (fix-operation runs shell=True for non-Python)
+        shell_calls = [c for c in subprocess_calls if c['is_shell']]
+        assert len(shell_calls) > 0, (
+            f"Expected at least one shell command for non-Python fix operation. "
+            f"All subprocess calls: {len(subprocess_calls)}"
+        )
+        actual_cwd = shell_calls[0]['kwargs'].get('cwd')
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd}. Fix operation uses pdd_files['test'].parent "
+            f"instead of config dir."
+        )
