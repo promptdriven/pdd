@@ -99,8 +99,8 @@ class TestDetectDrift:
         assert example_drifts[0].basename == "api"
 
     def test_no_drift(self):
-        """Modules with operation=='none' are not collected."""
-        decision = MagicMock(operation="none")
+        """Modules with operation=='nothing' are not collected."""
+        decision = MagicMock(operation="nothing")
         files, infer, sync = self._setup_mocks({"utils": decision})
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
