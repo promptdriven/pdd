@@ -7,7 +7,7 @@ import sys
 import os
 
 # Import the module under test
-from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner
+from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner, TestCommand
 
 
 class TestGetTestCommandForFilePython:
@@ -21,26 +21,26 @@ class TestGetTestCommandForFilePython:
         # Should return a command (either from CSV or smart detection)
         # For Python, smart detection returns pytest command
         assert result is not None
-        assert test_file in result or "test_example.py" in result
+        assert test_file in result.command or "test_example.py" in result.command
 
     def test_python_file_with_language_override(self):
         """Test Python file with explicit language parameter."""
         test_file = "/path/to/test_example.py"
         result = get_test_command_for_file(test_file, language="python")
-        
+
         assert result is not None
-        assert "pytest" in result.lower() or test_file in result
+        assert "pytest" in result.command.lower() or test_file in result.command
 
     def test_placeholder_replacement(self):
         """Test that {file} placeholder is replaced with actual file path."""
         test_file = "/my/test/file.py"
         result = get_test_command_for_file(test_file)
-        
+
         if result:
             # The {file} placeholder should be replaced
-            assert "{file}" not in result
+            assert "{file}" not in result.command
             # The actual file path should be in the command
-            assert test_file in result or "file.py" in result
+            assert test_file in result.command or "file.py" in result.command
 
 
 class TestGetTestCommandResolutionOrder:
@@ -58,8 +58,8 @@ class TestGetTestCommandResolutionOrder:
         mock_smart_detect.return_value = 'pytest command'
         
         result = get_test_command_for_file('/test/example.py')
-        
-        assert result == 'custom_runner /test/example.py'
+
+        assert result.command == 'custom_runner /test/example.py'
         # Smart detection should NOT be called when CSV has command
         mock_smart_detect.assert_not_called()
 
@@ -75,8 +75,8 @@ class TestGetTestCommandResolutionOrder:
         mock_smart_detect.return_value = 'pytest /test/example.py -q'
         
         result = get_test_command_for_file('/test/example.py')
-        
-        assert result == 'pytest /test/example.py -q'
+
+        assert result.command == 'pytest /test/example.py -q'
         mock_smart_detect.assert_called_once_with('python', '/test/example.py')
 
     @patch('pdd.get_test_command._load_language_format')
@@ -89,8 +89,8 @@ class TestGetTestCommandResolutionOrder:
         mock_smart_detect.return_value = 'pytest /test/example.py -q'
         
         result = get_test_command_for_file('/test/example.py')
-        
-        assert result == 'pytest /test/example.py -q'
+
+        assert result.command == 'pytest /test/example.py -q'
         mock_smart_detect.assert_called_once()
 
     @patch('pdd.get_test_command._load_language_format')
@@ -178,8 +178,8 @@ class TestEdgeCases:
         mock_get_lang.return_value = 'python'
         
         result = get_test_command_for_file('tests/test_example.py')
-        
-        assert result == 'pytest tests/test_example.py'
+
+        assert result.command == 'pytest tests/test_example.py'
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -192,8 +192,8 @@ class TestEdgeCases:
         mock_get_lang.return_value = 'python'
         
         result = get_test_command_for_file('/my path/test file.py')
-        
-        assert result == 'pytest /my path/test file.py'
+
+        assert result.command == 'pytest /my path/test file.py'
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -207,9 +207,9 @@ class TestEdgeCases:
         mock_smart_detect.return_value = 'smart cmd'
         
         result = get_test_command_for_file('/test/example.py')
-        
+
         # Whitespace-only command should be treated as empty
-        assert result == 'smart cmd'
+        assert result.command == 'smart cmd'
         mock_smart_detect.assert_called_once()
 
     @patch('pdd.get_test_command._load_language_format')
@@ -240,7 +240,7 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+        assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
     def test_vitest_config_overrides_csv_tsx_command(self, tmp_path):
         """When vitest.config.ts exists, TypeScript test files should use npx vitest."""
@@ -252,7 +252,7 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert result.startswith("npx vitest"), f"Expected command starting with 'npx vitest', got: {result}"
+        assert result.command.startswith("npx vitest"), f"Expected command starting with 'npx vitest', got: {result}"
 
     def test_no_config_falls_back_to_csv(self, tmp_path):
         """Without jest/vitest config, TypeScript should use the CSV command (npx tsx)."""
@@ -263,7 +263,7 @@ class TestTypeScriptTestRunnerDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert result.startswith("npx tsx"), f"Expected command starting with 'npx tsx', got: {result}"
+        assert result.command.startswith("npx tsx"), f"Expected command starting with 'npx tsx', got: {result}"
 
     def test_jest_config_ts_also_detected(self, tmp_path):
         """jest.config.ts should also trigger Jest detection."""
@@ -274,7 +274,7 @@ class TestTypeScriptTestRunnerDetection:
 
         result = get_test_command_for_file(str(test_file), language="typescript")
 
-        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+        assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
     def test_tsx_files_also_use_jest_when_available(self, tmp_path):
         """TSX files should also detect Jest config."""
@@ -285,7 +285,7 @@ class TestTypeScriptTestRunnerDetection:
 
         result = get_test_command_for_file(str(test_file), language="typescriptreact")
 
-        assert "npx jest" in result, f"Expected command starting with 'npx jest', got: {result}"
+        assert "npx jest" in result.command, f"Expected command starting with 'npx jest', got: {result}"
 
 
 class TestPlaywrightDetection:
@@ -302,7 +302,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert result.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
+        assert result.command.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
 
     def test_spec_ts_without_playwright_config_falls_back_to_jest(self, tmp_path):
         """.spec.ts with only jest config (no playwright) should use Jest (Angular-style)."""
@@ -314,7 +314,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert "npx jest" in result, f"Expected jest command, got: {result}"
+        assert "npx jest" in result.command, f"Expected jest command, got: {result}"
 
     def test_test_ts_with_both_configs_uses_jest(self, tmp_path):
         """.test.ts files should use Jest even when playwright.config.ts exists."""
@@ -327,7 +327,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescript")
 
         assert result is not None
-        assert "npx jest" in result, f"Expected jest command, got: {result}"
+        assert "npx jest" in result.command, f"Expected jest command, got: {result}"
 
     def test_spec_tsx_with_playwright_config_uses_playwright(self, tmp_path):
         """When playwright.config.ts exists, .spec.tsx files should also use playwright."""
@@ -339,7 +339,7 @@ class TestPlaywrightDetection:
         result = get_test_command_for_file(str(test_file), language="typescriptreact")
 
         assert result is not None
-        assert result.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
+        assert result.command.startswith("npx playwright"), f"Expected 'npx playwright' command, got: {result}"
 
 
 class TestIntegrationWithRealCSV:
@@ -353,7 +353,7 @@ class TestIntegrationWithRealCSV:
         # Should get some command for Python
         assert result is not None
         # Should contain the file path
-        assert test_file in result
+        assert test_file in result.command
 
     def test_javascript_file_integration(self):
         """Integration test with real CSV for JavaScript file."""
@@ -362,8 +362,8 @@ class TestIntegrationWithRealCSV:
 
         # JavaScript should get a command from CSV run_test_command
         assert result is not None
-        assert "node" in result
-        assert test_file in result
+        assert "node" in result.command
+        assert test_file in result.command
 
     def test_unknown_extension_integration(self):
         """Integration test with unknown file extension."""
@@ -496,8 +496,8 @@ class TestMultipleFileTypes:
         mock_smart_detect.return_value = 'npx jest /test/example.ts'
         
         result = get_test_command_for_file('/test/example.ts')
-        
-        assert result == 'npx jest /test/example.ts'
+
+        assert result.command == 'npx jest /test/example.ts'
 
     @patch('pdd.get_test_command._load_language_format')
     @patch('pdd.get_test_command.default_verify_cmd_for')
@@ -507,10 +507,10 @@ class TestMultipleFileTypes:
         mock_load_csv.return_value = {}
         mock_get_lang.return_value = 'java'
         mock_smart_detect.return_value = 'mvn test -Dtest=ExampleTest'
-        
+
         result = get_test_command_for_file('/test/ExampleTest.java')
 
-        assert result == 'mvn test -Dtest=ExampleTest'
+        assert result.command == 'mvn test -Dtest=ExampleTest'
 
 
 # ============================================================================

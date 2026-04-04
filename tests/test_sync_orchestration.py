@@ -2304,7 +2304,7 @@ class TestLanguageTestCommandResolution:
 
         result = get_test_command_for_file("/tmp/test_foo.py", "python")
         assert result is not None
-        assert "pytest" in result
+        assert "pytest" in result.command
 
 
 class TestHasCoverageConfig:

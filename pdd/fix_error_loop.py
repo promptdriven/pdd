@@ -444,7 +444,8 @@ def fix_error_loop(unit_test_file: str,
                     pass
                 return success, final_unit_test, final_code, 1, agent_cost, agent_model
 
-            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL)
+            # Run from the test file's directory so Jest/Vitest can find their config (#1080).
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL, cwd=str(Path(unit_test_file).parent))
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
             if verify_result.returncode == 0:
                 initial_fails, initial_errors, initial_warnings = 0, 0, 0

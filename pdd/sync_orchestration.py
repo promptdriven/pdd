@@ -1399,15 +1399,18 @@ def _execute_tests_and_create_run_report(
                 _save_run_report_atomic(asdict(report), basename, language, atomic_state)
                 return report
 
-            # Run the test command
+            # Run the test command. Use config directory as cwd if detected
+            # (e.g. frontend/ for jest.config.js), otherwise test file's parent.
+            # Fixes monorepo test verification (#1080).
+            effective_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(test_file.parent)
             result = subprocess.run(
-                test_cmd,
+                test_cmd.command,
                 shell=True,
                 capture_output=True,
                 text=True,
                 timeout=300,
                 env=clean_env,
-                cwd=str(test_file.parent),
+                cwd=effective_cwd,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True
             )
@@ -2307,13 +2310,15 @@ def sync_orchestration(
 
                                             test_result = subprocess.run(pytest_args, **subprocess_kwargs)
                                         else:
-                                            # Use shell command for non-Python
+                                            # Use shell command for non-Python. Use config directory
+                                            # as cwd if detected, otherwise test file's parent (#1080).
+                                            fix_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(pdd_files['test'].parent)
                                             test_result = subprocess.run(
-                                                test_cmd,
+                                                test_cmd.command,
                                                 shell=True,
                                                 capture_output=True, text=True, timeout=300,
                                                 stdin=subprocess.DEVNULL, env=clean_env,
-                                                cwd=str(pdd_files['test'].parent),
+                                                cwd=fix_cwd,
                                                 start_new_session=True
                                             )
                                         error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"

@@ -2541,7 +2541,7 @@ class TestIssue797TypeScriptTestFiles:
         mock_pytest.assert_called_once()
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest src/__test__/Widget.test.tsx")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_tsx(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Jest .test.tsx files should NOT be run through pytest.
@@ -2550,6 +2550,8 @@ class TestIssue797TypeScriptTestFiles:
         which fails silently for TypeScript. The fix should use an appropriate
         runner (e.g., npx jest) for .test.tsx files.
         """
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest src/__test__/Widget.test.tsx", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "src" / "__test__"
@@ -2567,10 +2569,12 @@ class TestIssue797TypeScriptTestFiles:
         assert kwargs.get("shell") is False
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx playwright test e2e/login.spec.ts")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_spec_ts(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Playwright .spec.ts files should NOT be run through pytest."""
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx playwright test e2e/login.spec.ts", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "e2e"

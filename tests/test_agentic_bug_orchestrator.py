@@ -4546,7 +4546,8 @@ class TestVerifyE2eTests:
     @patch("pdd.agentic_bug_orchestrator.subprocess.run")
     def test_non_python_test_failure(self, mock_subproc, mock_get_cmd, tmp_path):
         """Non-Python test file that fails (expected)."""
-        mock_get_cmd.return_value = "npx jest test_e2e.js"
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest test_e2e.js", cwd=None)
         mock_subproc.return_value = MagicMock(
             returncode=1,
             stdout="test failed output",
@@ -4568,7 +4569,8 @@ class TestVerifyE2eTests:
     @patch("pdd.agentic_bug_orchestrator.subprocess.run")
     def test_non_python_test_timeout(self, mock_subproc, mock_get_cmd, tmp_path):
         """Non-Python test file that times out."""
-        mock_get_cmd.return_value = "npx jest test_e2e.js"
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest test_e2e.js", cwd=None)
         import subprocess as sp
         mock_subproc.side_effect = sp.TimeoutExpired(cmd="npx jest", timeout=120)
         ok, output = _verify_e2e_tests(["test_e2e.js"], tmp_path)
