@@ -367,14 +367,23 @@ def _parse_fix_locations(step6_output: str) -> List[str]:
 def _parse_expansion_items(step6_output: str) -> str:
     """Extract expansion items from Step 6's EXPANSION_ITEMS marker.
 
-    Returns a comma-separated string of expansion items, or "none" if the
-    marker is absent or empty (SCOPE_MATCH / NO_PROPOSED_FIX cases).
+    Returns a deduplicated comma-separated string of expansion items, or "none"
+    if the marker is absent, empty, or explicitly "none" (SCOPE_MATCH / NO_PROPOSED_FIX).
     """
     match = re.search(r"EXPANSION_ITEMS:\s*(.+)", step6_output)
     if not match:
         return "none"
-    items = match.group(1).strip()
-    return items if items else "none"
+    raw = match.group(1).strip()
+    if not raw or raw.lower() == "none":
+        return "none"
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for item in raw.split(","):
+        cleaned = item.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return ", ".join(deduped) if deduped else "none"
 
 
 def _verify_fix_location_coverage(
@@ -1224,7 +1233,13 @@ def run_agentic_bug_orchestrator(
                     "Step 6 output missing FIX_LOCATIONS marker — "
                     "downstream call-boundary checks will be skipped"
                 )
-            context["step6_expansion_items"] = _parse_expansion_items(step_output)
+            expansion = _parse_expansion_items(step_output)
+            context["step6_expansion_items"] = expansion
+            if expansion == "none" and "EXPANSION_ITEMS:" not in step_output:
+                logger.warning(
+                    "Step 6 output missing EXPANSION_ITEMS marker — "
+                    "scope expansion check will be skipped for downstream steps"
+                )
 
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
