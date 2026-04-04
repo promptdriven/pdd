@@ -52,7 +52,7 @@ Review each requirement in the prompt and verify it is implemented in the patche
 Output your conclusion as a JSON object with the following format:
 <output_json_example>
 {{
-  "is_complete": true/false,
-  "missing_requirements": ["requirement 1 that is missing", "requirement 2 that is incomplete"]
+  "is_complete": true,
+  "missing_requirements": []
 }}
 </output_json_example>

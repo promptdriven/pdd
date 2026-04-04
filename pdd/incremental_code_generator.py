@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
 from rich.console import Console
@@ -10,6 +11,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 # Pydantic models for structured output
@@ -188,6 +190,10 @@ def incremental_code_generator(
                         "PROMPT": new_prompt,
                         "PATCHED_CODE": patch_result.patched_code
                     },
+                    # Half-strength is intentional: verification is a simpler
+                    # task (check requirements vs. generate code) and keeps cost
+                    # at ~10% of the overall sync.  If this proves too weak for
+                    # subtle failures, bump to full strength.
                     strength=0.5 * strength,
                     temperature=temperature,
                     time=0.5 * time,
@@ -209,6 +215,7 @@ def incremental_code_generator(
             except Exception as verify_exc:
                 # Verification failure should not block the patch — log and
                 # accept the patch as-is (graceful degradation).
+                logger.warning("Patch verification skipped: %s", verify_exc)
                 if verbose:
                     console.print(f"[yellow]Patch verification skipped ({verify_exc})[/yellow]")
 
