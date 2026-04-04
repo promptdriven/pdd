@@ -3,6 +3,13 @@ name: CI Auto-Heal Drift
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    paths:
+      # Only trigger when PDD-managed files change
+      - 'pdd/**'
+      - 'prompts/**'
+      - 'context/**'
+      - 'tests/**'
+      - '.pdd/**'
   push:
     branches: [main]
 
@@ -47,38 +54,17 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
-      - name: Determine changed modules (PR only)
-        id: changed
-        if: github.event_name == 'pull_request'
-        run: |
-          # Scope to pdd/prompts/*_*.prompt files only; the --modules flag
-          # passed to ci_drift_heal filters discover_prompt_files() results
-          # to just these basenames, so the default scan path is irrelevant.
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD -- 'pdd/prompts/*_*.prompt')
-          # Extract module names from changed PDD prompt files
-          MODULES=""
-          for f in $CHANGED_FILES; do
-            basename=$(basename "$f" .prompt)
-            if [ -n "$MODULES" ]; then
-              MODULES="$MODULES $basename"
-            else
-              MODULES="$basename"
-            fi
-          done
-          echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
-          echo "Changed modules: $MODULES"
-
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Run auto-heal (PR)
-        if: github.event_name == 'pull_request' && steps.changed.outputs.modules != ''
+        if: github.event_name == 'pull_request'
         run: |
-          python -m pdd.ci_drift_heal --modules ${{ steps.changed.outputs.modules }} --budget-cap "${{ env.PDD_BUDGET_CAP }}"
+          python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}"
 
       - name: Run auto-heal (main)
         if: github.event_name == 'push'
         run: |
-          python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}"
+          python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}" --skip-ci

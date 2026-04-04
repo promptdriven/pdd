@@ -162,9 +162,9 @@ class TestHealModule:
     def _make_env(self):
         return {"PDD_FORCE": "1", "CI": "1", "NO_COLOR": "1", "PDD_OUTPUT_COST_PATH": "/tmp/c.csv"}
 
-    def test_update_runs_pdd_update(self):
-        """prompt drift (update) runs 'pdd update <basename>'."""
-        drift = DriftInfo("auth", "python", "update", "changed")
+    def test_update_runs_pdd_update_with_code_path(self):
+        """prompt drift (update) runs 'pdd update <code_path>' when code_path is set."""
+        drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
         mock_result = MagicMock(returncode=0, stderr="")
 
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
@@ -172,7 +172,19 @@ class TestHealModule:
 
         assert result is True
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["pdd", "update", "auth"]
+        assert cmd == ["pdd", "update", "/repo/auth.py"]
+
+    def test_update_falls_back_to_repo_wide(self):
+        """prompt drift (update) runs 'pdd update' (no args) when code_path is None."""
+        drift = DriftInfo("auth", "python", "update", "changed", code_path=None)
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["pdd", "update"]
 
     def test_example_runs_pdd_sync(self):
         """example drift runs 'pdd sync <basename>'."""
@@ -335,7 +347,7 @@ class TestCommitAndPush:
         assert result is False
 
     def test_stages_all_changes(self):
-        """Uses git add -A to stage all changes."""
+        """Uses git add -A to stage all changes (healing may create new files)."""
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=self._mock_run_success) as mock_run:
             commit_and_push(["auth"])
 
