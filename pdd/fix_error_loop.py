@@ -20,6 +20,7 @@ from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
 from .agentic_langtest import default_verify_cmd_for
+from .get_test_command import get_test_command_for_file
 from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 # Moved import to top level to allow mocking in tests
 from .pytest_output import run_pytest_and_capture_output
@@ -404,8 +405,8 @@ def fix_error_loop(unit_test_file: str,
             # For non-Python files, run the verification program to get an initial error state
             rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
             lang = get_language(os.path.splitext(code_file)[1])
-            verify_cmd = default_verify_cmd_for(lang, unit_test_file)
-            if not verify_cmd:
+            test_cmd_result = get_test_command_for_file(unit_test_file, lang)
+            if not test_cmd_result:
                 # No verify command available (e.g., Java without maven/gradle).
                 # Trigger agentic fallback directly.
                 rprint(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
@@ -444,8 +445,9 @@ def fix_error_loop(unit_test_file: str,
                     pass
                 return success, final_unit_test, final_code, 1, agent_cost, agent_model
 
-            # Run from the test file's directory so Jest/Vitest can find their config (#1080).
-            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL, cwd=str(Path(unit_test_file).parent))
+            verify_cmd = test_cmd_result.command
+            effective_cwd = str(test_cmd_result.cwd) if test_cmd_result.cwd is not None else str(Path(unit_test_file).parent)
+            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL, cwd=effective_cwd)
             pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
             if verify_result.returncode == 0:
                 initial_fails, initial_errors, initial_warnings = 0, 0, 0
