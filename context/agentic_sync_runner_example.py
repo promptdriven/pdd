@@ -25,8 +25,8 @@ def main():
     # to only include dependencies within the target basenames.
     print("--- Dependency Graph Example ---")
     # With a real architecture.json:
-    # graph = build_dep_graph_from_architecture(Path("architecture.json"), ["auth", "user_service", "api"])
-    # Result: {"auth": [], "user_service": ["auth"], "api": ["auth", "user_service"]}
+    # result = build_dep_graph_from_architecture(Path("architecture.json"), ["auth", "user_service", "api"])
+    # graph = result.graph  # {"auth": [], "user_service": ["auth"], "api": ["auth", "user_service"]}
 
     # --- Module State Tracking ---
     state = ModuleState()

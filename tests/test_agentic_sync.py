@@ -27,7 +27,7 @@ from pdd.agentic_sync import (
     _run_single_dry_run,
     run_agentic_sync,
 )
-from pdd.agentic_sync_runner import build_dep_graph_from_architecture
+from pdd.agentic_sync_runner import DepGraphFromArchitectureResult, build_dep_graph_from_architecture
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +170,9 @@ class TestBuildDepGraphFromArchitecture:
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps(arch))
 
-        graph = build_dep_graph_from_architecture(arch_path, ["api", "models"])
-        assert graph["api"] == ["models"]
-        assert graph["models"] == []
+        result = build_dep_graph_from_architecture(arch_path, ["api", "models"])
+        assert result.graph["api"] == ["models"]
+        assert result.graph["models"] == []
 
     def test_filters_to_target_basenames(self, tmp_path):
         arch = [
@@ -184,15 +184,16 @@ class TestBuildDepGraphFromArchitecture:
         arch_path.write_text(json.dumps(arch))
 
         # Only targeting api and models, not utils
-        graph = build_dep_graph_from_architecture(arch_path, ["api", "models"])
-        assert "models" in graph["api"]
-        assert "utils" not in graph.get("api", [])
+        result = build_dep_graph_from_architecture(arch_path, ["api", "models"])
+        assert "models" in result.graph["api"]
+        assert "utils" not in result.graph.get("api", [])
+        assert any("utils" in w and "not in the sync target set" in w for w in result.warnings)
 
     def test_missing_file_returns_empty_deps(self, tmp_path):
         arch_path = tmp_path / "architecture.json"
         # File doesn't exist
-        graph = build_dep_graph_from_architecture(arch_path, ["foo", "bar"])
-        assert graph == {"foo": [], "bar": []}
+        result = build_dep_graph_from_architecture(arch_path, ["foo", "bar"])
+        assert result.graph == {"foo": [], "bar": []}
 
     def test_self_dependency_excluded(self, tmp_path):
         arch = [
@@ -201,8 +202,8 @@ class TestBuildDepGraphFromArchitecture:
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps(arch))
 
-        graph = build_dep_graph_from_architecture(arch_path, ["foo"])
-        assert graph["foo"] == []
+        result = build_dep_graph_from_architecture(arch_path, ["foo"])
+        assert result.graph["foo"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +292,10 @@ class TestRunAgenticSync:
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
-    @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
     @patch("pdd.agentic_sync.run_agentic_task")
     @patch("pdd.agentic_sync._load_architecture_json")
@@ -325,7 +329,7 @@ class TestRunAgenticSync:
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
-        # Runner now includes initial_cost (0.05) + per-module (0.10) = 0.15
+        # Runner returns full total: initial_cost (0.05) + per-module (0.10) = 0.15
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.15)
         mock_runner_cls.return_value = mock_runner
 
@@ -376,7 +380,9 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_build_graph.return_value = {"crm_models": ["api_orders"], "api_orders": []}
+        mock_build_graph.return_value = DepGraphFromArchitectureResult(
+            {"crm_models": ["api_orders"], "api_orders": []}, []
+        )
         mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
@@ -398,7 +404,10 @@ class TestRunAgenticSync:
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
-    @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
     @patch("pdd.agentic_sync.run_agentic_task")
     @patch("pdd.agentic_sync._load_architecture_json")
@@ -433,7 +442,8 @@ class TestRunAgenticSync:
         mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
 
         mock_runner = MagicMock()
-        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        # Full total: initial_cost (0.07) + per-module (0.10) = 0.17
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.17)
         mock_runner_cls.return_value = mock_runner
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
@@ -1341,7 +1351,10 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
-    @patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"foo": []})
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
     @patch("pdd.agentic_sync.load_prompt_template",
            return_value="Issue #{issue_number}\n{issue_content}\n{architecture_json}")
     @patch("pdd.agentic_sync.run_agentic_task")
