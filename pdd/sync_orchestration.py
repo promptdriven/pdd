@@ -78,6 +78,11 @@ def _truncate_text(text: str, limit_chars: int) -> str:
     return text[:limit_chars] + f"\n... (truncated, {len(text)} total chars)"
 
 
+def _run_fix_operation_test_subprocess(*args: Any, **kwargs: Any) -> Any:
+    """subprocess.run for fix-phase test capture; separate symbol so tests can patch reliably."""
+    return subprocess.run(*args, **kwargs)
+
+
 # --- Helper Functions ---
 # Note: _safe_basename is imported from sync_determine_operation
 
@@ -2395,15 +2400,15 @@ def sync_orchestration(
                                                 pytest_args.extend([f'--rootdir={project_root}', '-c', '/dev/null'])
                                                 subprocess_kwargs['cwd'] = str(project_root)
 
-                                            test_result = subprocess.run(pytest_args, **subprocess_kwargs)
+                                            test_result = _run_fix_operation_test_subprocess(pytest_args, **subprocess_kwargs)
                                         else:
                                             # Use shell command for non-Python
-                                            test_result = subprocess.run(
+                                            test_result = _run_fix_operation_test_subprocess(
                                                 test_cmd,
                                                 shell=True,
                                                 capture_output=True, text=True, timeout=300,
                                                 stdin=subprocess.DEVNULL, env=clean_env,
-                                                cwd=str(pdd_files['test'].parent),
+                                                cwd=str(Path(pdd_files["test"]).parent),
                                                 start_new_session=True
                                             )
                                         error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
