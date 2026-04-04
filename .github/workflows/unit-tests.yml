@@ -53,6 +53,9 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 
+      - name: Validate architecture vs prompt includes
+        run: pdd validate-arch-includes
+
       - name: Run unit tests
         run: >
           pytest tests/
