@@ -556,8 +556,6 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
                 all_outputs.append(f"{test_file}: FAILED (no test runner available)")
                 continue
 
-            # Use config directory as cwd if detected (e.g. frontend/ for jest.config.js),
-            # otherwise fall back to repo root. Fixes monorepo test verification (#1080).
             effective_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(cwd)
 
             try:

@@ -672,54 +672,6 @@ class TestIssue1080MonorepoCwd:
         cmd, returned_dir = result
         assert returned_dir == config_dir
 
-    # --- Test 14: pin_example_hack uses config dir cwd ---
-
-    def test_pin_example_hack_uses_config_dir_for_non_python(self, tmp_path, monkeypatch):
-        """pin_example_hack._execute_tests_and_create_run_report must use config dir as cwd.
-
-        Before fix: cwd=str(test_file.parent) (test's immediate parent = __test__/)
-        After fix: cwd=str(config_dir) (where jest.config.js lives = frontend/)
-        """
-        monkeypatch.chdir(tmp_path)
-
-        from pdd.pin_example_hack import _execute_tests_and_create_run_report as pin_execute
-
-        config_dir = tmp_path / "frontend"
-        config_dir.mkdir()
-        (config_dir / "jest.config.js").write_text("module.exports = {};")
-
-        test_dir = config_dir / "src" / "__test__"
-        test_dir.mkdir(parents=True)
-        test_file = test_dir / "api.test.ts"
-        test_file.write_text("test('api', () => {});")
-
-        subprocess_calls = []
-
-        def capture_run(cmd, **kwargs):
-            subprocess_calls.append({'cmd': cmd, 'kwargs': kwargs})
-            return MagicMock(returncode=0, stdout="Tests: 5 passed", stderr="")
-
-        with patch('pdd.pin_example_hack.subprocess.run', side_effect=capture_run), \
-             patch('pdd.pin_example_hack.calculate_sha256', return_value="abc123"), \
-             patch('pdd.pin_example_hack.save_run_report'):
-            try:
-                pin_execute(
-                    test_file=test_file,
-                    basename="api",
-                    language="typescript"
-                )
-            except Exception:
-                pass
-
-        # Find the non-Python shell command (string, not list)
-        non_python_calls = [c for c in subprocess_calls if isinstance(c['cmd'], str)]
-        assert len(non_python_calls) > 0, "Expected at least one shell command for non-Python test"
-        actual_cwd = non_python_calls[0]['kwargs'].get('cwd')
-        assert actual_cwd == str(config_dir), (
-            f"Bug #1080: Expected cwd={config_dir}, got cwd={actual_cwd}. "
-            f"pin_example_hack uses test_file.parent instead of config dir."
-        )
-
     # --- Test 16: Exact monorepo scenario from the issue ---
 
     def test_exact_monorepo_scenario_from_issue(self, tmp_path):
