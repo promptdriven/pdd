@@ -135,6 +135,8 @@ jobs:
 
       - name: Run auto-heal
         if: steps.changed.outputs.modules
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           SKIP_CI_FLAG=""
           if [ "${{ github.event_name }}" = "push" ]; then

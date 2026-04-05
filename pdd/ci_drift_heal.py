@@ -247,7 +247,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
             env=env,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=600,
         )
         if result.returncode == 0:
             console.print(f"[green]✓ Healed {drift.basename} successfully[/green]")
@@ -471,6 +471,10 @@ def main(
         console.print("\n[yellow]No modules healed — skipping commit phase.[/yellow]")
 
     if any_failure:
+        if skip_ci:
+            # Push-to-main mode: heal failures are advisory, not blocking
+            console.print("\n[yellow]⚠ Completed with failures (non-blocking on push to main).[/yellow]")
+            return 0
         console.print("\n[red]✗ Completed with failures.[/red]")
         return 1
 
