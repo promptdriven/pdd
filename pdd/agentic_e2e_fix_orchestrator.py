@@ -1006,7 +1006,7 @@ def _run_step11_code_cleanup(
     verbose: bool,
     quiet: bool,
 ) -> Tuple[float, List[str]]:
-    """Run Step 11: Code cleanup after CI validation.
+    """Run Step 11: Code cleanup before CI validation.
 
     Collects the full diff and changed file contents, invokes the cleanup LLM,
     re-runs tests to verify, and commits as a separate commit if tests pass.
