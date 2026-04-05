@@ -1,0 +1,44 @@
+Module: llm_client
+Language: Python
+Description: A self-contained LLM client simulator that handles model selection,
+  retry logic, cost tracking, and structured output parsing. No external
+  dependencies beyond the Python standard library.
+
+Requirements:
+1. Model selection by strength parameter (0.0-1.0 float). Strength 0.0 picks
+   the cheapest model; 1.0 picks the most capable. Intermediate values
+   interpolate by weighted ELO rating. Models are loaded from a CSV string
+   embedded in the module.
+
+2. Retry with exponential backoff on transient errors (rate-limit, timeout,
+   server-error). RetryConfig controls max_retries, base_delay, max_delay.
+   Jitter is added to each delay.
+
+3. Cost tracking accumulates across ALL attempts. When a request is retried,
+   the cost of every prior failed attempt MUST be included in the final
+   InvocationResult.cost. This is critical for accurate billing reporting.
+
+4. Structured output: caller may pass a JSON schema dict. The module extracts
+   JSON from the response (including from markdown fenced blocks), repairs
+   truncated JSON (closes unclosed braces/brackets/strings), and validates
+   against the schema.
+
+5. Context window validation: before sending a request, estimate token count
+   and reject if prompt exceeds the selected model's context limit.
+
+6. Provider abstraction: OpenAI, Anthropic, and Google provider configs each
+   format requests and parse responses differently. Provider is determined
+   by the selected model's provider field.
+
+7. LRU response cache keyed on (prompt, model, temperature). Cache is bypassed
+   on retries. Cache has configurable max size.
+
+8. Structured logging of each invocation: model chosen, token counts, cost,
+   retry count, cache hit/miss.
+
+9. The invoke() function is the main entry point. It returns an
+   InvocationResult with: result text, total cost, model name, thinking
+   output (if reasoning model), input/output token counts.
+
+10. All simulation -- no real HTTP calls. Provider responses are deterministic
+    canned responses suitable for testing.
