@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -387,6 +388,411 @@ def _parse_expansion_items(step6_output: str) -> str:
             seen.add(cleaned)
             deduped.append(cleaned)
     return ", ".join(deduped) if deduped else "none"
+
+
+# Maximum number of unclassified grep matches to process.
+_MAX_GREP_RESULTS = 50
+
+# Directories to exclude from grep searches.
+_GREP_EXCLUDE_DIRS = (
+    ".git", ".pdd", "node_modules", "__pycache__", ".venv", "venv",
+    "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
+)
+
+# Extensions to exclude from grep — these are data/config/doc formats where
+# code-pattern matches are noise, not bugs.
+_GREP_SKIP_EXTENSIONS = {
+    ".csv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".xml",
+    ".md", ".rst", ".txt", ".log", ".html", ".css", ".less", ".sass",
+    ".scss", ".svg", ".graphql", ".prisma", ".proto", ".hbs", ".ejs",
+    ".pug", ".twig", ".jinja2", ".tex",
+}
+
+
+def _get_code_extensions() -> list[str]:
+    """Read code-bearing file extensions from PDD's language_format.csv.
+
+    Returns glob patterns like ['*.py', '*.js', ...] for use with grep --include.
+    Falls back to a minimal hardcoded set if the CSV is unavailable.
+    """
+    try:
+        from .path_resolution import get_default_resolver
+        resolver = get_default_resolver()
+        csv_path = resolver.resolve_data_file("data/language_format.csv")
+        with open(csv_path) as f:
+            extensions: set[str] = set()
+            for i, line in enumerate(f):
+                if i == 0:
+                    continue  # skip header
+                parts = line.strip().split(",")
+                if len(parts) >= 3:
+                    ext = parts[2].strip()
+                    if ext and ext.startswith(".") and ext not in _GREP_SKIP_EXTENSIONS:
+                        extensions.add(ext)
+        if extensions:
+            return sorted(f"*{ext}" for ext in extensions)
+    except Exception:
+        pass
+    # Fallback: common code extensions if CSV is unavailable
+    return [
+        "*.py", "*.js", "*.ts", "*.tsx", "*.jsx", "*.rb", "*.go",
+        "*.java", "*.rs", "*.swift", "*.kt", "*.c", "*.cpp", "*.h",
+        "*.hpp", "*.cs", "*.sh", "*.php", "*.scala", "*.ex", "*.erl",
+    ]
+
+
+def _parse_pattern_search(step6_output: str) -> Optional[str]:
+    """Extract the PATTERN_SEARCH regex from Step 6 output.
+
+    Returns the first PATTERN_SEARCH value, stripped of whitespace, backticks,
+    and trailing comments (e.g. "# broad pattern"), or None if no marker is
+    present.
+    """
+    match = re.search(r"PATTERN_SEARCH:\s*(.*)", step6_output)
+    if not match:
+        return None
+    pattern = match.group(1).strip().strip("`")
+    # Strip trailing comment — LLM may write: PATTERN_SEARCH: \.glob\( # broad pattern
+    # The \s+#\s+ requirement (spaces on both sides) avoids corrupting regex
+    # character classes like [a-z#] where # has no surrounding spaces.
+    pattern = re.sub(r"\s+#\s+.*$", "", pattern)
+    return pattern if pattern else None
+
+
+def _sanitize_grep_pattern(pattern: str) -> Optional[str]:
+    """Validate and sanitize a grep pattern from LLM output.
+
+    Returns the pattern if safe, or None if it should be rejected.
+    """
+    if not pattern or len(pattern) < 3:
+        return None
+    # Reject pure wildcards that would match everything
+    if pattern.strip() in (".*", ".+", ".?", ".*?", ".+?"):
+        return None
+    # Reject shell metacharacters (defense in depth — subprocess.run with
+    # shell=False doesn't interpret these, but reject them anyway).
+    # Note: | is valid regex alternation and safe with shell=False.
+    dangerous_chars = set(";&$`\n\r")
+    if dangerous_chars.intersection(pattern):
+        return None
+    # Reject patterns longer than 200 chars (likely malformed)
+    if len(pattern) > 200:
+        return None
+    return pattern
+
+
+def _extract_match_context(
+    matches: List[Tuple[str, int, str]],
+    work_dir: Path,
+    context_before: int = 30,
+    context_after: int = 10,
+) -> Dict[str, str]:
+    """Read surrounding code around grep matches.
+
+    For each match, reads the source file and extracts a window of
+    [line - context_before, line + context_after].  Overlapping windows
+    within the same file are merged.
+
+    Args:
+        matches: List of (filepath, line_number, matching_line) tuples.
+        work_dir: Working directory (repo root).
+        context_before: Lines to include before the match (default 30).
+        context_after: Lines to include after the match (default 10).
+
+    Returns:
+        Dict mapping filepath to formatted context string with line numbers.
+    """
+    # Group matches by file
+    matches_by_file: Dict[str, List[int]] = defaultdict(list)
+    for filepath, line_num, _ in matches:
+        matches_by_file[filepath].append(line_num)
+
+    result: Dict[str, str] = {}
+    for filepath, line_nums in matches_by_file.items():
+        abs_path = work_dir / filepath
+        try:
+            file_lines = abs_path.read_text().splitlines()
+        except (OSError, UnicodeDecodeError):
+            result[filepath] = ""
+            continue
+
+        if not file_lines:
+            result[filepath] = ""
+            continue
+
+        total_lines = len(file_lines)
+
+        # Compute ranges and merge overlapping ones
+        ranges: List[Tuple[int, int]] = []
+        for ln in sorted(line_nums):
+            start = max(1, ln - context_before)
+            end = min(total_lines, ln + context_after)
+            if ranges and start <= ranges[-1][1] + 1:
+                # Merge with previous range
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+            else:
+                ranges.append((start, end))
+
+        # Format context with line numbers
+        sections: List[str] = []
+        for start, end in ranges:
+            lines_out = []
+            for i in range(start, end + 1):
+                lines_out.append(f"{i:>6}  {file_lines[i - 1]}")
+            sections.append("\n".join(lines_out))
+
+        result[filepath] = "\n...\n".join(sections)
+
+    return result
+
+
+def _verify_pattern_completeness(
+    pattern: str,
+    fix_locations: List[str],
+    work_dir: Path,
+) -> Tuple[List[Tuple[str, int, str]], str]:
+    """Run a deterministic grep and find matches missing from FIX_LOCATIONS.
+
+    Args:
+        pattern: A grep-compatible regex pattern (already sanitized).
+        fix_locations: File paths listed in FIX_LOCATIONS by the LLM.
+        work_dir: Working directory (repo root) to search in.
+
+    Returns:
+        (unclassified_matches, grep_summary) where unclassified_matches is a
+        list of (filepath, line_number, content) tuples for matches in files
+        NOT in fix_locations, and grep_summary is a human-readable log.
+    """
+    safe_pattern = _sanitize_grep_pattern(pattern)
+    if not safe_pattern:
+        return [], f"Pattern rejected by sanitizer: {pattern!r}"
+
+    cmd = [
+        "grep", "-rEnI",
+    ]
+    for exclude_dir in _GREP_EXCLUDE_DIRS:
+        cmd.append(f"--exclude-dir={exclude_dir}")
+    for ext_glob in _get_code_extensions():
+        cmd.append(f"--include={ext_glob}")
+    cmd.extend([
+        "--",  # terminate options so pattern can't be parsed as a flag
+        safe_pattern,
+        ".",
+    ])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return [], f"Grep timed out after 30s for pattern: {safe_pattern!r}"
+    except (OSError, FileNotFoundError):
+        return [], "grep binary not found"
+
+    # Exit code 2 means grep rejected the regex as invalid.
+    # Exit code 1 means no matches found (not an error).
+    if result.returncode == 2:
+        err = result.stderr.strip().splitlines()[0] if result.stderr.strip() else "invalid regex"
+        return [], f"Grep rejected pattern {safe_pattern!r}: {err}"
+
+    # Normalize fix_locations for comparison.
+    # Bare names from the LLM (sync_main.py) match any grep path with that
+    # basename. Full paths (pdd/sync_main.py) only match exact paths or bare
+    # names — they do NOT match other_dir/sync_main.py (different file).
+    fix_full_paths: set[str] = set()
+    fix_bare_names: set[str] = set()
+    for f in fix_locations:
+        cleaned = f.removeprefix("./").removeprefix("/")
+        fix_full_paths.add(cleaned)
+        if "/" not in cleaned:
+            fix_bare_names.add(cleaned)
+
+    def _is_in_fix_locations(filepath: str) -> bool:
+        """Check if a grep-found filepath is already in FIX_LOCATIONS."""
+        if filepath in fix_full_paths:
+            return True
+        base = Path(filepath).name
+        # A bare name in fix_locations covers any matching filepath
+        if base in fix_bare_names:
+            return True
+        # A full path in fix_locations does NOT cover a different-dir file
+        # with the same basename (pdd/utils.py does not cover tests/utils.py)
+        return False
+
+    # Parse grep -n output: ./file.py:123:matching line content
+    all_matches: List[Tuple[str, int, str]] = []
+    for line in result.stdout.strip().splitlines():
+        line = line.strip().removeprefix("./")
+        if not line:
+            continue
+        parts = line.split(":", 2)
+        if len(parts) >= 3:
+            filepath = parts[0]
+            try:
+                line_num = int(parts[1])
+            except ValueError:
+                continue
+            content = parts[2]
+            all_matches.append((filepath, line_num, content))
+
+    # Filter to matches from files NOT already in FIX_LOCATIONS
+    unclassified_all: List[Tuple[str, int, str]] = []
+    unclassified_files: set[str] = set()
+    for filepath, line_num, content in all_matches:
+        if not _is_in_fix_locations(filepath):
+            unclassified_all.append((filepath, line_num, content))
+            unclassified_files.add(filepath)
+
+    total_files = len({m[0] for m in all_matches})
+    summary_parts = [
+        f"Grep found {total_files} file(s) matching pattern {safe_pattern!r}",
+        f", FIX_LOCATIONS lists {len(fix_locations)} file(s)",
+        f", {len(unclassified_files)} unclassified file(s)",
+    ]
+
+    return unclassified_all, "".join(summary_parts)
+
+
+def _parse_classification_evidence(
+    retry_output: str,
+) -> Tuple[List[str], List[str]]:
+    """Parse NEEDS_FIX / SAFE_EVIDENCE markers from retry LLM output.
+
+    Returns:
+        (needs_fix_files, safe_files) — deduplicated lists of file paths.
+    """
+    needs_fix: List[str] = []
+    safe: List[str] = []
+    seen: set[str] = set()
+
+    for match in re.finditer(r"NEEDS_FIX:\s*(.*)", retry_output):
+        filepath = match.group(1).strip().strip("`")
+        if filepath and filepath not in seen:
+            needs_fix.append(filepath)
+            seen.add(filepath)
+
+    for match in re.finditer(r"SAFE_EVIDENCE:\s*(.*)", retry_output):
+        raw = match.group(1).strip().strip("`")
+        # Format: filepath | line_number | reason
+        parts = raw.split("|", 2)
+        filepath = parts[0].strip().strip("`")
+        if filepath and filepath not in seen:
+            safe.append(filepath)
+            seen.add(filepath)
+
+    return needs_fix, safe
+
+
+def _merge_fix_locations(
+    original_fix_locs: List[str],
+    needs_fix: List[str],
+    safe: List[str],
+    unclassified_filenames: List[str],
+) -> List[str]:
+    """Merge grep verification results into FIX_LOCATIONS using union semantics.
+
+    Rules:
+    - Original FIX_LOCATIONS are immutable (never removed)
+    - New NEEDS_FIX files are added
+    - Unclassified files (no evidence either way) default to NEEDS_FIX
+    - SAFE_EVIDENCE files are excluded UNLESS they were in the original list
+
+    Path normalization: the LLM may return basenames (agentic_update.py) while
+    grep returns full paths (pdd/agentic_update.py). Basename matching is used
+    to check if a file was *classified* by the LLM (so it doesn't get the
+    conservative default), but full-path comparison is used for deduplication
+    in the merged list. This ensures tests/utils.py and pdd/utils.py are both
+    added even when the LLM classified bare "utils.py".
+    """
+    merged: List[str] = list(dict.fromkeys(original_fix_locs))
+    merged_set: set[str] = set(merged)
+
+    def _same_file(a: str, b: str) -> bool:
+        """Check if two paths refer to the same file.
+
+        Exact match first, then basename match only when at least one side
+        has no directory component (bare name like 'foo.py').
+        """
+        if a == b:
+            return True
+        a_bare = "/" not in a
+        b_bare = "/" not in b
+        if (a_bare or b_bare) and Path(a).name == Path(b).name:
+            return True
+        return False
+
+    def _in_merged(candidate: str) -> bool:
+        """Check if candidate is already represented in the merged list.
+
+        A full path (pdd/utils.py) is only covered by another full path
+        with the same directory, or by an exact match. A bare name in
+        merged does NOT prevent adding a more-specific full path — the
+        full path wins because it's unambiguous.
+        """
+        if candidate in merged_set:
+            return True
+        candidate_has_dir = "/" in candidate
+        candidate_base = Path(candidate).name
+        for m in merged_set:
+            m_has_dir = "/" in m
+            if candidate_has_dir and m_has_dir:
+                # Both have dirs: only exact match counts (handled above)
+                continue
+            if not candidate_has_dir and m_has_dir:
+                # Bare candidate, full-path in merged: covered if basenames match
+                if candidate_base == Path(m).name:
+                    return True
+            # Full-path candidate, bare in merged: NOT covered — full path
+            # is more specific and should be added alongside or instead.
+        return False
+
+    # Add NEEDS_FIX files that aren't already in merged.
+    for f in needs_fix:
+        if not _in_merged(f):
+            merged.append(f)
+            merged_set.add(f)
+
+    # Build a set of basenames the LLM explicitly classified (needs_fix OR safe).
+    # A bare "utils.py" in this set means the LLM looked at some utils.py file,
+    # so any unclassified utils.py should NOT get the conservative default.
+    # But if there are multiple utils.py in different directories, classification
+    # of one doesn't mean the others were examined — so we track which specific
+    # full paths were classified.
+    classified_paths: set[str] = set(needs_fix) | set(safe)
+    classified_basenames: set[str] = set()
+    for p in classified_paths:
+        if "/" not in p:
+            classified_basenames.add(p)
+
+    def _is_classified(fname: str) -> bool:
+        """Check if fname was classified by the LLM."""
+        if fname in classified_paths:
+            return True
+        # If the LLM used a bare name and fname has a directory,
+        # it's a match only if exactly one file shares that basename.
+        # With multiple files sharing a basename, we can't know which
+        # one the LLM meant, so we treat them all as unclassified
+        # (conservative default applies).
+        base = Path(fname).name
+        if base in classified_basenames:
+            matching_unclassified = [
+                f for f in unclassified_filenames if Path(f).name == base
+            ]
+            # If only one file has this basename, the LLM's bare name
+            # unambiguously refers to it.
+            return len(matching_unclassified) <= 1
+        return False
+
+    for fname in unclassified_filenames:
+        if not _is_classified(fname) and not _in_merged(fname):
+            merged.append(fname)
+            merged_set.add(fname)
+
+    return merged
 
 
 def _verify_fix_location_coverage(
@@ -1243,6 +1649,165 @@ def run_agentic_bug_orchestrator(
                     "Step 6 output missing EXPANSION_ITEMS marker — "
                     "scope expansion check will be skipped for downstream steps"
                 )
+
+            # Deterministic grep verification for repeating-pattern bugs.
+            pattern_search = _parse_pattern_search(step_output)
+            if pattern_search and fix_locs:
+                unclassified, grep_summary = _verify_pattern_completeness(
+                    pattern_search, fix_locs, current_work_dir
+                )
+                if not quiet:
+                    console.print(f"  → Pattern search: {grep_summary}")
+
+                if unclassified:
+                    unclassified_filenames = sorted({m[0] for m in unclassified})
+                    if not quiet:
+                        console.print(
+                            f"[yellow]  → {len(unclassified_filenames)} file(s) found by grep but "
+                            f"missing from FIX_LOCATIONS, retrying Step 6[/yellow]"
+                        )
+                        for uf in unclassified_filenames[:10]:
+                            console.print(f"[yellow]    • {uf}[/yellow]")
+                        if len(unclassified_filenames) > 10:
+                            console.print(
+                                f"[yellow]    ... and {len(unclassified_filenames) - 10} more[/yellow]"
+                            )
+
+                    # Cap files sent to context extraction / LLM retry.
+                    # Prioritize source files so pdd/ files are always included.
+                    def _file_priority(filepath: str) -> int:
+                        if filepath.startswith("pdd/") or "/pdd/" in filepath:
+                            return 0
+                        if filepath.startswith("tests/") or "/tests/" in filepath:
+                            return 1
+                        return 2
+
+                    context_files = sorted(unclassified_filenames, key=_file_priority)
+                    overflow_files: List[str] = []
+                    if len(context_files) > _MAX_GREP_RESULTS:
+                        overflow_files = context_files[_MAX_GREP_RESULTS:]
+                        context_files = context_files[:_MAX_GREP_RESULTS]
+                        if not quiet:
+                            console.print(
+                                f"[yellow]  → Capping context extraction to "
+                                f"{_MAX_GREP_RESULTS} files ({len(overflow_files)} "
+                                f"overflow file(s) will be logged but not added)[/yellow]"
+                            )
+                            for of in overflow_files[:5]:
+                                console.print(f"[yellow]    (overflow) {of}[/yellow]")
+                            if len(overflow_files) > 5:
+                                console.print(
+                                    f"[yellow]    ... and {len(overflow_files) - 5} more[/yellow]"
+                                )
+                    context_file_set = set(context_files)
+                    # Only files within the cap are sent for classification.
+                    # Overflow files are NOT added to unclassified_filenames —
+                    # they bypass classification entirely, so applying the
+                    # conservative NEEDS_FIX default would poison Step 9's
+                    # coverage check with unreviewed files.
+                    unclassified_filenames = context_files
+                    context_matches = [m for m in unclassified if m[0] in context_file_set]
+
+                    # Extract surrounding code context for each match
+                    context_by_file = _extract_match_context(
+                        context_matches, current_work_dir
+                    )
+
+                    # Build retry addendum with context windows
+                    file_sections = []
+                    for filepath in sorted(context_by_file):
+                        ctx = context_by_file[filepath]
+                        if ctx:
+                            file_sections.append(
+                                f"=== {filepath} ===\n{ctx}"
+                            )
+
+                    pattern_addendum = (
+                        "\n\n% IMPORTANT — UNCLASSIFIED PATTERN MATCHES\n"
+                        "Your previous analysis identified a repeating-pattern bug and listed "
+                        f"these FIX_LOCATIONS: {', '.join(fix_locs)}\n\n"
+                        f"A deterministic grep for `{pattern_search}` found additional "
+                        f"matches in files not in your FIX_LOCATIONS. Below is the code "
+                        f"context around each match. The vulnerability may be ABOVE or "
+                        f"BELOW the matching line (e.g., a pattern variable constructed "
+                        f"without escaping several lines before it is passed to the call).\n\n"
+                        + "\n\n".join(file_sections)
+                        + "\n\n"
+                        "For EACH file above:\n"
+                        "1. Examine the code context provided. If insufficient, READ the file.\n"
+                        "2. Determine if this code has the same vulnerability as the files "
+                        "already in FIX_LOCATIONS.\n"
+                        "3. Output EXACTLY ONE of:\n"
+                        "   NEEDS_FIX: filepath\n"
+                        "   SAFE_EVIDENCE: filepath | line_number | reason why this usage is safe\n\n"
+                        "RULES:\n"
+                        "- Files without explicit SAFE_EVIDENCE default to NEEDS_FIX\n"
+                        "- To mark SAFE, you MUST cite a specific line that makes the usage safe\n"
+                        "- Do NOT remove any files from the original FIX_LOCATIONS\n"
+                    )
+
+                    retry_success, retry_output, retry_cost, retry_model = run_agentic_task(
+                        instruction=formatted_prompt + pattern_addendum,
+                        cwd=current_work_dir,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=timeout,
+                        label="step6",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += retry_cost
+                    model_used = retry_model
+                    state["total_cost"] = total_cost
+                    state["model_used"] = model_used
+
+                    if retry_success:
+                        needs_fix, safe = _parse_classification_evidence(retry_output)
+
+                        # MERGE semantics: original UNION new_needs_fix UNION defaults
+                        # Uses _merge_fix_locations for basename normalization so
+                        # "agentic_update.py" (LLM) and "pdd/agentic_update.py" (grep)
+                        # are treated as the same file.
+                        merged = _merge_fix_locations(
+                            fix_locs, needs_fix, safe, unclassified_filenames
+                        )
+
+                        # Log which unclassified files were defaulted to NEEDS_FIX
+                        if not quiet:
+                            classified_basenames = {Path(f).name for f in needs_fix} | {Path(f).name for f in safe}
+                            for fname in unclassified_filenames:
+                                if Path(fname).name not in classified_basenames:
+                                    console.print(
+                                        f"[yellow]    → {fname} has no classification "
+                                        f"evidence, defaulting to NEEDS_FIX[/yellow]"
+                                    )
+
+                    else:
+                        # Retry failed (rate limit, network error, LLM failure).
+                        # Apply conservative default: all grep-discovered files
+                        # are added to FIX_LOCATIONS since we can't classify them.
+                        merged = _merge_fix_locations(
+                            fix_locs, [], [], unclassified_filenames
+                        )
+                        if not quiet:
+                            for fname in unclassified_filenames:
+                                console.print(
+                                    f"[yellow]    → {fname} unclassified (retry failed), "
+                                    f"defaulting to NEEDS_FIX[/yellow]"
+                                )
+
+                    context["fix_locations"] = ", ".join(merged)
+                    # Preserve original root cause analysis for downstream steps (7, 8).
+                    # Append a FIX_LOCATIONS line so _parse_fix_locations picks up
+                    # the verified set on resume. _parse_fix_locations uses finditer
+                    # + dedup, so the second line's superset is handled correctly.
+                    step_output = step_output + f"\n\n% Updated after grep verification\nFIX_LOCATIONS: {', '.join(merged)}"
+                    context["step6_output"] = step_output
+
+                    if not quiet:
+                        console.print(
+                            f"  → Updated FIX_LOCATIONS: {len(merged)} file(s) "
+                            f"(was {len(fix_locs)})"
+                        )
 
         if step_num == 7:
             defect_type_match = re.search(r"DEFECT_TYPE:\s*(code|prompt)", step_output)
