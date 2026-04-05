@@ -153,5 +153,27 @@ Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
 
+% Per-Step Timeouts (specification — must match ``BUG_STEP_TIMEOUTS`` in code)
+
+The orchestrator uses per-step timeouts (seconds). Keep this dict in sync with
+``pdd/agentic_bug_orchestrator.py`` — ``test_prompt_file_timeout_spec_matches_code_dict`` parses it.
+
+```python
+BUG_STEP_TIMEOUTS = {
+    1: 240.0,
+    2: 400.0,
+    3: 400.0,
+    4: 400.0,
+    5: 600.0,
+    6: 600.0,
+    7: 600.0,
+    8: 340.0,
+    9: 1000.0,
+    10: 600.0,
+    11: 2000.0,
+    12: 240.0,
+}
+```
+
 % Deliverables
 - Code: `pdd/agentic_bug_orchestrator.py`
