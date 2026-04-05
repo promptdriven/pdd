@@ -2,25 +2,22 @@
 
 ### Feat
 
-- PDD enhancement changes for #1071
-- add scope-expansion directives to bug workflow prompts (#1071)
+- **scope-expansion directives for bug workflow** (#1071): Step 6 prompt now independently validates whether an issue's proposed fix covers the full scope found by root cause analysis. New `EXPANSION_ITEMS` machine-readable marker is parsed by the orchestrator (`_parse_expansion_items`) and injected into Steps 8, 9, and 10 so downstream steps generate tests for the FULL scope — not just the subset the issue author proposed. Steps 8/9 MUST include tests for each expansion item; Step 10 emits a WARNING (not FAIL) for uncovered items
+- **`TestCommand` dataclass** (#1080): `get_test_command_for_file()` now returns a `TestCommand` bundling the command string with the `cwd` where the test runner config was found. `_detect_ts_test_runner` returns `(command, config_dir)` tuple. Critical for monorepos where Jest/Vitest/Playwright configs live in subdirectories (e.g., `frontend/jest.config.js`)
 
 ### Fix
 
-- capture orchestrator errors in injection test assertions (#1071)
-- add step6_expansion_items to CALLER_BUG_SCENARIO fixture in step7 test
-- address adversarial review — dedup, missing warning, magic window, orchestrator test
-- review fixes for #1074 — stale architecture descriptions, mock-of-mock tests, step9 silent override
-- restore issue-symptom coverage baseline in step8, fix silent test swallow (#1071)
-- replace free-text scope directives with EXPANSION_ITEMS machine-readable marker (#1071)
-- Step 10 scope check uses WARNING not FAIL, replace keyword tests with real verification
-- use resolved absolute path in TestCommand to prevent double-prefix (#1080)
-- update e2e_797 test mocks and example to use TestCommand (#1080)
-- fix_error_loop uses TestCommand.cwd instead of test_file.parent (#1080)
-- non-Python test verification uses wrong cwd — breaks all monorepos (#1080)
-- auto-heal drift detection and healing bugs
-- address PR #1068 review feedback from Greg
-- bug: _is_permanent_error() misses Claude OAuth failures — wastes 9 retries per job
+- **non-Python test verification uses wrong cwd — breaks all monorepos** (#1080): all callers (`agentic_bug_orchestrator`, `agentic_e2e_fix_orchestrator`, `fix_error_loop`, `sync_orchestration`, `pin_example_hack`) now use `TestCommand.cwd` instead of hardcoded repo root or test file parent; test paths are resolved to absolute before being passed to the runner
+- **`_is_permanent_error()` misses Claude OAuth failures** — added patterns for `failed to authenticate`, `invalid bearer`, HTTP `401`, and relaxed `authentication_error` to match both underscore and space separators; narrowed temperature pattern to avoid false positives — previously wasted 9 retries per job on permanent auth errors
+- **auto-heal drift detection and healing bugs**: skip fully-synced/error-state modules instead of crashing, resolve code file path for `pdd update` commands, handle all drift operation types (not just `update`/`example`), guard against `None` basename/language
+
+### Build
+
+- **auto-heal workflow uses path filters**: only triggers on changes to `pdd/`, `prompts/`, `context/`, `tests/`, `.pdd/`; removed per-module scoping step in PR mode (now heals all drifted modules); added `--skip-ci` flag on main-branch push commits
+
+### Refactor
+
+- **ci_drift_heal simplification**: removed redundant CI git identity configuration from `commit_and_push` (handled by workflow step); generalized example drift branch to cover all non-update operation types with descriptive reason text
 
 ## v0.0.196 (2026-04-02)
 
