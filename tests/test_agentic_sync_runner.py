@@ -1080,19 +1080,17 @@ class TestBuildDepGraphFromArchitecture:
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps(arch))
 
-        result = build_dep_graph_from_architecture(
+        graph = build_dep_graph_from_architecture(
             arch_path, ["module_a_Python", "module_b_Python"]
         )
-        assert result.graph == {"module_a_Python": ["module_b_Python"], "module_b_Python": []}
-        assert result.warnings == []
+        assert graph == {"module_a_Python": ["module_b_Python"], "module_b_Python": []}
 
     def test_missing_file_returns_empty_deps(self, tmp_path):
         """Non-existent architecture.json gives empty deps for all."""
-        result = build_dep_graph_from_architecture(
+        graph = build_dep_graph_from_architecture(
             tmp_path / "nonexistent.json", ["x", "y"]
         )
-        assert result.graph == {"x": [], "y": []}
-        assert result.warnings == []
+        assert graph == {"x": [], "y": []}
 
     def test_language_suffix_targets(self, tmp_path):
         """Target basenames with language suffix (e.g. crm_models_Python)
@@ -1106,12 +1104,11 @@ class TestBuildDepGraphFromArchitecture:
         arch_path.write_text(json.dumps(arch))
 
         targets = ["crm_models_Python", "base_config_Python", "api_client_Python"]
-        result = build_dep_graph_from_architecture(arch_path, targets)
+        graph = build_dep_graph_from_architecture(arch_path, targets)
 
-        assert result.graph["crm_models_Python"] == ["base_config_Python"]
-        assert result.graph["base_config_Python"] == []
-        assert result.graph["api_client_Python"] == ["crm_models_Python"]
-        assert result.warnings == []
+        assert graph["crm_models_Python"] == ["base_config_Python"]
+        assert graph["base_config_Python"] == []
+        assert graph["api_client_Python"] == ["crm_models_Python"]
 
     def test_only_target_deps_included(self, tmp_path):
         """Dependencies outside the target set are excluded."""
@@ -1123,12 +1120,11 @@ class TestBuildDepGraphFromArchitecture:
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps(arch))
 
-        result = build_dep_graph_from_architecture(
+        graph = build_dep_graph_from_architecture(
             arch_path, ["mod_a_Python", "mod_b_Python"]
         )
         # mod_c_Python is not in target set, so mod_a's dep on it is excluded
-        assert result.graph == {"mod_a_Python": ["mod_b_Python"], "mod_b_Python": []}
-        assert any("mod_c" in w and "not in the sync target set" in w for w in result.warnings)
+        assert graph == {"mod_a_Python": ["mod_b_Python"], "mod_b_Python": []}
 
     def test_self_dep_excluded(self, tmp_path):
         """A module depending on itself is not included in its deps."""
@@ -1138,29 +1134,8 @@ class TestBuildDepGraphFromArchitecture:
         arch_path = tmp_path / "architecture.json"
         arch_path.write_text(json.dumps(arch))
 
-        result = build_dep_graph_from_architecture(arch_path, ["mod_a_Python"])
-        assert result.graph == {"mod_a_Python": []}
-        assert result.warnings == []
-
-    def test_warns_orphan_dependency_filename(self, tmp_path):
-        """Dependency string not matching any architecture entry is reported."""
-        arch = [
-            {
-                "filename": "mod_a_Python.prompt",
-                "dependencies": ["missing_module_python.prompt", "mod_b_Python.prompt"],
-            },
-            {"filename": "mod_b_Python.prompt", "dependencies": []},
-        ]
-        arch_path = tmp_path / "architecture.json"
-        arch_path.write_text(json.dumps(arch))
-
-        result = build_dep_graph_from_architecture(
-            arch_path, ["mod_a_Python", "mod_b_Python"]
-        )
-        assert result.graph["mod_a_Python"] == ["mod_b_Python"]
-        assert any(
-            "missing_module_python.prompt" in w and "orphan" in w.lower() for w in result.warnings
-        ), result.warnings
+        graph = build_dep_graph_from_architecture(arch_path, ["mod_a_Python"])
+        assert graph == {"mod_a_Python": []}
 
 
 # ---------------------------------------------------------------------------

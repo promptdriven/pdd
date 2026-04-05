@@ -69,7 +69,7 @@ This tutorial walks through implementing a GitHub issue using PDD.
    ```bash
    pdd fix https://github.com/myorg/myrepo/issues/456
    ```
-   This orchestrates a 10-step iterative workflow that fixes the code until all tests pass locally, followed by post-push CI validation.
+   This orchestrates an 11-step iterative workflow that fixes the code until all tests pass locally, followed by post-push CI validation and code cleanup.
 
 3. **Configure CI Validation (Optional)**
    - Use `--ci-retries INT` to set maximum post-push fix attempts (default: 3)
