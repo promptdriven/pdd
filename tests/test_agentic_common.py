@@ -2174,7 +2174,10 @@ class TestAgenticDebugLogging:
     def test_run_agentic_task_no_log_when_not_verbose(
         self, mock_shutil_which, mock_subprocess_run, tmp_path
     ):
-        """run_agentic_task should NOT log when verbose=False."""
+        """run_agentic_task should NOT log successful interactions when verbose=False.
+
+        Only failures are always logged (#1072). Success logging stays verbose-only.
+        """
         import pdd.agentic_common
 
         # Reset session ID
@@ -2196,11 +2199,11 @@ class TestAgenticDebugLogging:
 
         assert success
 
-        # No log entries should be written when verbose=False
+        # No log entries should be written for success when verbose=False
         log_dir = tmp_path / AGENTIC_LOG_DIR
         if log_dir.exists():
             log_files = list(log_dir.glob("*.jsonl"))
-            assert len(log_files) == 0, "No JSONL log files should be written when verbose=False"
+            assert len(log_files) == 0, "No JSONL log files should be written for success when verbose=False"
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
@@ -4401,4 +4404,163 @@ class TestIsPermanentErrorClaudeOAuth:
         assert _is_permanent_error("temperature out of range") is True
         # Should NOT be flagged as permanent (transient/unrelated mention)
         assert _is_permanent_error("server temperature threshold exceeded") is False
+
+
+# --- Issue #1072 Tests: Missing quota patterns and verbose-gated logging ---
+
+
+class TestIssue1072PermanentErrors:
+    """Tests for _is_permanent_error() recognizing quota exhaustion patterns.
+
+    Issue #1072: _is_permanent_error() at agentic_common.py:292-310 doesn't match
+    quota errors like TerminalQuotaError, causing Google quota exhaustion to waste
+    3x10-minute retries before failing.
+    """
+
+    def test_is_permanent_error_recognizes_terminal_quota_error(self):
+        """_is_permanent_error must return True for 'TerminalQuotaError'.
+
+        This is the exact error string from the issue's production logs
+        (Google provider quota exhaustion). Before the fix, _is_permanent_error
+        returns False, wasting 3x10-minute retries.
+        """
+        assert _is_permanent_error("google: TerminalQuotaError") is True, (
+            "_is_permanent_error('google: TerminalQuotaError') returned False — "
+            "quota errors waste retries because no quota pattern exists in "
+            "permanent_patterns at agentic_common.py:298-312"
+        )
+
+    def test_is_permanent_error_recognizes_quota_exhausted(self):
+        """_is_permanent_error must return True for 'quota exhausted' messages."""
+        assert _is_permanent_error("API quota exhausted for project-12345") is True, (
+            "_is_permanent_error('API quota exhausted ...') returned False — "
+            "missing quota pattern in permanent_patterns"
+        )
+
+    def test_is_permanent_error_recognizes_daily_quota_variants(self):
+        """_is_permanent_error must return True for 'daily quota' messages."""
+        assert _is_permanent_error("daily quota exceeded") is True, (
+            "_is_permanent_error('daily quota exceeded') returned False"
+        )
+        assert _is_permanent_error("Quota Exceeded — daily limit reached") is True, (
+            "_is_permanent_error('Quota Exceeded — daily limit reached') returned False"
+        )
+
+    def test_existing_permanent_patterns_unaffected_by_quota_addition(self):
+        """Regression: Adding quota patterns must not break existing permanent error detection."""
+        assert _is_permanent_error("authentication_error") is True
+        assert _is_permanent_error("Invalid API key") is True
+        assert _is_permanent_error("model not found") is True
+        assert _is_permanent_error("access denied") is True
+
+    def test_transient_errors_still_not_permanent(self):
+        """Regression: Transient errors must still be retried."""
+        assert _is_permanent_error("Rate limit exceeded") is False
+        assert _is_permanent_error("Timeout expired") is False
+        assert _is_permanent_error("Connection reset by peer") is False
+
+
+class TestIssue1072FailureLogging:
+    """Tests for _log_agentic_interaction being called even when verbose=False.
+
+    Issue #1072: agentic_common.py:925 gates _log_agentic_interaction behind
+    `if verbose:`, so batch sync (which runs non-verbose) never logs provider
+    failures to JSONL files.
+    """
+
+    def test_provider_failure_logged_when_not_verbose(
+        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    ):
+        """Provider failures must be logged to JSONL even with verbose=False.
+
+        Before the fix, _log_agentic_interaction at agentic_common.py:929 is only
+        called inside `if verbose:` (line 928). Batch sync runs non-verbose, so no
+        provider failure logs are ever written — failures are completely invisible.
+
+        This test directly contradicts the existing test
+        test_run_agentic_task_no_log_when_not_verbose (which validates the bug).
+        After the fix, that test should be updated to expect failure logs ARE written.
+        """
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # Only anthropic available, and it fails all retries
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 1
+        mock_subprocess_run.return_value.stdout = ""
+        mock_subprocess_run.return_value.stderr = "Exit code 1: rate limited"
+
+        success, msg, cost, provider = run_agentic_task(
+            "Generate tests for calculator",
+            tmp_path,
+            verbose=False,  # NOT verbose — batch sync mode
+            label="test-generate",
+            max_retries=1,  # Single retry to keep test fast
+        )
+
+        assert not success
+
+        # The fix: failure logs MUST be written even without verbose mode
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        assert log_dir.exists(), (
+            f"No agentic-logs directory created at {log_dir} — "
+            "_log_agentic_interaction is gated behind `if verbose:` "
+            "at agentic_common.py:928, so batch sync never logs provider failures"
+        )
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) >= 1, (
+            "No JSONL log files written for provider failure — "
+            "_log_agentic_interaction gated behind `if verbose:` at line 928"
+        )
+
+        # Verify the log entry records the failure
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            lines = f.read().strip().splitlines()
+        assert len(lines) >= 1
+        entry = json.loads(lines[-1])
+        assert entry["success"] is False, (
+            f"Expected failure log entry, got success={entry['success']}"
+        )
+
+    # Scope addition: covers expansion item "agentic_common.py:895 success logging
+    # is also verbose-only and should be ungated" identified by Step 6 but absent
+    # from Step 8's plan
+    def test_success_not_logged_when_not_verbose(
+        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    ):
+        """Issue #1072: Success interactions remain verbose-only (not diagnostic).
+
+        Only failures need always-on logging for post-mortem diagnosis.
+        Success logging stays behind `if verbose:` to avoid unnecessary I/O.
+        """
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Task completed successfully with enough output characters.",
+            "total_cost_usd": 0.05
+        })
+
+        success, msg, cost, provider = run_agentic_task(
+            "Generate tests",
+            tmp_path,
+            verbose=False,
+            label="test-generate",
+        )
+
+        assert success
+
+        # Success logging stays verbose-only — no JSONL written
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        if log_dir.exists():
+            log_files = list(log_dir.glob("session_*.jsonl"))
+            assert len(log_files) == 0, (
+                "Success should not be logged when verbose=False — "
+                "only failures need always-on logging"
+            )
 

@@ -364,9 +364,11 @@ For test execution and example runs:
 Handle command results in multiple formats:
 - Dict: Extract `success`, `cost`, `model` fields directly
 - Tuple (3-element): Cost is second-to-last element, model is last element
-- Tuple (4-element from cmd_test_main): `(content, cost, model, agentic_success)` - use explicit indexing for test operation
-- For test operation with 4-tuple: use `result[1]` for cost and `result[2]` for model (not negative indexing)
+- Tuple (5-element from cmd_test_main): `(content, cost, model, agentic_success, error_message)` - use explicit indexing for test operation
+- For test operation with 5-tuple: use `result[1]` for cost and `result[2]` for model (not negative indexing). Extract cost and model regardless of success or failure.
 - For test operation success: if `agentic_success` (4th element) is not None, trust it; otherwise check if file exists
+- For test operation failure: if `result[4]` (error_message) is non-empty, append it to the errors list so it reaches the sync log
+- For crash/fix operations returning tuples: extract error message from `result[1]` on failure and append to errors list
 - Save fingerprint after successful operations regardless of format
 
 ### Non-Python Language Handling and Agentic Mode

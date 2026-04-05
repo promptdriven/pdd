@@ -157,9 +157,10 @@ def test(
     existing_tests: Optional[str],
     target_coverage: Optional[float],
     merge: bool,
-) -> Tuple[str, float, str]:
+):
     """
     Generate or enhance unit tests for a given code file and its corresponding prompt file.
+    Returns a TestResult NamedTuple (content, cost, model, agentic_success, error_message).
     """
     return cmd_test_main(
         ctx,
