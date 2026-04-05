@@ -133,9 +133,17 @@ jobs:
           echo "modules=$CHANGED_MODULES" >> "$GITHUB_OUTPUT"
           echo "Detected changed modules: $CHANGED_MODULES"
 
+      - name: Set up Vertex AI credentials
+        if: steps.changed.outputs.modules && secrets.GCP_SERVICE_ACCOUNT != ''
+        run: |
+          echo '${{ secrets.GCP_SERVICE_ACCOUNT }}' > /tmp/gcp-sa.json
+
       - name: Run auto-heal
         if: steps.changed.outputs.modules
         env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GCP_SERVICE_ACCOUNT != '' && '/tmp/gcp-sa.json' || '' }}
+          VERTEXAI_PROJECT: prompt-driven-development-stg
+          VERTEXAI_LOCATION: us-central1
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           SKIP_CI_FLAG=""
