@@ -478,7 +478,8 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
          patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e, \
          patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify, \
-         patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post_comment:
+         patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post_comment, \
+         patch("pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup", side_effect=lambda **kw: (kw["total_cost"], kw["changed_files"])):
 
         # Default: successful run, generic output
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
@@ -2541,7 +2542,7 @@ class TestIssue797TypeScriptTestFiles:
         mock_pytest.assert_called_once()
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest src/__test__/Widget.test.tsx")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_tsx(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Jest .test.tsx files should NOT be run through pytest.
@@ -2550,6 +2551,8 @@ class TestIssue797TypeScriptTestFiles:
         which fails silently for TypeScript. The fix should use an appropriate
         runner (e.g., npx jest) for .test.tsx files.
         """
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest src/__test__/Widget.test.tsx", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "src" / "__test__"
@@ -2567,10 +2570,12 @@ class TestIssue797TypeScriptTestFiles:
         assert kwargs.get("shell") is False
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx playwright test e2e/login.spec.ts")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_spec_ts(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Playwright .spec.ts files should NOT be run through pytest."""
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx playwright test e2e/login.spec.ts", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "e2e"
@@ -4900,3 +4905,265 @@ class TestIssue1031WorkflowStateMarkers:
             f"Expected only ['tests/test_target.py'] but got {len(result)} files — "
             f"directory scan fallback likely fired: {result!r}"
         )
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _verify_tests_independently must use config dir as cwd.
+
+    Bug: _verify_tests_independently() runs non-Python tests (Jest, Vitest, Playwright)
+    from the repo root instead of the directory containing the test runner config.
+    This causes every monorepo with tests in a subdirectory to fail verification.
+    """
+
+    # --- Test 9: _verify_tests_independently uses config dir cwd ---
+
+    @patch("subprocess.run")
+    def test_verify_independently_uses_config_dir_not_repo_root(self, mock_subproc, tmp_path):
+        """_verify_tests_independently must pass the test runner config directory as cwd.
+
+        Before fix: subprocess.run(cwd=str(repo_root)) — always repo root
+        After fix: subprocess.run(cwd=str(config_dir)) — where jest.config.js lives
+
+        Uses real filesystem so get_test_command_for_file finds the config naturally.
+        """
+        # Set up monorepo: frontend/jest.config.js + frontend/src/lib/__test__/api.test.ts
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "api.test.ts").write_text("test('api', () => {});")
+
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+        passed, output = _verify_tests_independently(
+            ["frontend/src/lib/__test__/api.test.ts"], tmp_path
+        )
+
+        mock_subproc.assert_called_once()
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd} (repo root). Non-Python test verification uses "
+            f"wrong cwd, breaking all monorepos."
+        )
+
+    # --- Test 10: Backward compat — falls back to repo root when cwd=None ---
+
+    @patch("subprocess.run")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
+    def test_verify_independently_falls_back_to_repo_root_when_cwd_none(
+        self, mock_get_cmd, mock_subproc, tmp_path
+    ):
+        """When TestCommand.cwd is None, _verify_tests_independently falls back to repo root.
+
+        On buggy code: get_test_command_for_file returns str → caller does shlex.split(str)
+            which works, but this test returns a TestCommand-like object → crash (TypeError).
+        On fixed code: caller extracts .command and .cwd, falls back to repo root when cwd=None.
+        """
+        from types import SimpleNamespace
+
+        # Return a TestCommand-like object with cwd=None
+        mock_cmd = SimpleNamespace(
+            command="some_runner src/test.rb",
+            cwd=None
+        )
+        mock_get_cmd.return_value = mock_cmd
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+
+        passed, output = _verify_tests_independently(["src/test.rb"], tmp_path)
+
+        # On buggy code, shlex.split(SimpleNamespace) raises TypeError which is
+        # caught silently → subprocess.run never called. On fixed code, the caller
+        # extracts .command and .cwd from the TestCommand correctly.
+        assert mock_subproc.called, (
+            "subprocess.run was never called — the caller can't handle a TestCommand "
+            "return type from get_test_command_for_file. The fix must extract .command "
+            "from the result before passing to shlex.split()."
+        )
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(tmp_path), (
+            f"Expected fallback to repo root ({tmp_path}) when cwd=None, got {actual_cwd}"
+        )
+
+# ============================================================================
+# Step 11: Code Cleanup Tests (Issue #1073)
+# ============================================================================
+
+
+class TestStep11CodeCleanup:
+    """Tests for Step 11: Code cleanup after CI validation.
+
+    Step 11 collects the full diff and changed file contents, invokes the
+    cleanup LLM, re-runs tests to verify, and commits as a separate commit
+    if tests pass. Reverts all cleanup changes if tests fail.
+    """
+
+    def test_step11_skipped_when_no_files_changed(self, tmp_path):
+        """Step 11 should be skipped when no files changed during workflow."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["old.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        assert cost == 1.0
+        assert files == ["old.py"]
+
+    def test_step11_skipped_when_template_missing(self, tmp_path):
+        """Step 11 should be skipped when cleanup prompt template is missing."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value=None):
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        assert cost == 1.0
+
+    def test_step11_reverts_on_test_failure(self, tmp_path):
+        """Step 11 should revert changes when tests fail after cleanup."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        (tmp_path / "module.py").write_text("x = 1")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value="Cleanup {issue_number}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", return_value=(True, "Cleaned up", 0.05, "gpt-4")), \
+             patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_mod.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(False, "1 failed")), \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_subprocess.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        # Should have called git checkout . to revert
+        checkout_calls = [c for c in mock_subprocess.call_args_list if "checkout" in str(c)]
+        assert len(checkout_calls) > 0, "Should revert via git checkout when tests fail"
+        assert cost == 1.05  # Original + cleanup cost
+
+    def test_step11_commits_on_test_pass(self, tmp_path):
+        """Step 11 should commit cleanup when tests pass."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        (tmp_path / "module.py").write_text("x = 1")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value="Cleanup {issue_number}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", return_value=(True, "Cleaned up", 0.05, "gpt-4")), \
+             patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_mod.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(True, "1 passed")), \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_subprocess.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        # Should have called git commit
+        commit_calls = [c for c in mock_subprocess.call_args_list if "commit" in str(c)]
+        assert len(commit_calls) > 0, "Should commit cleanup when tests pass"
+
+    def test_step11_llm_failure_skips_cleanup(self, tmp_path):
+        """Step 11 should skip cleanup when the LLM task fails."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value="Cleanup {issue_number}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", return_value=(False, "LLM error", 0.02, "gpt-4")), \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_subprocess.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        assert cost == 1.02  # Original + failed LLM cost still accumulated
+
+    def test_step11_timeout_in_dict(self):
+        """E2E_FIX_STEP_TIMEOUTS should include step 11."""
+        from pdd.agentic_e2e_fix_orchestrator import E2E_FIX_STEP_TIMEOUTS
+        assert 11 in E2E_FIX_STEP_TIMEOUTS
+        assert E2E_FIX_STEP_TIMEOUTS[11] == 600.0
+
+    def test_step11_integrated_with_orchestrator_skip_ci(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 11 should run before CI validation on the skip_ci path."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Make Step 9 pass so we reach commit/push -> skip_ci -> step 11
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Remove the step 11 mock to test integration
+        with patch("pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup") as mock_step11:
+            mock_step11.return_value = (0.9, ["module.py"])
+
+            with patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(True, "1 passed")), \
+                 patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_foo.py"]):
+                success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                    **e2e_fix_default_args
+                )
+
+            assert success is True
+            mock_step11.assert_called_once()

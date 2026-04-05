@@ -602,9 +602,7 @@ class TestUpdateMainRepoModeChangeDetection:
             directory="/repo/src",
         )
 
-        mock_find.assert_called_once_with(
-            "/repo/src", True, None, None, create_missing_prompts=True
-        )
+        mock_find.assert_called_once_with("/repo/src", True, None, None)
 
 
 # ---------------------------------------------------------------------------

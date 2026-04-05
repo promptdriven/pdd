@@ -21,7 +21,6 @@ from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_u
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
 from .architecture_include_validation import collect_architecture_include_validation_warnings
-from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .architecture_registry import find_project_root as _find_project_root
 from .construct_paths import (
     _detect_context_from_basename,
@@ -29,6 +28,7 @@ from .construct_paths import (
     _find_pddrc_file,
     _load_pddrc_config,
 )
+from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -945,11 +945,7 @@ def run_agentic_sync(
 
     # 11. Build dependency graph
     if architecture is not None:
-        dep_graph_result = build_dep_graph_from_architecture(arch_path, modules_to_sync)
-        dep_graph = dep_graph_result.graph
-        if dep_graph_result.warnings and not quiet:
-            for w in dep_graph_result.warnings:
-                console.print(f"[yellow]Warning: {w}[/yellow]")
+        dep_graph = build_dep_graph_from_architecture(arch_path, modules_to_sync)
         if not quiet:
             for w in collect_architecture_include_validation_warnings(project_root):
                 console.print(f"[yellow]Warning: {w}[/yellow]")

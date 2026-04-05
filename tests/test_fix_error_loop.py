@@ -1790,3 +1790,65 @@ def test_success_gate_false_on_actual_failures(mock_pytest, mock_files):
         )
 
     assert success is False, "success should be False when there are actual test failures"
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+@patch("pdd.fix_error_loop.rprint")
+@patch("pdd.fix_error_loop.subprocess.run")
+@patch("pdd.fix_error_loop.get_test_command_for_file")
+@patch("pdd.fix_error_loop.get_language")
+def test_fix_error_loop_non_python_subprocess_has_cwd(
+    mock_get_lang, mock_get_test_cmd, mock_subprocess, mock_rprint, tmp_path
+):
+    """Bug #1080: fix_error_loop must use TestCommand.cwd (config dir), not test_file.parent.
+
+    For frontend/src/__test__/api.test.ts with jest.config.js in frontend/,
+    cwd must be frontend/, not src/__test__/.
+    """
+    from pdd.get_test_command import TestCommand
+
+    # Simulate monorepo: config is in frontend/, test is nested deeper
+    frontend_dir = tmp_path / "project" / "frontend"
+    test_dir = frontend_dir / "src" / "__test__"
+    test_dir.mkdir(parents=True)
+    test_file = test_dir / "api.test.ts"
+    test_file.write_text("test('api', () => {});")
+    code_file = test_dir / "api.ts"
+    code_file.write_text("export function fetchApi() { return 'ok'; }")
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("Create API module")
+
+    mock_get_lang.return_value = "typescript"
+    # get_test_command_for_file returns config dir (frontend/), not test file parent
+    mock_get_test_cmd.return_value = TestCommand(
+        command=f"npx jest --no-coverage -- {test_file}",
+        cwd=frontend_dir,
+    )
+    mock_subprocess.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+    fix_error_loop(
+        str(test_file), str(code_file), str(prompt_file),
+        "Create API module", f"npx jest --no-coverage -- {test_file}",
+        0.5, 0.1, 5, 1.0,
+        agentic_fallback=False
+    )
+
+    # Find the verification subprocess call
+    verify_calls = [
+        c for c in mock_subprocess.call_args_list
+        if c.kwargs.get('shell') is True
+    ]
+    assert len(verify_calls) > 0, (
+        f"Expected a shell=True subprocess call. All calls: {mock_subprocess.call_args_list}"
+    )
+
+    verify_call = verify_calls[0]
+    actual_cwd = verify_call.kwargs.get('cwd')
+    assert actual_cwd == str(frontend_dir), (
+        f"Bug #1080: Expected cwd={frontend_dir} (where jest.config.js lives), "
+        f"got cwd={actual_cwd}. fix_error_loop must use TestCommand.cwd, "
+        f"not Path(test_file).parent ({test_dir})."
+    )

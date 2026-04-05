@@ -109,6 +109,16 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
     - Report any asymmetries (markers saved but not restored, or restored but not saved) as independent bugs
     - This catches bugs where a code path works correctly on first run but silently drops data on resume
 
+11. **Proposed Fix Validation**
+    If the issue body proposes a specific fix (code snippets, file paths, or a described approach), independently validate its scope against your own findings:
+    - Compare the set of affected locations/cases identified by the issue's proposed fix against the full set you found in steps 4-10 above
+    - Classify the result:
+      - `SCOPE_MATCH` — the issue's proposed fix covers the same scope as your independent analysis
+      - `SCOPE_EXPANSION` — your independent analysis found additional affected locations, cases, or files beyond what the issue proposes
+      - `NO_PROPOSED_FIX` — the issue does not propose a specific fix
+    - If `SCOPE_EXPANSION`: list every affected item your analysis found that the issue's proposed fix does NOT cover. These are the items downstream steps (8, 9, 10) must include in their test plans and verification — not just the subset the issue mentions.
+    - **This step exists because issue authors may propose partial fixes.** Downstream steps must use YOUR full scope, not the issue's proposed scope.
+
 
 % Output
 
@@ -162,6 +172,13 @@ problematic_code_snippet()
 - **State symmetry check:** [If save/restore exists — list markers handled during execution vs during restore. Flag asymmetries]
 - **Independent bugs found:** [List any sibling bugs discovered, with file:line and a one-line description. "None" if the root cause is the only bug]
 
+### Proposed Fix Validation
+- **Issue proposes a fix:** [Yes | No]
+- **Scope classification:** [SCOPE_MATCH | SCOPE_EXPANSION | NO_PROPOSED_FIX]
+- **Issue-proposed scope:** [List locations/cases the issue's fix covers, or "N/A"]
+- **Step 6 full scope:** [List ALL locations/cases your independent analysis found]
+- **Expansion items (if SCOPE_EXPANSION):** [List items found by your analysis but NOT covered by the issue's proposed fix. These MUST be included in downstream test plans and verification]
+
 ### Fix Location
 - **File(s) to modify:** `path/to/root_cause_file.py`
 - **Why this location:** [Explain why this is the root cause, not just where symptoms appear]
@@ -172,13 +189,31 @@ problematic_code_snippet()
 *Proceeding to Step 7: Prompt Classification*
 ```
 
-After posting your comment, output a machine-readable marker listing every file that needs to be modified to fix the bug. This is parsed by the orchestrator and injected into downstream steps:
+After posting your comment, output two machine-readable markers. Both are parsed by the orchestrator and injected into downstream steps as structured variables:
 
 ```
 FIX_LOCATIONS: path/to/file1.py, path/to/file2.py
+EXPANSION_ITEMS: description of item 1, description of item 2
 ```
 
-List ALL files from "File(s) to modify" above, comma-separated on one line. If only one file needs modification, list just that one file.
+- `FIX_LOCATIONS`: ALL files from "File(s) to modify" above, comma-separated on one line.
+- `EXPANSION_ITEMS`: If scope classification is `SCOPE_EXPANSION`, list every item your analysis found that the issue's proposed fix does NOT cover, comma-separated on one line. If `SCOPE_MATCH` or `NO_PROPOSED_FIX`, output: `EXPANSION_ITEMS: none`
+
+If the bug involves a **repeating pattern** across multiple files — a class of misuse that could occur in many places (e.g., unescaped user input, missing error handling, incorrect API usage, missing sanitization) — also output a grep-compatible regex that would find ALL instances of the problematic code pattern in the codebase:
+
+```
+PATTERN_SEARCH: <grep -E compatible regex>
+```
+
+The orchestrator will run this pattern via `grep -rE` to verify your FIX_LOCATIONS are complete. Any files found by grep but missing from FIX_LOCATIONS will be sent back to you for classification. Only emit this marker for repeating-pattern bugs; omit it for single-site bugs.
+
+**CRITICAL: Use the BROADEST reasonable pattern — one that catches ALL potential instances, including safe ones.** The goal is zero false negatives (missed files), even if it means some false positives that you classify later. Do NOT narrow the pattern to only match the buggy form.
+
+Examples:
+- Unescaped glob calls → `PATTERN_SEARCH: \.glob\(`
+- Missing timeout in requests → `PATTERN_SEARCH: requests\.(get|post|put|delete)\(`
+- SQL injection risk → `PATTERN_SEARCH: (execute|cursor\.execute)\(`
+- Missing input sanitization → `PATTERN_SEARCH: subprocess\.(run|call|Popen)\(`
 
 % Important
 

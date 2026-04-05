@@ -1,10 +1,7 @@
 import fnmatch
-import logging
 import re
 import subprocess
 import sys
-import heapq
-from collections import defaultdict
 from typing import Tuple, Optional, List, Dict, Any, Set
 import click
 from rich import print as rprint
@@ -28,20 +25,8 @@ from .update_prompt import update_prompt
 from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
-from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
+from .sync_determine_operation import calculate_sha256, read_fingerprint
 from . import DEFAULT_TIME
-
-logger = logging.getLogger(__name__)
-
-
-def _budget_allows_post_update_llm(
-    budget: Optional[float], total_repo_cost: float
-) -> bool:
-    """False when --budget is set and cumulative cost already meets or exceeds the cap."""
-    if budget is None:
-        return True
-    return total_repo_cost < budget
-
 
 # Config/data files that should not get prompts in repo-scan mode.
 # Users can still target these explicitly with single-file mode.
@@ -303,12 +288,7 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     return str(pddrc_parent / expanded)
 
 
-def resolve_prompt_code_pair(
-    code_file_path: str,
-    quiet: bool = False,
-    output_dir: Optional[str] = None,
-    create_missing: bool = True,
-) -> Tuple[str, str]:
+def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None, create_missing: bool = True) -> Tuple[str, str]:
     """
     Derives the corresponding prompt file path from a code file path.
     Searches for and creates prompts only in the specified output directory or 'prompts' directory.
@@ -437,19 +417,9 @@ def resolve_prompt_code_pair(
 
     return prompt_path_str, code_file_path
 
-def find_and_resolve_all_pairs(
-    repo_root: str,
-    quiet: bool = False,
-    extensions: Optional[str] = None,
-    output_dir: Optional[str] = None,
-    create_missing_prompts: bool = False,
-) -> List[Tuple[str, str]]:
+def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: Optional[str] = None, output_dir: Optional[str] = None) -> List[Tuple[str, str]]:
     """
     Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
-
-    By default does not create missing prompt files on disk (scan-only). Pass
-    ``create_missing_prompts=True`` when the caller will run updates next (e.g. ``update_main``
-    with ``not dry_run``).
     """
     pairs = []
 
@@ -509,12 +479,7 @@ def find_and_resolve_all_pairs(
         ]
     
     for file_path in code_files:
-        prompt_path, code_path = resolve_prompt_code_pair(
-            file_path,
-            quiet,
-            output_dir,
-            create_missing=create_missing_prompts,
-        )
+        prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir, create_missing=False)
         pairs.append((prompt_path, code_path))
         
     return pairs
@@ -805,217 +770,6 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
             "error": str(e),
         }
 
-def _repo_relative_md_dep(dep_str: str, repo_root_p: Path) -> Optional[str]:
-    """Return repo-relative path for a resolved include target, or None if outside repo / not a healable doc.
-
-    Only ``.md`` is listed: repo update post-processing regenerates included markdown via
-    ``context_generator_main(..., format='md')``, which does not target ``.mdx`` paths.
-    """
-    dep_p = Path(dep_str)
-    if not dep_p.is_absolute():
-        dep_p = (Path.cwd() / dep_p).resolve()
-    else:
-        dep_p = dep_p.resolve()
-    if dep_p.suffix.lower() != ".md":
-        return None
-    try:
-        rel = dep_p.relative_to(repo_root_p)
-    except ValueError:
-        return None
-    return str(rel).replace("\\", "/")
-
-
-def _md_doc_prompt_reference_counts(
-    repo_root: str, prompt_paths: List[str]
-) -> Dict[str, Set[str]]:
-    """Map repo-relative .md → set of prompt paths that <include> it (scan-wide)."""
-    repo_root_p = Path(repo_root).resolve()
-    doc_to_prompts: Dict[str, Set[str]] = defaultdict(set)
-    for prompt_path_str in prompt_paths:
-        deps = extract_include_deps(Path(prompt_path_str))
-        for dep_str in deps:
-            rel = _repo_relative_md_dep(dep_str, repo_root_p)
-            if rel:
-                doc_to_prompts[rel].add(prompt_path_str)
-    return doc_to_prompts
-
-
-def _included_docs_for_drift_report(
-    repo_root: str,
-    all_prompt_paths: List[str],
-    drifted_prompt_paths: List[str],
-) -> List[Tuple[str, int]]:
-    """Docs referenced by at least one drifted prompt; count = prompts in full scan that include each doc."""
-    drifted_set = set(drifted_prompt_paths)
-    doc_to_prompts = _md_doc_prompt_reference_counts(repo_root, all_prompt_paths)
-    rows: List[Tuple[str, int]] = []
-    for doc_rel, prompters in doc_to_prompts.items():
-        if not prompters & drifted_set:
-            continue
-        rows.append((doc_rel, len(prompters)))
-    return sorted(rows, key=lambda x: (-x[1], x[0]))
-
-
-def _dependency_order_key(prompt_path: str) -> Optional[str]:
-    """
-    Build a stable module key matching fingerprint identity.
-
-    Uses `infer_module_identity()` so that nested prompt basenames (e.g. `src/foo`)
-    become part of the key and avoid collisions.
-    """
-    try:
-        from .operation_log import infer_module_identity
-
-        basename, language = infer_module_identity(prompt_path)
-        if not basename or not language:
-            return None
-        return f"{basename}::{language}"
-    except Exception:
-        return None
-
-
-def _order_changed_items_by_dependency(
-    changed_items: List[Tuple[str, str, str]],
-) -> List[Tuple[str, str, str]]:
-    """
-    Order changed prompt/code pairs so dependencies are updated first.
-
-    We derive a module dependency graph from `<include>` relationships inside prompt files.
-    When multiple modules are eligible, we prefer the one with the most downstream dependents.
-    """
-    if len(changed_items) <= 1:
-        return changed_items
-
-    # Map module key -> (index in original list, prompt_path, code_path, reason)
-    key_to_item: Dict[str, Tuple[int, Tuple[str, str, str]]] = {}
-    for idx, item in enumerate(changed_items):
-        prompt_path = item[0]
-        key = _dependency_order_key(prompt_path)
-        if key is None:
-            return changed_items  # If we can't identify modules, don't risk reordering.
-        key_to_item[key] = (idx, item)
-
-    changed_keys = set(key_to_item.keys())
-
-    # graph[module] = set(dependencies_in_changed_set)
-    graph: Dict[str, Set[str]] = {k: set() for k in changed_keys}
-    reverse: Dict[str, Set[str]] = {k: set() for k in changed_keys}  # dependency -> dependents
-
-    for key, (_idx, (prompt_path, _code_path, _reason)) in key_to_item.items():
-        include_deps = extract_include_deps(Path(prompt_path))
-        for dep_path_str in include_deps.keys():
-            dep_path = Path(dep_path_str)
-            if not dep_path.is_absolute():
-                dep_path = (Path.cwd() / dep_path).resolve()
-            dep_key = _dependency_order_key(dep_path)
-            if dep_key and dep_key in changed_keys:
-                graph[key].add(dep_key)
-                reverse[dep_key].add(key)
-
-    # Downstream dependents count (transitive) for tie-breaking.
-    downstream_count: Dict[str, int] = {}
-    for k in changed_keys:
-        visited: Set[str] = set()
-        stack = [k]
-        while stack:
-            cur = stack.pop()
-            for dependent in reverse.get(cur, set()):
-                if dependent not in visited:
-                    visited.add(dependent)
-                    stack.append(dependent)
-        visited.discard(k)
-        downstream_count[k] = len(visited)
-
-    # Kahn's algorithm over `graph` where edges are module -> dependencies.
-    in_degree: Dict[str, int] = {k: len(graph[k]) for k in changed_keys}
-    heap: List[Tuple[int, int, str]] = []
-    for k in changed_keys:
-        if in_degree[k] == 0:
-            # Max downstream_count first, then original index.
-            heapq.heappush(heap, (-downstream_count[k], key_to_item[k][0], k))
-
-    ordered_keys: List[str] = []
-    processed: Set[str] = set()
-
-    while heap:
-        _neg_downstream, _orig_idx, k = heapq.heappop(heap)
-        if k in processed:
-            continue
-        ordered_keys.append(k)
-        processed.add(k)
-
-        for dependent in reverse.get(k, set()):
-            in_degree[dependent] -= 1
-            if in_degree[dependent] == 0:
-                heapq.heappush(heap, (-downstream_count[dependent], key_to_item[dependent][0], dependent))
-
-    # If cycles exist or nodes remain, append remaining nodes in best-effort order.
-    if len(processed) != len(changed_keys):
-        remaining = [k for k in changed_keys if k not in processed]
-        remaining.sort(key=lambda n: (-downstream_count[n], key_to_item[n][0]))
-        ordered_keys.extend(remaining)
-
-    # Build final ordered items.
-    ordered_items: List[Tuple[str, str, str]] = []
-    for k in ordered_keys:
-        ordered_items.append(key_to_item[k][1])
-    return ordered_items
-
-
-def _estimate_dry_run_cost_range(
-    ctx: click.Context,
-    repo_obj: git.Repo,
-    simple: bool,
-    changed_items: List[Tuple[str, str, str]],
-) -> Tuple[float, float]:
-    """Flat heuristic total $ range for dry-run (not billed).
-
-    Historically, each per-file update tends to cost around $0.50–$1.00. For dry-run,
-    report a simple flat estimate based on the number of drifted pairs.
-    """
-    n = len(changed_items)
-    return (n * 0.5, n * 1.0)
-
-
-def _print_repository_drift_report(
-    repo_root: str,
-    n_changed: int,
-    n_pairs: int,
-    changed_items: List[Tuple[str, str, str]],
-    included_docs: List[Tuple[str, int]],
-    cost_low: float,
-    cost_high: float,
-) -> None:
-    """Print the repository drift summary for `pdd update --dry-run` (no LLM)."""
-    console.print()
-    console.print("[bold]Repository drift report:[/bold]")
-    console.print(f"  Changed files: [cyan]{n_changed}[/cyan] of [cyan]{n_pairs}[/cyan] pairs")
-    console.print(
-        f"  Estimated cost: [yellow]${cost_low:.2f}–${cost_high:.2f}[/yellow] "
-        "(flat $0.50–$1.00 per drifted pair; not billed in dry run)"
-    )
-    console.print()
-    console.print("  [bold]Drifted modules:[/bold]")
-    rows = sorted(changed_items, key=lambda x: x[1])
-    code_width = 0
-    for _p, code_path, _r in rows:
-        code_width = max(code_width, len(os.path.relpath(code_path, repo_root)))
-    code_width = min(max(code_width, 12), 52)
-    for i, (prompt_path, code_path, _reason) in enumerate(rows, start=1):
-        cr = os.path.relpath(code_path, repo_root)
-        pr = os.path.relpath(prompt_path, repo_root)
-        pad = max(code_width - len(cr), 0)
-        console.print(f"    {i}. {cr}{' ' * pad}  →  {pr}")
-    console.print()
-    console.print("  [bold]Included docs that may need updating:[/bold]")
-    if not included_docs:
-        console.print("    [dim](none detected among drifted prompts)[/dim]")
-    else:
-        for doc_rel, cnt in included_docs:
-            console.print(f"    - {doc_rel} (included by {cnt} prompt{'s' if cnt != 1 else ''})")
-    console.print()
-
-
 def _find_prd_file(project_root: Path) -> Optional[Path]:
     """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
     for pattern in ["PRD.md", "prd.md", "*_prd.md", "*_PRD.md"]:
@@ -1039,8 +793,6 @@ def update_main(
     temperature: Optional[float] = None,
     simple: bool = False,
     base_branch: str = "main",
-    budget: Optional[float] = None,
-    dry_run: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -1058,8 +810,6 @@ def update_main(
     :param strength: Optional strength parameter (overrides ctx.obj if provided).
     :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
     :param base_branch: Git branch to compare against for change detection in repo mode.
-    :param budget: Optional repository-wide cap; stop processing once cumulative update cost reaches this amount.
-    :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -1090,15 +840,9 @@ def update_main(
                 scan_dir = cwd
             else:
                 scan_dir = repo_root
-        pairs = find_and_resolve_all_pairs(
-            scan_dir,
-            quiet,
-            extensions,
-            output,
-            create_missing_prompts=not dry_run,
-        )
+        pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
 
-        if pairs and not dry_run:
+        if pairs:
             from .pddrc_initializer import ensure_pddrc_for_scan
             code_files_for_pddrc = [code_path for _, code_path in pairs]
             ensure_pddrc_for_scan(scan_dir, repo_root, code_files_for_pddrc, quiet=quiet)
@@ -1110,66 +854,30 @@ def update_main(
         # Change-detection: filter to changed code files OR empty prompts
         git_changed_files = get_git_changed_files(repo_root, base_branch)
 
-        changed_items = []
+        changed_pairs = []
         for prompt_path, code_path in pairs:
             # Empty prompts always need generation, regardless of code changes
             prompt_p = Path(prompt_path)
             if prompt_p.exists() and prompt_p.stat().st_size == 0:
-                changed_items.append((prompt_path, code_path, "empty prompt file"))
+                changed_pairs.append((prompt_path, code_path))
                 continue
             changed, reason = is_code_changed(code_path, repo_root, git_changed_files, prompt_file_path=prompt_path)
             if changed:
-                changed_items.append((prompt_path, code_path, reason))
+                changed_pairs.append((prompt_path, code_path))
 
-        if not changed_items:
+        if not changed_pairs:
             if not quiet:
                 rprint("[info]No changed code files detected. Everything is in sync.[/info]")
             return None
 
-        # Process in dependency order so that if a budget cap stops execution,
-        # earlier-updated modules have their downstream dependents ready.
-        changed_items = _order_changed_items_by_dependency(changed_items)
-
-        if dry_run:
-            if not quiet:
-                drift_prompts = [p for p, _c, _r in changed_items]
-                all_prompt_paths = [p for p, _c in pairs]
-                included_docs = _included_docs_for_drift_report(
-                    repo_root, all_prompt_paths, drift_prompts
-                )
-                cost_low, cost_high = _estimate_dry_run_cost_range(
-                    ctx, repo_obj, simple, changed_items
-                )
-                _print_repository_drift_report(
-                    repo_root,
-                    len(changed_items),
-                    len(pairs),
-                    changed_items,
-                    included_docs,
-                    cost_low,
-                    cost_high,
-                )
-                rprint(
-                    "[dim]No LLM calls, no prompt writes, no architecture or PRD sync.[/dim]"
-                )
-            n = len(changed_items)
-            return (
-                f"Dry run: {n} prompt(s) would be updated (no changes made).",
-                0.0,
-                "N/A",
-            )
-
         if not quiet:
             rprint(
-                f"[info]Found {len(changed_items)} changed file(s) "
+                f"[info]Found {len(changed_pairs)} changed file(s) "
                 f"out of {len(pairs)} total pairs.[/info]"
             )
 
         results = []
         total_repo_cost = 0.0
-        budget_reached = False
-        updated_doc_paths: Set[str] = set()
-        submitted_dev_units: Set[str] = set()
 
         progress = Progress(
             SpinnerColumn(),
@@ -1187,19 +895,11 @@ def update_main(
         with progress:
             task = progress.add_task(
                 "Updating prompts...",
-                total=len(changed_items),
+                total=len(changed_pairs),
                 total_cost=0.0
             )
 
-            for prompt_path, code_path, _reason in changed_items:
-                if budget is not None and total_repo_cost >= budget:
-                    budget_reached = True
-                    if not quiet:
-                        rprint(
-                            f"[info]Budget cap reached (${budget:.2f}); "
-                            f"stopping with {len(results)} file(s) processed.[/info]"
-                        )
-                    break
+            for prompt_path, code_path in changed_pairs:
                 relative_path = os.path.relpath(code_path, repo_root)
                 progress.update(task, description=f"Processing [path]{relative_path}[/path]")
 
@@ -1225,185 +925,8 @@ def update_main(
                                 cost=result.get("cost", 0.0),
                                 model=result.get("model", "unknown"),
                             )
-                        except Exception as e:
-                            logger.warning(
-                                "save_fingerprint failed after repo update: %s", e, exc_info=True
-                            )
-                            if not quiet:
-                                rprint(
-                                    f"[yellow]Warning: could not save fingerprint for "
-                                    f"{relative_path}: {e}[/yellow]"
-                                )
-
-                        # Regenerate example, upload dev unit, and refresh included .md docs (best-effort).
-                        # Post-update LLM steps honor --budget: skip when cap already reached.
-                        if not _budget_allows_post_update_llm(budget, total_repo_cost):
-                            if budget is not None and not quiet:
-                                rprint(
-                                    f"[yellow]Skipping example/doc regeneration and cloud submit for "
-                                    f"{relative_path}: budget cap reached "
-                                    f"(${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
-                                )
-                        else:
-                            try:
-                                dev_key = f"{basename}::{language}"
-                                if dev_key not in submitted_dev_units:
-                                    from .sync_determine_operation import get_pdd_file_paths
-                                    from .sync_main import _auto_submit_example
-                                    from .context_generator_main import context_generator_main
-
-                                    context_name, _context_cfg = detect_context_for_file(code_path, repo_root)
-                                    pdd_files = get_pdd_file_paths(
-                                        basename=basename,
-                                        language=language,
-                                        prompts_dir=str(Path(repo_root) / "prompts"),
-                                        context_override=ctx.obj.get("context") or context_name,
-                                    )
-                                    pdd_files["prompt"] = Path(prompt_path)
-                                    pdd_files["code"] = Path(code_path)
-
-                                    # Example regeneration (LLM cost applies to --budget).
-                                    if _budget_allows_post_update_llm(budget, total_repo_cost):
-                                        try:
-                                            _ex_content, ex_cost, _ex_model = context_generator_main(
-                                                ctx=ctx,
-                                                prompt_file=str(pdd_files["prompt"]),
-                                                code_file=str(pdd_files["code"]),
-                                                output=str(pdd_files["example"]),
-                                                format="code",
-                                            )
-                                            total_repo_cost += ex_cost
-                                            progress.update(task, total_cost=total_repo_cost)
-                                        except Exception as e:
-                                            logger.warning(
-                                                "Example regeneration failed after repo update: %s",
-                                                e,
-                                                exc_info=True,
-                                            )
-                                            if not quiet:
-                                                rprint(
-                                                    f"[yellow]Warning: example regeneration failed "
-                                                    f"for {relative_path}: {e}[/yellow]"
-                                                )
-                                    elif budget is not None and not quiet:
-                                        rprint(
-                                            f"[yellow]Skipping example regeneration for {relative_path}: "
-                                            f"budget cap reached (${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
-                                        )
-
-                                    if _budget_allows_post_update_llm(budget, total_repo_cost):
-                                        try:
-                                            _auto_submit_example(basename, language, pdd_files, ctx)
-                                        except Exception as e:
-                                            logger.warning(
-                                                "Cloud dev-unit submit failed after repo update: %s",
-                                                e,
-                                                exc_info=True,
-                                            )
-                                            if not quiet:
-                                                rprint(
-                                                    f"[yellow]Warning: cloud submit failed for "
-                                                    f"{basename} ({language}): {e}[/yellow]"
-                                                )
-                                    elif budget is not None and not quiet:
-                                        rprint(
-                                            f"[yellow]Skipping cloud submit for {basename}: "
-                                            f"budget cap reached (${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
-                                        )
-
-                                    submitted_dev_units.add(dev_key)
-                            except Exception as e:
-                                logger.warning(
-                                    "Post-update example/submit pipeline failed: %s", e, exc_info=True
-                                )
-                                if not quiet:
-                                    rprint(
-                                        f"[yellow]Warning: post-update example/submit failed: {e}[/yellow]"
-                                    )
-
-                    # Markdown docs from <include> tags (each LLM call respects --budget).
-                    if basename and language and _budget_allows_post_update_llm(budget, total_repo_cost):
-                        try:
-                            from .context_generator_main import context_generator_main
-
-                            include_deps = extract_include_deps(Path(prompt_path))
-                            for dep_str in include_deps.keys():
-                                if not _budget_allows_post_update_llm(budget, total_repo_cost):
-                                    if budget is not None and not quiet:
-                                        rprint(
-                                            f"[yellow]Stopping included-doc regeneration for "
-                                            f"{relative_path}: budget cap reached "
-                                            f"(${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
-                                        )
-                                    break
-                                dep_path = Path(dep_str)
-                                if not dep_path.is_absolute():
-                                    dep_path = (Path.cwd() / dep_path).resolve()
-                                else:
-                                    dep_path = dep_path.resolve()
-
-                                if dep_path.suffix.lower() != ".md":
-                                    continue
-                                if not dep_path.exists():
-                                    continue
-
-                                dep_key = str(dep_path)
-                                if dep_key in updated_doc_paths:
-                                    continue
-
-                                try:
-                                    _md_content, md_cost, _md_model = context_generator_main(
-                                        ctx=ctx,
-                                        prompt_file=str(prompt_path),
-                                        code_file=str(code_path),
-                                        output=str(dep_path),
-                                        format="md",
-                                    )
-                                    total_repo_cost += md_cost
-                                    progress.update(task, total_cost=total_repo_cost)
-                                    updated_doc_paths.add(dep_key)
-                                except Exception as e:
-                                    logger.warning(
-                                        "Included markdown regeneration failed for %s: %s",
-                                        dep_path,
-                                        e,
-                                        exc_info=True,
-                                    )
-                                    if not quiet:
-                                        rprint(
-                                            f"[yellow]Warning: could not regenerate included doc "
-                                            f"{dep_path}: {e}[/yellow]"
-                                        )
-                        except Exception as e:
-                            logger.warning(
-                                "Included-doc regeneration loop failed: %s", e, exc_info=True
-                            )
-                            if not quiet:
-                                rprint(
-                                    f"[yellow]Warning: included-doc regeneration failed: {e}[/yellow]"
-                                )
-                    elif (
-                        basename
-                        and language
-                        and budget is not None
-                        and not _budget_allows_post_update_llm(budget, total_repo_cost)
-                        and not quiet
-                    ):
-                        rprint(
-                            f"[yellow]Skipping included-doc regeneration for {relative_path}: "
-                            f"budget cap reached (${total_repo_cost:.2f} >= ${budget:.2f}).[/yellow]"
-                        )
-
-                    if (
-                        budget is not None
-                        and total_repo_cost > budget
-                        and "Success" in result.get("status", "")
-                    ):
-                        if not quiet:
-                            rprint(
-                                f"[yellow]Warning: cumulative cost ${total_repo_cost:.2f} exceeds "
-                                f"--budget ${budget:.2f} (post-update LLM steps can exceed the cap).[/yellow]"
-                            )
+                        except Exception:
+                            pass  # Best-effort; don't fail the update
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
@@ -1509,8 +1032,6 @@ def update_main(
 
         console.print("\n[bold]Repository Update Summary[/bold]")
         console.print(table)
-        if budget_reached:
-            console.print(f"[info]Budget cap reached: ${budget:.2f}[/info]")
         if arch_entries_updated > 0 or prd_status != "skipped (no arch changes)":
             console.print(f"\n[info]Architecture entries updated: {arch_entries_updated}[/info]")
             console.print(f"[info]PRD status: {prd_status}[/info]")

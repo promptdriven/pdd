@@ -720,6 +720,14 @@ def update_architecture_from_prompt(
         updated = False
         warnings = []
 
+        # Check if prompt has ANY PDD tags (used to determine if dependencies should be cleared)
+        has_any_pdd_tags = (
+            tags['reason'] is not None or
+            tags['interface'] is not None or
+            tags.get('has_dependency_tags', False) or
+            tags['dependencies']
+        )
+
         # Update reason if tag present
         if tags['reason'] is not None:
             old_reason = module_entry.get('reason')
@@ -741,12 +749,14 @@ def update_architecture_from_prompt(
                 module_entry['interface'] = merged_interface
                 updated = True
 
-        # Update dependencies only when <pdd-dependency> metadata is present in the prompt.
-        # Reason/interface-only updates must not clear architecture.json dependencies (those may
-        # still reflect include-based or manually curated edges).
-        # Empty <pdd-dependency></pdd-dependency> still counts (has_dependency_tags) and clears deps.
+        # Update dependencies if:
+        # 1. Dependency tags were present in the prompt (even if empty), OR
+        # 2. Prompt has OTHER pdd tags (reason/interface) but no dependency tags = clear dependencies
+        # This ensures removing all <pdd-dependency> tags will clear dependencies in architecture.json
         should_update_deps = (
-            tags.get('has_dependency_tags', False) or bool(tags['dependencies'])
+            tags.get('has_dependency_tags', False) or  # Has dependency tags (even if empty)
+            tags['dependencies'] or  # Has dependencies
+            has_any_pdd_tags  # Has any PDD tags = manage all fields including deps
         )
         if should_update_deps:
             old_deps = module_entry.get('dependencies', [])
