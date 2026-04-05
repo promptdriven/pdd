@@ -409,7 +409,124 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 AGENTIC_LOG_DIR = ".pdd/agentic-logs"
+AGENTIC_TRACE_DIR = ".pdd/agentic-traces"
 _AGENTIC_SESSION_ID: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Trace Capture: find and copy provider session files after a run
+# ---------------------------------------------------------------------------
+
+def _find_gemini_project_slug(cwd: Path) -> Optional[str]:
+    """Read ~/.gemini/projects.json to find the slug for the given cwd."""
+    projects_file = Path.home() / ".gemini" / "projects.json"
+    if not projects_file.exists():
+        return None
+    try:
+        data = json.loads(projects_file.read_text(encoding="utf-8"))
+        projects = data.get("projects", {})
+        cwd_str = str(cwd.resolve())
+        best_match = None
+        best_len = 0
+        for path_str, slug in projects.items():
+            if cwd_str.startswith(path_str) and len(path_str) > best_len:
+                best_match = slug
+                best_len = len(path_str)
+        return best_match
+    except Exception:
+        return None
+
+
+def _find_gemini_session_file(cwd: Path, start_time: float) -> Optional[Path]:
+    """Find the Gemini session file created/updated after start_time."""
+    slug = _find_gemini_project_slug(cwd)
+    if not slug:
+        return None
+    chats_dir = Path.home() / ".gemini" / "tmp" / slug / "chats"
+    if not chats_dir.exists():
+        return None
+    candidates = [f for f in chats_dir.glob("session-*.json") if f.stat().st_mtime >= start_time]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda f: f.stat().st_mtime)
+
+
+def _find_claude_session_file(cwd: Path, start_time: float) -> Optional[Path]:
+    """Find the Claude Code session file created/updated after start_time."""
+    claude_projects = Path.home() / ".claude" / "projects"
+    if not claude_projects.exists():
+        return None
+    project_hash = str(cwd.resolve()).replace("/", "-")
+    project_dir = claude_projects / project_hash
+    if not project_dir.exists():
+        return None
+    candidates = [f for f in project_dir.glob("*.jsonl") if f.stat().st_mtime >= start_time]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda f: f.stat().st_mtime)
+
+
+def _save_trace(
+    provider: str,
+    cwd: Path,
+    start_time: float,
+    label: str,
+    duration: float,
+    success: bool,
+    cost: float,
+    prompt: str = "",
+) -> Optional[Path]:
+    """
+    Find the provider's session file and copy it to .pdd/agentic-traces/.
+
+    The trace file contains the full agent reasoning process: every tool call
+    (file reads, edits, shell commands), thinking/reasoning traces, token
+    counts per turn, and the model used.
+
+    Returns the path to the saved trace, or None if not found.
+    """
+    try:
+        if provider == "google":
+            source = _find_gemini_session_file(cwd, start_time)
+        elif provider == "anthropic":
+            source = _find_claude_session_file(cwd, start_time)
+        else:
+            return None
+
+        if source is None:
+            return None
+
+        trace_dir = Path(cwd) / AGENTIC_TRACE_DIR
+        trace_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_label = re.sub(r'[^\w\-]', '_', label) if label else "unlabeled"
+        ext = source.suffix  # .json for Gemini, .jsonl for Claude
+        trace_file = trace_dir / f"trace_{timestamp}_{safe_label}_{provider}{ext}"
+
+        metadata = {
+            "type": "pdd_trace_metadata",
+            "timestamp": datetime.now().isoformat(),
+            "label": label,
+            "provider": provider,
+            "success": success,
+            "cost_usd": cost,
+            "duration_seconds": round(duration, 2),
+            "source_file": str(source),
+            "cwd": str(cwd),
+            "prompt": prompt,
+        }
+
+        source_content = source.read_text(encoding="utf-8")
+        with open(trace_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps(metadata) + "\n")
+            f.write(source_content)
+            if source_content and not source_content.endswith("\n"):
+                f.write("\n")
+
+        return trace_file
+    except Exception:
+        return None
 
 
 def _log_agentic_interaction(
@@ -856,10 +973,12 @@ def run_agentic_task(
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
+                attempt_start_time = time.time()
                 success, output, cost = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                 )
+                attempt_duration = time.time() - attempt_start_time
                 last_output = output
 
                 # False Positive Detection
@@ -891,7 +1010,16 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success
+                        # Real success — save trace
+                        trace_path = _save_trace(
+                            provider=provider, cwd=cwd,
+                            start_time=attempt_start_time,
+                            label=label, duration=attempt_duration,
+                            success=True, cost=cost,
+                            prompt=full_instruction,
+                        )
+                        if trace_path and not quiet:
+                            console.print(f"[dim]Trace saved: {trace_path}[/dim]")
                         if verbose:
                             _log_agentic_interaction(
                                 label=label,
@@ -904,6 +1032,15 @@ def run_agentic_task(
                                 cwd=cwd
                             )
                         return True, output, cost, provider
+
+                # Failed — save trace for debugging
+                _save_trace(
+                    provider=provider, cwd=cwd,
+                    start_time=attempt_start_time,
+                    label=label, duration=attempt_duration,
+                    success=False, cost=cost,
+                    prompt=full_instruction,
+                )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 if not success and _is_permanent_error(output):
