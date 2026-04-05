@@ -59,12 +59,86 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Run auto-heal (PR)
-        if: github.event_name == 'pull_request'
+      - name: Detect changed modules
+        id: changed
         run: |
-          python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}"
+          # For PRs, diff against the base branch; for pushes, diff against prior commit
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            DIFF_BASE="origin/${{ github.event.pull_request.base.ref }}...HEAD"
+          else
+            DIFF_BASE="HEAD~1"
+          fi
 
-      - name: Run auto-heal (main)
-        if: github.event_name == 'push'
+          CHANGED_FILES=$(git diff --name-only "$DIFF_BASE" -- \
+            'pdd/' 'prompts/' 'context/' 'tests/')
+
+          CHANGED_MODULES=$(echo "$CHANGED_FILES" | python3 -c "
+          import glob, os, re, sys
+
+          # Step 1: Extract module basenames from directly changed files
+          changed_files = []
+          basenames = set()
+          for line in sys.stdin:
+              f = line.strip()
+              if not f:
+                  continue
+              changed_files.append(f)
+              # (pdd/)prompts/<name>_<lang>.prompt -> <name>
+              m = re.match(r'(?:pdd/)?prompts/(.+)_[^_]+\.prompt$', f)
+              if m:
+                  basenames.add(m.group(1))
+                  continue
+              # pdd/<name>.py -> <name>  (skip __init__, prompts subdir)
+              m = re.match(r'pdd/([^/]+)\.py$', f)
+              if m and m.group(1) != '__init__':
+                  basenames.add(m.group(1))
+                  continue
+              # context/<name>_example.<ext> -> <name>
+              m = re.match(r'(?:pdd/)?context/([^/]+)_example\.\w+$', f)
+              if m:
+                  basenames.add(m.group(1))
+                  continue
+              # tests/test_<name>.py -> <name>
+              m = re.match(r'tests/test_([^/]+)\.py$', f)
+              if m:
+                  basenames.add(m.group(1))
+                  continue
+
+          # Step 2: Find prompts that <include> any changed file (reverse deps)
+          # This catches scenario: module B's example changes, module A includes it
+          if changed_files:
+              include_pat = re.compile(r'<include[^>]*>([^<]+)</include>')
+              prompt_name_pat = re.compile(r'(.+)_[^_]+\.prompt$')
+              prompt_dirs = ['prompts/', 'pdd/prompts/']
+              for pdir in prompt_dirs:
+                  for prompt_file in glob.glob(os.path.join(pdir, '*.prompt')):
+                      try:
+                          content = open(prompt_file).read()
+                      except OSError:
+                          continue
+                      includes = include_pat.findall(content)
+                      # Check if any included path matches a changed file
+                      for inc in includes:
+                          inc_clean = inc.strip()
+                          for cf in changed_files:
+                              if cf.endswith(inc_clean) or inc_clean.endswith(os.path.basename(cf)):
+                                  fname = os.path.basename(prompt_file)
+                                  pm = prompt_name_pat.match(fname)
+                                  if pm:
+                                      basenames.add(pm.group(1))
+                                  break
+
+          print(','.join(sorted(basenames)))
+          ")
+          echo "modules=$CHANGED_MODULES" >> "$GITHUB_OUTPUT"
+          echo "Detected changed modules: $CHANGED_MODULES"
+
+      - name: Run auto-heal
+        if: steps.changed.outputs.modules
         run: |
-          python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}" --skip-ci
+          SKIP_CI_FLAG=""
+          if [ "${{ github.event_name }}" = "push" ]; then
+            SKIP_CI_FLAG="--skip-ci"
+          fi
+          python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}" \
+            --modules "${{ steps.changed.outputs.modules }}" $SKIP_CI_FLAG

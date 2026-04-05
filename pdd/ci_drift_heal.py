@@ -90,6 +90,7 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
 
     prompt_drifts: List[DriftInfo] = []
     example_drifts: List[DriftInfo] = []
+    seen_basenames: set = set()
 
     for prompt_path in prompt_files:
         try:
@@ -106,6 +107,8 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
         # Scope control: skip modules not in the requested list
         if modules is not None and basename not in modules:
             continue
+
+        seen_basenames.add(basename)
 
         try:
             decision = sync_determine_operation(
@@ -153,6 +156,42 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
                     reason=getattr(decision, "reason", "Needs sync"),
                 )
             )
+
+    # Detect code files without prompts: these need `pdd update` to generate
+    # the prompt and complete the dev unit.
+    if modules is not None:
+        _LANG_EXTENSIONS = {
+            ".py": "python", ".ts": "typescript", ".tsx": "typescript",
+            ".js": "javascript", ".jsx": "javascript", ".go": "go",
+            ".rs": "rust", ".java": "java", ".rb": "ruby",
+            ".sh": "bash", ".bash": "bash",
+        }
+        for basename in modules:
+            if basename in seen_basenames:
+                continue
+            # No prompt found for this basename — look for a code file
+            for ext, language in _LANG_EXTENSIONS.items():
+                candidates = list(Path(".").rglob(f"{basename}{ext}"))
+                # Filter out test files, examples, and hidden dirs
+                candidates = [
+                    c for c in candidates
+                    if not any(p.startswith(".") for p in c.parts)
+                    and "test" not in c.name.lower().split(basename.lower())[0]
+                    and "example" not in c.name.lower()
+                ]
+                if candidates:
+                    code_path = str(candidates[0])
+                    prompt_drifts.append(
+                        DriftInfo(
+                            basename=basename,
+                            language=language,
+                            operation="update",
+                            reason="Code exists without prompt — needs pdd update",
+                            code_path=code_path,
+                        )
+                    )
+                    seen_basenames.add(basename)
+                    break
 
     return prompt_drifts, example_drifts
 
