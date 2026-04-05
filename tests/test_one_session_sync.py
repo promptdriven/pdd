@@ -916,7 +916,7 @@ class TestPostSyncFingerprintAndAutoSubmit:
     @patch("pdd.sync_main._auto_submit_example")
     @patch("pdd.operation_log.save_fingerprint")
     @patch("pdd.one_session_sync.run_one_session_sync")
-    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.get_pdd_file_paths")
     @patch("pdd.sync_main.construct_paths")
     def test_fingerprint_saved_on_success(
         self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
@@ -950,7 +950,7 @@ class TestPostSyncFingerprintAndAutoSubmit:
     @patch("pdd.sync_main._auto_submit_example")
     @patch("pdd.operation_log.save_fingerprint")
     @patch("pdd.one_session_sync.run_one_session_sync")
-    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.get_pdd_file_paths")
     @patch("pdd.sync_main.construct_paths")
     def test_fingerprint_not_saved_on_failure(
         self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
@@ -981,7 +981,7 @@ class TestPostSyncFingerprintAndAutoSubmit:
     @patch("pdd.sync_main._auto_submit_example")
     @patch("pdd.operation_log.save_fingerprint")
     @patch("pdd.one_session_sync.run_one_session_sync")
-    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.get_pdd_file_paths")
     @patch("pdd.sync_main.construct_paths")
     def test_auto_submit_on_success(
         self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
@@ -1012,7 +1012,7 @@ class TestPostSyncFingerprintAndAutoSubmit:
     @patch("pdd.sync_main._auto_submit_example")
     @patch("pdd.operation_log.save_fingerprint")
     @patch("pdd.one_session_sync.run_one_session_sync")
-    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.get_pdd_file_paths")
     @patch("pdd.sync_main.construct_paths")
     def test_auto_submit_skipped_when_local(
         self, mock_construct, mock_get_paths, mock_run, mock_save_fp,
@@ -1043,7 +1043,7 @@ class TestPostSyncFingerprintAndAutoSubmit:
     @patch("pdd.sync_main._auto_submit_example")
     @patch("pdd.operation_log.save_fingerprint")
     @patch("pdd.one_session_sync.run_one_session_sync")
-    @patch("pdd.sync_determine_operation.get_pdd_file_paths")
+    @patch("pdd.sync_main.get_pdd_file_paths")
     @patch("pdd.sync_main.construct_paths")
     def test_auto_submit_skipped_on_failure(
         self, mock_construct, mock_get_paths, mock_run, mock_save_fp,

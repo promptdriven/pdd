@@ -985,9 +985,14 @@ def _revert_out_of_scope_changes(
             ["git", "-C", str(cwd), "status", "--porcelain", "-uno"],
             capture_output=True, text=True, timeout=30,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        _scope_guard_logger.warning("Scope guard: git status failed: %s", exc)
         return []
     if result.returncode != 0:
+        _scope_guard_logger.warning(
+            "Scope guard: git status returned %d: %s",
+            result.returncode, result.stderr.strip(),
+        )
         return []
     reverted: List[Path] = []
     to_restore: List[str] = []
@@ -1005,8 +1010,12 @@ def _revert_out_of_scope_changes(
                 ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
                 capture_output=True, timeout=30,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            pass
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            _scope_guard_logger.warning(
+                "Scope guard: git checkout failed for %d file(s): %s",
+                len(to_restore), exc,
+            )
+            reverted.clear()
         else:
             if reverted:
                 _scope_guard_logger.info(

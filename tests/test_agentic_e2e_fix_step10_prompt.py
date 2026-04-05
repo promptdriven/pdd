@@ -93,7 +93,7 @@ class TestStep10PromptFormatting:
 
         # This should NOT raise KeyError
         formatted = _strip_pdd_metadata(template).format(**step10_context)
-        assert "step 10 of 10" in formatted
+        assert "step 10 of 11" in formatted
         assert "CI Failure Information" in formatted
         assert "github_actions" in formatted
         assert "{issue_url}" not in formatted  # Should be substituted

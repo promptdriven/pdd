@@ -778,9 +778,10 @@ def test_step_timeouts_dictionary_exists():
     assert isinstance(BUG_STEP_TIMEOUTS, dict), "BUG_STEP_TIMEOUTS must be a dictionary"
 
     # Verify complex steps have longer timeouts
-    # Steps 4 (reproduce), 5 (root cause), 5.5 (prompt classification),
-    # 7 (generate), 8 (verify), 9 (E2E test) need >= 600 seconds
-    complex_steps = [4, 5, 5.5, 7, 8, 9]
+    # Steps 5 (reproduce), 6 (root cause), 7 (prompt classification),
+    # 9 (generate), 10 (verify), 11 (e2e test) need >= 600 seconds
+    # Note: step 4 is API Research (400s) — correctly not a complex step
+    complex_steps = [5, 6, 7, 9, 10, 11]
     for step in complex_steps:
         assert step in BUG_STEP_TIMEOUTS, f"BUG_STEP_TIMEOUTS missing entry for step {step}"
         assert BUG_STEP_TIMEOUTS[step] >= 600.0, (
@@ -789,9 +790,9 @@ def test_step_timeouts_dictionary_exists():
         )
 
     # Verify medium complexity step (Test Plan) has increased timeout
-    assert 6 in BUG_STEP_TIMEOUTS, "BUG_STEP_TIMEOUTS missing entry for step 6"
-    assert BUG_STEP_TIMEOUTS[6] >= 300.0, (
-        f"Step 6 timeout ({BUG_STEP_TIMEOUTS[6]}) should be >= 300 seconds "
+    assert 8 in BUG_STEP_TIMEOUTS, "BUG_STEP_TIMEOUTS missing entry for step 8"
+    assert BUG_STEP_TIMEOUTS[8] >= 300.0, (
+        f"Step 8 timeout ({BUG_STEP_TIMEOUTS[8]}) should be >= 300 seconds "
         f"for test plan operations"
     )
 

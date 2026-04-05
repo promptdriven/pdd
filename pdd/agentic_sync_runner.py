@@ -20,7 +20,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.console import Console
 
@@ -87,16 +87,9 @@ def _parse_cost_from_csv(csv_path: str) -> float:
     return total
 
 
-class DepGraphFromArchitectureResult(NamedTuple):
-    """Dependency subgraph from architecture.json plus validation warnings."""
-
-    graph: Dict[str, List[str]]
-    warnings: List[str]
-
-
 def build_dep_graph_from_architecture(
     arch_path: Path, target_basenames: List[str]
-) -> DepGraphFromArchitectureResult:
+) -> Dict[str, List[str]]:
     """
     Build dependency subgraph for target basenames from architecture.json.
 
@@ -105,20 +98,16 @@ def build_dep_graph_from_architecture(
         target_basenames: List of module basenames to include.
 
     Returns:
-        DepGraphFromArchitectureResult: ``graph`` maps basename -> dependency basenames
-        (only edges to modules in ``target_basenames``). ``warnings`` lists orphan dependency
-        filenames and dependencies outside the target set (partial sync) that were omitted
-        from the graph.
+        Dict mapping basename -> [dependency basenames] (only within target set).
     """
-    empty = DepGraphFromArchitectureResult({b: [] for b in target_basenames}, [])
     try:
         with open(arch_path, "r", encoding="utf-8") as f:
             arch = json.load(f)
     except (OSError, json.JSONDecodeError):
-        return empty
+        return {b: [] for b in target_basenames}
 
     if not isinstance(arch, list):
-        return empty
+        return {b: [] for b in target_basenames}
 
     # Map prompt filename -> stripped basename (e.g., "crm_models_Python.prompt" -> "crm_models")
     filename_to_basename: Dict[str, str] = {}
@@ -140,7 +129,6 @@ def build_dep_graph_from_architecture(
 
     target_set = set(stripped_to_target.keys())
 
-    warnings: List[str] = []
     # Build graph using original target basenames
     graph: Dict[str, List[str]] = {}
     for entry in arch:
@@ -150,22 +138,8 @@ def build_dep_graph_from_architecture(
             deps = []
             for dep_filename in entry.get("dependencies", []):
                 dep_basename = filename_to_basename.get(dep_filename)
-                if dep_basename is None:
-                    warnings.append(
-                        f"Orphan dependency {dep_filename!r} on architecture entry "
-                        f"{entry.get('filename', '')!r}: no matching module entry in architecture.json"
-                    )
-                    continue
-                if dep_basename == basename:
-                    continue
-                if dep_basename not in target_set:
-                    warnings.append(
-                        f"Partial sync: module {target_name!r} depends on {dep_basename!r} "
-                        f"(via {dep_filename!r}), which is not in the sync target set; "
-                        "dependency edge omitted from graph"
-                    )
-                    continue
-                deps.append(stripped_to_target[dep_basename])
+                if dep_basename and dep_basename in target_set and dep_basename != basename:
+                    deps.append(stripped_to_target[dep_basename])
             graph[target_name] = deps
 
     # Ensure all target basenames are in graph
@@ -173,7 +147,7 @@ def build_dep_graph_from_architecture(
         if b not in graph:
             graph[b] = []
 
-    return DepGraphFromArchitectureResult(graph, warnings)
+    return graph
 
 
 class AsyncSyncRunner:
