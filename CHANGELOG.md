@@ -1,3 +1,17 @@
+## v0.0.198 (2026-04-04)
+
+### Feat
+
+- implement scope-expansion directives and TestCommand dataclass, fix monorepo test verification, and update Step 11 cleanup timing
+- deterministic grep verification of Step 6 FIX_LOCATIONS (#1063) (#1082)
+
+### Fix
+
+- correct mock target for get_pdd_file_paths in TestPostSyncFingerprintAndAutoSubmit
+- update docstring to reflect code cleanup occurs before CI validation
+- multi-step sync auto-submits grounding examples to vector DB (#1095)
+- skip CI polling when GitHub App lacks checks:read permission
+
 ## v0.0.197 (2026-04-03)
 
 ### Feat
