@@ -21,6 +21,7 @@ from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_u
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
 from .architecture_include_validation import collect_architecture_include_validation_warnings
+from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .architecture_registry import find_project_root as _find_project_root
 from .construct_paths import (
     _detect_context_from_basename,
@@ -951,6 +952,12 @@ def run_agentic_sync(
                 console.print(f"[yellow]Warning: {w}[/yellow]")
         if not quiet:
             for w in collect_architecture_include_validation_warnings(project_root):
+                console.print(f"[yellow]Warning: {w}[/yellow]")
+            for w in warnings_for_arch_vs_include_sync_order(
+                dep_graph_from_architecture=dep_graph,
+                modules_to_sync=modules_to_sync,
+                project_root=project_root,
+            ):
                 console.print(f"[yellow]Warning: {w}[/yellow]")
     else:
         # Fallback: scan prompt files for <include> tags
