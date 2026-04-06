@@ -1,39 +1,13 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Orchestrates the 12-step agentic bug workflow with E2E gate, structural test guard, and state persistence.</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "run_agentic_bug_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
-    ]
-  }
-}
-</pdd-interface>
-
-<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
-<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
-
 % Goal
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
 % Role & Scope
 Orchestrator for the 12-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
 
-% Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
-2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
-3. Run 12 steps sequentially (steps 1-12), each as a separate `run_agentic_task()` call
-4. Accumulate step outputs to pass as context to subsequent steps
-5. Track total cost across all steps
-6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files
-7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
-8. Pass extracted files to Steps 11 (E2E) and 12 (PR) via `files_to_stage` context variable for explicit git staging
-
 % Per-Step Timeouts
-Define locally (workflow-specific configuration stays with the workflow):
+The prompt spec must match the code constant exactly:
 ```python
 BUG_STEP_TIMEOUTS: Dict[int, float] = {
     1: 240.0,    # Duplicate Check
@@ -51,14 +25,25 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 }
 ```
 
+% Requirements
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 10 steps sequentially, each as a separate `run_agentic_task()` call
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. For Step 7: Parse agent output for `FILES_CREATED: path1, path2` or `FILES_MODIFIED: path1, path2` lines to extract changed files (used for hard stop check and final summary)
+7. For Step 9: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
+8. Pass extracted files to Step 9 (E2E) and Step 10 (PR) via `files_to_stage` context variable for explicit git staging
+
 % Step Execution
-For each step (1-12), convert step number to string suffix for template names and context keys:
-1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{step_suffix}_{name}_LLM")`
-2. Preprocess the template via `preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))` to expand `<include>` tags and escape curly braces
-3. Un-double braces (`{{` → `{`, `}}` → `}`), then substitute context keys using `str.replace()` (safe: unknown placeholders remain intact, JSON braces in values are preserved)
-4. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_cwd, ..., timeout=BUG_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, max_retries=DEFAULT_MAX_RETRIES, label=f"step{step_suffix}")`
-5. Store the output for use by subsequent steps
-6. Accumulate cost: `total_cost += step_cost`
+For each step (1-10):
+1. Load the step prompt template via `load_prompt_template(f"agentic_bug_step{n}_{name}_LLM")`
+2. Format template with: issue_url, repo_owner, repo_name, issue_number, issue_content, issue_author, step1_output, step2_output, etc.
+3. Call `run_agentic_task(formatted_prompt, cwd, ..., timeout=STEP_TIMEOUTS.get(step_num))`
+   - Import `STEP_TIMEOUTS` from `agentic_common` (Issue #261)
+   - Pass step-specific timeout to ensure complex steps get adequate time
+4. Store the output for use by subsequent steps
+5. Accumulate cost: `total_cost += step_cost`
 
 % Step Sequence
 | Step | Template Name | Purpose |
@@ -66,124 +51,30 @@ For each step (1-12), convert step number to string suffix for template names an
 | 1 | agentic_bug_step1_duplicate_LLM | Search for duplicate issues |
 | 2 | agentic_bug_step2_docs_LLM | Check documentation for user error |
 | 3 | agentic_bug_step3_triage_LLM | Assess if enough info to proceed |
-| 4 | agentic_bug_step4_api_research_LLM | Research external API dependencies and constraints |
-| 5 | agentic_bug_step5_reproduce_LLM | Attempt to reproduce the bug |
-| 6 | agentic_bug_step6_root_cause_LLM | Analyze root cause |
-| 7 | agentic_bug_step7_prompt_classification_LLM | Classify defect as code bug vs prompt defect; auto-fix prompts if needed |
-| 8 | agentic_bug_step8_test_plan_LLM | Design test strategy |
-| 9 | agentic_bug_step9_generate_LLM | Generate failing unit test |
-| 10 | agentic_bug_step10_verify_LLM | Verify test catches the bug; classify E2E necessity |
-| 11 | agentic_bug_step11_e2e_test_LLM | Generate and run E2E tests (skipped if E2E_NEEDED: no) |
-| 12 | agentic_bug_step12_pr_LLM | Create draft PR and link to issue |
+| 4 | agentic_bug_step4_reproduce_LLM | Attempt to reproduce the bug |
+| 5 | agentic_bug_step5_root_cause_LLM | Analyze root cause |
+| 6 | agentic_bug_step6_test_plan_LLM | Design test strategy |
+| 7 | agentic_bug_step7_generate_LLM | Generate failing unit test |
+| 8 | agentic_bug_step8_verify_LLM | Verify test catches the bug |
+| 9 | agentic_bug_step9_e2e_test_LLM | Generate and run E2E tests |
+| 10 | agentic_bug_step10_pr_LLM | Create draft PR and link to issue |
 
 % Context Accumulation
-Each step receives issue_content plus all prior step outputs (e.g., step3 gets step1_output, step2_output). Steps 11 and 12 also receive worktree_path and files_to_stage. Initial context also includes `step5_reproduction_tests` (empty string), `fix_locations` ("none"), and `step9_test_verification` (empty string).
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output through step3_output
+- ... and so on
+- Step 8 receives: issue_content, step1_output through step7_output
+- Step 9 receives: issue_content, step1_output through step8_output, worktree_path, files_to_stage
+- Step 10 receives: issue_content, step1_output through step9_output, worktree_path, files_to_stage
 
-% Step 5 Reproduction Test Flow
-After Step 5, parse `REPRO_FILES_CREATED: path1, path2` from output. For each file that exists on disk, read its content and store in `context["step5_reproduction_tests"]` so downstream steps (especially Step 9) can reference the reproduction test code.
-
-Helper: `_extract_repro_test_content(output: str, cwd: Path) -> str` — parse REPRO_FILES_CREATED marker and read file contents. Uses `_validate_repro_path()` to reject absolute paths and traversal attempts.
-
-Helper: `_validate_repro_path(raw_path: str, base_dir: Path) -> Optional[Path]` — validates a path is relative, contains no traversal segments, and resolves within base_dir.
-
-Helper: `_copy_repro_files_to_worktree(step5_output: str, cwd: Path, worktree_path: Path) -> List[str]` — copies Step 5 reproduction test files from cwd into the worktree (Step 5 runs before the worktree exists). Returns list of relative paths for staging.
-
-% Step 6 Fix-Location Extraction
-After Step 6 (root cause), parse `FIX_LOCATIONS: path1, path2` from output and store deduplicated file paths in `context["fix_locations"]` (comma-separated, or "none" if absent). Used downstream by the fix-location coverage check after Step 9.
-
-Helper: `_parse_fix_locations(step6_output: str) -> List[str]` — extract FIX_LOCATIONS marker, strip backticks, deduplicate.
-
-% Post-Step-6 Deterministic Grep Verification of FIX_LOCATIONS
-After Step 6 completes and FIX_LOCATIONS are parsed, verify completeness for repeating-pattern bugs using deterministic grep. This closes the gap where LLMs miss instances of the same class of misuse across multiple files.
-
-1. **Parse PATTERN_SEARCH marker**: `_parse_pattern_search(step6_output: str) -> Optional[str]`
-   - Extract regex from `PATTERN_SEARCH: <regex>` line in Step 6 output
-   - Return None if marker not present (non-pattern bugs — skip verification entirely)
-   - Strip whitespace and backticks from extracted pattern
-
-2. **Sanitize grep pattern**: `_sanitize_grep_pattern(pattern: str) -> Optional[str]`
-   - Reject empty patterns, patterns < 3 chars, patterns > 200 chars
-   - Reject pure wildcards (`.*`, `.+`, `.?`)
-   - Reject shell metacharacters (`;&$` `` ` `` `\n\r`) as defense in depth
-   - Allow `|` for regex alternation (safe with shell=False)
-   - Return sanitized pattern or None
-
-3. **Verify pattern completeness**: `_verify_pattern_completeness(pattern: str, fix_locations: List[str], cwd: Path) -> Tuple[List[Tuple[str, int, str]], str]`
-   - Run `grep -rEnI --exclude-dir={.git,node_modules,__pycache__,.venv,venv,dist,build,.tox,.mypy_cache,.pytest_cache} --include=*.py --include=*.js ... pattern .` via subprocess (list-form, no shell=True)
-   - 30-second subprocess timeout
-   - Parse output into (filepath, line_number, matching_line) tuples
-   - Compare grep-found files against fix_locations (normalize `./` prefixes)
-   - Return only unclassified matches (files found by grep but NOT in fix_locations)
-   - Cap at 50 unclassified results
-
-4. **Extract match context**: `_extract_match_context(matches: List[Tuple[str, int, str]], work_dir: Path, context_before: int = 30, context_after: int = 10) -> Dict[str, str]`
-   - For each match, read the source file and extract a window of [line - 30, line + 10]
-   - Merge overlapping windows within the same file
-   - Include line numbers in output for LLM reference
-   - Handle missing/unreadable files gracefully (return empty string)
-   - The 30-line context window is critical: it captures vulnerabilities ABOVE the match (e.g., a pattern variable constructed without escaping 18 lines before the call site)
-
-5. **Parse classification evidence**: `_parse_classification_evidence(retry_output: str) -> Tuple[List[str], List[str]]`
-   - Parse `NEEDS_FIX: filepath` and `SAFE_EVIDENCE: filepath | line_number | reason` markers
-   - Strip backticks and whitespace from filepaths
-   - Return (needs_fix_files, safe_files)
-
-6. **Post-Step-6 verification block** (after existing fix_locations parsing):
-   - Parse PATTERN_SEARCH from step_output; if absent, skip entirely
-   - If pattern present and passes sanitization:
-     a. Run `_verify_pattern_completeness()` to find unclassified files
-     b. If unclassified files exist:
-        - Extract 30+10 line context windows via `_extract_match_context()`
-        - Build retry addendum with context windows + evidence-based classification protocol (default: NEEDS_FIX; to exclude, LLM must output `SAFE_EVIDENCE: filepath | line | reason`)
-        - Call `run_agentic_task()` for classification retry
-        - Parse classification via `_parse_classification_evidence()`
-        - Merge: `final = original_fix_locations UNION new_needs_fix UNION unclassified_defaults` (additive only — NEVER remove original fix_locations)
-        - Update `context["fix_locations"]` with merged result
-     c. Post-retry: re-verify and log warnings for any remaining unclassified files
-
-% Step 9 Filesystem Fallback
-Before Step 9 runs, snapshot the current modified/untracked files via `_get_modified_and_untracked(current_cwd)`. After Step 9, if no `FILES_CREATED`/`FILES_MODIFIED` markers are found in the output, detect new or modified files on disk by diffing against the snapshot. This handles providers (e.g. Codex) that create files without emitting markers.
-
-Helper: `_get_modified_and_untracked(cwd: Path) -> List[str]` — returns modified tracked files (`git diff --name-only HEAD`) plus untracked files (`git ls-files --others --exclude-standard`).
-
-% Step 9 Cross-Validation Against Step 8 Test Plan
-After Step 9 completes and files are extracted, cross-validate the generated tests against Step 8's test plan:
-
-1. **Count planned tests from Step 8**: Parse `PLANNED_TEST_COUNT: N` marker from step8_output. Falls back to counting `#### Test N:` headers if marker is absent.
-2. **Count generated tests from Step 9**: For each extracted test file, count `def test_` / `async def test_` functions via regex. Detect stubs (functions whose body is only docstring/pass/ellipsis) and subtract from count.
-3. **Compare counts**: If real (non-stub) generated tests < planned count, retry Step 9 with a focused prompt.
-4. **Single retry**: Only retry once. If still short, log a warning and proceed.
-
-Helper: `_count_planned_tests(step8_output: str) -> int`
-Helper: `_count_generated_tests(file_paths: List[str], cwd: Path) -> Tuple[int, int]` — return (total_test_functions, stub_count).
-
-% Step 9 Structural Test Guard
-After Step 9 file extraction, scan generated test files for structural/non-behavioral patterns via `detect_structural_test_patterns()`. Only check lines added by Step 9 (using pre-step line count snapshots to skip pre-existing patterns).
-
-If violations are found:
-1. Back up first-attempt files (rename to `.bak`), rejecting paths outside `current_work_dir`
-2. Retry Step 9 with a feedback addendum containing violation snippets and BAD/GOOD examples
-3. If retry succeeds: clean up backups via `_cleanup_backups_with_regression_guard()` (restores any backup where new file has >50% line loss), re-extract files, re-scan for structural patterns (warn if still present)
-4. If retry fails: restore originals from backup
-
-Public helper: `detect_structural_test_patterns(file_path: str, start_line: Optional[int] = None) -> List[str]` — scans for inspect.getsource, inspect.signature, assert hasattr, and source-string-matching patterns (read_text/read/getsource followed by `assert ... in var`). Excludes non-source files (config, YAML, JSON, etc.) from the read_text check. Returns list of violation descriptions.
-
-Helper: `_extract_violation_snippets(file_violations: dict, work_dir: Path) -> str` — reads actual violating code lines with surrounding context for retry feedback.
-
-Helper: `_cleanup_backups_with_regression_guard(backed_up: List[Tuple[Path, Path]], quiet: bool) -> List[Path]` — removes .bak files after successful retry; if new file has >50% line loss compared to backup, restores backup instead.
-
-% Step 9 Fix-Location Coverage Check
-After Step 9 cross-validation, if `fix_locations` is not "none" and has multiple locations, verify that generated test files reference all fix locations (by module path, slash path, or basename word boundary). If any locations are uncovered, retry Step 9 with coverage-focused feedback. Single retry with structural pattern scanning on coverage-retry output.
-
-Helper: `_verify_fix_location_coverage(fix_locations: List[str], test_files: List[str], work_dir: Path) -> List[str]` — returns list of uncovered fix locations. Skips check for single-file bugs (<=1 location).
-
-% Step 9 Test Verification
-After Step 9 and all retries, run extracted test files via `_verify_e2e_tests()` to verify they actually execute. Store output in `context["step9_test_verification"]`. Note: in the bug workflow, test failures are expected (tests should fail on buggy code) — only setup/import errors indicate problems.
-
-Helper: `_verify_e2e_tests(e2e_files: List[str], cwd: Path) -> Tuple[bool, str]` — dispatches runners based on file extension: `.py` → `run_pytest_and_capture_output`, non-Python → `get_test_command_for_file`. Returns (all_passed, output) where "passed" means no setup errors (test failures are expected for bug-detection tests).
-
-% Pre-Step 12 Deterministic File Staging
-Before Step 12 runs, `git add` every file in `changed_files` into the worktree. This prevents the LLM from selectively omitting files during PR creation.
+% Files to Stage
+After Step 7 parses FILES_CREATED/FILES_MODIFIED, pass the extracted file list to Steps 9 and 10:
+- `context["files_to_stage"] = ", ".join(changed_files)`
+- After Step 9 parses E2E_FILES_CREATED, extend changed_files and update files_to_stage
+- This ensures Step 9 (E2E) and Step 10 (PR) know exactly which files to include
+- Step 10 prompt uses `{files_to_stage}` to display the explicit list of files to stage
 
 % Early Exit Conditions (Hard Stops)
 
@@ -194,121 +85,92 @@ The orchestrator must parse step output to detect stop conditions:
 | 1 | Issue is a duplicate | Output contains "Duplicate of #" |
 | 2 | "Feature Request" or "User Error" | Output contains "Feature Request (Not a Bug)" or "User Error (Not a Bug)" |
 | 3 | Needs more info from author | Output contains "Needs More Info" |
-| 3 | Issue pre-diagnosed (fast-track) | Output contains "FAST_TRACK:" marker — skip Steps 4-5, inject provided root cause into step outputs 4 and 5 |
-| 7 | Prompt defect needs human review | Output contains "PROMPT_REVIEW:" marker |
-| 9 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output AND no new files detected on disk (filesystem fallback) |
-| 10 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
-| 10 | E2E not needed (skip Step 11) | Output contains "E2E_NEEDED: no" — skip Step 11 entirely, continue to Step 12 |
-| 11 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
-| 11 | E2E test skipped (non-failure) | Output contains "E2E_SKIP:" — continue to Step 12 normally |
-
-% Step 7 Special Handling
-After Step 7, parse output for:
-- `DEFECT_TYPE: code` - Normal code bug, proceed to Step 8
-- `DEFECT_TYPE: prompt` - Prompt was defective, check for PROMPT_FIXED marker
-- `PROMPT_FIXED: path/to/file.prompt` - The prompt was auto-fixed; add to changed_files list
-- `PROMPT_REVIEW: reason` - Hard stop, prompt defect needs human review (ambiguous case)
-
-% Step 7 Filesystem Fallback for Prompt Files
-Before Step 7 runs, snapshot the current modified/untracked files via
-`_get_modified_and_untracked(current_cwd)`. After Step 7, if `DEFECT_TYPE: prompt`
-is detected but no `PROMPT_FIXED:` markers are found in the output, detect modified
-`.prompt` files on disk by diffing against the pre-Step-7 snapshot. Filter to files
-ending in `.prompt` to avoid picking up unrelated changes.
-
-Additionally, if `DEFECT_TYPE: prompt` but no `.prompt` files are in `changed_files`
-after both marker parsing and filesystem fallback, log a warning.
-
-**E2E gate (Step 10 → Step 11):**
-- After Step 10 (verify), parse output for `E2E_NEEDED: no`
-- If found, skip Step 11 (E2E test) entirely — do not invoke the LLM, do not wait for timeout
-- If `E2E_NEEDED: yes` or the marker is missing (backward compatibility), run Step 11 as normal
-- Log a message when skipping: `"Skipping Step 11 (E2E): unit tests provide sufficient coverage"`
+| 7 | No test file generated | No FILES_CREATED or FILES_MODIFIED line in output, or empty file list |
+| 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
+| 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
 
 **Hard stop behavior:**
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- The step has already posted its findings to GitHub before returning
 - Do NOT continue to subsequent steps
 
 **Soft failures (continue):**
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
-
-% Step 3 Fast-Track Handling
-After Step 3, parse output for "FAST_TRACK:" marker. When detected:
-1. Extract the root cause summary (text after "FAST_TRACK:" on the same line)
-2. Inject skip messages into step outputs:
-   - `context["step4_output"] = "Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"`
-   - `context["step5_output"] = "Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"`
-3. Set `last_completed_step` to 5 (so state persistence reflects the skip)
-4. Save workflow state with updated step outputs
-5. Skip Steps 4 and 5 by continuing the loop (check `step_num in (4, 5)` and continue if fast-track is active)
-This follows the existing marker-based control flow pattern (STOP_CONDITION, PROMPT_REVIEW, E2E_SKIP).
-
-% Consecutive Provider Failure Abort
-Track consecutive steps where the output contains "All agent providers failed". If 3 consecutive such failures occur, save state and return early with an abort message. Reset the counter on any success or non-provider failure.
-
-% Agentic Progress Tracking
-On entry, call `clear_agentic_progress()` to remove stale progress from prior runs. Before each step, call `set_agentic_progress(workflow="bug", current_step=step_num, total_steps=12, step_name=description, completed_steps=...)` so KeyboardInterrupt can report how far the workflow got. On successful completion, call `clear_agentic_progress()` again.
+- This applies to all steps - only the specific hard stop patterns above terminate the workflow
+- Steps should post their findings to GitHub even on partial failure
 
 % Git Worktree Isolation
 
-Before Step 7, create an isolated git worktree for prompt fixes, test generation, and PR creation. This prevents the workflow from disturbing the user's current branch.
+Before Step 7, create an isolated git worktree for test generation and PR creation. This prevents the workflow from disturbing the user's current branch.
 
-1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
-   - Resolve the main branch ref for use as worktree base
-   - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
-   - For each, run `git rev-parse --verify <ref>` — return the commit hash on success
-   - If none resolve, return the literal string `"HEAD"` as last resort
-
-2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]`
+1. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
    - Create worktree at `.pdd/worktrees/fix-issue-{issue_number}/` relative to git root
    - Branch name: `fix/issue-{issue_number}`
-   - Clean up any existing worktree/directory at path before creating
-   - If branch already exists, attempt to delete it first
-     - If deletion fails and `resume_existing=True`: keep the branch as-is
-     - If deletion fails and `resume_existing=False`: attach with `--force`, then `git reset --hard` to `_resolve_main_ref(git_root)` for a clean re-run
-   - When creating a new branch: use `_resolve_main_ref(git_root)` as the base ref
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, delete with `git branch -D`
+   - Create worktree: `git worktree add -b {branch} {path} HEAD`
    - Return (worktree_path, None) on success, (None, error_msg) on failure
 
-3. In orchestrator loop, before Step 7:
-   - Only create worktree if not already set (from resume)
-   - Warn if not on main/master branch
-   - If worktree creation fails, return early with error
-   - Switch working directory to worktree path for Steps 7-12
-   - Add `worktree_path` to context dict
-   - Copy Step 5 reproduction tests into worktree via `_copy_repro_files_to_worktree()`
+2. In orchestrator loop, before Step 7:
+   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 7-10
+   - Add `worktree_path` to context dict (for Step 10 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
 
-4. Git helpers: `_get_git_root`, `_worktree_exists`, `_branch_exists`, `_remove_worktree`, `_delete_branch`
+3. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
 
 % Console Output
-Provide real-time feedback: header with issue number/title, step progress markers (`[Step N/12]`), brief step results, hard stop messages, and final summary with cost/files/worktree. Use `quiet` to suppress all output except errors, `verbose` for full agentic task output.
 
-After each successful step, print a step completion marker: `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
+The orchestrator must provide real-time feedback to the user via rich console output:
 
-% State Persistence (GitHub + Local)
+1. **Header** (at start):
+   ```
+   🔍 Investigating issue #{issue_number}: "{issue_title}"
+   ```
 
-Use shared functions from agentic_common for state persistence. GitHub is primary storage, local file is cache.
+2. **Step progress** (before each step):
+   ```
+   [Step N/10] {step_description}...
+   ```
 
-1. **State file location**: `.pdd/bug-state/` relative to git root (via `_get_state_dir`)
-2. **Orchestrator logic**:
-   - On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
-   - **State validation on load**: Scan `step_outputs` for entries that do NOT start with "FAILED:" to find the actual last successful step. This prevents resuming past failed steps.
-   - For steps < start_step: Use cached output from state
-   - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
-     - On success: Store output, set `last_completed_step = step_num`
-     - On failure (not hard stop): Store "FAILED: {output}", keep `last_completed_step` unchanged (no ratchet effect)
-   - On successful completion (step 12): Call `clear_workflow_state()`
-3. **Worktree restoration on resume**: If saved state has a `worktree_path`, reuse if exists on disk; otherwise recreate with `resume_existing=True`. Copy Step 5 reproduction tests into worktree on resume.
-4. **Re-extraction on resume**: When loading saved state, re-parse step outputs for files (Steps 5, 5.5, 6, 7, 9, 11) to reconstruct `changed_files`, `fix_locations`, and `step5_reproduction_tests`.
+3. **Agentic output** (during each step):
+   - Stream or display the output from `run_agentic_task()` so the user can see what the agent is doing
+   - Use `verbose` flag to control detail level
+
+4. **Step result** (after each step):
+   ```
+     → {brief_result}
+   ```
+   Examples: "No duplicates found", "Confirmed bug", "Needs More Info (stopping)"
+
+5. **Hard stop message** (if workflow terminates early):
+   ```
+   ⏹️  Investigation stopped at Step N: {reason}
+   ```
+
+6. **Final summary** (at end):
+   ```
+   ✅ Investigation complete  (or ❌ Investigation failed)
+      Total cost: ${total_cost:.4f}
+      Files changed: {comma_separated_list}
+      Worktree: {worktree_path}  (if worktree was created)
+      PR created: #{pr_number}  (if applicable)
+   ```
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `set_agentic_progress`, `clear_agentic_progress`
-Import from `preprocess`: `preprocess` (used to expand `<include>` tags and escape braces in prompt templates before substitution)
-Import from `get_test_command`: `get_test_command_for_file` (resolves test runner command for non-Python files)
-Import from `pytest_output`: `run_pytest_and_capture_output` (runs pytest and returns structured results)
-Note: `BUG_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
+Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
 
 % Deliverables
 - Code: `pdd/agentic_bug_orchestrator.py`
