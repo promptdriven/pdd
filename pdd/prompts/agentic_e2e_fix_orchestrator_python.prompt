@@ -1,0 +1,34 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Design the `agentic_e2e_fix_orchestrator` for the 9‑step E2E‑fix workflow.
+
+% Loop Control & Status Tokens
+The orchestrator must interpret special status markers in step outputs:
+- ALL_TESTS_PASS
+- CONTINUE_CYCLE
+- NOT_A_BUG
+
+The orchestrator must treat NOT_A_BUG as a first‑class loop‑control token, alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
+
+% Environment Safety: _check_e2e_environment
+Before running any E2E workflow, the orchestrator must explicitly call the `_check_e2e_environment` helper function.
+This verifies that E2E tests can safely run in the current environment (CI or local), including:
+- required tools (Python, Node, browsers, etc.)
+- required environment variables and endpoints
+If the environment is unsafe, the orchestrator stops early with an informative message and does not run real E2E tests.
+
+% Skipped Steps & Memory: skipped_steps_memory
+The orchestrator tracks last_completed_step and, when resuming, may skip earlier steps.
+However, it must still preserve and reload previous step outputs so that later steps receive a coherent context.
+skipped_steps persists across cycles and is NOT cleared when step_outputs is cleared.
+This behavior is called `skipped_steps_memory`: even skipped steps contribute their prior stepN_output values into downstream prompts.
+The skipped_steps (or equivalent) state persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
+
+% Convergence (Issue #903)
+Empty dev-units short-circuit: when Step 5 yields no dev-units, the orchestrator must short-circuit the cycle (skip dependent work) instead of continuing as if work remained.
+
+Per-cycle file-hash comparison: compare file hashes each cycle so unchanged files are not mistaken for fresh changes; use per-cycle file-hash snapshots to decide whether dev-units or code actually moved.
+
+This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory`
+so tests can assert the orchestrator prompt documents these behaviors.
