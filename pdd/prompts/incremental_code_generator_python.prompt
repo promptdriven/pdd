@@ -14,7 +14,6 @@
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>preprocess_python.prompt</pdd-dependency>
 <pdd-dependency>postprocess_python.prompt</pdd-dependency>
-<pdd-dependency>patch_verifier_LLM.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write a python function, "incremental_code_generator", that will analyze changes to a prompt and either incrementally patch existing code or regenerate code from scratch.
 
@@ -89,24 +88,6 @@
             * Extract 'patched_code', 'analysis', and 'planned_modifications' from the Pydantic output
             * If verbose is True, print the analysis and planned modifications
             * If patched_code equals existing_code (no-op), return None, False, total_cost, model_name (fall back to full regen)
-            * Otherwise, proceed to Step 4.5 for verification before returning
-    
-    Step 4.5. Verify completeness of patched code (only when Step 4b produces patched_code that differs from existing_code):
-        - a. Define a PatchVerification Pydantic model with:
-            * 'is_complete' (bool): Whether the patched code implements all requirements from the prompt
-            * 'missing_requirements' (list[str]): List of requirements missing or incomplete in the patched code (empty if is_complete is True)
-        - b. Load the 'patch_verifier_LLM' prompt template using load_prompt_template with preprocess double_curly_brackets=True but exclude input parameters from getting double curly brackets.
-        - c. Run the patch_verifier_LLM prompt through llm_invoke:
-            * Pass 'PROMPT': The new prompt, 'PATCHED_CODE': The patched code from Step 4b
-            * Use a low strength (0.5 * strength) since verification is simpler than generation
-            * Use the provided temperature
-            * Use a low time (0.5 * time) since verification is simpler than generation
-        - d. Extract 'is_complete' and 'missing_requirements' from the Pydantic output
-        - e. Accumulate the verification cost into total_cost
-        - f. If verbose is True, print whether verification passed and any missing requirements
-        - g. If is_complete is False:
-            * If verbose, print a message listing the missing requirements and indicating fallback to full regeneration
-            * Return None for updated_code, False for is_incremental, total_cost, and model_name (triggers existing full regen fallback)
-        - h. If is_complete is True, proceed to return patched_code as normal
+            * Return patched_code, True for is_incremental, total cost (sum of all LLM invocations), and the model_name
 
     Step 5. Return the updated_code, is_incremental flag, total cost (sum of all LLM invocations), and the model_name used for the main operation.

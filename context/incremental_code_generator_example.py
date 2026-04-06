@@ -3,7 +3,7 @@ Example demonstrating the usage of the `incremental_code_generator` function
 from the `pdd.incremental_code_generator` module.
 
 This example showcases three scenarios:
-1. Minor change detected -> incremental patching applied (with patch verification passing)
+1. Minor change detected -> incremental patching applied
 2. Major change detected -> full regeneration recommended
 3. Force incremental patching despite major change detection
 
@@ -24,7 +24,6 @@ from pdd.incremental_code_generator import (
     incremental_code_generator,
     DiffAnalysis,
     CodePatchResult,
-    PatchVerification,
 )
 from pdd import DEFAULT_STRENGTH, DEFAULT_TIME
 
@@ -71,26 +70,6 @@ def build_patch_response(patched_code: str, cost: float = 0.002) -> dict:
     }
 
 
-def build_verification_response(is_complete: bool, missing: list = None, cost: float = 0.0005) -> dict:
-    """Build a mock response for the patch_verifier_LLM step.
-
-    Args:
-        is_complete: Whether the verification passed.
-        missing: List of missing requirements (empty if is_complete is True).
-        cost: Simulated cost in dollars.
-    Returns:
-        Dict matching the shape returned by llm_invoke with output_pydantic=PatchVerification.
-    """
-    return {
-        "result": PatchVerification(
-            is_complete=is_complete,
-            missing_requirements=missing or [],
-        ),
-        "cost": cost,
-        "model_name": "mock-verifier-model",
-    }
-
-
 # --- Common inputs used across all scenarios ---
 ORIGINAL_PROMPT = "Write a Python function to calculate the factorial of a number."
 NEW_PROMPT = "Write a Python function to calculate the factorial with input validation (must be non-negative)."
@@ -115,7 +94,7 @@ def scenario_minor_change_incremental():
     """Scenario 1: Minor change detected -- incremental patching applied.
 
     The diff analyzer reports a small change; the code patcher produces an
-    updated version; the patch verifier confirms completeness.
+    updated version.
 
     Inputs:
         original_prompt (str): The original specification.
@@ -140,7 +119,6 @@ def scenario_minor_change_incremental():
     mock_responses = [
         build_diff_response(is_big_change=False),
         build_patch_response(patched_code=PATCHED_CODE),
-        build_verification_response(is_complete=True),
     ]
 
     with patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template"):
@@ -209,7 +187,6 @@ def scenario_force_incremental():
     mock_responses = [
         build_diff_response(is_big_change=True),   # would normally trigger full regen
         build_patch_response(patched_code=PATCHED_CODE),
-        build_verification_response(is_complete=True),
     ]
 
     with patch("pdd.incremental_code_generator.load_prompt_template", return_value="mock_template"):

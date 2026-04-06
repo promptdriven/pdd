@@ -4,7 +4,6 @@ Tests for incremental_code_generator module.
 Covers:
 - Input validation (empty inputs, out-of-range parameters)
 - Decision logic (major vs minor change, force_incremental override)
-- Patch verification gate (Step 4.5)
 - No-op detection (patched code == existing code)
 - Verbose logging and preprocessing toggles
 - Error handling for LLM failures
@@ -19,9 +18,7 @@ from pdd.incremental_code_generator import (
     incremental_code_generator,
     DiffAnalysis,
     CodePatchResult,
-    PatchVerification,
     DEFAULT_STRENGTH,
-    DEFAULT_TIME,
 )
 
 
@@ -69,18 +66,6 @@ def mock_patch_response(patched_code: str = "def updated(): pass", cost: float =
         ),
         "cost": cost,
         "model_name": "test-patch-model",
-    }
-
-
-def mock_verification_response(is_complete: bool = True, missing: list = None, cost: float = 0.0005) -> dict:
-    """Build a mock patch verification response."""
-    return {
-        "result": PatchVerification(
-            is_complete=is_complete,
-            missing_requirements=missing or [],
-        ),
-        "cost": cost,
-        "model_name": "test-verifier-model",
     }
 
 
@@ -148,20 +133,19 @@ def test_major_change_full_regeneration(mock_preprocess, mock_load_template, moc
 @patch("pdd.incremental_code_generator.load_prompt_template")
 @patch("pdd.incremental_code_generator.preprocess")
 def test_minor_change_incremental_patching(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """When diff analyzer reports small change, patch and verify."""
+    """When diff analyzer reports small change, patch incrementally."""
     mock_load_template.return_value = "template"
     mock_preprocess.return_value = "processed_template"
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=False),
         mock_patch_response(),
-        mock_verification_response(is_complete=True),
     ]
 
     updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
 
     assert updated_code == "def updated(): pass"
     assert is_incremental is True
-    assert total_cost == pytest.approx(0.001 + 0.002 + 0.0005)
+    assert total_cost == pytest.approx(0.001 + 0.002)
     assert model_name == "test-patch-model"
 
 
@@ -176,104 +160,13 @@ def test_force_incremental_override(mock_preprocess, mock_load_template, mock_ll
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=True),
         mock_patch_response(),
-        mock_verification_response(is_complete=True),
     ]
 
     updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
 
     assert updated_code == "def updated(): pass"
     assert is_incremental is True
-    assert total_cost == pytest.approx(0.001 + 0.002 + 0.0005)
-
-
-# --- Patch Verification Gate Tests (Step 4.5) ---
-
-@patch("pdd.incremental_code_generator.llm_invoke")
-@patch("pdd.incremental_code_generator.load_prompt_template")
-@patch("pdd.incremental_code_generator.preprocess")
-def test_verification_failure_triggers_full_regen(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """When patch verification fails, return None to trigger full regeneration."""
-    mock_load_template.return_value = "template"
-    mock_preprocess.return_value = "processed_template"
-    mock_llm_invoke.side_effect = [
-        mock_diff_response(is_big_change=False),
-        mock_patch_response(),
-        mock_verification_response(is_complete=False, missing=["input validation", "error handling"]),
-    ]
-
-    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
-
-    assert updated_code is None
-    assert is_incremental is False
-    # Cost should include all three calls
-    assert total_cost == pytest.approx(0.001 + 0.002 + 0.0005)
-
-
-@patch("pdd.incremental_code_generator.llm_invoke")
-@patch("pdd.incremental_code_generator.load_prompt_template")
-@patch("pdd.incremental_code_generator.preprocess")
-def test_verification_uses_half_strength_and_time(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """Verification step should use 0.5 * strength and 0.5 * time."""
-    common_inputs["strength"] = 0.8
-    common_inputs["time"] = 0.4
-    mock_load_template.return_value = "template"
-    mock_preprocess.return_value = "processed_template"
-    mock_llm_invoke.side_effect = [
-        mock_diff_response(is_big_change=False),
-        mock_patch_response(),
-        mock_verification_response(is_complete=True),
-    ]
-
-    incremental_code_generator(**common_inputs)
-
-    # Third call is the verification call
-    verification_call = mock_llm_invoke.call_args_list[2]
-    assert verification_call.kwargs["strength"] == pytest.approx(0.4)  # 0.5 * 0.8
-    assert verification_call.kwargs["time"] == pytest.approx(0.2)      # 0.5 * 0.4
-
-
-@patch("pdd.incremental_code_generator.llm_invoke")
-@patch("pdd.incremental_code_generator.load_prompt_template")
-@patch("pdd.incremental_code_generator.preprocess")
-def test_verification_loads_patch_verifier_template(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """Verification should load 'patch_verifier_LLM' template."""
-    mock_load_template.return_value = "template"
-    mock_preprocess.return_value = "processed_template"
-    mock_llm_invoke.side_effect = [
-        mock_diff_response(is_big_change=False),
-        mock_patch_response(),
-        mock_verification_response(is_complete=True),
-    ]
-
-    incremental_code_generator(**common_inputs)
-
-    # load_prompt_template called 3 times: diff_analyzer_LLM, code_patcher_LLM, patch_verifier_LLM
-    template_calls = [c.args[0] for c in mock_load_template.call_args_list]
-    assert "diff_analyzer_LLM" in template_calls
-    assert "code_patcher_LLM" in template_calls
-    assert "patch_verifier_LLM" in template_calls
-
-
-@patch("pdd.incremental_code_generator.llm_invoke")
-@patch("pdd.incremental_code_generator.load_prompt_template")
-@patch("pdd.incremental_code_generator.preprocess")
-def test_verification_passes_correct_input(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """Verification should pass new_prompt as PROMPT and patched_code as PATCHED_CODE."""
-    mock_load_template.return_value = "template"
-    mock_preprocess.return_value = "processed_template"
-    mock_llm_invoke.side_effect = [
-        mock_diff_response(is_big_change=False),
-        mock_patch_response(patched_code="def new_code(): pass"),
-        mock_verification_response(is_complete=True),
-    ]
-
-    incremental_code_generator(**common_inputs)
-
-    verification_call = mock_llm_invoke.call_args_list[2]
-    assert verification_call.kwargs["input_json"] == {
-        "PROMPT": "New prompt",
-        "PATCHED_CODE": "def new_code(): pass",
-    }
+    assert total_cost == pytest.approx(0.001 + 0.002)
 
 
 # --- No-op Detection Test ---
@@ -294,7 +187,6 @@ def test_noop_patch_triggers_full_regen(mock_preprocess, mock_load_template, moc
 
     assert updated_code is None
     assert is_incremental is False
-    # Only diff + patch cost, no verification since no-op detected before verification
     assert total_cost == pytest.approx(0.001 + 0.002)
 
 
@@ -304,21 +196,19 @@ def test_noop_patch_triggers_full_regen(mock_preprocess, mock_load_template, moc
 @patch("pdd.incremental_code_generator.load_prompt_template")
 @patch("pdd.incremental_code_generator.preprocess")
 def test_verbose_logging(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs, capsys):
-    """Verbose=True should produce output for diff analyzer, patcher, and verification."""
+    """Verbose=True should produce output for diff analyzer and patcher."""
     common_inputs["verbose"] = True
     mock_load_template.return_value = "template"
     mock_preprocess.return_value = "processed_template"
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=False),
         mock_patch_response(),
-        mock_verification_response(is_complete=True),
     ]
 
     incremental_code_generator(**common_inputs)
     captured = capsys.readouterr()
     assert "Diff Analyzer Results" in captured.out
     assert "Code Patcher Results" in captured.out
-    assert "Patch verification passed" in captured.out
 
 
 @patch("pdd.incremental_code_generator.llm_invoke")
@@ -332,32 +222,11 @@ def test_no_verbose_logging(mock_preprocess, mock_load_template, mock_llm_invoke
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=False),
         mock_patch_response(),
-        mock_verification_response(is_complete=True),
     ]
 
     incremental_code_generator(**common_inputs)
     captured = capsys.readouterr()
     assert captured.out == ""
-
-
-@patch("pdd.incremental_code_generator.llm_invoke")
-@patch("pdd.incremental_code_generator.load_prompt_template")
-@patch("pdd.incremental_code_generator.preprocess")
-def test_verbose_verification_failure_shows_missing(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs, capsys):
-    """Verbose verification failure should show missing requirements."""
-    common_inputs["verbose"] = True
-    mock_load_template.return_value = "template"
-    mock_preprocess.return_value = "processed_template"
-    mock_llm_invoke.side_effect = [
-        mock_diff_response(is_big_change=False),
-        mock_patch_response(),
-        mock_verification_response(is_complete=False, missing=["input validation"]),
-    ]
-
-    incremental_code_generator(**common_inputs)
-    captured = capsys.readouterr()
-    assert "input validation" in captured.out
-    assert "missing requirements" in captured.out.lower()
 
 
 # --- Preprocessing Tests ---
@@ -372,7 +241,6 @@ def test_no_preprocess_prompt(mock_preprocess, mock_load_template, mock_llm_invo
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=False),
         mock_patch_response(),
-        mock_verification_response(is_complete=True),
     ]
 
     updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
@@ -392,7 +260,6 @@ def test_preprocess_called_with_correct_exclude_keys(mock_preprocess, mock_load_
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=False),
         mock_patch_response(),
-        mock_verification_response(is_complete=True),
     ]
 
     incremental_code_generator(**common_inputs)
@@ -404,10 +271,6 @@ def test_preprocess_called_with_correct_exclude_keys(mock_preprocess, mock_load_
     # Second preprocess call: code_patcher excludes ORIGINAL_PROMPT, NEW_PROMPT, EXISTING_CODE, CHANGE_DESCRIPTION
     patch_call = mock_preprocess.call_args_list[1]
     assert set(patch_call.kwargs.get("exclude_keys", patch_call[1].get("exclude_keys", []))) == {"ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE", "CHANGE_DESCRIPTION"}
-
-    # Third preprocess call: patch_verifier excludes PROMPT, PATCHED_CODE
-    verifier_call = mock_preprocess.call_args_list[2]
-    assert set(verifier_call.kwargs.get("exclude_keys", verifier_call[1].get("exclude_keys", []))) == {"PROMPT", "PATCHED_CODE"}
 
 
 # --- Error Handling Tests ---
@@ -431,18 +294,17 @@ def test_llm_invoke_failure(mock_preprocess, mock_load_template, mock_llm_invoke
 @patch("pdd.incremental_code_generator.load_prompt_template")
 @patch("pdd.incremental_code_generator.preprocess")
 def test_cost_accumulation_full_path(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """Total cost should accumulate across diff, patch, and verification calls."""
+    """Total cost should accumulate across diff and patch calls."""
     mock_load_template.return_value = "template"
     mock_preprocess.return_value = "processed_template"
     mock_llm_invoke.side_effect = [
         mock_diff_response(is_big_change=False, cost=0.01),
         mock_patch_response(cost=0.02),
-        mock_verification_response(cost=0.005),
     ]
 
     _, _, total_cost, _ = incremental_code_generator(**common_inputs)
 
-    assert total_cost == pytest.approx(0.035)
+    assert total_cost == pytest.approx(0.03)
 
 
 @patch("pdd.incremental_code_generator.llm_invoke")
@@ -487,25 +349,3 @@ def test_decision_logic_formal_verification():
         solver.add(should_regenerate == combo["expected_should_regenerate"])
         solver.add(expected_logic)
         assert solver.check() == sat, f"Failed for {combo}"
-
-
-# --- Graceful Degradation Tests ---
-
-@patch("pdd.incremental_code_generator.llm_invoke")
-@patch("pdd.incremental_code_generator.load_prompt_template")
-@patch("pdd.incremental_code_generator.preprocess")
-def test_verification_error_degrades_gracefully(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """When verification LLM call fails, accept the patch anyway (graceful degradation)."""
-    mock_load_template.return_value = "template"
-    mock_preprocess.return_value = "processed_template"
-    mock_llm_invoke.side_effect = [
-        mock_diff_response(is_big_change=False),
-        mock_patch_response(),
-        Exception("Verification LLM unavailable"),
-    ]
-
-    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
-
-    # Patch accepted despite verification failure
-    assert updated_code == "def updated(): pass"
-    assert is_incremental is True

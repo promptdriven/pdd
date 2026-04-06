@@ -1,7 +1,4 @@
-from __future__ import annotations
-
-import logging
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
@@ -9,9 +6,8 @@ from rich.markdown import Markdown
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from . import DEFAULT_STRENGTH, DEFAULT_TIME
+from . import DEFAULT_STRENGTH
 
-logger = logging.getLogger(__name__)
 console = Console()
 
 # Pydantic models for structured output
@@ -24,10 +20,6 @@ class CodePatchResult(BaseModel):
     patched_code: str = Field(description="The updated code with incremental patches applied")
     analysis: str = Field(description="Analysis of the patching process")
     planned_modifications: str = Field(description="Description of the modifications planned and applied")
-
-class PatchVerification(BaseModel):
-    is_complete: bool = Field(description="Whether the patched code implements all requirements from the prompt")
-    missing_requirements: List[str] = Field(description="List of requirements missing or incomplete in the patched code (empty if is_complete is True)")
 
 def incremental_code_generator(
     original_prompt: str,
@@ -43,7 +35,7 @@ def incremental_code_generator(
 ) -> Tuple[Optional[str], bool, float, str]:
     """
     Analyzes changes to a prompt and either incrementally patches existing code or suggests full regeneration.
-    
+
     Args:
         original_prompt (str): The original prompt used to generate the existing code.
         new_prompt (str): The updated prompt that needs to be processed.
@@ -55,7 +47,7 @@ def incremental_code_generator(
         force_incremental (bool): Forces incremental patching even if full regeneration is suggested. Defaults to False.
         verbose (bool): If True, prints detailed information about the process. Defaults to False.
         preprocess_prompt (bool): If True, preprocesses the prompt before invocation. Defaults to True.
-    
+
     Returns:
         Tuple[Optional[str], bool, float, str]: A tuple containing:
             - updated_code (Optional[str]): The updated code if incremental patching is applied, None if full regeneration is needed.
@@ -169,55 +161,6 @@ def incremental_code_generator(
                 if verbose:
                     console.print("[yellow]Incremental patch produced no changes. Recommending full regeneration.[/yellow]")
                 return None, False, total_cost, model_name
-
-            # Step 4.5: Verify completeness of patched code.
-            # Catches incomplete patches (e.g. function signature updated but
-            # call sites not wired) before accepting.  Falls back to full
-            # regeneration when gaps are found.  See issue #1076.
-            try:
-                verifier_template = load_prompt_template("patch_verifier_LLM")
-                if preprocess_prompt:
-                    verifier_template = preprocess(
-                        verifier_template,
-                        recursive=False,
-                        double_curly_brackets=True,
-                        exclude_keys=["PROMPT", "PATCHED_CODE"]
-                    )
-
-                verification_response = llm_invoke(
-                    prompt=verifier_template,
-                    input_json={
-                        "PROMPT": new_prompt,
-                        "PATCHED_CODE": patch_result.patched_code
-                    },
-                    # Half-strength is intentional: verification is a simpler
-                    # task (check requirements vs. generate code) and keeps cost
-                    # at ~10% of the overall sync.  If this proves too weak for
-                    # subtle failures, bump to full strength.
-                    strength=0.5 * strength,
-                    temperature=temperature,
-                    time=0.5 * time,
-                    verbose=verbose,
-                    output_pydantic=PatchVerification
-                )
-                verification_result: PatchVerification = verification_response['result']
-                total_cost += verification_response['cost']
-
-                if not verification_result.is_complete:
-                    if verbose:
-                        console.print("[yellow]Patch verification found missing requirements. Falling back to full regeneration.[/yellow]")
-                        for req in verification_result.missing_requirements:
-                            console.print(f"  [yellow]- {req}[/yellow]")
-                    return None, False, total_cost, model_name
-
-                if verbose:
-                    console.print("[green]Patch verification passed — all prompt requirements implemented.[/green]")
-            except Exception as verify_exc:
-                # Verification failure should not block the patch — log and
-                # accept the patch as-is (graceful degradation).
-                logger.warning("Patch verification skipped: %s", verify_exc)
-                if verbose:
-                    console.print(f"[yellow]Patch verification skipped ({verify_exc})[/yellow]")
 
             return patch_result.patched_code, True, total_cost, model_name
 
