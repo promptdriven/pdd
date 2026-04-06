@@ -54,8 +54,12 @@ def _require_agentic_env():
 class DimensionVerdict(BaseModel):
     """Verdict for a single comparison dimension."""
     winner: str = Field(description="'current', 'original', or 'tie'")
+    one_line: str = Field(
+        description="One-sentence summary of why this winner was chosen (max 120 chars). "
+        "Must cite specific evidence (file names, test counts, dollar amounts)."
+    )
     explanation: str = Field(
-        description="Why this winner was chosen. Reference specific differences in the outputs."
+        description="Full explanation with specific evidence from the outputs."
     )
 
 
@@ -85,7 +89,8 @@ class ComparativeResult(BaseModel):
         description="Compare wall-clock time. Use the times provided."
     )
     overall: DimensionVerdict = Field(
-        description="Overall winner considering all dimensions. Explain the decision."
+        description="Overall winner considering correctness, test_quality, example_quality, "
+        "and minimality only. Do NOT factor in cost or speed."
     )
     agent_issues_current: str = Field(
         description="From the sync stdout: describe any loops, stuck behavior, "
@@ -198,6 +203,7 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
        line numbers, dollar amounts, timestamps, stdout markers)
     2. State which version is better and why, or declare a tie with justification
     3. Use the labels "current", "original", or "tie" — not "A" or "B"
+    4. Provide BOTH a one_line summary (max ~120 chars, with key evidence) AND a full explanation
 
     Do NOT make judgments based on assumptions. Only use what is present in the outputs above.
     If a file is missing or a run failed, that is itself evidence — do not speculate about
@@ -205,28 +211,23 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
 
     ### Dimensions
 
-    **test_quality**: Compare the test files line by line. Which covers more spec requirements?
-    Which uses stronger assertions (checking specific values vs just types/existence)?
-    Which tests more edge cases? Name specific test functions as evidence.
+    **test_quality**: Compare the test files. Which covers more spec requirements?
+    Which uses stronger assertions? Which tests more edge cases? Cite specific test functions.
 
     **example_quality**: Compare the example files. Which better demonstrates the module's API?
-    Which is more readable? Does either demonstrate incorrect usage?
 
-    **minimality**: Diff each version's final files against the reference files above.
-    Which made fewer unnecessary changes? Did either rewrite files that were already correct?
-    A version that changes nothing when nothing needs changing is ideal.
+    **minimality**: Which made fewer unnecessary changes? Did either rewrite correct files?
 
-    **correctness**: Did each version change the RIGHT file? The spec (prompt file) is the
-    authority. If the spec says X and the code does Y, the code is wrong. If the spec says X
-    and the tests expect Y, the tests are wrong. Did either version get this backwards?
+    **correctness**: Did each version change the RIGHT file? The spec is the authority.
     Did either introduce new bugs?
 
-    **cost**: Which cost less? (Use the exact dollar amounts above. Lower is better.)
+    **cost**: Which cost less? (Lower is better.)
 
-    **speed**: Which completed faster? (Use the exact times above. Lower is better.)
+    **speed**: Which completed faster? (Lower is better.)
 
-    **overall**: Weigh all dimensions. Correctness and test_quality matter most.
-    Cost and speed are tiebreakers. State the overall winner with a 1-2 sentence justification.
+    **overall**: Weigh all dimensions. Only consider correctness, test_quality,
+    example_quality, and minimality. Do NOT factor in cost or speed for the overall
+    winner — those are reported separately for informational purposes only.
 
     ### Agent behavior analysis
 
@@ -1650,8 +1651,6 @@ def _run_pdd_sync(
         pytest.skip("pdd CLI not found on PATH")
 
     cmd = [pdd_cmd, "--local", "sync", "--one-session", basename]
-    print(f"\n  >> Running: {' '.join(cmd)}")
-    print(f"  >> CWD: {project_dir}")
 
     env = {**os.environ, "PDD_FORCE": "1", "PDD_SKIP_UPDATE_CHECK": "1"}
     if extra_env:
@@ -1671,10 +1670,9 @@ def _run_pdd_sync(
         wall_time = time.monotonic() - start
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
-        print(f"  >> Completed in {wall_time:.1f}s (exit={proc.returncode})")
         if proc.returncode != 0:
-            print(f"  >> STDERR: {stderr[:300]}")
-            print(f"  >> STDOUT (tail): {stdout[-300:]}")
+            print(f"\n  >> sync failed: exit={proc.returncode} ({wall_time:.0f}s)")
+            print(f"  >> stderr: {stderr[:300]}")
     except subprocess.TimeoutExpired as e:
         wall_time = time.monotonic() - start
         stdout = (e.stdout or b"").decode(errors="replace")
@@ -1987,6 +1985,7 @@ def _evaluate_comparative(
 
 def _log_comparative_result(
     scenario_name: str,
+    scenario_description: str,
     comparison: ComparativeResult,
     improved_run: Dict[str, Any],
     original_run: Dict[str, Any],
@@ -2006,29 +2005,38 @@ def _log_comparative_result(
 
     dimensions = [
         ("test_quality", comparison.test_quality),
-        ("example_quality", comparison.example_quality),
+        ("example", comparison.example_quality),
         ("minimality", comparison.minimality),
         ("correctness", comparison.correctness),
         ("cost", comparison.cost),
         ("speed", comparison.speed),
-        ("OVERALL", comparison.overall),
     ]
 
     print(f"\n{'='*80}")
-    print(f"  {scenario_name} — Comparative Results")
-    print(f"  Cost: current=${cur_cost:.4f} original=${orig_cost:.4f}")
-    print(f"  Time: current={cur_time:.1f}s original={orig_time:.1f}s")
+    print(f"  {scenario_description}")
+    print(f"  Current: ${cur_cost:.2f} / {cur_time:.0f}s  |  Original: ${orig_cost:.2f} / {orig_time:.0f}s")
     print(f"{'='*80}")
+
+    # Overall first
+    overall_tag = comparison.overall.winner.upper()
+    print(f"  OVERALL  ->  {overall_tag}")
+    print(f"    {comparison.overall.one_line}")
+    print()
+
+    # Dimensions table — winner in middle column
+    print(f"  {'Dimension':<16s}  {'Winner':^10s}  Summary")
+    print(f"  {'-'*16}  {'-'*10}  {'-'*45}")
     for name, verdict in dimensions:
         tag = verdict.winner.upper()
-        print(f"  {name:<20s} [{tag:>8s}]  {verdict.explanation}")
+        print(f"  {name:<16s}  {tag:^10s}  {verdict.one_line}")
     print()
+
     if comparison.agent_issues_current != "none":
         print(f"  Agent issues (current): {comparison.agent_issues_current}")
     if comparison.agent_issues_original != "none":
         print(f"  Agent issues (original): {comparison.agent_issues_original}")
     if comparison.prompt_improvement_suggestions != "none":
-        print(f"  Prompt improvements: {comparison.prompt_improvement_suggestions}")
+        print(f"  Prompt suggestions for 'current': {comparison.prompt_improvement_suggestions}")
     print(f"{'='*80}\n")
 
 
@@ -2037,8 +2045,21 @@ def _log_comparative_result(
 # =========================================================================
 
 @pytest.fixture(scope="session", autouse=True)
-def _print_cost_summary(request):
-    """Print total cost summary after all eval tests complete."""
+def _print_eval_header_and_summary(request):
+    """Print intro header and cost summary for the eval session."""
+    print(
+        "\n"
+        "========================================================================\n"
+        "  One-Session Eval: Prompt Comparison\n"
+        "========================================================================\n"
+        "  This test suite compares the CURRENT version of\n"
+        "  one_session_agent_LLM.prompt against an ORIGINAL version from\n"
+        "  before April 2026. Both prompt versions are run against curated\n"
+        "  out-of-sync scenarios to see how each prompt guides the agent\n"
+        "  through syncing up code, examples, and tests.\n"
+        "  An LLM judge then evaluates the results side by side.\n"
+        "========================================================================"
+    )
     yield
     if _COST_TRACKER:
         total_cur = sum(v.get("current_cost", 0) for v in _COST_TRACKER.values())
@@ -2090,17 +2111,16 @@ def _run_comparative_test(
         improved_run = current_future.result()
         original_run = original_future.result()
 
-    # Diagnostic output for both variants
+    # Print failure details only when a variant didn't complete
     for label, run in [("CURRENT", improved_run), ("ORIGINAL", original_run)]:
         s = run["sync"]
-        timed_out = s.get("timed_out", False)
-        print(
-            f"\n  >> {label}: exit={s['exit_code']} wall={s['wall_time']:.1f}s "
-            f"cost=${s['cost']:.4f} timed_out={timed_out}"
-        )
         if s["exit_code"] != 0:
-            print(f"  >> {label} stderr: {s['stderr'][:500]}")
-            print(f"  >> {label} stdout (last 2000 chars):\n{s['stdout'][-2000:]}")
+            timed_out = s.get("timed_out", False)
+            print(
+                f"\n  >> {label} FAILED: exit={s['exit_code']} wall={s['wall_time']:.0f}s "
+                f"timed_out={timed_out}"
+            )
+            print(f"  >> stdout (last 2000 chars):\n{s['stdout'][-2000:]}")
 
     # Always run the LLM judge — even if one variant failed or timed out, the
     # judge's analysis of the partial stdout and diffs is valuable for understanding
@@ -2110,7 +2130,9 @@ def _run_comparative_test(
     )
 
     # Log everything
-    _log_comparative_result(scenario_name, comparison, improved_run, original_run)
+    _log_comparative_result(
+        scenario_name, scenario["description"], comparison, improved_run, original_run,
+    )
 
     # Hard assertions: current variant must at least complete
     assert improved_run["sync"]["exit_code"] == 0, (
