@@ -170,7 +170,7 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
 
     ## Version A (current) results
     Cost: ${current_cost:.4f} | Time: {current_time:.1f}s | Sync exit: {current_exit}
-    Tests: exit {current_test_exit} | Test count: {current_test_count}
+    Tests: exit {current_test_exit} | Test count: {current_test_count} | Code coverage: {current_coverage_pct}%
     Example: exit {current_example_exit}
 
     Changes made (unified diff against reference files):
@@ -184,7 +184,7 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
 
     ## Version B (original) results
     Cost: ${original_cost:.4f} | Time: {original_time:.1f}s | Sync exit: {original_exit}
-    Tests: exit {original_test_exit} | Test count: {original_test_count}
+    Tests: exit {original_test_exit} | Test count: {original_test_count} | Code coverage: {original_coverage_pct}%
     Example: exit {original_example_exit}
 
     Changes made (unified diff against reference files):
@@ -211,8 +211,9 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
 
     ### Dimensions
 
-    **test_quality**: Compare the test files. Which covers more spec requirements?
-    Which uses stronger assertions? Which tests more edge cases? Cite specific test functions.
+    **test_quality**: Compare the test files. Use the code coverage percentages above as
+    a key metric. Which covers more spec requirements? Which uses stronger assertions?
+    Which tests more edge cases? Cite specific test functions and the coverage numbers.
 
     **example_quality**: Compare the example files. Which better demonstrates the module's API?
 
@@ -1706,13 +1707,23 @@ def _run_pytest_on_result(
     project_dir: Path,
     basename: str,
 ) -> Dict[str, Any]:
-    """Run pytest on the scenario's test file after sync."""
+    """Run pytest with coverage on the scenario's test file after sync."""
     test_file = project_dir / "tests" / f"test_{basename}.py"
     if not test_file.exists():
-        return {"exit_code": -1, "output": "Test file not found", "test_count": 0}
+        return {
+            "exit_code": -1, "output": "Test file not found",
+            "test_count": 0, "coverage_pct": 0.0,
+        }
+
+    code_dir = project_dir / "src"
+    cov_json = project_dir / ".coverage.json"
 
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-xvs", str(test_file)],
+        [
+            sys.executable, "-m", "pytest", "-xvs", str(test_file),
+            f"--cov={code_dir}", "--cov-report", f"json:{cov_json}",
+            "--cov-report", "term-missing",
+        ],
         cwd=project_dir,
         capture_output=True,
         text=True,
@@ -1724,10 +1735,20 @@ def _run_pytest_on_result(
     test_content = test_file.read_text()
     test_count = len(re.findall(r"def test_\w+", test_content))
 
+    # Parse coverage from JSON report
+    coverage_pct = 0.0
+    if cov_json.exists():
+        try:
+            cov_data = json.loads(cov_json.read_text())
+            coverage_pct = cov_data.get("totals", {}).get("percent_covered", 0.0)
+        except (json.JSONDecodeError, KeyError):
+            pass
+
     return {
         "exit_code": proc.returncode,
         "output": output,
         "test_count": test_count,
+        "coverage_pct": round(coverage_pct, 1),
     }
 
 
@@ -1950,6 +1971,7 @@ def _evaluate_comparative(
         "{current_exit}": str(improved_run["sync"]["exit_code"]),
         "{current_test_exit}": str(improved_run["test"]["exit_code"]),
         "{current_test_count}": str(improved_run["test"]["test_count"]),
+        "{current_coverage_pct}": str(improved_run["test"].get("coverage_pct", 0.0)),
         "{current_example_exit}": str(improved_run["example"]["exit_code"]),
         "{current_diffs}": _compute_diffs(reference_files, improved_run["final_files"]),
         "{current_new_files}": _format_files_for_prompt(
@@ -1961,6 +1983,7 @@ def _evaluate_comparative(
         "{original_exit}": str(original_run["sync"]["exit_code"]),
         "{original_test_exit}": str(original_run["test"]["exit_code"]),
         "{original_test_count}": str(original_run["test"]["test_count"]),
+        "{original_coverage_pct}": str(original_run["test"].get("coverage_pct", 0.0)),
         "{original_example_exit}": str(original_run["example"]["exit_code"]),
         "{original_diffs}": _compute_diffs(reference_files, original_run["final_files"]),
         "{original_new_files}": _format_files_for_prompt(
@@ -1993,8 +2016,10 @@ def _log_comparative_result(
     """Log comparative results and update cost tracker."""
     cur_cost = improved_run["sync"].get("cost", 0.0)
     cur_time = improved_run["sync"].get("wall_time", 0.0)
+    cur_cov = improved_run["test"].get("coverage_pct", 0.0)
     orig_cost = original_run["sync"].get("cost", 0.0)
     orig_time = original_run["sync"].get("wall_time", 0.0)
+    orig_cov = original_run["test"].get("coverage_pct", 0.0)
 
     _COST_TRACKER[scenario_name] = {
         "current_cost": cur_cost,
@@ -2014,7 +2039,7 @@ def _log_comparative_result(
 
     print(f"\n{'='*80}")
     print(f"  {scenario_description}")
-    print(f"  Current: ${cur_cost:.2f} / {cur_time:.0f}s  |  Original: ${orig_cost:.2f} / {orig_time:.0f}s")
+    print(f"  Current: ${cur_cost:.2f} / {cur_time:.0f}s / {cur_cov}% cov  |  Original: ${orig_cost:.2f} / {orig_time:.0f}s / {orig_cov}% cov")
     print(f"{'='*80}")
 
     # Overall first
