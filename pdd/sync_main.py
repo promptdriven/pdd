@@ -400,7 +400,23 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
         pattern = f"{glob.escape(name_part)}_*.prompt"
     else:
         pattern = f"{glob.escape(basename)}_*.prompt"
-    for prompt_file in prompts_dir.glob(pattern):
+    # Search root first, then subdirectories if not found (supports prompts
+    # in context-specific subdirs like prompts/src/services/).
+    matches = list(prompts_dir.glob(pattern))
+    if not matches:
+        recursive_matches = list(prompts_dir.glob(f"**/{glob.escape(name_part)}_*.prompt"))
+        # Collision detection: warn if same basename found in multiple subdirs
+        if len(recursive_matches) > 1:
+            dirs = {str(m.parent) for m in recursive_matches}
+            if len(dirs) > 1:
+                import warnings
+                warnings.warn(
+                    f"Prompt '{name_part}' found in multiple subdirectories: "
+                    f"{sorted(dirs)}. Using first match: {recursive_matches[0]}",
+                    stacklevel=2,
+                )
+        matches = recursive_matches
+    for prompt_file in matches:
         # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
         # Ensure the file starts with the exact name part followed by an underscore

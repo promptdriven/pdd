@@ -1145,6 +1145,69 @@ class TestDetectLanguagesWithContextExpanded:
         assert "kotlin" in languages, f"Expected 'kotlin' in detected languages, got: {list(languages.keys())}"
 
 
+class TestRecursivePromptSearch:
+    """pdd sync should find prompts in subdirectories when not at root."""
+
+    def test_finds_prompt_in_subdirectory(self, tmp_path):
+        """_detect_languages should find prompt in subdirectory when not at root."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        subdir = prompts_dir / "src" / "services"
+        subdir.mkdir(parents=True)
+        (subdir / "my_module_python.prompt").write_text("python prompt")
+
+        result = _detect_languages("my_module", prompts_dir)
+        assert "python" in result, f"Expected prompt found in subdirectory, got: {result}"
+        assert "services" in str(result["python"]), "Should point to subdirectory path"
+
+    def test_root_prompt_preferred_over_subdirectory(self, tmp_path):
+        """Root-level prompt should be preferred when both root and subdirectory exist."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "my_module_python.prompt").write_text("root prompt")
+        subdir = prompts_dir / "src" / "services"
+        subdir.mkdir(parents=True)
+        (subdir / "my_module_python.prompt").write_text("subdir prompt")
+
+        result = _detect_languages("my_module", prompts_dir)
+        assert "python" in result
+        assert result["python"].parent == prompts_dir, "Root should be preferred over subdirectory"
+
+    def test_collision_warning_multiple_subdirs(self, tmp_path):
+        """Should warn when same basename found in multiple subdirectories."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        dir1 = prompts_dir / "src" / "services"
+        dir1.mkdir(parents=True)
+        (dir1 / "dup_module_python.prompt").write_text("services version")
+        dir2 = prompts_dir / "src" / "workers"
+        dir2.mkdir(parents=True)
+        (dir2 / "dup_module_python.prompt").write_text("workers version")
+
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = _detect_languages("dup_module", prompts_dir)
+            assert len(w) == 1, f"Expected 1 collision warning, got {len(w)}"
+            assert "multiple subdirectories" in str(w[0].message)
+
+    def test_no_prompt_found_anywhere(self, tmp_path):
+        """Should return empty when prompt not found at root or subdirectories."""
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+
+        result = _detect_languages("nonexistent", prompts_dir)
+        assert result == {}
+
+
 # --- Tests for sync skipping LLM-only basenames ---
 
 

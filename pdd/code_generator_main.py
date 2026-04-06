@@ -456,6 +456,7 @@ def code_generator_main(
     unit_test_file: Optional[str] = None,
     exclude_tests: bool = False,
     language: Optional[str] = None,
+    output_from_config: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -695,8 +696,10 @@ def code_generator_main(
     if output_path:
         output_path = _expand_vars(output_path, env_vars)
 
-    # Honor front-matter output when CLI did not pass --output
-    if output is None and fm_meta and isinstance(fm_meta.get("output"), str):
+    # Honor front-matter output when no explicit --output CLI flag was passed.
+    # Front-matter overrides .pddrc generate_output_path (config default) but
+    # NOT an explicit CLI --output flag. Precedence: CLI > front-matter > .pddrc.
+    if (output is None or output_from_config) and fm_meta and isinstance(fm_meta.get("output"), str):
         try:
             meta_out = _expand_vars(fm_meta["output"], env_vars)
             if meta_out:

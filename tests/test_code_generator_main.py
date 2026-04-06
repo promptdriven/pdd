@@ -224,6 +224,10 @@ def mock_rich_console_fixture(monkeypatch):
 def mock_env_vars(monkeypatch):
     monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test_firebase_key")
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_id")
+    # Ensure cloud-only env vars don't leak from the host environment
+    # and override local=True in tests (see _env_flag_enabled checks).
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
+    monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
 
 # --- Helper to create files ---
 def create_file(path, content=""):
@@ -1267,6 +1271,96 @@ Generate module for $NAME.
     expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
     assert expected_path.exists()
     assert expected_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
+
+
+def test_front_matter_output_overrides_pddrc_config(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    """Front-matter output: should override .pddrc generate_output_path
+    when output_from_config=True (sync flow)."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "fm_override.prompt"
+
+    fm_output = temp_dir_setup["tmp_path"] / "correct_subdir" / "fm_override.py"
+    pddrc_output = temp_dir_setup["output_dir"] / "fm_override.py"
+
+    front_matter_prompt = f"""---
+output: \"{fm_output}\"
+---
+Generate module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(pddrc_output)},
+        "python",
+    )
+
+    # output_from_config=True simulates sync passing .pddrc-resolved path
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(pddrc_output),  # .pddrc output
+        None,
+        False,
+        env_vars={"llm": "true"},
+        output_from_config=True,
+    )
+
+    # Front-matter should win over .pddrc
+    assert fm_output.resolve().exists(), "Front-matter output should override .pddrc path"
+    assert not pddrc_output.exists(), ".pddrc path should NOT be used"
+
+
+def test_cli_output_flag_beats_front_matter(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    """Explicit --output CLI flag should NOT be overridden by front-matter."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "cli_wins.prompt"
+
+    fm_output = temp_dir_setup["tmp_path"] / "fm_path" / "cli_wins.py"
+    cli_output = temp_dir_setup["output_dir"] / "cli_wins.py"
+
+    front_matter_prompt = f"""---
+output: \"{fm_output}\"
+---
+Generate module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(cli_output)},
+        "python",
+    )
+
+    # output_from_config=False (default) = explicit CLI --output
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(cli_output),  # CLI --output
+        None,
+        False,
+        env_vars={"llm": "true"},
+        output_from_config=False,
+    )
+
+    # CLI flag should win over front-matter
+    assert cli_output.exists(), "CLI --output should be used"
+    assert not fm_output.resolve().exists(), "Front-matter should NOT override CLI --output"
+
 
 
 def test_front_matter_variable_defaults_and_no_override(
