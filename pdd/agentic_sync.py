@@ -33,7 +33,6 @@ from .construct_paths import (
     _find_pddrc_file,
     _load_pddrc_config,
 )
-from .construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir, _find_pddrc_file, _load_pddrc_config
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -955,7 +954,7 @@ def run_agentic_sync(
         if dep_graph_result.warnings and not quiet:
             for w in dep_graph_result.warnings:
                 console.print(f"[yellow]Warning: {w}[/yellow]")
-        if not quiet:
+        if not quiet and verbose:
             for w in collect_architecture_include_validation_warnings(project_root):
                 console.print(f"[yellow]Warning: {w}[/yellow]")
             for w in warnings_for_arch_vs_include_sync_order(

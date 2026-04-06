@@ -67,9 +67,9 @@ def collect_architecture_include_validation_warnings(
     return warnings
 
 
-def print_architecture_include_validation_warnings(*, quiet: bool) -> None:
-    """Print yellow warnings for the current project (non-``quiet`` only)."""
-    if quiet:
+def print_architecture_include_validation_warnings(*, quiet: bool, verbose: bool = False) -> None:
+    """Print yellow warnings for the current project only when ``--verbose`` (and not ``--quiet``)."""
+    if quiet or not verbose:
         return
     from rich import print as rprint
 
@@ -85,6 +85,11 @@ def _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
     if rel.startswith("prompts/"):
         return (project_root / rel).resolve()
     return (project_root / "prompts" / rel).resolve()
+
+
+def resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path:
+    """Public API for resolving an architecture ``filename`` to an on-disk path."""
+    return _resolve_architecture_prompt_path(filename, project_root)
 
 
 def cross_validate_architecture_with_prompt_includes(

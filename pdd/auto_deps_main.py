@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import sys
 from pathlib import Path
 from typing import Optional, Tuple, Callable
@@ -119,7 +120,7 @@ def auto_deps_main(
                     if arch_report.get("messages") and not ctx.obj.get("quiet", False):
                         for line in arch_report["messages"]:
                             rprint(f"[dim]{line}[/dim]")
-                except Exception as arch_exc:
+                except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
                     if not ctx.obj.get("quiet", False):
                         rprint(
                             f"[yellow]Warning: Could not update architecture.json after auto-deps: "
