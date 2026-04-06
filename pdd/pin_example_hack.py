@@ -784,15 +784,15 @@ def _execute_tests_and_create_run_report(
                 save_run_report(asdict(report), basename, language, atomic_state)
                 return report
 
-            # Run the test command
+            effective_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(test_file.parent)
             result = subprocess.run(
-                test_cmd,
+                test_cmd.command,
                 shell=True,
                 capture_output=True,
                 text=True,
                 timeout=300,
                 env=clean_env,
-                cwd=str(test_file.parent),
+                cwd=effective_cwd,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True
             )
@@ -1503,13 +1503,13 @@ def sync_orchestration(
                                                 stdin=subprocess.DEVNULL, env=clean_env, start_new_session=True
                                             )
                                         else:
-                                            # Use shell command for non-Python
+                                            fix_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(pdd_files['test'].parent)
                                             test_result = subprocess.run(
-                                                test_cmd,
+                                                test_cmd.command,
                                                 shell=True,
                                                 capture_output=True, text=True, timeout=300,
                                                 stdin=subprocess.DEVNULL, env=clean_env,
-                                                cwd=str(pdd_files['test'].parent),
+                                                cwd=fix_cwd,
                                                 start_new_session=True
                                             )
                                         error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
@@ -1569,9 +1569,19 @@ def sync_orchestration(
                                 success = result.get('success', False)
                                 current_cost_ref[0] += result.get('cost', 0.0)
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                if operation == 'test': success = pdd_files['test'].exists()
-                                else: success = bool(result[0])
-                                # Cost is always at index 1 in both 3-tuple and 4-tuple returns
+                                if operation == 'test':
+                                    # Issue #1072: Use agentic_success if available (TestResult NamedTuple)
+                                    agentic_flag = getattr(result, 'agentic_success', None) or (result[3] if len(result) >= 4 else None)
+                                    if agentic_flag is not None:
+                                        success = agentic_flag
+                                    else:
+                                        success = pdd_files['test'].exists()
+                                    # Extract error message if present
+                                    error_msg = getattr(result, 'error_message', '') or (result[4] if len(result) >= 5 else '')
+                                    if not success and error_msg:
+                                        errors.append(f"Agentic test generation failed: {error_msg}")
+                                else:
+                                    success = bool(result[0])
                                 cost = result[1] if len(result) >= 2 and isinstance(result[1], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
@@ -1581,17 +1591,17 @@ def sync_orchestration(
                             errors.append(f"Exception during '{operation}': {e}")
                             success = False
                     
-                        # Log update
+                        # Log update — extract cost/model regardless of success (#1072)
                         duration = time.time() - op_start_time
                         actual_cost = 0.0
                         model_name = "unknown"
+                        if isinstance(result, dict):
+                            actual_cost = result.get('cost', 0.0)
+                            model_name = result.get('model', 'unknown')
+                        elif isinstance(result, tuple) and len(result) >= 3:
+                            actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
+                            model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
                         if success:
-                            if isinstance(result, dict):
-                                 actual_cost = result.get('cost', 0.0)
-                                 model_name = result.get('model', 'unknown')
-                            elif isinstance(result, tuple) and len(result) >= 3:
-                                 actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
-                                 model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)

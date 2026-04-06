@@ -52,6 +52,8 @@ from pdd.core.cloud import (
     PDD_JWT_TOKEN_ENV,
     PDD_CLOUD_TIMEOUT_ENV,
     get_cloud_timeout,
+    get_cloud_request_timeout,
+    CLOUD_CONNECT_TIMEOUT,
     AuthError,
     NetworkError,
     RateLimitError
@@ -542,6 +544,39 @@ def test_get_cloud_timeout_returns_int(clean_env):
     with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "600"}):
         timeout = get_cloud_timeout()
         assert isinstance(timeout, int)
+
+
+# -----------------------------------------------------------------------------
+# Unit Tests: get_cloud_request_timeout (tuple for requests library)
+# -----------------------------------------------------------------------------
+
+def test_get_cloud_request_timeout_returns_tuple(clean_env):
+    """Test that get_cloud_request_timeout returns a (connect, read) tuple."""
+    timeout = get_cloud_request_timeout()
+    assert isinstance(timeout, tuple)
+    assert len(timeout) == 2
+
+
+def test_get_cloud_request_timeout_connect_is_short(clean_env):
+    """Test that connect timeout is the short CLOUD_CONNECT_TIMEOUT constant."""
+    connect, _ = get_cloud_request_timeout()
+    assert connect == CLOUD_CONNECT_TIMEOUT
+    assert connect == 30
+
+
+def test_get_cloud_request_timeout_read_uses_cloud_timeout(clean_env):
+    """Test that read timeout comes from get_cloud_timeout()."""
+    _, read = get_cloud_request_timeout()
+    assert read == get_cloud_timeout()
+    assert read == 900  # default
+
+
+def test_get_cloud_request_timeout_respects_env_var(clean_env):
+    """Test that PDD_CLOUD_TIMEOUT env var controls the read timeout in the tuple."""
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "480"}):
+        connect, read = get_cloud_request_timeout()
+        assert connect == 30
+        assert read == 480
 
 
 # --- Bug #470: Incorrect auth command reference in error messages ---

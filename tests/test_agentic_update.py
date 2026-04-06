@@ -504,3 +504,133 @@ def test_successful_update_renders_markdown(tmp_path: Path, mock_deps: Tuple[Mag
         for call in call_args
     )
     assert found_markdown, "Expected agent output to be rendered with Markdown"
+
+
+def test_agent_task_raises_exception(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that an exception from run_agentic_task is handled gracefully."""
+    _, _, mock_run, _ = mock_deps
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    mock_run.side_effect = RuntimeError("Agent process crashed")
+
+    success, msg, cost, model, changed = run_agentic_update(
+        str(prompt_file), str(code_file), quiet=True
+    )
+
+    assert not success
+    assert "Agentic task failed with an exception" in msg
+    assert cost == 0.0
+    assert model == ""
+    assert changed == []
+
+
+def test_get_available_agents_raises_exception(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that an exception from get_available_agents is handled gracefully."""
+    mock_agents, _, _, _ = mock_deps
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    mock_agents.side_effect = OSError("Cannot check agents")
+
+    success, msg, cost, model, changed = run_agentic_update(
+        str(prompt_file), str(code_file), quiet=True
+    )
+
+    assert not success
+    assert "Failed to check agent availability" in msg
+    assert cost == 0.0
+
+
+def test_explicit_valid_test_files(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that explicitly provided valid test files are passed to the template."""
+    _, mock_load, _, _ = mock_deps
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    test_file = tmp_path / "test_code.py"
+    prompt_file.touch()
+    code_file.touch()
+    test_file.write_text("def test_something(): pass\n")
+
+    run_agentic_update(
+        str(prompt_file),
+        str(code_file),
+        test_files=[test_file],
+        quiet=True,
+    )
+
+    args, kwargs = mock_load.return_value.format.call_args
+    test_paths_str = kwargs.get("test_paths", "")
+    assert "test_code.py" in test_paths_str
+
+
+def test_return_tuple_types(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Verify the return tuple has the correct types in all cases."""
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    success, msg, cost, model, changed = run_agentic_update(
+        str(prompt_file), str(code_file), quiet=True
+    )
+
+    assert isinstance(success, bool)
+    assert isinstance(msg, str)
+    assert isinstance(cost, float)
+    assert isinstance(model, str)
+    assert isinstance(changed, list)
+
+
+def test_new_test_files_detected_after_agent_run(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that test files created by the agent during the run are detected as changed."""
+    _, _, mock_run, _ = mock_deps
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    old_time = time.time() - 100
+    os.utime(prompt_file, (old_time, old_time))
+
+    new_test = tmp_path / "test_code.py"
+
+    def simulate_agent_creates_test(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        # Agent modifies the prompt and creates a new test file
+        prompt_file.touch()
+        new_test.write_text("def test_new(): pass\n")
+        return True, "Done", 0.03, "claude"
+
+    mock_run.side_effect = simulate_agent_creates_test
+
+    success, msg, cost, model, changed = run_agentic_update(
+        str(prompt_file), str(code_file), quiet=True
+    )
+
+    assert success is True
+    # The new test file should be in the changed files
+    assert str(new_test.resolve()) in changed
+
+
+def test_quiet_suppresses_output(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Test that quiet=True suppresses console output on failure paths."""
+    mock_agents, _, _, mock_console = mock_deps
+    mock_agents.return_value = []
+
+    prompt_file = tmp_path / "test.prompt"
+    code_file = tmp_path / "code.py"
+    prompt_file.touch()
+    code_file.touch()
+
+    run_agentic_update(str(prompt_file), str(code_file), quiet=True)
+
+    # Console should NOT have been called when quiet=True
+    mock_console.print.assert_not_called()

@@ -9,9 +9,13 @@ entries with existing ones.
 from __future__ import annotations
 
 import json
+import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def load_registry(project_root: Path) -> dict:
@@ -204,20 +208,27 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     if root_arch.exists():
         results.append(root_arch)
 
-    # Scan immediate subdirectories
+    # Recursively scan subdirectories (bounded depth)
+    max_depth = 4
+    excluded = {"node_modules", "__pycache__", ".git", "venv", ".venv", "env"}
     try:
-        children = sorted(project_root.iterdir())
-    except (OSError, IOError):
-        return results
-
-    for child in children:
-        if not child.is_dir() or child.name.startswith("."):
-            continue
-        if child.name in ("node_modules", "__pycache__", ".git"):
-            continue
-        arch_file = child / "architecture.json"
-        if arch_file.exists():
-            results.append(arch_file)
+        for dirpath, dirnames, filenames in os.walk(project_root):
+            # Enforce depth limit
+            rel = Path(dirpath).relative_to(project_root)
+            depth = len(rel.parts)
+            if depth >= max_depth:
+                dirnames.clear()
+                continue
+            dirnames[:] = sorted(
+                d for d in dirnames
+                if not d.startswith(".") and d not in excluded
+            )
+            if "architecture.json" in filenames:
+                arch_path = Path(dirpath) / "architecture.json"
+                if arch_path != root_arch:
+                    results.append(arch_path)
+    except (OSError, IOError) as exc:
+        logger.warning("Error scanning %s for architecture files: %s", project_root, exc)
 
     return results
 

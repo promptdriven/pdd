@@ -54,6 +54,10 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
 {step9_output}
 </step9_output>
 
+<step9_test_verification>
+{step9_test_verification}
+</step9_test_verification>
+
 % Your Task
 
 1. **Run the generated test**
@@ -80,14 +84,19 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
    - If any mock assumes behavior that contradicts the investigation findings, report: FAIL: Test does not work as expected — mock assumptions contradict investigation findings
    - This prevents "green tests, broken fix" scenarios where mocks encode incorrect assumptions
 
-5. **Classify E2E test necessity**
+5. **Scope completeness verification**
+   Step 6's expansion items (injected by the orchestrator): `{step6_expansion_items}`
+   - If the value is not `none`, verify that the generated tests cover every listed item
+   - If any listed item lacks dedicated test coverage, note: "WARNING: Tests may have incomplete scope — the following expansion items lack coverage: [list items]." This is informational for reviewers, not a workflow-stopping condition.
+
+6. **Classify E2E test necessity**
    Determine whether an E2E test would add value beyond the unit test created in Step 9.
    - Answer: "Is there a user-facing behavior or integration path NOT already covered by the unit test?"
    - Output `E2E_NEEDED: yes` if the bug has user-facing symptoms (CLI output, API response, UI behavior) that the unit test cannot verify because it mocks the integration boundary.
    - Output `E2E_NEEDED: no` if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path.
    - Include a one-line justification after the marker (e.g., `E2E_NEEDED: no — unit test covers the full code path from input to output with no mocked boundaries`).
 
-6. **Summarize the investigation**
+7. **Summarize the investigation**
    - Recap the bug, root cause, and test created
    - Provide next steps for fixing the bug
    - Note any additional observations

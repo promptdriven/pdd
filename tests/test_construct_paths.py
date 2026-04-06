@@ -3418,4 +3418,3 @@ class TestStripLanguageSuffixWithSubdir:
             Path("/Users/me/project/prompts/ci_validation_python.prompt")
         )
         assert result == "ci_validation"
-

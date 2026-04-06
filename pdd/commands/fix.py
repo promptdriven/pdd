@@ -62,6 +62,7 @@ def _is_user_story_file(value: str) -> bool:
     help="Maximum post-push CI fix attempts (Agentic mode).",
 )
 @click.option("--skip-ci", is_flag=True, help="Skip post-push CI validation (Agentic mode).")
+@click.option("--skip-cleanup", is_flag=True, help="Skip Step 11 code cleanup (Agentic mode).")
 @click.option("--output-test", type=click.Path(), help="Specify where to save the fixed unit test file.")
 @click.option("--output-code", type=click.Path(), help="Specify where to save the fixed code file.")
 @click.option("--output-results", type=click.Path(), help="Specify where to save the results log.")
@@ -87,6 +88,14 @@ def _is_user_story_file(value: str) -> bool:
         "created by `pdd bug` are known to be correct and only the code should be fixed."
     ),
 )
+@click.option(
+    "--failure-aware-retries/--no-failure-aware-retries",
+    default=True,
+    help=(
+        "Enable/disable failure-aware retry short-circuiting in --loop mode "
+        "(syntax/import and timeout/flaky heuristics)."
+    ),
+)
 @click.pass_context
 @log_operation(operation="fix", clears_run_report=True)
 @track_cost
@@ -101,6 +110,7 @@ def fix(
     no_github_state: bool,
     ci_retries: int,
     skip_ci: bool,
+    skip_cleanup: bool,
     output_test: Optional[str],
     output_code: Optional[str],
     output_results: Optional[str],
@@ -111,6 +121,7 @@ def fix(
     auto_submit: bool,
     agentic_fallback: bool,
     protect_tests: bool,
+    failure_aware_retries: bool,
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
     """
     Fix code/tests manually, apply a story-driven prompt fix, or orchestrate an agentic issue fix.
@@ -141,6 +152,7 @@ def fix(
                 protect_tests=protect_tests,
                 ci_retries=ci_retries,
                 skip_ci=skip_ci,
+                skip_cleanup=skip_cleanup,
             )
 
             if not quiet:
@@ -243,6 +255,7 @@ def fix(
                 strength=None,
                 temperature=None,
                 protect_tests=protect_tests,
+                failure_aware_retries=failure_aware_retries,
             )
 
             total_cost += cost

@@ -875,7 +875,7 @@ If multiple development language prompt files exist for the same basename, sync 
 
 The sync command automatically detects what files exist and executes the appropriate workflow:
 
-1. **auto-deps**: Find and inject relevant dependencies into the prompt if needed
+1. **auto-deps**: Find and inject relevant dependencies into the prompt — both code examples and documentation files (schema docs, API docs, etc.). Removes redundant inline content that duplicates included documents.
 2. **generate**: Create or update the code module from the prompt
 3. **example**: Generate usage example if it doesn't exist or is outdated
 4. **crash**: Fix any runtime errors to make code executable
@@ -1975,7 +1975,7 @@ You can configure these keys using `pdd setup` or by setting them in your shell'
 
 #### Agentic E2E Fix Mode
 
-For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates a 10-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation.
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an 11-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation and code cleanup.
 
 **How it Works:**
 
@@ -1991,6 +1991,7 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 8. **Run PDD Fix**: Execute `pdd fix` sequentially on failing unit tests for each dev unit
 9. **Verify All**: Final verification that all tests pass locally
 10. **CI Validation**: Poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate CI-specific issues (lint, artifacts, build)
+11. **Code Cleanup**: Review all changes from the workflow and clean up code quality issues (debug statements, unused imports, duplicated code); revert if tests fail
 
 **Resumable Operations:**
 
@@ -2345,15 +2346,15 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 2. **Documentation check** - Review repo documentation to determine if this is a bug or user error. Posts comment with findings.
 
-3. **Triage** - Assess if enough information is provided to proceed. Posts comment requesting more info if needed.
+3. **Triage** - Assess if enough information is provided to proceed. If the issue already contains a detailed root cause analysis with file paths, line numbers, and causal explanation, fast-tracks to root cause analysis (skipping API research and reproduction). Posts comment requesting more info if needed.
 
-4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce).
+4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Posts comment explaining the root cause.
+5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
 
 5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
+6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels and all distinct code paths (first-run, resume, retry, error recovery) to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
 
 7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
@@ -2402,7 +2403,7 @@ See the [fix command](#6-fix) documentation for details on the agentic E2E fix w
 
 ### 15. auto-deps
 
-Analyze a prompt file and search a directory or glob pattern for potential dependencies/examples to determine and insert into the prompt. Auto-deps automatically determines what parts of each dependency are needed and emits appropriate selectors on new and existing `<include>` tags.
+Analyze a prompt file and search for potential dependencies — both code examples and documentation files (schema docs, API docs, PRD sections) — to determine and insert into the prompt. Auto-deps automatically determines what parts of each dependency are needed and emits appropriate selectors on new and existing `<include>` tags. Automatically removes redundant inline content that duplicates what an included document provides.
 
 ```
 pdd [GLOBAL OPTIONS] auto-deps [OPTIONS] PROMPT_FILE DIRECTORY_PATH
@@ -2416,6 +2417,15 @@ Options:
 - `--output LOCATION`: Specify where to save the modified prompt file with dependencies inserted. The default file name is `<basename>_with_deps.prompt`. If an environment variable `PDD_AUTO_DEPS_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--csv FILENAME`: Specify the CSV file that contains or will contain dependency information. Default is "project_dependencies.csv". If the environment variable`PDD_AUTO_DEPS_CSV_PATH` is set, that path will be used unless overridden by this option.
 - `--force-scan`: Force rescanning of all potential dependency files even if they exist in the CSV file.
+- `--include-docs`: Include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Default: disabled.
+- `--no-dedup`: Skip the redundant inline content removal pass.
+- `--concurrency N`: Maximum number of parallel LLM calls for dependency analysis (default: 1).
+
+The command uses a two-stage retrieval pipeline when candidates exceed 50:
+1. **Embedding search**: Embeds the prompt and candidate files, retrieving the top-50 candidates by cosine similarity
+2. **LLM reranking**: Uses LLM-as-judge to select the most relevant dependencies from candidates
+
+After inserting `<include>` directives, the command performs a **deduplication pass** that identifies and removes inline content in the prompt that semantically duplicates what the included documents already provide.
 
 The command maintains a CSV file with the following columns:
 - `full_path`: The full path to the dependency file
@@ -2428,14 +2438,17 @@ The command maintains a CSV file with the following columns:
 
 Examples:
 ```
-# Search all Python files in examples (recursive)
-pdd [GLOBAL OPTIONS] auto-deps --output prompts/data_pipeline_with_deps.prompt --csv project_deps.csv data_processing_pipeline_python.prompt "examples/**/*.py"
+# Search code examples and documentation files
+pdd auto-deps --include-docs my_module_python.prompt "context/"
 
-# Search example stubs following a naming convention
-pdd [GLOBAL OPTIONS] auto-deps data_processing_pipeline_python.prompt "context/*_example.py"
+# Search only Python examples (skip doc discovery)
+pdd auto-deps my_module_python.prompt "context/*_example.py"
 
-# Search an entire directory (non-recursive)
-pdd [GLOBAL OPTIONS] auto-deps data_processing_pipeline_python.prompt "examples/*"
+# Force rescan with custom concurrency
+pdd auto-deps --force-scan --concurrency 30 my_module_python.prompt "context/"
+
+# Skip redundant content removal
+pdd auto-deps --no-dedup my_module_python.prompt "docs/"
 ```
 
 ### 16. verify
@@ -2903,6 +2916,8 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_BUG_OUTPUT_PATH`**: Default path for the unit test file generated by the `bug` command.
 - **`PDD_AUTO_DEPS_OUTPUT_PATH`**: Default path for the modified prompt files generated by the `auto-deps` command.
 - **`PDD_AUTO_DEPS_CSV_PATH`**: Default path and filename for the CSV file used by the auto-deps command to store dependency information. If set, this overrides the default "project_dependencies.csv" filename.
+- **`PDD_AUTO_DEPS_CONCURRENCY`**: Default maximum number of parallel LLM calls for auto-deps dependency analysis (default: 1).
+- **`PDD_EMBEDDING_MODEL`**: Embedding model used for two-stage retrieval in auto-deps (default: `text-embedding-3-small`).
 - **`PDD_VERIFY_RESULTS_OUTPUT_PATH`**: Default path for the results log file generated by the `verify` command.
 - **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the final code file generated by the `verify` command.
 - **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
@@ -3022,6 +3037,8 @@ Here are some common issues and their solutions:
    - Use the `--force-scan` option to ensure all files are re-analyzed
    - Verify the CSV file format and content
    - Check file permissions for the dependency directory
+   - For documentation dependencies, ensure `.md`/`.txt`/`.rst` files are in the search path and `--include-docs` is set
+   - If redundant content removal is too aggressive, use `--no-dedup` to skip it
 
 7. **Command Timeout**:
    - Check internet connection
@@ -3200,6 +3217,38 @@ PDD can be integrated into various development workflows. Here are the conceptua
 
 **Key Insight**: Feature additions should flow from prompt changes rather than direct code modifications.
 
+### CI Drift Detection & Auto-Heal
+
+**Conceptual Flow**: `detect drift → heal (update/sync) → commit → push`
+
+**Purpose**: Automatically detect and fix prompt/example drift in CI pipelines.
+
+**Process**:
+1. Scan modules for drift using `sync_determine_operation` (no LLM calls)
+2. For stale prompts: run `pdd update` to sync code changes back to prompts
+3. For stale examples: run `pdd sync` with example+verify operations
+4. Stage and commit healed files with a descriptive message
+5. Push changes to the current branch
+
+**Usage:**
+```bash
+# Scan all modules (main branch trigger)
+python -m pdd.ci_drift_heal
+
+# Scan specific modules (PR trigger)
+python -m pdd.ci_drift_heal --modules module_a module_b
+
+# With budget cap and skip-ci flag
+python -m pdd.ci_drift_heal --budget-cap 5.00 --skip-ci
+```
+
+**Key Options:**
+- `--modules`: Limit detection to specific modules (for PR-scoped checks)
+- `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
+- `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
+
+**Key Insight**: This workflow automates the Code-to-Prompt Update pattern for CI, ensuring prompts stay in sync with code changes without manual intervention.
+
 ### Critical Dependencies
 
 When using these workflows, remember these crucial tool dependencies:
@@ -3209,8 +3258,25 @@ When using these workflows, remember these crucial tool dependencies:
 - 'fix' requires runnable code created/verified by 'crash'
 - 'test' must be created before using 'fix'
 - Always update 'example' after major prompt interface changes
+- 'ci_drift_heal' requires modules to have existing prompts and code files
 
 For detailed command examples for each workflow, see the respective command documentation sections.
+
+### CI Auto-Heal
+
+**Workflow File**: `.github/workflows/auto-heal-drift.yml`
+
+**Purpose**: Automatically detect and fix prompt-code drift in CI.
+
+**Triggers**:
+- **Pull requests**: Heals only modules changed by the PR, commits fixes to the PR branch
+- **Push to main**: Heals all modules, commits fixes directly to main
+
+**Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
+
+**Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
+
+For full details, see [docs/ci-auto-heal.md](docs/ci-auto-heal.md).
 
 ## Integrations
 
@@ -3223,6 +3289,10 @@ A dedicated VS Code extension (`utils/vscode_prompt`) provides syntax highlighti
 ### MCP Server (for Agentic Clients)
 
 The `pdd-mcp-server` (`utils/mcp`) acts as a bridge using the Model Context Protocol (MCP). This allows agentic clients like Cursor, Claude Desktop, Continue.dev, and others to invoke `pdd-cli` commands programmatically. See the [MCP Server README](utils/mcp/README.md) for configuration and usage instructions.
+
+### CI Drift Detection
+
+PDD includes a CI-ready drift detection and auto-heal script (`pdd/ci_drift_heal.py`) that can be integrated into GitHub Actions or other CI systems. It scans for prompt/example drift, heals it using `pdd update` and `pdd sync`, and commits the results. See the [Workflow Integration](#ci-drift-detection--auto-heal) section for usage details.
 
 ## Utilities
 

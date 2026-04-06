@@ -990,6 +990,12 @@ def _select_model_candidates(
     # Allow models with empty api_key (e.g., Bedrock using AWS creds, local models)
     available_df = model_df[model_df['api_key'].notna()].copy()
 
+    # In CI / headless environments, exclude local models (lm_studio, ollama)
+    # that require a running local server — they hang on connection attempts.
+    if os.environ.get("PDD_SKIP_LOCAL_MODELS"):
+        local_providers = {"lm_studio", "ollama"}
+        available_df = available_df[~available_df['provider'].str.lower().isin(local_providers)]
+
     # --- Check if the initial DataFrame itself was empty ---
     if model_df.empty:
         raise ValueError("Loaded model data is empty. Check CSV file.")
@@ -2498,6 +2504,16 @@ def llm_invoke(
                                     logger.info("[INFO] Claude with thinking/reasoning enabled: forcing temperature=1 for compliance.")
                                 litellm_kwargs['temperature'] = 1
                                 current_temperature = 1
+                    except Exception:
+                        pass
+                    # Gemini 3 requirement: temperature < 1.0 causes infinite loops and
+                    # degraded reasoning. Force temperature=1 for all Gemini 3+ models.
+                    try:
+                        if 'gemini-3' in model_name_litellm.lower() and litellm_kwargs.get('temperature', 0) < 1:
+                            if verbose:
+                                logger.info(f"[INFO] Gemini 3 model detected: forcing temperature=1 (was {litellm_kwargs.get('temperature')}).")
+                            litellm_kwargs['temperature'] = 1
+                            current_temperature = 1
                     except Exception:
                         pass
                     if verbose:

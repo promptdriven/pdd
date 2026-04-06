@@ -93,14 +93,18 @@ class TestStep10PromptFormatting:
 
         # This should NOT raise KeyError
         formatted = _strip_pdd_metadata(template).format(**step10_context)
-        assert "step 10 of 10" in formatted
+        assert "step 10 of 11" in formatted
         assert "CI Failure Information" in formatted
         assert "github_actions" in formatted
         assert "{issue_url}" not in formatted  # Should be substituted
 
 
+@pytest.mark.private_prompt
 def test_generation_prompts_include_ci_examples():
-    """The new generation prompts should include the examples they reference."""
+    """The new generation prompts should include the examples they reference.
+
+    Reads _python.prompt files not synced to the public repo.
+    """
     orchestrator_prompt = _read_repo_text("pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt")
     ci_validation_prompt = _read_repo_text("pdd/prompts/ci_validation_python.prompt")
 
@@ -210,8 +214,12 @@ def test_fix_prompt_dependency_points_to_real_prompt():
     assert "fix_python.prompt" not in arch_entry["dependencies"]
 
 
+@pytest.mark.private_prompt
 def test_ci_validation_prompt_uses_required_check_buckets():
-    """The CI validation prompt should scope polling to merge-blocking checks."""
+    """The CI validation prompt should scope polling to merge-blocking checks.
+
+    Reads ci_validation_python.prompt not synced to the public repo.
+    """
     prompt = _read_repo_text("pdd/prompts/ci_validation_python.prompt")
 
     assert "gh pr checks --required --json name,state,bucket,link" in prompt

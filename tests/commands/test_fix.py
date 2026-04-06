@@ -44,10 +44,20 @@ for _module_name in _side_effect_modules:
 
 import pdd.commands.templates as _templates_module
 from pdd.core.errors import custom_theme as _real_theme
+from pdd.core.errors import handle_error as _real_handle_error
 
 _templates_module.custom_theme = _real_theme
 
-del _import_mocks, _saved_modules, _module_name, _side_effect_modules, _templates_module, _real_theme
+# Repair handle_error binding leaked to sibling command modules that were
+# imported as a side effect (via pdd.commands.__init__) while pdd.core.errors
+# was temporarily mocked above.
+for _mod_name in list(sys.modules):
+    if _mod_name.startswith("pdd.commands."):
+        _mod = sys.modules[_mod_name]
+        if hasattr(_mod, 'handle_error') and isinstance(getattr(_mod, 'handle_error'), MagicMock):
+            setattr(_mod, 'handle_error', _real_handle_error)
+
+del _import_mocks, _saved_modules, _module_name, _side_effect_modules, _templates_module, _real_theme, _real_handle_error
 
 
 @pytest.fixture
@@ -138,6 +148,7 @@ def test_agentic_mode_passes_all_options(runner: CliRunner, mock_deps) -> None:
         "protect_tests": True,
         "ci_retries": 4,
         "skip_ci": True,
+        "skip_cleanup": False,
     }
 
 
@@ -229,6 +240,7 @@ def test_manual_non_loop_mode_passes_error_file(runner: CliRunner, mock_deps) ->
     assert kwargs["loop"] is False
     assert kwargs["verification_program"] is None
     assert kwargs["protect_tests"] is False
+    assert kwargs["failure_aware_retries"] is True
 
 
 def test_manual_loop_mode_uses_no_error_file(runner: CliRunner, mock_deps) -> None:
@@ -252,6 +264,29 @@ def test_manual_loop_mode_uses_no_error_file(runner: CliRunner, mock_deps) -> No
     assert kwargs["error_file"] is None
     assert kwargs["loop"] is True
     assert kwargs["verification_program"] == "verify.py"
+    assert kwargs["failure_aware_retries"] is True
+
+
+def test_manual_loop_mode_passes_no_failure_aware_retries(runner: CliRunner, mock_deps) -> None:
+    mock_deps["fix_main"].return_value = (True, "fixed test", "fixed code", 1, 0.1, "gpt-4.1")
+
+    result = runner.invoke(
+        fix,
+        [
+            "--manual",
+            "--loop",
+            "--no-failure-aware-retries",
+            "--verification-program",
+            "verify.py",
+            "prompt.prompt",
+            "code.py",
+            "tests/test_fix.py",
+        ],
+    )
+
+    assert result.exit_code == 0
+    kwargs = mock_deps["fix_main"].call_args.kwargs
+    assert kwargs["failure_aware_retries"] is False
 
 
 def test_manual_multiple_test_files_calls_fix_main_for_each(runner: CliRunner, mock_deps) -> None:

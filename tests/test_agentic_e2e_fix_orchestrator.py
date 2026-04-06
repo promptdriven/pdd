@@ -7,6 +7,7 @@ raising KeyError on undefined placeholders.
 Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
+import json
 import re
 import subprocess
 import sys
@@ -17,7 +18,7 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from pdd.load_prompt_template import load_prompt_template
-from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently
+from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently, _classify_verification_failure, _handle_verification_failure
 
 
 def _strip_pdd_metadata(template: str) -> str:
@@ -462,6 +463,8 @@ def e2e_fix_mock_dependencies(tmp_path):
     - save_workflow_state: No-op
     - clear_workflow_state: No-op
     - _get_file_hashes: Returns empty dict (skip git operations)
+    - _detect_changed_files: Returns ["module.py"] (simulate progress so
+      per-cycle file-hash comparison doesn't block multi-cycle tests)
     - _commit_and_push: No-op (skip git operations)
     """
     with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
@@ -471,9 +474,12 @@ def e2e_fix_mock_dependencies(tmp_path):
          patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save_state, \
          patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear_state, \
          patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+         patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files") as mock_detect, \
          patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
          patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment") as mock_check_e2e, \
-         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify:
+         patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify, \
+         patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post_comment, \
+         patch("pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup", side_effect=lambda **kw: (kw["total_cost"], kw["changed_files"])):
 
         # Default: successful run, generic output
         mock_run.return_value = (True, "Step output", 0.1, "gpt-4")
@@ -485,6 +491,8 @@ def e2e_fix_mock_dependencies(tmp_path):
         mock_save_state.return_value = None
         # Default: no file hashes
         mock_hashes.return_value = {}
+        # Default: simulate file changes so per-cycle progress check passes
+        mock_detect.return_value = ["module.py"]
         # Default: commit succeeds
         mock_commit.return_value = (True, "No changes to commit")
         # Default: E2E environment available
@@ -1410,6 +1418,214 @@ class TestPushWithRetryTokenFile:
         mock_push.assert_called_once_with(tmp_path, "myowner", "myrepo")
 
 
+class TestPushWithRetryNonFastForward:
+    """Tests for _push_with_retry handling non-fast-forward push errors.
+
+    When checkout_existing_issue_branch() rebases an issue branch onto
+    origin/main, commit SHAs diverge from the remote branch. A plain
+    `git push` fails with non-fast-forward. The fix should detect this
+    and retry with --force-with-lease (safe force push).
+
+    Regression test for issue #608 pdd fix failure.
+    """
+
+    def test_non_fast_forward_retries_with_force_with_lease(self, tmp_path):
+        """Non-fast-forward push error should trigger --force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    "To https://github.com/owner/repo.git\n"
+                    " ! [rejected]        HEAD -> fix/issue-608 (non-fast-forward)\n"
+                    "error: failed to push some refs to 'https://github.com/owner/repo.git'\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind\n"
+                    "hint: its remote counterpart."
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True, f"Expected success after --force-with-lease retry, got error: {err}"
+        # Should have retried with --force-with-lease
+        force_push_calls = [c for c in calls if "--force-with-lease" in c]
+        assert len(force_push_calls) == 1, (
+            f"Expected exactly one --force-with-lease retry, got {len(force_push_calls)}. "
+            f"All calls: {calls}"
+        )
+
+    def test_non_fast_forward_logs_warning(self, tmp_path):
+        """Non-fast-forward retry should log a warning via console.print."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect), \
+             patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console:
+            _push_with_retry(tmp_path, "owner", "repo")
+
+        mock_console.print.assert_called()
+        warning_text = mock_console.print.call_args[0][0]
+        assert "yellow" in warning_text.lower() or "[yellow]" in warning_text
+        assert "force-with-lease" in warning_text.lower() or "non-fast-forward" in warning_text.lower()
+
+    def test_non_fast_forward_fetch_first_not_detected(self, tmp_path):
+        """'fetch first' rejection (without non-fast-forward) should NOT trigger force-with-lease.
+
+        Only specific non-fast-forward markers should trigger the retry,
+        not generic [rejected] which could be protected branches or hooks.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> main (fetch first)\n"
+                    "error: failed to push some refs\n"
+                    "hint: Updates were rejected because the remote contains work that you do not\n"
+                    "hint: have locally."
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        # Should NOT retry — "fetch first" means remote has new work, force-push would lose it
+        assert success is False
+
+    def test_protected_branch_rejection_not_detected(self, tmp_path):
+        """Protected branch rejection should NOT trigger force-with-lease retry."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [remote rejected] HEAD -> main (protected branch hook declined)\n"
+                    "error: failed to push some refs"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "protected branch" in err
+
+    def test_non_fast_forward_force_with_lease_also_fails(self, tmp_path):
+        """If --force-with-lease also fails, return the error."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if "push" in cmd:
+                result.returncode = 1
+                if "--force-with-lease" in cmd:
+                    result.stderr = (
+                        "! [rejected]        HEAD -> fix/issue-1 (stale info)\n"
+                        "error: failed to push some refs (--force-with-lease)"
+                    )
+                else:
+                    result.stderr = (
+                        " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                        "hint: Updates were rejected because the tip of your current branch is behind"
+                    )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is False
+        assert "force-with-lease" in err
+
+    def test_non_fast_forward_takes_precedence_over_auth_retry(self, tmp_path, monkeypatch):
+        """Non-fast-forward should be detected before auth failure check.
+
+        An error containing both non-ff markers and auth-like text should
+        be handled as non-fast-forward, not as an auth failure.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        # Set up a token file that should NOT be used for non-ff errors
+        token_file = tmp_path / "gh_token"
+        token_file.write_text("ghp_should_not_be_used")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        calls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            if cmd == ["git", "push", "-u", "origin", "HEAD"]:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected]        HEAD -> fix/issue-1 (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your current branch is behind\n"
+                    "hint: its remote counterpart.\n"
+                    "remote: HTTP 401: Unauthorized\n"
+                    "fatal: Authentication failed for 'https://example.com/owner/repo.git'\n"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run_side_effect):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+        # Should NOT have called git remote set-url (auth retry path)
+        set_url_calls = [c for c in calls if "set-url" in c]
+        assert len(set_url_calls) == 0, (
+            f"Non-fast-forward should not trigger auth retry. set-url calls: {set_url_calls}"
+        )
+
+    def test_commit_and_push_surfaces_force_push_success(self, tmp_path):
+        """_commit_and_push should return success when _push_with_retry uses --force-with-lease."""
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._push_with_retry") as mock_push, \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
+
+            # Simulate a file that changed during workflow
+            mock_hashes.return_value = {"backend/functions/get_waitlist_status.py": "new_hash"}
+            # Simulate _push_with_retry succeeding via --force-with-lease
+            mock_push.return_value = (True, "")
+            mock_run.return_value = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            success, message = _commit_and_push(
+                cwd=tmp_path, issue_number=608,
+                issue_title="Add fallback in get_waitlist_status.py",
+                repo_owner="promptdriven", repo_name="pdd_cloud",
+                initial_file_hashes={
+                    "backend/functions/get_waitlist_status.py": "old_hash"
+                },
+                quiet=True
+            )
+
+        assert success is True
+        assert "1 file(s)" in message
+        mock_push.assert_called_once_with(tmp_path, "promptdriven", "pdd_cloud")
+
+
 class TestProviderFailureAbort:
     """Tests for abort on consecutive provider failures."""
 
@@ -2268,10 +2484,15 @@ class TestIssue797TypeScriptTestFiles:
 
         assert "e2e/tests/login.spec.ts" in result
 
-    # ── _extract_test_files: inline regex (line 197) ──
+    # ── _extract_test_files: inline regex removed (issue #633) ──
 
-    def test_extract_test_files_inline_regex_matches_tsx_test_files(self, tmp_path):
-        """Inline references to .test.tsx files in issue content should be found."""
+    def test_extract_test_files_narrative_mentions_not_extracted(self, tmp_path):
+        """Inline references in issue narrative should NOT be extracted.
+
+        The inline regex was removed because it picked up files mentioned as
+        examples, not just files to verify. Files should be discovered via
+        markers, changed_files, or disk/git detection instead.
+        """
         test_dir = tmp_path / "src" / "__test__"
         test_dir.mkdir(parents=True)
         (test_dir / "Button.test.tsx").touch()
@@ -2280,7 +2501,31 @@ class TestIssue797TypeScriptTestFiles:
 
         result = _extract_test_files(issue_content, [], tmp_path)
 
-        assert "src/__test__/Button.test.tsx" in result
+        assert "src/__test__/Button.test.tsx" not in result
+
+    def test_extract_test_files_does_not_match_narrative_examples(self, tmp_path):
+        """Files mentioned as examples in issue narrative should NOT be extracted.
+
+        Issue #633 mentioned link-github-save-navigation.spec.ts as an example
+        of a broken test, and the regex incorrectly picked it up for verification.
+        The inline regex should only match files from markers or changed_files,
+        not from unstructured narrative text.
+        """
+        # The example file exists on disk (as it would in a real project)
+        e2e_dir = tmp_path / "frontend" / "e2e" / "tests" / "settings"
+        e2e_dir.mkdir(parents=True)
+        (e2e_dir / "link-github-save-navigation.spec.ts").touch()
+
+        issue_content = (
+            "## Problem\n\n"
+            "PDD bug step 11 generates Playwright E2E tests that look correct but contain subtle bugs.\n\n"
+            "**Concrete example**: PR #627 generated `frontend/e2e/tests/settings/link-github-save-navigation.spec.ts` with 3 bugs.\n\n"
+            "## Fix\n\nUpdate the step 11 prompt."
+        )
+
+        result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert "frontend/e2e/tests/settings/link-github-save-navigation.spec.ts" not in result
 
     # ── _verify_tests_independently: runner dispatch ──
 
@@ -2297,7 +2542,7 @@ class TestIssue797TypeScriptTestFiles:
         mock_pytest.assert_called_once()
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx jest src/__test__/Widget.test.tsx")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_tsx(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Jest .test.tsx files should NOT be run through pytest.
@@ -2306,6 +2551,8 @@ class TestIssue797TypeScriptTestFiles:
         which fails silently for TypeScript. The fix should use an appropriate
         runner (e.g., npx jest) for .test.tsx files.
         """
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest src/__test__/Widget.test.tsx", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "src" / "__test__"
@@ -2323,10 +2570,12 @@ class TestIssue797TypeScriptTestFiles:
         assert kwargs.get("shell") is False
 
     @patch("subprocess.run")
-    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file", return_value="npx playwright test e2e/login.spec.ts")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
     @patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output")
     def test_verify_independently_does_not_use_pytest_for_spec_ts(self, mock_pytest, mock_get_cmd, mock_subproc, tmp_path):
         """Playwright .spec.ts files should NOT be run through pytest."""
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx playwright test e2e/login.spec.ts", cwd=None)
         mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
 
         test_dir = tmp_path / "e2e"
@@ -3172,6 +3421,73 @@ class TestClassifyStepOutput:
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
 
 
+class TestClassifyStepOutputCodeBugPriority:
+    """Bug: _classify_step_output for step 3 only checks for NOT_A_BUG, missing
+    CODE_BUG/TEST_BUG/BOTH. When the LLM correctly emits CODE_BUG, tiers 1-3
+    return None, and tier 4 misclassifies as NOT_A_BUG — killing the workflow.
+
+    Fix: check positive tokens (CODE_BUG, TEST_BUG, BOTH) before NOT_A_BUG,
+    matching the fail-before-pass pattern used for Steps 1/2/9.
+    """
+
+    def test_code_bug_detected_in_step3(self):
+        """When Step 3 output contains CODE_BUG, return it (not None)."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "## Step 3: Root Cause Analysis (Cycle 1)\n\n**Status:** CODE_BUG\n\n### Failure Analysis\n..."
+        assert _classify_step_output(output, step_num=3) == "CODE_BUG"
+
+    def test_test_bug_detected_in_step3(self):
+        """When Step 3 output contains TEST_BUG, return it."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** TEST_BUG\n\nThe test expectations are wrong."
+        assert _classify_step_output(output, step_num=3) == "TEST_BUG"
+
+    def test_both_detected_in_step3(self):
+        """When Step 3 output contains BOTH, return it."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** BOTH\n\nCode and tests both need fixing."
+        assert _classify_step_output(output, step_num=3) == "BOTH"
+
+    def test_code_bug_prevents_not_a_bug_false_positive(self):
+        """Real failure case: long output with CODE_BUG at top and 'not caused
+        by the bug' language in the tail. Must return CODE_BUG, not None."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = (
+            "## Step 3: Root Cause Analysis (Cycle 1)\n\n"
+            "**Status:** CODE_BUG\n\n"
+            "### Failure Analysis\n\n"
+            "The Step 2 full-suite run reported failures across multiple test files. "
+            "I categorized every failure and traced each to its root cause. "
+            "**None are caused by the issue #449 fix** — they are all pre-existing.\n\n"
+            "#### Category A: `python` binary not found (6 tests)\n"
+            "- **Root cause:** Pre-existing environment issue.\n\n"
+            "#### Category B: Missing `pytest-mock` package (94 errors)\n"
+            "- **Root cause:** Pre-existing dependency issue.\n\n"
+            "### Root Cause\n\n"
+            "The **code bug** is confirmed and localized.\n"
+            "No test fixes needed — the issue #449 tests are correctly written.\n"
+            "The 111 other failures are pre-existing environmental issues.\n"
+        )
+        result = _classify_step_output(output, step_num=3)
+        assert result == "CODE_BUG", (
+            f"Expected CODE_BUG but got {result!r}. "
+            "Tier 4 would misclassify this as NOT_A_BUG because the tail "
+            "discusses 'not caused by the bug' — but CODE_BUG at the top "
+            "should take priority."
+        )
+
+    def test_not_a_bug_still_works(self):
+        """Regression: NOT_A_BUG detection still works when no positive token present."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        assert _classify_step_output("NOT_A_BUG", step_num=3) == "NOT_A_BUG"
+
+    def test_code_bug_takes_priority_over_not_a_bug(self):
+        """If both CODE_BUG and NOT_A_BUG appear, CODE_BUG wins (checked first)."""
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        output = "**Status:** CODE_BUG\n\nNote: this is NOT_A_BUG for the unrelated issue."
+        assert _classify_step_output(output, step_num=3) == "CODE_BUG"
+
+
 class TestIssue673CheckE2ESubdirectory:
     """Bug: _check_e2e_environment only checks repo root for playwright config.
 
@@ -3601,3 +3917,1253 @@ class TestSemanticTierConsoleLogging:
         assert "semantic" in console_output.lower(), (
             f"Expected console log about semantic detection but got: {console_output}"
         )
+
+
+class TestParseDevUnitsMarkerDistinction:
+    """Tests for _parse_dev_units to ensure it distinguishes absent vs empty markers."""
+
+    def test_parse_dev_units_returns_none_when_marker_absent(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "Analysis complete. I found some issues in the auth module."
+        assert _parse_dev_units(output) is None
+
+    def test_parse_dev_units_returns_empty_when_marker_present_but_empty(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "DEV_UNITS_IDENTIFIED: \nI found no issues."
+        assert _parse_dev_units(output) == ""
+
+    def test_parse_dev_units_returns_zero_when_marker_says_zero(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "DEV_UNITS_IDENTIFIED: 0"
+        assert _parse_dev_units(output) == "0"
+
+    def test_parse_dev_units_returns_value_when_marker_has_units(self):
+        from pdd.agentic_e2e_fix_orchestrator import _parse_dev_units
+        output = "DEV_UNITS_IDENTIFIED: auth_service, login_tests"
+        assert _parse_dev_units(output) == "auth_service, login_tests"
+
+
+class TestEmptyDevUnitsShortCircuit:
+    """Issue #903: When Step 5 returns 0 dev units, Steps 6-8 should be skipped
+    and the cycle loop should break immediately."""
+
+    def test_zero_dev_units_skips_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns 'DEV_UNITS_IDENTIFIED: 0', steps 6-8 must not run."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "Analysis complete.\nDEV_UNITS_IDENTIFIED: 0\nNo dev units need fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Steps 6, 7, 8 should be skipped when dev units = 0.
+        # Only steps 1-5 should run (5 calls), then cycle breaks.
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 0, (
+            f"Steps 6-8 should be skipped when dev units = 0, but these ran: {steps_that_ran}"
+        )
+
+    def test_zero_slash_zero_dev_units_skips_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns 'DEV_UNITS_IDENTIFIED: 0/0', steps 6-8 must not run."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: 0/0\n0/0 Dev Units Needed Fix", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 0, (
+            f"Steps 6-8 should be skipped when dev units = 0/0, but these ran: {steps_that_ran}"
+        )
+
+    def test_marker_present_but_empty_value_skips_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns 'DEV_UNITS_IDENTIFIED: ' (empty), steps 6-8 must be skipped."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "Analysis complete.\nDEV_UNITS_IDENTIFIED: \nI found no issues.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 0, (
+            f"Steps 6-8 should be skipped when marker is present but empty, but these ran: {steps_that_ran}"
+        )
+
+    def test_marker_absent_does_not_short_circuit(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When Step 5 returns output without DEV_UNITS_IDENTIFIED marker, steps 6-8 must run normally."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                # No DEV_UNITS_IDENTIFIED line at all — implies unknown state, should continue
+                return (True, "Analysis complete. I found some issues in the auth module.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 3, (
+            f"Steps 6-8 should run when marker is absent, but these ran: {steps_that_ran}"
+        )
+
+    def test_nonempty_dev_units_runs_steps_6_through_8(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Regression guard: when dev units ARE found, steps 6-8 must still run."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: auth_module, api_handler\n2 dev units need fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_labels = [call.kwargs.get('label', '') for call in mock_run.call_args_list]
+        steps_that_ran = [label for label in step_labels if any(f'step{s}' in label for s in [6, 7, 8])]
+        assert len(steps_that_ran) == 3, (
+            f"Steps 6-8 should run when dev units exist, but got: {step_labels}"
+        )
+
+
+class TestPerCycleFileHashComparison:
+    """Issue #903: The orchestrator should detect when a cycle made zero code
+    changes and stop cycling instead of burning wasted iterations."""
+
+    def test_no_file_changes_breaks_cycle_loop(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When file hashes are identical before and after a cycle,
+        the next cycle should NOT start."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 3
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: auth_module\n1 dev unit needs fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # _get_file_hashes returns same {} for all calls, and _detect_changed_files
+        # returns [] (no progress) to trigger the no-progress stop.
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", return_value={}), \
+             patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Should run exactly 9 steps (1 cycle) then break on no-progress detection.
+        assert mock_run.call_count == 9, (
+            f"Expected 9 step calls (1 cycle) but got {mock_run.call_count}."
+        )
+
+    def test_file_changes_allow_next_cycle(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """When files DO change between cycles, the orchestrator should continue
+        to the next cycle as normal."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+
+        call_count = [0]
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step5' in label:
+                return (True, "DEV_UNITS_IDENTIFIED: auth_module\n1 dev unit needs fixing.", 0.1, "gpt-4")
+            if 'step9' in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Override _get_file_hashes to return different hashes each call,
+        # simulating actual code changes.
+        hash_values = [
+            {},  # initial (before cycle 1)
+            {"pdd/auth.py": "hash_after_cycle1"},  # after cycle 1 — different from initial
+            {"pdd/auth.py": "hash_after_cycle2"},  # after cycle 2 — different from cycle 1
+        ]
+        hash_call_idx = [0]
+
+        def hash_side_effect(*args, **kwargs):
+            idx = min(hash_call_idx[0], len(hash_values) - 1)
+            hash_call_idx[0] += 1
+            return hash_values[idx]
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes", side_effect=hash_side_effect):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # When files change, both cycles should run = 18 steps
+        assert mock_run.call_count == 18, (
+            f"Expected 2 full cycles (18 steps) when files changed each cycle, "
+            f"but got {mock_run.call_count} step calls"
+        )
+
+
+class TestStep9ScopedTestExecution:
+    """Issue #903: Step 9 prompt should run only issue-related tests,
+    not the entire test suite."""
+
+    def test_step9_prompt_does_not_run_all_tests(self):
+        """The Step 9 prompt file must NOT instruct running 'pytest tests/ -v'
+        (all tests). Pre-existing failures in unrelated tests should not drive
+        cycle decisions."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_step9_verify_all_LLM.prompt"
+        assert prompt_path.exists(), f"Step 9 prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # The old prompt had "Run all unit tests: `pytest tests/ -v`"
+        # The fixed prompt should NOT contain this instruction.
+        assert "Run all unit tests: `pytest tests/ -v`" not in prompt, (
+            "Step 9 prompt still contains 'Run all unit tests: `pytest tests/ -v`' which runs "
+            "ALL tests. It should scope to issue-related tests only."
+        )
+
+    def test_step9_prompt_scopes_to_issue_related_tests(self):
+        """The Step 9 prompt file must instruct running only issue-related tests,
+        not the full test suite."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_step9_verify_all_LLM.prompt"
+        assert prompt_path.exists(), f"Step 9 prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # The fixed prompt should explicitly prohibit running the entire test suite
+        assert "Do NOT run the entire test suite" in prompt, (
+            "Step 9 prompt should explicitly instruct NOT to run the entire test suite. "
+            "Pre-existing failures in unrelated tests must not influence cycle decisions."
+        )
+
+
+class TestConvergencePromptRequirements:
+    """Issue #903: The orchestrator prompt must contain convergence requirements
+    so that regenerated code implements them."""
+
+    def test_orchestrator_prompt_contains_empty_dev_units_requirement(self):
+        """The orchestrator prompt file must contain requirement 5a
+        (empty dev-units short-circuit) so code generation includes it."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        assert prompt_path.exists(), f"Orchestrator prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # Requirement 5a should mention skipping steps when dev units are empty/0
+        assert "empty dev-units short-circuit" in prompt.lower() or "Empty dev-units short-circuit" in prompt, (
+            "Orchestrator prompt is missing requirement 5a: empty dev-units short-circuit"
+        )
+
+    def test_orchestrator_prompt_contains_file_hash_comparison_requirement(self):
+        """The orchestrator prompt file must contain requirement 5b
+        (per-cycle file-hash comparison) so code generation includes it."""
+        import pathlib
+
+        prompt_path = pathlib.Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        assert prompt_path.exists(), f"Orchestrator prompt not found at {prompt_path}"
+
+        prompt = prompt_path.read_text()
+
+        # Requirement 5b should mention per-cycle file hash comparison
+        assert "per-cycle file-hash" in prompt.lower() or "Per-cycle file-hash comparison" in prompt, (
+            "Orchestrator prompt is missing requirement 5b: per-cycle file-hash comparison"
+        )
+
+class TestClassifyVerificationFailure:
+    """Tests for _classify_verification_failure (issue #934).
+
+    All tests are deterministic pattern matching — no LLM mocks needed.
+    Unrecognized patterns default to test_failure without any LLM call.
+    """
+
+    def test_python_import_error(self):
+        """Python ImportError in pytest ^E format should be classified as import_error."""
+        output = "tests/test_login.py::test_auth\nE   ImportError: No module named 'login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_module_not_found_error(self):
+        """Python ModuleNotFoundError in pytest ^E format should be classified as import_error."""
+        output = "tests/test_login.py::test_auth\nE   ModuleNotFoundError: No module named 'pdd.login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_name_error_pytest_format(self):
+        """NameError in pytest traceback format should be classified as import_error."""
+        output = "tests/test_login.py::test_retry\nE   NameError: name '_count_planned_tests' is not defined"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_attribute_error_pytest_format(self):
+        """AttributeError in pytest traceback format should be classified as import_error."""
+        output = "tests/test_login.py::test_retry\nE   AttributeError: module 'login' has no attribute 'handle'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_python_syntax_error_pytest_format(self):
+        """SyntaxError in pytest traceback format should be classified as import_error."""
+        output = "tests/test_login.py\nE   SyntaxError: invalid syntax"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_js_cannot_find_module(self):
+        """JS/TS 'Cannot find module' in pytest ^E format should be classified as import_error."""
+        output = "tests/test_app.js\nE   Cannot find module './login' from 'src/index.ts'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_js_module_not_found(self):
+        """JS/TS 'Module not found' in pytest ^E format should be classified as import_error."""
+        output = "tests/test_app.js\nE   Module not found: Error: Can't resolve './login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_js_reference_error(self):
+        """JS/TS ReferenceError in pytest ^E format should be classified as import_error."""
+        output = "tests/test_app.js\nE   ReferenceError: handleLogin is not defined"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_no_test_runner_available(self):
+        """'FAILED (no test runner available)' should be classified as import_error."""
+        assert _classify_verification_failure("test_login.ts: FAILED (no test runner available)") == "import_error"
+
+    def test_assertion_error_is_test_failure(self):
+        """AssertionError (no import patterns) should be classified as test_failure."""
+        assert _classify_verification_failure("FAILED tests/test_login.py::test_retry - AssertionError: assert 1 == 2") == "test_failure"
+
+    def test_empty_output_is_test_failure(self):
+        """Empty output should default to test_failure."""
+        assert _classify_verification_failure("") == "test_failure"
+
+    def test_name_error_outside_pytest_format_no_match(self):
+        """NameError NOT in pytest ^E format should not match (avoids false positives)."""
+        output = "FAILED - assert 'NameError' in error_messages"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_unrecognized_pattern_defaults_to_test_failure(self):
+        """Unrecognized patterns (e.g. Go compile errors) default to test_failure."""
+        assert _classify_verification_failure("./main.go:10:2: undefined: handleLogin") == "test_failure"
+
+    def test_unknown_output_defaults_to_test_failure(self):
+        """Completely unknown output defaults to test_failure."""
+        assert _classify_verification_failure("some unknown error output") == "test_failure"
+
+
+class TestHandleVerificationFailure:
+    """Tests for _handle_verification_failure helper (deduplication of retry logic)."""
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    def test_import_error_returns_should_retry(self, _mock_classify):
+        """First import_error should return should_retry=True."""
+        console = MagicMock()
+        failure_type, retries, should_retry = _handle_verification_failure(
+            "ImportError: No module named 'login'", 0, console
+        )
+        assert failure_type == "import_error"
+        assert retries == 1
+        assert should_retry is True
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    def test_import_error_exhausted_returns_no_retry(self, _mock_classify):
+        """Second import_error (retries=1) should return should_retry=False."""
+        console = MagicMock()
+        failure_type, retries, should_retry = _handle_verification_failure(
+            "ImportError: No module named 'login'", 1, console
+        )
+        assert failure_type == "import_error"
+        assert retries == 1
+        assert should_retry is False
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="test_failure")
+    def test_test_failure_returns_no_retry(self, _mock_classify):
+        """test_failure should never retry."""
+        console = MagicMock()
+        failure_type, retries, should_retry = _handle_verification_failure(
+            "FAILED tests/test_login.py::test_retry - AssertionError", 0, console
+        )
+        assert failure_type == "test_failure"
+        assert retries == 0
+        assert should_retry is False
+
+
+class TestImportErrorRetryBehavior:
+    """Tests for import_error retry routing at verification call sites (issue #934).
+
+    When verification fails with an import error, the orchestrator should retry
+    from Step 1 instead of falling through to expensive Steps 3-9.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_import_error_retries_step1(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 2 verification ImportError should retry from Step 1."""
+        mock_run, _, mock_console = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should have retried — step1 called in cycle 1 and again in cycle 2 (retry)
+        step1_calls = sum(1 for c in mock_run.call_args_list if 'step1' in str(c))
+        assert step1_calls >= 2, (
+            f"Expected Step 1 to be called at least twice (original + retry) but got {step1_calls}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="test_failure")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_test_failure_falls_through(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 2 verification AssertionError should fall through to Steps 3-9."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "FAILED tests/test_login.py::test_retry - AssertionError")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 1
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Step 1 should NOT be retried — should proceed to Step 3+
+        step1_calls = sum(1 for c in mock_run.call_args_list if 'step1' in str(c))
+        assert step1_calls == 1, (
+            f"Expected Step 1 to be called exactly once (no retry for test_failure) but got {step1_calls}"
+        )
+        # Should have continued past Step 2 (at least to Step 3)
+        assert mock_run.call_count > 2
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_import_error_retry_limited_to_one(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Import error retry should be limited to 1 total (global budget) to prevent infinite loops."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 3
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Global budget of 1 retry, so step1 calls <= max_cycles + 1
+        step1_calls = sum(1 for c in mock_run.call_args_list if 'step1' in str(c))
+        max_cycles = e2e_fix_default_args["max_cycles"]
+        assert step1_calls <= max_cycles + 1, (
+            f"Expected at most {max_cycles + 1} Step 1 calls (max_cycles + 1 retry) "
+            f"but got {step1_calls}. Global retry budget should prevent excessive retries."
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step9_import_error_retries_step1(self, mock_extract, mock_verify, _mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 9 verification ImportError should retry from Step 1."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        call_labels = []
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            call_labels.append(label)
+            if 'step9' in label:
+                return (True, "Verification complete. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Should have retried Step 1 after Step 9 import error
+        step9_indices = [i for i, l in enumerate(call_labels) if 'step9' in l]
+        step1_after_step9 = any(
+            i > s9_idx and 'step1' in call_labels[i]
+            for s9_idx in step9_indices
+            for i in range(s9_idx + 1, len(call_labels))
+        )
+        assert step9_indices, "Step 9 should have been called"
+        assert step1_after_step9, (
+            f"Expected Step 1 to be retried after Step 9 import_error but call sequence was: {call_labels}"
+        )
+
+
+class TestReviewFix1NoLLMFallback:
+    """Review item 1: _classify_verification_failure must NOT call LLM.
+
+    The most common failure (AssertionError) won't match any tier-1 pattern.
+    The old tier-2 LLM fallback added an LLM call on the most frequent path,
+    defeating the purpose of the optimization. Default should be test_failure
+    with no LLM call.
+    """
+
+    def test_no_llm_call_for_assertion_error(self):
+        """AssertionError should be classified as test_failure WITHOUT any LLM call."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure(
+                "FAILED tests/test_login.py::test_retry - AssertionError: assert 1 == 2"
+            )
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_no_llm_call_for_unknown_output(self):
+        """Unknown/unrecognized output should default to test_failure WITHOUT LLM call."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure("some completely unknown error output")
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_no_llm_call_for_empty_output(self):
+        """Empty output should default to test_failure WITHOUT LLM call."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure("")
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_no_llm_call_for_go_compile_error(self):
+        """Go compile errors should default to test_failure WITHOUT LLM call.
+
+        Previously these went through tier-2 LLM fallback. Now they should
+        just be test_failure (conservative default).
+        """
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            result = _classify_verification_failure(
+                "./main.go:10:2: undefined: handleLogin"
+            )
+            assert result == "test_failure"
+            mock_llm.assert_not_called()
+
+    def test_tier1_patterns_still_work_without_llm(self):
+        """Tier-1 patterns should still detect import_error without any LLM involvement."""
+        with patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_llm:
+            # Use pytest traceback format (anchored)
+            result = _classify_verification_failure(
+                "tests/test_login.py::test_retry\nE   NameError: name '_count_planned_tests' is not defined"
+            )
+            assert result == "import_error"
+            mock_llm.assert_not_called()
+
+
+class TestReviewFix2AnchoredPatterns:
+    """Review item 2: ImportError/ReferenceError patterns must be anchored.
+
+    Unanchored patterns false-positive on test output containing
+    'pytest.raises(ImportError)' or assertion messages mentioning error types.
+    """
+
+    def test_pytest_raises_import_error_not_false_positive(self):
+        """'pytest.raises(ImportError)' in test output should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "PASSED tests/test_routes_init.py::test_invalid_import - "
+            "with pytest.raises(ImportError): import nonexistent"
+        )
+        assert result == "test_failure", (
+            "pytest.raises(ImportError) in passing test output should not trigger import_error"
+        )
+
+    def test_import_error_in_assertion_message_not_false_positive(self):
+        """ImportError mentioned in an assertion string should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "FAILED tests/test_error_handling.py::test_error_msg - "
+            "AssertionError: assert 'ImportError: no module' in error_messages"
+        )
+        assert result == "test_failure", (
+            "ImportError inside assertion message should not trigger false positive"
+        )
+
+    def test_reference_error_in_test_name_not_false_positive(self):
+        """ReferenceError in test name/description should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "PASSED tests/test_errors.py::test_handles_ReferenceError_gracefully"
+        )
+        assert result == "test_failure", (
+            "ReferenceError in test name should not trigger false positive"
+        )
+
+    def test_bare_import_error_at_line_start_not_matched(self):
+        """Bare ImportError at line start (not ^E format) should NOT trigger import_error.
+
+        Only pytest ^E format is matched to avoid false positives from log/print lines.
+        """
+        output = "ImportError: cannot import name '_count_planned_tests' from 'pdd.agentic_bug_orchestrator'"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_real_import_error_pytest_E_format_detected(self):
+        """Real ImportError in pytest ^E format should be detected."""
+        output = "tests/test_login.py::test_auth\nE   ImportError: No module named 'login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_bare_module_not_found_at_line_start_not_matched(self):
+        """Bare ModuleNotFoundError at line start should NOT trigger import_error."""
+        output = "ModuleNotFoundError: No module named 'pdd.login'"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_bare_reference_error_at_line_start_not_matched(self):
+        """Bare ReferenceError at line start should NOT trigger import_error."""
+        output = "ReferenceError: handleLogin is not defined\n    at Object.<anonymous>"
+        assert _classify_verification_failure(output) == "test_failure"
+
+    def test_real_reference_error_pytest_E_format_detected(self):
+        """Real ReferenceError in pytest ^E format should be detected."""
+        output = "tests/test_app.js\nE   ReferenceError: handleLogin is not defined"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_cannot_find_module_mid_line_not_false_positive(self):
+        """'Cannot find module' mid-line (e.g. in assertion) should NOT trigger import_error."""
+        result = _classify_verification_failure(
+            "FAILED - assert error.message == 'Cannot find module ./login'"
+        )
+        assert result == "test_failure"
+
+    def test_real_cannot_find_module_pytest_E_format_detected(self):
+        """Real 'Cannot find module' in pytest ^E format should be detected."""
+        output = "tests/test_app.js\nE   Cannot find module './login' from 'src/index.ts'"
+        assert _classify_verification_failure(output) == "import_error"
+
+    def test_real_module_not_found_pytest_E_format_detected(self):
+        """Real 'Module not found' in pytest ^E format should be detected."""
+        output = "tests/test_app.js\nE   Module not found: Error: Can't resolve './login'"
+        assert _classify_verification_failure(output) == "import_error"
+
+
+class TestReviewFix3VerificationContextInjection:
+    """Review item 3: Retry prompt must include verification failure output.
+
+    When retrying from Step 1 after import_error, the LLM needs to see what
+    went wrong so it doesn't re-hallucinate the same failure.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_retry_prompt_contains_verification_output(
+        self, mock_extract, mock_verify, _mock_classify,
+        e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Step 1 retry prompt should contain the verification failure output."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        verification_error = "ImportError: cannot import name '_count_planned_tests' from 'pdd.agentic_bug_orchestrator'"
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, verification_error)
+
+        prompts_by_label = {}
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            instruction = kwargs.get('instruction', '') or (args[0] if args else '')
+            prompts_by_label[label] = instruction
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Find the retry Step 1 call (second time step1 appears)
+        step1_labels = [l for l in prompts_by_label if 'step1' in l]
+        assert len(step1_labels) >= 2, (
+            f"Expected at least 2 Step 1 calls (original + retry) but got: {step1_labels}"
+        )
+        retry_label = step1_labels[1]
+        retry_prompt = prompts_by_label[retry_label]
+
+        # The retry prompt must contain the verification failure output
+        assert "_count_planned_tests" in retry_prompt, (
+            f"Retry Step 1 prompt should contain the verification failure details "
+            f"(ImportError about _count_planned_tests) but got:\n{retry_prompt[:500]}"
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_non_retry_prompt_does_not_contain_stale_context(
+        self, mock_extract, mock_verify, _mock_classify,
+        e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Normal (non-retry) Step 1 prompt should NOT contain verification failure context."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: cannot import name 'missing_func'")
+
+        prompts_by_label = {}
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            instruction = kwargs.get('instruction', '') or (args[0] if args else '')
+            prompts_by_label[label] = instruction
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # The FIRST Step 1 call should NOT have verification failure context
+        step1_labels = [l for l in prompts_by_label if 'step1' in l]
+        assert len(step1_labels) >= 1
+        first_prompt = prompts_by_label[step1_labels[0]]
+        assert "PREVIOUS ATTEMPT FAILED" not in first_prompt, (
+            "First Step 1 call should not contain verification failure context"
+        )
+
+
+class TestReviewFix4ConsistentRetryState:
+    """Review item 4: All 4 verification call sites should have consistent state on retry.
+
+    When should_retry is True, all sites should set step_outputs to indicate
+    what happened before breaking, so orchestrator state is clean.
+    """
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._classify_verification_failure", return_value="import_error")
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_main_path_sets_verification_failed_on_retry(
+        self, mock_extract, mock_verify, _mock_classify,
+        e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Step 2 main-path retry should set step_output to VERIFICATION_FAILED before breaking."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        mock_extract.return_value = ["tests/test_login.py"]
+        mock_verify.return_value = (False, "ImportError: No module named 'login'")
+
+        call_count = [0]
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            call_count[0] += 1
+            if 'step2' in label:
+                return (True, "All tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 2
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            # Check that save_workflow_state was called with step_outputs containing
+            # a VERIFICATION_FAILED or IMPORT_ERROR_RETRY marker for step 2
+            # At minimum, the state should reflect that verification failed
+            save_calls = mock_save.call_args_list
+            # Find the save call after the verification failure
+            found_verification_state = False
+            for call in save_calls:
+                args, kwargs_call = call
+                # state_data is positional arg index 4 or keyword
+                state_data = args[3] if len(args) > 3 else kwargs_call.get('state_data', {})
+                if isinstance(state_data, dict):
+                    step_outputs = state_data.get('step_outputs', {})
+                    step2_output = step_outputs.get('2', '')
+                    if 'VERIFICATION_FAILED' in step2_output or 'IMPORT_ERROR_RETRY' in step2_output:
+                        found_verification_state = True
+                        break
+
+            assert found_verification_state, (
+                "Step 2 main-path retry should save state with VERIFICATION_FAILED "
+                "or IMPORT_ERROR_RETRY in step_outputs['2']"
+            )
+
+
+class TestIssue1031WorkflowStateMarkers:
+    """Tests for issue #1031: _extract_test_files misses FILES_CREATED markers
+    embedded inside PDD_WORKFLOW_STATE JSON comments.
+
+    Bug: When pdd-issue chains bug → fix in separate Cloud Run Jobs, the fix
+    executor runs in a fresh clone. FILES_CREATED markers from pdd bug are
+    embedded inside a JSON-serialized PDD_WORKFLOW_STATE HTML comment where
+    newlines become \\n escape sequences. splitlines() misses them, causing
+    _extract_test_files to fall back to scanning all test files (multi-hour stall).
+
+    These tests use the exact production format from _serialize_state_comment:
+    indent=2 JSON, <!-- PDD_WORKFLOW_STATE:{type}:issue-{N} --> markers.
+    """
+
+    @staticmethod
+    def _make_workflow_comment(
+        step_output: str,
+        workflow_type: str = "bug",
+        issue_number: int = 1026,
+        step_key: str = "9",
+    ) -> str:
+        """Build a PDD_WORKFLOW_STATE comment matching production format exactly.
+
+        Uses json.dumps(indent=2) and the real marker format from
+        agentic_common._serialize_state_comment.
+        """
+        state = {"step_outputs": {step_key: step_output}}
+        json_str = json.dumps(state, indent=2)
+        return (
+            f"<!-- PDD_WORKFLOW_STATE:{workflow_type}:issue-{issue_number}\n"
+            f"{json_str}\n"
+            f"-->"
+        )
+
+    def test_json_embedded_files_created_marker(self, tmp_path):
+        """FILES_CREATED: inside a PDD_WORKFLOW_STATE JSON must be found.
+
+        This is the core bug: pdd bug produces step output with a real newline
+        before FILES_CREATED:. json.dumps() serializes it as \\n in JSON text.
+        splitlines() on the raw HTML comment never sees it as a line start.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_webhook.py").write_text("def test_x(): pass")
+        # Decoy files — if the directory scan fallback fires, these get included
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Analysis complete.\nFILES_CREATED: tests/test_webhook.py"
+        issue_content = (
+            "Bug description here.\n"
+            + self._make_workflow_comment(step_output)
+            + "\nMore text."
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_webhook.py"], (
+            f"Expected ['tests/test_webhook.py'] from JSON-embedded marker, "
+            f"got {result!r}"
+        )
+
+    def test_json_embedded_e2e_files_created_marker(self, tmp_path):
+        """E2E_FILES_CREATED: inside a PDD_WORKFLOW_STATE JSON must also be found."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_e2e_login.py").write_text("def test_x(): pass")
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Done.\nE2E_FILES_CREATED: tests/test_e2e_login.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_e2e_login.py"], (
+            f"Expected ['tests/test_e2e_login.py'] from JSON-embedded E2E marker, "
+            f"got {result!r}"
+        )
+
+    def test_json_embedded_comma_separated_markers(self, tmp_path):
+        """Multiple comma-separated files in a JSON-embedded marker are all found."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_alpha.py").write_text("def test_a(): pass")
+        (tmp_path / "tests" / "test_beta.py").write_text("def test_b(): pass")
+        for i in range(5):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Created.\nFILES_CREATED: tests/test_alpha.py, tests/test_beta.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert sorted(result) == ["tests/test_alpha.py", "tests/test_beta.py"], (
+            f"Expected both test files from comma-separated marker, got {result!r}"
+        )
+
+    def test_json_embedded_marker_prevents_directory_scan_fallback(self, tmp_path):
+        """When a JSON-embedded marker is found, the directory scan must NOT fire.
+
+        Without the fix, the marker is invisible to splitlines(), no files are
+        found by any discovery path, and the ultimate fallback scans the entire
+        tests/ directory — returning hundreds of files.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_target.py").write_text("def test_t(): pass")
+        # Decoy files that the directory scan fallback would pick up
+        for i in range(10):
+            (tmp_path / "tests" / f"test_decoy_{i}.py").write_text(f"def test_{i}(): pass")
+
+        step_output = "Fix applied.\nFILES_CREATED: tests/test_target.py"
+        issue_content = self._make_workflow_comment(step_output)
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=[],
+        ):
+            result = _extract_test_files(
+                issue_content=issue_content,
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert result == ["tests/test_target.py"], (
+            f"Expected only ['tests/test_target.py'] but got {len(result)} files — "
+            f"directory scan fallback likely fired: {result!r}"
+        )
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _verify_tests_independently must use config dir as cwd.
+
+    Bug: _verify_tests_independently() runs non-Python tests (Jest, Vitest, Playwright)
+    from the repo root instead of the directory containing the test runner config.
+    This causes every monorepo with tests in a subdirectory to fail verification.
+    """
+
+    # --- Test 9: _verify_tests_independently uses config dir cwd ---
+
+    @patch("subprocess.run")
+    def test_verify_independently_uses_config_dir_not_repo_root(self, mock_subproc, tmp_path):
+        """_verify_tests_independently must pass the test runner config directory as cwd.
+
+        Before fix: subprocess.run(cwd=str(repo_root)) — always repo root
+        After fix: subprocess.run(cwd=str(config_dir)) — where jest.config.js lives
+
+        Uses real filesystem so get_test_command_for_file finds the config naturally.
+        """
+        # Set up monorepo: frontend/jest.config.js + frontend/src/lib/__test__/api.test.ts
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "lib" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "api.test.ts").write_text("test('api', () => {});")
+
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="PASS", stderr="")
+
+        passed, output = _verify_tests_independently(
+            ["frontend/src/lib/__test__/api.test.ts"], tmp_path
+        )
+
+        mock_subproc.assert_called_once()
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd} (repo root). Non-Python test verification uses "
+            f"wrong cwd, breaking all monorepos."
+        )
+
+    # --- Test 10: Backward compat — falls back to repo root when cwd=None ---
+
+    @patch("subprocess.run")
+    @patch("pdd.agentic_e2e_fix_orchestrator.get_test_command_for_file")
+    def test_verify_independently_falls_back_to_repo_root_when_cwd_none(
+        self, mock_get_cmd, mock_subproc, tmp_path
+    ):
+        """When TestCommand.cwd is None, _verify_tests_independently falls back to repo root.
+
+        On buggy code: get_test_command_for_file returns str → caller does shlex.split(str)
+            which works, but this test returns a TestCommand-like object → crash (TypeError).
+        On fixed code: caller extracts .command and .cwd, falls back to repo root when cwd=None.
+        """
+        from types import SimpleNamespace
+
+        # Return a TestCommand-like object with cwd=None
+        mock_cmd = SimpleNamespace(
+            command="some_runner src/test.rb",
+            cwd=None
+        )
+        mock_get_cmd.return_value = mock_cmd
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="OK", stderr="")
+
+        passed, output = _verify_tests_independently(["src/test.rb"], tmp_path)
+
+        # On buggy code, shlex.split(SimpleNamespace) raises TypeError which is
+        # caught silently → subprocess.run never called. On fixed code, the caller
+        # extracts .command and .cwd from the TestCommand correctly.
+        assert mock_subproc.called, (
+            "subprocess.run was never called — the caller can't handle a TestCommand "
+            "return type from get_test_command_for_file. The fix must extract .command "
+            "from the result before passing to shlex.split()."
+        )
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(tmp_path), (
+            f"Expected fallback to repo root ({tmp_path}) when cwd=None, got {actual_cwd}"
+        )
+
+# ============================================================================
+# Step 11: Code Cleanup Tests (Issue #1073)
+# ============================================================================
+
+
+class TestStep11CodeCleanup:
+    """Tests for Step 11: Code cleanup after CI validation.
+
+    Step 11 collects the full diff and changed file contents, invokes the
+    cleanup LLM, re-runs tests to verify, and commits as a separate commit
+    if tests pass. Reverts all cleanup changes if tests fail.
+    """
+
+    def test_step11_skipped_when_no_files_changed(self, tmp_path):
+        """Step 11 should be skipped when no files changed during workflow."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["old.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        assert cost == 1.0
+        assert files == ["old.py"]
+
+    def test_step11_skipped_when_template_missing(self, tmp_path):
+        """Step 11 should be skipped when cleanup prompt template is missing."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value=None):
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        assert cost == 1.0
+
+    def test_step11_reverts_on_test_failure(self, tmp_path):
+        """Step 11 should revert changes when tests fail after cleanup."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        (tmp_path / "module.py").write_text("x = 1")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value="Cleanup {issue_number}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", return_value=(True, "Cleaned up", 0.05, "gpt-4")), \
+             patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_mod.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(False, "1 failed")), \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_subprocess.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        # Should have called git checkout . to revert
+        checkout_calls = [c for c in mock_subprocess.call_args_list if "checkout" in str(c)]
+        assert len(checkout_calls) > 0, "Should revert via git checkout when tests fail"
+        assert cost == 1.05  # Original + cleanup cost
+
+    def test_step11_commits_on_test_pass(self, tmp_path):
+        """Step 11 should commit cleanup when tests pass."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        (tmp_path / "module.py").write_text("x = 1")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value="Cleanup {issue_number}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", return_value=(True, "Cleaned up", 0.05, "gpt-4")), \
+             patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_mod.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(True, "1 passed")), \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_subprocess.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        # Should have called git commit
+        commit_calls = [c for c in mock_subprocess.call_args_list if "commit" in str(c)]
+        assert len(commit_calls) > 0, "Should commit cleanup when tests pass"
+
+    def test_step11_llm_failure_skips_cleanup(self, tmp_path):
+        """Step 11 should skip cleanup when the LLM task fails."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=["module.py"]), \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template", return_value="Cleanup {issue_number}"), \
+             patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task", return_value=(False, "LLM error", 0.02, "gpt-4")), \
+             patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_subprocess, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console"):
+
+            mock_subprocess.return_value = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+            cost, files = _run_step11_code_cleanup(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_content="test",
+                initial_file_hashes={},
+                total_cost=1.0,
+                changed_files=["module.py"],
+                timeout_adder=0.0,
+                verbose=False,
+                quiet=False,
+            )
+
+        assert cost == 1.02  # Original + failed LLM cost still accumulated
+
+    def test_step11_timeout_in_dict(self):
+        """E2E_FIX_STEP_TIMEOUTS should include step 11."""
+        from pdd.agentic_e2e_fix_orchestrator import E2E_FIX_STEP_TIMEOUTS
+        assert 11 in E2E_FIX_STEP_TIMEOUTS
+        assert E2E_FIX_STEP_TIMEOUTS[11] == 600.0
+
+    def test_step11_integrated_with_orchestrator_skip_ci(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
+        """Step 11 should run before CI validation on the skip_ci path."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Make Step 9 pass so we reach commit/push -> skip_ci -> step 11
+        def side_effect(*args, **kwargs):
+            label = kwargs.get('label', '')
+            if 'step9' in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Remove the step 11 mock to test integration
+        with patch("pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup") as mock_step11:
+            mock_step11.return_value = (0.9, ["module.py"])
+
+            with patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently", return_value=(True, "1 passed")), \
+                 patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=["tests/test_foo.py"]):
+                success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                    **e2e_fix_default_args
+                )
+
+            assert success is True
+            mock_step11.assert_called_once()

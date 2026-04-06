@@ -1741,7 +1741,9 @@ class TestCoverageTargetSelection:
         assert report.tests_passed == 1
         assert report.tests_failed == 0
         assert report.coverage == 100.0
-        assert seen_cov_args["value"] == ["--cov=pdd.my_module"]
+        # Dotted module path is collapsed to top-level package to avoid
+        # litellm/pydantic crash under coverage's import hook.
+        assert seen_cov_args["value"] == ["--cov=pdd"]
 
     def test_execute_tests_prefers_stem_when_test_imports_stem_even_if_packaged(self, tmp_path, monkeypatch):
         """
@@ -1799,6 +1801,72 @@ class TestCoverageTargetSelection:
         assert report.tests_failed == 0
         assert report.coverage == 100.0
         assert seen_cov_args["value"] == ["--cov=admin_get_users"]
+
+    def test_execute_tests_uses_package_for_dotted_cov_target(self, tmp_path, monkeypatch):
+        """
+        Regression test: litellm>=1.80.11 crashes under pytest-cov when the
+        --cov target is a dotted submodule (e.g. --cov=pdd.my_module). The
+        crash is a KeyError: 'pydantic.root_model' during collection because
+        coverage's import hook triggers litellm's pydantic RootModel generics
+        before sys.modules is fully populated.
+
+        Workaround: use the top-level package (e.g. --cov=pdd) instead of the
+        dotted module path. Coverage still reports per-file data.
+        """
+        import subprocess
+        from pdd.sync_orchestration import _execute_tests_and_create_run_report
+
+        monkeypatch.chdir(tmp_path)
+
+        package_dir = tmp_path / "pdd"
+        package_dir.mkdir(parents=True, exist_ok=True)
+        (package_dir / "__init__.py").write_text("", encoding="utf-8")
+
+        code_file = package_dir / "my_module.py"
+        code_file.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+
+        test_file = tmp_path / "tests" / "test_my_module.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(
+            "from pdd.my_module import add\ndef test_add():\n    assert add(1, 2) == 3\n",
+            encoding="utf-8",
+        )
+
+        seen_cov_args = {"value": None}
+
+        def fake_run(cmd, **kwargs):
+            cov_args = [str(c) for c in cmd if str(c).startswith("--cov=")]
+            seen_cov_args["value"] = cov_args
+            # Simulate --cov=pdd output: per-file lines + TOTAL
+            stdout = (
+                "pdd/__init__.py           10     10     0%\n"
+                "pdd/my_module.py           4      0   100%\n"
+                "pdd/other.py              20     20     0%\n"
+                "TOTAL                     34     30    12%\n"
+                "1 passed in 0.01s\n"
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=fake_run):
+            report = _execute_tests_and_create_run_report(
+                test_file=test_file,
+                basename="my_module",
+                language="python",
+                target_coverage=0.0,
+                code_file=code_file,
+            )
+
+        assert report.exit_code == 0
+        # Must use top-level package, NOT dotted module path
+        assert seen_cov_args["value"] == ["--cov=pdd"], (
+            f"Expected --cov=pdd (package) to avoid litellm/pydantic crash, "
+            f"got {seen_cov_args['value']}"
+        )
+        # Must extract per-module coverage (100%), not TOTAL (12%)
+        assert report.coverage == 100.0, (
+            f"Expected per-module coverage 100% for pdd/my_module.py, "
+            f"got {report.coverage}% (likely picked up TOTAL line instead)"
+        )
 
 
 # --- Run Report Update After Fix Regression Tests ---
@@ -1997,6 +2065,75 @@ class TestRunReportUpdateAfterFix:
         )
 
 
+    def test_fix_operation_runs_real_coverage_in_agentic_mode_python(self, orchestration_fixture, tmp_path):
+        """
+        Regression test: In agentic_mode=True for Python, the post-fix path
+        wrote a synthetic RunReport with coverage=0.0 instead of running real
+        pytest with coverage. This caused the coverage gate to fail even though
+        tests pass with 88%+ coverage.
+
+        Commit 86fe07dc1 fixed the test and test_extend operations but missed
+        the post-fix, post-crash, and post-verify synthetic reports.
+
+        The fix: for Python, always use _execute_tests_and_create_run_report
+        even in agentic mode, since Python has working coverage tools.
+        """
+        import os
+
+        os.chdir(tmp_path)
+
+        (tmp_path / "prompts").mkdir(exist_ok=True)
+        (tmp_path / "prompts" / "calc_python.prompt").write_text("# prompt")
+        (tmp_path / "pdd").mkdir(exist_ok=True)
+        (tmp_path / "pdd" / "calc.py").write_text("def add(a, b): return a + b")
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        test_file = tmp_path / "tests" / "test_calc.py"
+        test_file.write_text("def test_add(): assert True")
+        (tmp_path / "examples").mkdir(exist_ok=True)
+        (tmp_path / "examples" / "calc_example.py").write_text("# example")
+
+        mocks = orchestration_fixture
+        mock_determine = mocks['sync_determine_operation']
+        mock_fix = mocks['fix_main']
+
+        mock_determine.side_effect = [
+            SyncDecision(operation='fix', reason='Test failures'),
+            SyncDecision(operation='all_synced', reason='Done'),
+        ]
+
+        mock_fix.return_value = (True, "fixed_code", "fixed_example", 1, 0.15, "gpt-4")
+
+        mocks['get_pdd_file_paths'].return_value = {
+            'prompt': tmp_path / 'prompts' / 'calc_python.prompt',
+            'code': tmp_path / 'pdd' / 'calc.py',
+            'example': tmp_path / 'examples' / 'calc_example.py',
+            'test': test_file,
+        }
+
+        with patch('pdd.sync_orchestration._execute_tests_and_create_run_report') as mock_exec_tests, \
+             patch('pdd.sync_orchestration._save_run_report_atomic') as mock_save_report:
+            result = sync_orchestration(
+                basename="calc", language="python", agentic_mode=True
+            )
+
+        # In agentic mode for Python, post-fix must use real test execution,
+        # not a synthetic report with coverage=0.0
+        assert mock_exec_tests.called, (
+            "REGRESSION: post-fix path wrote synthetic coverage=0.0 report "
+            "instead of running _execute_tests_and_create_run_report for Python "
+            "in agentic mode. This causes the coverage gate to always fail."
+        )
+
+        # Verify no synthetic coverage=0.0 report was written for the fix operation
+        for call in mock_save_report.call_args_list:
+            report_data = call[0][0] if call[0] else call[1].get('report', {})
+            if isinstance(report_data, dict) and report_data.get('coverage') == 0.0:
+                assert report_data.get('tests_passed') != 1 or report_data.get('exit_code') != 0, (
+                    "REGRESSION: synthetic RunReport(tests_passed=1, coverage=0.0) "
+                    "was written for Python in agentic mode — this clobbers real coverage"
+                )
+
+
 # --- Multi-Language Test Execution Tests ---
 
 class TestNonPythonFixLoopBug:
@@ -2167,7 +2304,7 @@ class TestLanguageTestCommandResolution:
 
         result = get_test_command_for_file("/tmp/test_foo.py", "python")
         assert result is not None
-        assert "pytest" in result
+        assert "pytest" in result.command
 
 
 class TestHasCoverageConfig:
@@ -6929,3 +7066,458 @@ def test_e2e_typescript_real_execution_detects_failures(tmp_path):
         f"This means sync_determine_operation would never recommend 'fix'."
     )
     assert real.tests_passed == 0 or real.tests_failed > 0, "At least some tests must fail"
+
+
+# ---------------------------------------------------------------------------
+# _validate_typescript_imports: package.json fallback (#826)
+# ---------------------------------------------------------------------------
+
+class TestValidateTypescriptImportsPackageJsonFallback:
+    """When node_modules doesn't exist, _validate_typescript_imports should
+    check package.json dependencies before flagging imports as hallucinated.
+
+    Regression test for pdd_cloud#826: generated code imports next/link and
+    lucide-react which are real deps in package.json, but flagged as
+    hallucinated because node_modules wasn't installed in the git clone.
+    """
+
+    def test_bare_import_resolved_via_package_json(self, tmp_path):
+        """Imports of packages listed in package.json should not be flagged."""
+        from pdd.sync_orchestration import _validate_typescript_imports
+        import json
+
+        # Create project structure without node_modules
+        (tmp_path / "package.json").write_text(json.dumps({
+            "dependencies": {"next": "^15.0.0", "react": "^19.0.0"},
+            "devDependencies": {"lucide-react": "^0.509.0"},
+        }))
+        code_file = tmp_path / "src" / "components" / "Test.tsx"
+        code_file.parent.mkdir(parents=True)
+        code_file.write_text(
+            "import Link from 'next/link';\n"
+            "import { Github } from 'lucide-react';\n"
+            "import React from 'react';\n"
+        )
+
+        unresolved = _validate_typescript_imports(code_file)
+        assert "next/link" not in unresolved, (
+            f"next/link should resolve via package.json deps, got unresolved={unresolved}"
+        )
+        assert "lucide-react" not in unresolved, (
+            f"lucide-react should resolve via package.json devDeps, got unresolved={unresolved}"
+        )
+        assert "react" not in unresolved
+
+    def test_truly_hallucinated_import_still_flagged(self, tmp_path):
+        """Imports NOT in package.json or node_modules should still be flagged."""
+        from pdd.sync_orchestration import _validate_typescript_imports
+        import json
+
+        (tmp_path / "package.json").write_text(json.dumps({
+            "dependencies": {"react": "^19.0.0"},
+        }))
+        code_file = tmp_path / "src" / "Test.tsx"
+        code_file.parent.mkdir(parents=True)
+        code_file.write_text("import { foo } from 'nonexistent-package';\n")
+
+        unresolved = _validate_typescript_imports(code_file)
+        assert "nonexistent-package" in unresolved
+
+    def test_scoped_package_resolved_via_package_json(self, tmp_path):
+        """Scoped packages (@org/pkg) in package.json should not be flagged."""
+        from pdd.sync_orchestration import _validate_typescript_imports
+        import json
+
+        (tmp_path / "package.json").write_text(json.dumps({
+            "dependencies": {"@radix-ui/react-dialog": "^1.0.0"},
+        }))
+        code_file = tmp_path / "src" / "Test.tsx"
+        code_file.parent.mkdir(parents=True)
+        code_file.write_text("import { Dialog } from '@radix-ui/react-dialog';\n")
+
+        unresolved = _validate_typescript_imports(code_file)
+        assert "@radix-ui/react-dialog" not in unresolved
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: Non-Python subprocess.run must use config dir as cwd.
+
+    Bug: _execute_tests_and_create_run_report() and the fix-operation path both run
+    non-Python tests with cwd=str(test_file.parent) instead of the config directory.
+    For monorepos, test_file.parent is the test's immediate directory (e.g., __test__/)
+    but Jest/Vitest need to run from where their config lives (e.g., frontend/).
+    """
+
+    # --- Test 12: _execute_tests_and_create_run_report uses config dir ---
+
+    def test_execute_tests_uses_config_dir_for_non_python(self, tmp_path, monkeypatch):
+        """_execute_tests_and_create_run_report must use the config dir, not test_file.parent.
+
+        Before fix: cwd=str(test_file.parent) = __test__/ directory
+        After fix: cwd=str(config_dir) = frontend/ where jest.config.js lives
+        """
+        monkeypatch.chdir(tmp_path)
+
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        subprocess_calls = []
+
+        def capture_run(cmd, **kwargs):
+            subprocess_calls.append({'cmd': cmd, 'kwargs': kwargs})
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = "Tests: 5 passed"
+            result.stderr = ""
+            return result
+
+        with patch('pdd.sync_orchestration.subprocess.run', side_effect=capture_run), \
+             patch('pdd.sync_orchestration.calculate_sha256', return_value="abc123"), \
+             patch('pdd.sync_orchestration.save_run_report'):
+            try:
+                _execute_tests_and_create_run_report(
+                    test_file=test_file,
+                    basename="api",
+                    language="typescript",
+                    target_coverage=0.0
+                )
+            except Exception:
+                pass
+
+        # Find the non-Python shell command (string cmd, not list)
+        non_python_calls = [c for c in subprocess_calls if isinstance(c['cmd'], str)]
+        assert len(non_python_calls) > 0, (
+            "Expected at least one shell command for non-Python test. "
+            f"All calls: {subprocess_calls}"
+        )
+        actual_cwd = non_python_calls[0]['kwargs'].get('cwd')
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd}. _execute_tests_and_create_run_report uses "
+            f"test_file.parent instead of config dir."
+        )
+
+    # --- Test 13: sync_orchestration fix-operation path uses config dir ---
+
+    def test_fix_operation_uses_config_dir_for_non_python(self, tmp_path, monkeypatch):
+        """The fix-operation in sync_orchestration must use config dir for non-Python.
+
+        Before fix: cwd=str(pdd_files['test'].parent) = __test__/ directory
+        After fix: cwd=str(config_dir) = frontend/ where jest.config.js lives
+        """
+        import subprocess as sp
+        from pdd.sync_orchestration import sync_orchestration
+        from pdd.sync_determine_operation import SyncDecision
+
+        # Create monorepo structure
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "api_typescript.prompt").write_text("Create API tests.")
+
+        code_dir = config_dir / "src" / "lib"
+        code_dir.mkdir(parents=True)
+        (code_dir / "api.ts").write_text("export function fetchApi() { return 'ok'; }")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        test_file = test_dir / "api.test.ts"
+        test_file.write_text("test('api', () => {});")
+
+        examples_dir = tmp_path / "examples"
+        examples_dir.mkdir()
+        (examples_dir / "api_example.ts").write_text("// example")
+
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
+
+        # Capture all subprocess.run calls
+        subprocess_calls = []
+
+        def capture_subprocess_run(cmd, **kwargs):
+            cmd_info = [str(c) for c in cmd] if not isinstance(cmd, str) else [cmd]
+            subprocess_calls.append({'cmd': cmd_info, 'is_shell': isinstance(cmd, str), 'kwargs': kwargs})
+            mock_result = MagicMock()
+            mock_result.returncode = 1
+            mock_result.stdout = "1 failed"
+            mock_result.stderr = ""
+            return mock_result
+
+        with patch("pdd.sync_orchestration.subprocess.run", side_effect=capture_subprocess_run), \
+             patch("pdd.sync_orchestration.sync_determine_operation") as mock_determine, \
+             patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             patch("pdd.sync_orchestration.SyncApp") as mock_sync_app_class, \
+             patch("pdd.sync_orchestration.fix_main") as mock_fix, \
+             patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths") as mock_get_paths, \
+             patch.object(sys.stdout, 'isatty', return_value=True):
+
+            # Configure lock mock
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+
+            # Configure SyncApp to run worker synchronously
+            def store_worker_func(*args, **kwargs):
+                instance = MagicMock()
+                worker_func = kwargs.get('worker_func', lambda: {"success": True})
+                instance.worker_func = worker_func
+
+                def mock_run():
+                    try:
+                        return worker_func()
+                    except Exception as e:
+                        return {"success": False, "error": str(e)}
+                instance.run = mock_run
+                return instance
+            mock_sync_app_class.side_effect = store_worker_func
+
+            # Configure paths to point to monorepo TypeScript files
+            mock_get_paths.return_value = {
+                'prompt': prompts_dir / "api_typescript.prompt",
+                'code': code_dir / "api.ts",
+                'example': examples_dir / "api_example.ts",
+                'test': test_file,
+                'test_files': [test_file],
+            }
+
+            # Configure sync_determine_operation: 'fix' once, then 'all_synced'
+            call_count = [0]
+
+            def determine_side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return SyncDecision(operation='fix', reason='Tests failing', confidence=0.9)
+                return SyncDecision(operation='all_synced', reason='Complete', confidence=1.0)
+            mock_determine.side_effect = determine_side_effect
+
+            mock_fix.return_value = {'success': True, 'cost': 0.1, 'model': 'mock-model'}
+
+            try:
+                sync_orchestration(
+                    basename="api",
+                    language="typescript",
+                    skip_verify=True,
+                    budget=10.0
+                )
+            except Exception:
+                pass
+
+        # Find non-Python shell commands (fix-operation runs shell=True for non-Python)
+        shell_calls = [c for c in subprocess_calls if c['is_shell']]
+        assert len(shell_calls) > 0, (
+            f"Expected at least one shell command for non-Python fix operation. "
+            f"All subprocess calls: {len(subprocess_calls)}"
+        )
+        actual_cwd = shell_calls[0]['kwargs'].get('cwd')
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd}. Fix operation uses pdd_files['test'].parent "
+            f"instead of config dir."
+        )
+
+
+# --- Issue #1072 Tests: Error propagation and cost/model extraction in sync ---
+
+
+def test_sync_logs_error_from_failed_agentic_test(orchestration_fixture):
+    """Issue #1072: When agentic test generation fails, the error message from the
+    result tuple must be captured in the errors list, not silently dropped.
+
+    Before the fix, sync_orchestration.py:2427 logs `error=errors[-1] if errors and
+    not success else None`, but the `errors` list is empty because no Python exception
+    was raised and error messages from result tuples are never extracted (line 2384-2398).
+    This causes failed test operations to show `error=None` in sync logs.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+
+    error_msg = "All agent providers failed: anthropic: Exit code 1; google: TerminalQuotaError"
+
+    # cmd_test_main returns failure with error message
+    # Using current 4-tuple (buggy code) — the fix changes this to 5-tuple
+    def mock_test_failure(*args, **kwargs):
+        return ("", 0.0, "agentic-anthropic", False, error_msg)
+
+    mock_test.side_effect = mock_test_failure
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Spy on append_log_entry to capture what gets logged
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append:
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # The errors list should contain the SPECIFIC error from the tuple, not just
+    # the generic "Operation 'test' failed." fallback from line 2520.
+    # Before the fix: errors = ["Operation 'test' failed."] (generic, no provider detail)
+    # After the fix: errors should include "All agent providers failed: ..." (specific)
+    found_specific_error = any(
+        "All agent providers failed" in str(e) for e in result.get('errors', [])
+    )
+    assert found_specific_error, (
+        f"Expected specific provider failure message 'All agent providers failed' in "
+        f"errors list, but got only generic errors: {result.get('errors', [])}. "
+        f"sync_orchestration never extracts error messages from result tuples — "
+        f"the 5th tuple element is silently dropped."
+    )
+
+
+def test_sync_extracts_cost_and_model_on_failed_test(orchestration_fixture):
+    """Issue #1072: Cost and model must be extracted from result tuples even when
+    the test operation fails — not gated behind `if success:`.
+
+    Before the fix, sync_orchestration.py:2416 gates cost/model extraction behind
+    `if success:`, so failed ops always log cost=0.0 and model='unknown' even when
+    the result tuple contains real values (e.g., cost=2.78, model='agentic-anthropic').
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+
+    # cmd_test_main returns failure BUT with real cost and model values
+    def mock_test_failure_with_cost(*args, **kwargs):
+        return ("", 2.78, "agentic-anthropic", False, "Rate limited")
+
+    mock_test.side_effect = mock_test_failure_with_cost
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Spy on append_log_entry to capture the logged entry dict
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append:
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Find the append_log_entry call for the test operation
+    test_entries = []
+    for call_obj in mock_append.call_args_list:
+        entry = call_obj.args[2] if len(call_obj.args) > 2 else call_obj[0][2]
+        if isinstance(entry, dict) and entry.get('operation') == 'test':
+            test_entries.append(entry)
+
+    assert len(test_entries) >= 1, (
+        "No log entry found for 'test' operation in append_log_entry calls"
+    )
+    test_entry = test_entries[0]
+
+    assert test_entry.get('actual_cost') == pytest.approx(2.78), (
+        f"Expected cost=2.78 for failed test op, got cost={test_entry.get('actual_cost')} — "
+        f"cost extraction is gated behind `if success:` at sync_orchestration.py:2416"
+    )
+    assert test_entry.get('model') == "agentic-anthropic", (
+        f"Expected model='agentic-anthropic' for failed test op, got model='{test_entry.get('model')}' — "
+        f"model extraction is gated behind `if success:` at sync_orchestration.py:2416"
+    )
+
+
+def test_sync_successful_test_logs_no_spurious_error(orchestration_fixture):
+    """Issue #1072 regression guard: A successful test operation must still log
+    error=None, not accidentally inject the success message as an error.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_get_paths = mocks['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    def mock_test_success(*args, **kwargs):
+        test_file = tmp_path / 'tests' / 'test_calculator.py'
+        test_file.write_text("# Generated test content")
+        return ("test_content", 0.06, "agentic-anthropic", True, "")
+
+    mock_test.side_effect = mock_test_success
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Spy on append_log_entry to capture the logged entry dict
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append:
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Find the append_log_entry call for the test operation
+    test_entries = []
+    for call_obj in mock_append.call_args_list:
+        entry = call_obj.args[2] if len(call_obj.args) > 2 else call_obj[0][2]
+        if isinstance(entry, dict) and entry.get('operation') == 'test':
+            test_entries.append(entry)
+
+    assert len(test_entries) >= 1, (
+        "No log entry found for 'test' operation"
+    )
+    test_entry = test_entries[0]
+
+    assert test_entry.get('error') is None, (
+        f"Successful test should log error=None, got: {test_entry.get('error')!r}"
+    )
+    assert test_entry.get('actual_cost') == pytest.approx(0.06), (
+        f"Expected cost=0.06 for successful test, got: {test_entry.get('actual_cost')}"
+    )
+    assert test_entry.get('model') == "agentic-anthropic", (
+        f"Expected model='agentic-anthropic', got: {test_entry.get('model')!r}"
+    )
+
+
+# Scope addition: covers expansion item "sync_orchestration.py:2398 should also
+# extract crash/fix error messages from result[1]" identified by Step 6 but absent
+# from Step 8's plan
+def test_sync_extracts_error_from_crash_fix_result_tuple(orchestration_fixture):
+    """Issue #1072 (Step 6 expansion): crash/fix operations return error messages in
+    result[1], but sync_orchestration.py:2398 only does `success = bool(result[0])` —
+    it never extracts the error from result[1]. Failed crash/fix ops should also log
+    their error messages.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_crash = mocks['crash_main']
+
+    crash_error_msg = "Crash fix failed: could not resolve merge conflict"
+    mock_crash.return_value = (False, crash_error_msg, 0.0, "unknown", "", [])
+
+    # Create the required files so the crash operation doesn't skip due to missing files
+    pdd_files = mocks['get_pdd_file_paths'].return_value
+    pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
+    pdd_files['code'].write_text("# code file")
+    pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
+    pdd_files['example'].write_text("# example file")
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Code has errors'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Mock _run_example_with_error_detection to simulate a crash (nonzero exit)
+    # so has_crash=True and crash_main actually gets called
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append, \
+         patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Traceback: error")), \
+         patch('pdd.sync_orchestration.read_run_report', return_value=None):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # The errors list should contain the SPECIFIC crash error from result[1],
+    # not just the generic "Operation 'crash' failed." fallback.
+    found_specific_error = any(
+        "Crash fix failed" in str(e) for e in result.get('errors', [])
+    )
+    assert found_specific_error, (
+        f"Expected specific crash error 'Crash fix failed: ...' in errors list, "
+        f"got only: {result.get('errors', [])}. "
+        f"sync_orchestration never extracts error messages from crash/fix result[1]."
+    )
