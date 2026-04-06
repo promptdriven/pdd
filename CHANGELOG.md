@@ -1,26 +1,59 @@
+## v0.0.199 (2026-04-05)
+
+### Fix
+
+- auto-heal end-to-end — skip local models, force local LLM, log timeouts
+- simplify auto-heal credentials to use GEMINI_API_KEY
+- use Vertex AI credentials for auto-heal LLM calls
+- pass API keys, increase timeout, and soften push-mode failures in auto-heal
+- scope auto-heal drift to changed modules only
+
+## v0.0.198 (2026-04-04)
+
+### Feat
+
+- **deterministic grep verification of Step 6 FIX_LOCATIONS**: after the LLM identifies fix locations for repeating-pattern bugs, the orchestrator now runs a `grep -rEnI` search using a `PATTERN_SEARCH` regex emitted by Step 6 to find all matching files in the codebase. Unclassified files are sent back to the LLM with 30+10 line context windows for evidence-based classification (`NEEDS_FIX` / `SAFE_EVIDENCE`). Files without explicit safe evidence default to NEEDS_FIX. New helpers: `_parse_pattern_search`, `_sanitize_grep_pattern`, `_verify_pattern_completeness`, `_extract_match_context`, `_parse_classification_evidence`, `_merge_fix_locations`
+- **Step 11 code cleanup for E2E fix workflow**: new final step runs an LLM pass over all workflow-produced changes to remove debug prints, commented-out code, unused imports, and fix import ordering. Cleanup is committed separately, re-verified by tests, and auto-reverted if tests fail. New `--skip-cleanup` CLI flag to opt out. Prompt template: `agentic_e2e_fix_step11_code_cleanup_LLM.prompt`
+- **bug workflow renumbered to 12 integer steps**: replaced fractional step 5.5 with integer step 7 (prompt classification); added step 4 (API research). Timeouts dict key type changed from `Dict[Union[int, float], float]` to `Dict[int, float]`
+- **structural test guard for Step 9**: scans generated test files for non-behavioral patterns (inspect.getsource, inspect.signature, assert hasattr, source-string-matching). Backs up files, retries with violation feedback, and restores originals on regression (>50% line loss)
+- **Step 5 reproduction test flow**: parses `REPRO_FILES_CREATED` marker, validates paths against traversal, reads test content into context, and copies repro files into worktree for downstream steps
+- **fix-location coverage check**: after Step 9, verifies generated tests reference all fix locations; retries with coverage-focused feedback if any locations are uncovered
+
+### Fix
+
+- **multi-step sync auto-submits grounding examples to vector DB**: the multi-step sync path now calls `_auto_submit_example` on success, matching the single-step path behavior
+- **skip CI polling when GitHub App lacks `checks:read`**: `_poll_required_checks` now detects "resource not accessible by integration" and returns `no_checks` instead of polling until timeout
+- **`_revert_out_of_scope_changes` logs failures and clears reverted list**: scope guard now logs warnings on git status/checkout failures and clears the reverted list when checkout fails, preventing downstream code from assuming files were successfully restored
+
+### Build
+
+- **Makefile `example` target reformatted**: multi-line foreach body for readability (no behavior change)
+
+### Refactor
+
+- **E2E fix workflow expanded to 11 steps**: step map, descriptions, timeouts, and total_steps updated; `_run_step11_code_cleanup` extracts full diff from initial SHA for accurate cleanup scope
+- **agentic_e2e_fix example context rewritten**: replaced mock data dicts with `_mock_subprocess_run` that handles `gh api` and `git` commands realistically; expanded module docstring with full parameter/return documentation
+
 ## v0.0.197 (2026-04-03)
 
 ### Feat
 
-- PDD enhancement changes for #1071
-- add scope-expansion directives to bug workflow prompts (#1071)
+- **scope-expansion directives for bug workflow** (#1071): Step 6 prompt now independently validates whether an issue's proposed fix covers the full scope found by root cause analysis. New `EXPANSION_ITEMS` machine-readable marker is parsed by the orchestrator (`_parse_expansion_items`) and injected into Steps 8, 9, and 10 so downstream steps generate tests for the FULL scope — not just the subset the issue author proposed. Steps 8/9 MUST include tests for each expansion item; Step 10 emits a WARNING (not FAIL) for uncovered items
+- **`TestCommand` dataclass** (#1080): `get_test_command_for_file()` now returns a `TestCommand` bundling the command string with the `cwd` where the test runner config was found. `_detect_ts_test_runner` returns `(command, config_dir)` tuple. Critical for monorepos where Jest/Vitest/Playwright configs live in subdirectories (e.g., `frontend/jest.config.js`)
 
 ### Fix
 
-- capture orchestrator errors in injection test assertions (#1071)
-- add step6_expansion_items to CALLER_BUG_SCENARIO fixture in step7 test
-- address adversarial review — dedup, missing warning, magic window, orchestrator test
-- review fixes for #1074 — stale architecture descriptions, mock-of-mock tests, step9 silent override
-- restore issue-symptom coverage baseline in step8, fix silent test swallow (#1071)
-- replace free-text scope directives with EXPANSION_ITEMS machine-readable marker (#1071)
-- Step 10 scope check uses WARNING not FAIL, replace keyword tests with real verification
-- use resolved absolute path in TestCommand to prevent double-prefix (#1080)
-- update e2e_797 test mocks and example to use TestCommand (#1080)
-- fix_error_loop uses TestCommand.cwd instead of test_file.parent (#1080)
-- non-Python test verification uses wrong cwd — breaks all monorepos (#1080)
-- auto-heal drift detection and healing bugs
-- address PR #1068 review feedback from Greg
-- bug: _is_permanent_error() misses Claude OAuth failures — wastes 9 retries per job
+- **non-Python test verification uses wrong cwd — breaks all monorepos** (#1080): all callers (`agentic_bug_orchestrator`, `agentic_e2e_fix_orchestrator`, `fix_error_loop`, `sync_orchestration`, `pin_example_hack`) now use `TestCommand.cwd` instead of hardcoded repo root or test file parent; test paths are resolved to absolute before being passed to the runner
+- **`_is_permanent_error()` misses Claude OAuth failures** — added patterns for `failed to authenticate`, `invalid bearer`, HTTP `401`, and relaxed `authentication_error` to match both underscore and space separators; narrowed temperature pattern to avoid false positives — previously wasted 9 retries per job on permanent auth errors
+- **auto-heal drift detection and healing bugs**: skip fully-synced/error-state modules instead of crashing, resolve code file path for `pdd update` commands, handle all drift operation types (not just `update`/`example`), guard against `None` basename/language
+
+### Build
+
+- **auto-heal workflow uses path filters**: only triggers on changes to `pdd/`, `prompts/`, `context/`, `tests/`, `.pdd/`; removed per-module scoping step in PR mode (now heals all drifted modules); added `--skip-ci` flag on main-branch push commits
+
+### Refactor
+
+- **ci_drift_heal simplification**: removed redundant CI git identity configuration from `commit_and_push` (handled by workflow step); generalized example drift branch to cover all non-update operation types with descriptive reason text
 
 ## v0.0.196 (2026-04-02)
 

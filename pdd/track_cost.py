@@ -177,3 +177,4 @@ def collect_files(args, kwargs):
                     input_files.append(item)
 
     return input_files, output_files
+

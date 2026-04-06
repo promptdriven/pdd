@@ -18,6 +18,7 @@ from rich.console import Console
 
 from .agentic_common import run_agentic_task, get_available_agents, DEFAULT_MAX_RETRIES
 from .load_prompt_template import load_prompt_template
+from .test_result import TestResult
 
 console = Console()
 
@@ -187,7 +188,7 @@ def run_agentic_test_generate(
         )
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown", False
+        return TestResult("", 0.0, "unknown", False, error_msg)
 
     if verbose and not quiet:
         console.print(f"[green]Available agents:[/green] {', '.join(agents)}")
@@ -198,7 +199,7 @@ def run_agentic_test_generate(
         error_msg = "Failed to load prompt template 'agentic_test_generate_LLM'"
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown", False
+        return TestResult("", 0.0, "unknown", False, error_msg)
 
     # Read input files
     prompt_content = ""
@@ -232,7 +233,7 @@ def run_agentic_test_generate(
         error_msg = f"Error formatting agent prompt template: {e}"
         if not quiet:
             console.print(f"[bold red]{error_msg}[/bold red]")
-        return "", 0.0, "unknown", False
+        return TestResult("", 0.0, "unknown", False, error_msg)
 
     if verbose and not quiet:
         console.print(f"[cyan]Prompt file:[/cyan] {prompt_file}")
@@ -307,4 +308,5 @@ def run_agentic_test_generate(
 
     model_name = f"agentic-{provider}" if provider else "agentic-cli"
 
-    return generated_content, cost, model_name, final_success
+    error_message = "" if final_success else message
+    return TestResult(generated_content, cost, model_name, final_success, error_message)

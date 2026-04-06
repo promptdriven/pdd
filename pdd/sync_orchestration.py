@@ -2495,15 +2495,22 @@ def sync_orchestration(
                                     # agentic_success flag (4th element) since the agent may create
                                     # test files with different extensions or at different paths.
                                     # Only fall back to file existence check for Python (non-agentic mode).
-                                    agentic_success_flag = result[3] if len(result) >= 4 else None
+                                    agentic_success_flag = result.agentic_success if hasattr(result, 'agentic_success') else (result[3] if len(result) >= 4 else None)
                                     if agentic_success_flag is not None:
                                         # Agentic mode was used - trust the agent's success report
                                         success = agentic_success_flag
                                     else:
                                         # Non-agentic mode (Python) - check if file exists
                                         success = pdd_files['test'].exists()
+                                    # Issue #1072: Extract error message from TestResult
+                                    error_msg = result.error_message if hasattr(result, 'error_message') else (result[4] if len(result) >= 5 else "")
+                                    if not success and error_msg:
+                                        errors.append(f"Agentic test generation failed: {error_msg}")
                                 else:
                                     success = bool(result[0])
+                                    # Issue #1072: Extract error message from crash/fix result[1]
+                                    if not success and len(result) >= 2 and result[1]:
+                                        errors.append(str(result[1]))
                                 cost = _extract_cost_from_result(operation, result)
                                 current_cost_ref[0] += cost
                             else:
@@ -2521,13 +2528,14 @@ def sync_orchestration(
                         duration = time.time() - op_start_time
                         actual_cost = 0.0
                         model_name = "unknown"
+                        # Issue #1072: Extract cost/model regardless of success/failure
+                        if isinstance(result, dict):
+                            actual_cost = result.get('cost', 0.0)
+                            model_name = result.get('model', 'unknown')
+                        elif isinstance(result, tuple) and len(result) >= 3:
+                            actual_cost = _extract_cost_from_result(operation, result)
+                            model_name = _extract_model_from_result(operation, result)
                         if success:
-                            if isinstance(result, dict):
-                                 actual_cost = result.get('cost', 0.0)
-                                 model_name = result.get('model', 'unknown')
-                            elif isinstance(result, tuple) and len(result) >= 3:
-                                 actual_cost = _extract_cost_from_result(operation, result)
-                                 model_name = _extract_model_from_result(operation, result)
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)

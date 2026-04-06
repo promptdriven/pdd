@@ -1957,7 +1957,7 @@ You can configure these keys using `pdd setup` or by setting them in your shell'
 
 #### Agentic E2E Fix Mode
 
-For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates a 10-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation.
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an 11-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation and code cleanup.
 
 **How it Works:**
 
@@ -1973,6 +1973,7 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 8. **Run PDD Fix**: Execute `pdd fix` sequentially on failing unit tests for each dev unit
 9. **Verify All**: Final verification that all tests pass locally
 10. **CI Validation**: Poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate CI-specific issues (lint, artifacts, build)
+11. **Code Cleanup**: Review all changes from the workflow and clean up code quality issues (debug statements, unused imports, duplicated code); revert if tests fail
 
 **Resumable Operations:**
 
