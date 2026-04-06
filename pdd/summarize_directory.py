@@ -199,10 +199,13 @@ def summarize_directory(
 
     # Step 4: Return early if no files
     if not files:
-        # Return empty CSV header
+        # No files discovered, but preserve any existing cached entries
         output_io = io.StringIO()
-        writer = csv.DictWriter(output_io, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
+        fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
+        writer = csv.DictWriter(output_io, fieldnames=fieldnames)
         writer.writeheader()
+        for entry in existing_data.values():
+            writer.writerow({k: entry.get(k, '') for k in fieldnames})
         return output_io.getvalue(), 0.0, "None"
 
     # Determine base directory for relative paths
@@ -314,16 +317,30 @@ def summarize_directory(
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
 
-    # Step 7: Generate CSV output
-    output_io = io.StringIO()
+    # Step 7: Merge in existing entries that were not part of this scan.
+    # This preserves cached summaries for files outside the current
+    # directory_path / glob scope so they are not silently dropped.
+    scanned_paths = set()
+    for row in results_data:
+        scanned_paths.add(os.path.normpath(row['full_path']))
+        # Also track the absolute version so entries keyed by absolute path
+        # are recognized as already present when the scan wrote a relative path.
+        abs_candidate = os.path.normpath(os.path.join(base_dir, row['full_path']))
+        scanned_paths.add(abs_candidate)
     fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
+    for norm_path, entry in existing_data.items():
+        if norm_path not in scanned_paths:
+            results_data.append({k: entry.get(k, '') for k in fieldnames})
+
+    # Step 8: Generate CSV output
+    output_io = io.StringIO()
     writer = csv.DictWriter(output_io, fieldnames=fieldnames)
-    
+
     writer.writeheader()
     writer.writerows(results_data)
-    
+
     csv_output = output_io.getvalue()
-    
+
     return csv_output, total_cost, last_model_name
 
 def _process_single_file_logic(
