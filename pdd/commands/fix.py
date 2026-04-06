@@ -62,6 +62,7 @@ def _is_user_story_file(value: str) -> bool:
     help="Maximum post-push CI fix attempts (Agentic mode).",
 )
 @click.option("--skip-ci", is_flag=True, help="Skip post-push CI validation (Agentic mode).")
+@click.option("--skip-cleanup", is_flag=True, help="Skip Step 11 code cleanup (Agentic mode).")
 @click.option("--output-test", type=click.Path(), help="Specify where to save the fixed unit test file.")
 @click.option("--output-code", type=click.Path(), help="Specify where to save the fixed code file.")
 @click.option("--output-results", type=click.Path(), help="Specify where to save the results log.")
@@ -109,6 +110,7 @@ def fix(
     no_github_state: bool,
     ci_retries: int,
     skip_ci: bool,
+    skip_cleanup: bool,
     output_test: Optional[str],
     output_code: Optional[str],
     output_results: Optional[str],
@@ -150,6 +152,7 @@ def fix(
                 protect_tests=protect_tests,
                 ci_retries=ci_retries,
                 skip_ci=skip_ci,
+                skip_cleanup=skip_cleanup,
             )
 
             if not quiet:

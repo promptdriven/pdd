@@ -372,7 +372,7 @@ def test(
             strength = ctx.obj.get("strength") if ctx.obj else None
             temperature = ctx.obj.get("temperature") if ctx.obj else None
 
-            unit_test_code, cost, model, _agentic_success = cmd_test_main(
+            test_result = cmd_test_main(
                 ctx=ctx,
                 prompt_file=prompt_file,
                 code_file=code_file,
@@ -387,7 +387,7 @@ def test(
                 manual=manual
             )
 
-            return unit_test_code, cost, model
+            return test_result.content, test_result.cost, test_result.model
 
     except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise

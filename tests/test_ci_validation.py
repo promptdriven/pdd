@@ -382,6 +382,37 @@ def test_poll_does_not_return_no_checks_on_auth_error(tmp_path: Path) -> None:
     assert call_count >= 2, "Should have retried polling, not exited immediately"
 
 
+def test_poll_returns_no_checks_on_resource_not_accessible(tmp_path: Path) -> None:
+    """GitHub App tokens on fork repos may lack checks:read, returning
+    'Resource not accessible by integration'. Should skip CI validation
+    instead of polling until timeout."""
+    inaccessible_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout="",
+        stderr="GraphQL: Resource not accessible by integration (node.statusCheckRollup)",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=inaccessible_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=False,
+        )
+
+    assert status == "no_checks", (
+        f"Expected 'no_checks' when GitHub App lacks checks:read, got '{status}'. "
+        "Without this fix, CI polling times out after MAX_POLL_SECONDS."
+    )
+    assert checks == []
+
+
 def test_ci_validation_loop_succeeds_without_fix_loop_when_no_required_checks(tmp_path: Path) -> None:
     """End-to-end: no required checks should succeed without ever calling the LLM fix task."""
     empty_result = subprocess.CompletedProcess(

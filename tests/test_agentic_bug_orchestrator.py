@@ -5091,20 +5091,11 @@ def test_max_retries_passed_to_run_agentic_task(mock_dependencies, default_args)
 
 
 def test_bug_step_timeouts_has_expected_steps():
-    """Verify BUG_STEP_TIMEOUTS matches the spec."""
+    """Verify BUG_STEP_TIMEOUTS matches the spec (12 integer-keyed steps)."""
     from pdd.agentic_bug_orchestrator import BUG_STEP_TIMEOUTS
-    assert 1 in BUG_STEP_TIMEOUTS
-    assert 2 in BUG_STEP_TIMEOUTS
-    assert 3 in BUG_STEP_TIMEOUTS
-    assert 4 in BUG_STEP_TIMEOUTS
-    assert 5 in BUG_STEP_TIMEOUTS
-    assert 5.5 in BUG_STEP_TIMEOUTS
-    assert 6 in BUG_STEP_TIMEOUTS
-    assert 7 in BUG_STEP_TIMEOUTS
-    assert 8 in BUG_STEP_TIMEOUTS
-    assert 9 in BUG_STEP_TIMEOUTS
-    assert 10 in BUG_STEP_TIMEOUTS
-    # Step 11 and 12 use default
+    for step in range(1, 13):
+        assert step in BUG_STEP_TIMEOUTS, f"Step {step} missing from BUG_STEP_TIMEOUTS"
+    assert 5.5 not in BUG_STEP_TIMEOUTS, "Float key 5.5 should not exist"
 
 
 def test_parse_changed_files_empty_output():
@@ -6625,4 +6616,268 @@ class TestIssue1080MonorepoCwd:
             f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
             f"got cwd={actual_cwd} (repo root). _verify_e2e_tests uses wrong cwd, "
             f"breaking monorepo test verification."
+        )
+
+
+# ============================================================================
+# Issue #1083: BUG_STEP_TIMEOUTS stale numbering — behavioral tests
+# ============================================================================
+
+
+def _run_issue_1083_fresh(tmp_path, **extra_kwargs):
+    """Run orchestrator with standard patches for Issue #1083 fresh-run tests.
+
+    Returns mock_run for assertion in the caller.
+    """
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \
+         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
+         patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]):
+
+        def side_effect_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        mock_run.side_effect = side_effect_run
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            **extra_kwargs,
+        )
+
+    return mock_run
+
+
+def _run_issue_1083_resume(tmp_path, last_completed_step, quiet=True):
+    """Run orchestrator with resume state for Issue #1083 resume tests.
+
+    Returns (mock_run, mock_console, mock_worktree_path) for assertion.
+    """
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    state = {
+        "workflow": "bug",
+        "issue_number": 1,
+        "issue_url": "http://github.com/owner/repo/issues/1",
+        "last_completed_step": last_completed_step,
+        "step_outputs": {str(i): f"Output for step{i}" for i in range(1, last_completed_step + 1)},
+        "total_cost": last_completed_step * 0.1,
+        "model_used": "model",
+        "changed_files": [],
+        "worktree_path": str(mock_worktree_path),
+    }
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+         patch("pdd.agentic_bug_orchestrator.console") as mock_console, \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \
+         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
+         patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+         patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
+
+        mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.return_value = (True, "Output for step", 0.1, "model")
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=quiet,
+        )
+
+    return mock_run, mock_console, mock_worktree_path
+
+
+# Correct timeouts per the 12-step prompt specification
+_EXPECTED_STEP_TIMEOUTS = {
+    1: 240.0,    # Duplicate Check
+    2: 400.0,    # Docs Check
+    3: 400.0,    # Triage
+    4: 400.0,    # API Research
+    5: 600.0,    # Reproduce (Complex)
+    6: 600.0,    # Root Cause (Complex)
+    7: 600.0,    # Prompt Classification
+    8: 340.0,    # Test Plan
+    9: 1000.0,   # Generate Unit Test (Most Complex)
+    10: 600.0,   # Verify Unit Test
+    11: 2000.0,  # E2E Test (Complex)
+    12: 240.0,   # Create PR
+}
+
+
+def test_all_12_steps_receive_correct_prompt_specified_timeouts(tmp_path):
+    """All 12 steps must receive the correct timeout from the prompt spec."""
+    mock_run = _run_issue_1083_fresh(tmp_path)
+
+    assert mock_run.call_count == 12, f"Expected 12 steps, got {mock_run.call_count}"
+
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        actual_timeout = call_obj.kwargs.get("timeout")
+        step_str = label.replace("step", "").replace("_", ".")
+        step_num = float(step_str) if "." in step_str else int(step_str)
+        expected = _EXPECTED_STEP_TIMEOUTS.get(step_num)
+
+        assert actual_timeout == expected, (
+            f"Step {step_num} ({label}): expected timeout={expected}, got {actual_timeout}"
+        )
+
+
+def test_steps_11_and_12_do_not_fall_back_to_default_timeout(tmp_path):
+    """Steps 11 (e2e_test) and 12 (pr) must have explicit timeouts, not 340.0 default."""
+    mock_run = _run_issue_1083_fresh(tmp_path)
+
+    step11_timeout = None
+    step12_timeout = None
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        if label == "step11":
+            step11_timeout = call_obj.kwargs.get("timeout")
+        elif label == "step12":
+            step12_timeout = call_obj.kwargs.get("timeout")
+
+    assert step11_timeout == 2000.0, f"Step 11 timeout should be 2000.0, got {step11_timeout}"
+    assert step12_timeout == 240.0, f"Step 12 timeout should be 240.0, got {step12_timeout}"
+
+
+def test_timeout_adder_correctly_sums_with_steps_11_and_12(tmp_path):
+    """timeout_adder=60 must sum correctly: step 11=2060.0, step 12=300.0."""
+    mock_run = _run_issue_1083_fresh(tmp_path, timeout_adder=60.0)
+
+    step11_timeout = None
+    step12_timeout = None
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        if label == "step11":
+            step11_timeout = call_obj.kwargs.get("timeout")
+        elif label == "step12":
+            step12_timeout = call_obj.kwargs.get("timeout")
+
+    assert step11_timeout == 2060.0, f"Step 11 with adder=60 should be 2060.0, got {step11_timeout}"
+    assert step12_timeout == 300.0, f"Step 12 with adder=60 should be 300.0, got {step12_timeout}"
+
+
+def test_resume_at_step_11_restores_worktree(tmp_path):
+    """Resume at step 11 must restore worktree as working directory."""
+    mock_run, _, mock_worktree_path = _run_issue_1083_resume(tmp_path, last_completed_step=10)
+
+    step11_call = next(
+        (c for c in mock_run.call_args_list if c.kwargs.get("label") == "step11"),
+        None,
+    )
+    assert step11_call is not None, "Step 11 should have been called"
+    assert step11_call.kwargs.get("cwd") == mock_worktree_path, (
+        f"Step 11 should run in worktree, but ran in {step11_call.kwargs.get('cwd')}"
+    )
+
+
+def test_resume_at_step_12_restores_worktree(tmp_path):
+    """Resume at step 12 must restore worktree as working directory."""
+    mock_run, _, mock_worktree_path = _run_issue_1083_resume(tmp_path, last_completed_step=11)
+
+    step12_call = next(
+        (c for c in mock_run.call_args_list if c.kwargs.get("label") == "step12"),
+        None,
+    )
+    assert step12_call is not None, "Step 12 should have been called"
+    assert step12_call.kwargs.get("cwd") == mock_worktree_path, (
+        f"Step 12 should run in worktree, but ran in {step12_call.kwargs.get('cwd')}"
+    )
+
+
+def test_resume_at_step_11_prints_progress_message(tmp_path):
+    """Resume at step 11 must print 'Resuming...' progress message."""
+    _, mock_console, _ = _run_issue_1083_resume(tmp_path, last_completed_step=10, quiet=False)
+
+    print_calls = [str(c) for c in mock_console.print.call_args_list]
+    resume_msg = next((c for c in print_calls if "Resuming" in c), None)
+
+    assert resume_msg is not None, (
+        f"Resume message should be printed when resuming at step 11. "
+        f"Print calls: {print_calls[:5]}"
+    )
+
+
+def test_prompt_file_timeout_spec_matches_code_dict():
+    """Prompt file BUG_STEP_TIMEOUTS spec must have 12 integer-keyed steps and
+    the code dict must match the prompt spec.
+
+    The prompt at pdd/prompts/agentic_bug_orchestrator_python.prompt is the
+    specification for the orchestrator. Its Per-Step Timeouts code block was
+    fixed in Step 7 to use 12 integer keys. This test evaluates the spec dict
+    and cross-checks it against the code dict to ensure they stay in sync.
+
+    Fix location: pdd/prompts/agentic_bug_orchestrator_python.prompt
+    Fails on buggy code: code dict has stale keys (5.5, missing 11/12) that
+    don't match the corrected prompt spec.
+    """
+    import ast
+    import re
+
+    # Load the prompt file (the specification for the orchestrator)
+    prompt_path = Path(__file__).resolve().parents[1] / "pdd" / "prompts" / "agentic_bug_orchestrator_python.prompt"
+    content = prompt_path.read_text()
+
+    # Extract the BUG_STEP_TIMEOUTS dict from the Per-Step Timeouts code block
+    match = re.search(r'BUG_STEP_TIMEOUTS[^=]*=\s*(\{[^}]+\})', content, re.DOTALL)
+    assert match is not None, "Could not find BUG_STEP_TIMEOUTS dict in prompt file"
+
+    # Strip inline comments and evaluate the dict
+    dict_str = re.sub(r'#[^\n]*', '', match.group(1))
+    spec_dict = ast.literal_eval(dict_str)
+
+    # Prompt spec must have integer keys 1-12 with no float 5.5
+    assert 5.5 not in spec_dict, (
+        f"Prompt file still has float key 5.5 — prompt_classification is now step 7"
+    )
+    for step in range(1, 13):
+        assert step in spec_dict, (
+            f"Prompt file missing timeout for step {step}"
+        )
+
+    # Cross-check: code dict must match the prompt specification
+    from pdd.agentic_bug_orchestrator import BUG_STEP_TIMEOUTS
+
+    for step, expected_timeout in spec_dict.items():
+        actual = BUG_STEP_TIMEOUTS.get(step)
+        assert actual == expected_timeout, (
+            f"Code BUG_STEP_TIMEOUTS[{step}] = {actual} but prompt spec says {expected_timeout}. "
+            f"The code dict is out of sync with the prompt specification."
         )

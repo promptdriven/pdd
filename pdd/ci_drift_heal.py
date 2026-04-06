@@ -44,6 +44,11 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     env["CI"] = "1"
     env["NO_COLOR"] = "1"
     env["PDD_OUTPUT_COST_PATH"] = cost_csv_path
+    env["PDD_FORCE_LOCAL"] = "1"
+    # Disable local models (LM Studio) that hang connecting to localhost.
+    # Set a fake required API key so pdd's model selection skips them
+    # (empty api_key = "no auth needed" = always selected as cheapest).
+    env["PDD_SKIP_LOCAL_MODELS"] = "1"
     return env
 
 
@@ -90,6 +95,7 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
 
     prompt_drifts: List[DriftInfo] = []
     example_drifts: List[DriftInfo] = []
+    seen_basenames: set = set()
 
     for prompt_path in prompt_files:
         try:
@@ -106,6 +112,8 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
         # Scope control: skip modules not in the requested list
         if modules is not None and basename not in modules:
             continue
+
+        seen_basenames.add(basename)
 
         try:
             decision = sync_determine_operation(
@@ -153,6 +161,42 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
                     reason=getattr(decision, "reason", "Needs sync"),
                 )
             )
+
+    # Detect code files without prompts: these need `pdd update` to generate
+    # the prompt and complete the dev unit.
+    if modules is not None:
+        _LANG_EXTENSIONS = {
+            ".py": "python", ".ts": "typescript", ".tsx": "typescript",
+            ".js": "javascript", ".jsx": "javascript", ".go": "go",
+            ".rs": "rust", ".java": "java", ".rb": "ruby",
+            ".sh": "bash", ".bash": "bash",
+        }
+        for basename in modules:
+            if basename in seen_basenames:
+                continue
+            # No prompt found for this basename — look for a code file
+            for ext, language in _LANG_EXTENSIONS.items():
+                candidates = list(Path(".").rglob(f"{basename}{ext}"))
+                # Filter out test files, examples, and hidden dirs
+                candidates = [
+                    c for c in candidates
+                    if not any(p.startswith(".") for p in c.parts)
+                    and "test" not in c.name.lower().split(basename.lower())[0]
+                    and "example" not in c.name.lower()
+                ]
+                if candidates:
+                    code_path = str(candidates[0])
+                    prompt_drifts.append(
+                        DriftInfo(
+                            basename=basename,
+                            language=language,
+                            operation="update",
+                            reason="Code exists without prompt — needs pdd update",
+                            code_path=code_path,
+                        )
+                    )
+                    seen_basenames.add(basename)
+                    break
 
     return prompt_drifts, example_drifts
 
@@ -208,7 +252,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
             env=env,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=600,
         )
         if result.returncode == 0:
             console.print(f"[green]✓ Healed {drift.basename} successfully[/green]")
@@ -221,8 +265,12 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
             if stderr_snippet:
                 console.print(f"[dim]{stderr_snippet}[/dim]")
             return False
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         console.print(f"[red]✗ Timeout healing {drift.basename}[/red]")
+        if e.stdout:
+            console.print(f"[dim]stdout (last 1000 chars): {e.stdout[-1000:]}[/dim]")
+        if e.stderr:
+            console.print(f"[dim]stderr (last 1000 chars): {e.stderr[-1000:]}[/dim]")
         return False
     except FileNotFoundError:
         console.print(
@@ -432,6 +480,10 @@ def main(
         console.print("\n[yellow]No modules healed — skipping commit phase.[/yellow]")
 
     if any_failure:
+        if skip_ci:
+            # Push-to-main mode: heal failures are advisory, not blocking
+            console.print("\n[yellow]⚠ Completed with failures (non-blocking on push to main).[/yellow]")
+            return 0
         console.print("\n[red]✗ Completed with failures.[/red]")
         return 1
 

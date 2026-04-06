@@ -283,7 +283,7 @@ def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mo
         handle.write.assert_called_once_with("unit_test_code")
 
         # Verify the result (4th element is agentic_success, None for Python)
-        assert result == ("unit_test_code", 0.10, "model_v1", None)
+        assert result == ("unit_test_code", 0.10, "model_v1", None, "")
 
 
 # pylint: disable=redefined-outer-name
@@ -325,7 +325,7 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
         handle = m_file()
         handle.write.assert_called_once_with("more_tests")
         # 4th element is agentic_success, None for Python
-        assert result == ("more_tests", 0.20, "model_v2", None)
+        assert result == ("more_tests", 0.20, "model_v2", None, "")
 
 
 # pylint: disable=redefined-outer-name
@@ -401,7 +401,7 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
         )
 
         # 4th element is agentic_success, None for Python
-        assert result == ("unit_test_code", 0.10, "model_v1", None)
+        assert result == ("unit_test_code", 0.10, "model_v1", None, "")
         m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
         handle = m_open()
         handle.write.assert_called_once_with("unit_test_code")
@@ -422,7 +422,7 @@ def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx
     # Do NOT create expected_output or its parent - verify cmd_test_main creates the directory when missing.
     generated_content = "test('add', () => { expect(1 + 2).toBe(3); });"
 
-    mock_agentic = MagicMock(return_value=(generated_content, 0.1, "agentic-cli", True))
+    mock_agentic = MagicMock(return_value=(generated_content, 0.1, "agentic-cli", True, ""))
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
          patch("pdd.agentic_test_generate.run_agentic_test_generate", mock_agentic):
 
@@ -706,6 +706,7 @@ def mock_cloud_env_vars(monkeypatch):
     """Set required environment variables for cloud authentication."""
     monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test_firebase_key")
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_id")
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
 
 
 # B. Cloud Execution Tests
@@ -1337,8 +1338,8 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     # Capture output to verify cloud execution
     captured = capsys.readouterr()
 
-    # Verify we got valid test code back (4th element is agentic_success)
-    generated_test, cost, model, _ = result
+    # Verify we got valid test code back (TestResult NamedTuple)
+    generated_test, cost, model, _, _ = result
     assert len(generated_test) > 0, "Cloud should return generated test code"
     assert "def test" in generated_test.lower() or "class test" in generated_test.lower(), \
         "Should contain test functions or test class"
@@ -1402,7 +1403,7 @@ def test_cmd_test_main_example_file_detection(mock_ctx_fixture, mock_files_fixtu
         assert "example content" in call_kwargs["example"], "Should contain example content"
 
         # Verify result (4th element is agentic_success)
-        generated_test, cost, _, _ = result
+        generated_test, cost, _, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST
 
@@ -1461,7 +1462,7 @@ def test_cmd_test_main_non_example_file_uses_code(mock_ctx_fixture, mock_files_f
         assert "def add" in call_kwargs["code"], "Should contain code content"
 
         # Verify result (4th element is agentic_success)
-        generated_test, cost, _, _ = result
+        generated_test, cost, _, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST
 
@@ -1491,7 +1492,7 @@ def test_agentic_python_test_gets_sys_path_preamble(mock_ctx_fixture, mock_files
             {"output": mock_files_fixture["output"]},
             "python"
         )
-        mock_agentic.return_value = (raw_agent_output, 0.05, "agent_model", True)
+        mock_agentic.return_value = (raw_agent_output, 0.05, "agent_model", True, "")
 
         result = cmd_test_main(
             ctx=mock_ctx_fixture,
@@ -1673,7 +1674,7 @@ def test_issue_717_default_non_python_uses_agentic(mock_ctx_fixture, tmp_path):
             {"output": output_path},
             "shell",
         )
-        mock_agentic.return_value = ("agentic code", 0.10, "agentic_model", True)
+        mock_agentic.return_value = ("agentic code", 0.10, "agentic_model", True, "")
 
         cmd_test_main(
             ctx=mock_ctx_fixture,
@@ -1734,3 +1735,52 @@ def test_issue_717_cli_integration_manual_kwarg_forwarded():
         assert kwargs["manual"] is True, (
             f"Expected manual=True, got manual={kwargs['manual']}"
         )
+
+
+# --- Issue #1072 Tests: Error propagation through cmd_test_main ---
+
+
+def test_cmd_test_main_propagates_error_from_agentic_failure(mock_ctx_fixture, mock_files_fixture, tmp_path):
+    """Issue #1072: cmd_test_main must propagate the 5th element (error_message)
+    from run_agentic_test_generate through to its own return value.
+
+    Before the fix, cmd_test_main unpacks only 4 values from run_agentic_test_generate
+    at line 143:
+        generated_content, total_cost, model_name, agentic_success = run_agentic_test_generate(...)
+    This causes ValueError when run_agentic_test_generate returns a 5-tuple.
+
+    After the fix, cmd_test_main unpacks 5 values and includes the error in its return.
+    """
+    error_msg = "All agent providers failed: anthropic: Exit code 1"
+    mock_agentic = MagicMock(return_value=("", 0.0, "agentic-anthropic", False, error_msg))
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", mock_agentic):
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(tmp_path / "test_output.ts")},
+            "typescript",  # Non-Python triggers agentic mode
+        )
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.ts",
+            output=str(tmp_path / "test_output.ts"),
+            language="typescript",
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+    assert len(result) >= 5, (
+        f"cmd_test_main returned {len(result)}-tuple, expected 5-tuple with error message. "
+        f"ValueError: too many values to unpack (expected 4) at cmd_test_main.py:143"
+    )
+    assert result[3] is False, "agentic_success should be False"
+    assert error_msg in result[4], (
+        f"Expected error message propagated through cmd_test_main, got: {result[4]!r}"
+    )

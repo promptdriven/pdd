@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, Generator
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, patch
 
 import click
 import pytest
@@ -102,13 +102,14 @@ def mock_project_dir(tmp_path: Path) -> Generator[Path, None, None]:
 
 
 @pytest.fixture
-def mock_sync_orchestration(mocker: MagicMock) -> MagicMock:
+def mock_sync_orchestration() -> Generator[MagicMock, None, None]:
     """Mocks the sync_orchestration function."""
-    return mocker.patch("pdd.sync_main.sync_orchestration", autospec=True)
+    with patch("pdd.sync_main.sync_orchestration", autospec=True) as mock_orch:
+        yield mock_orch
 
 
 @pytest.fixture
-def mock_construct_paths(mocker: MagicMock, mock_project_dir: Path) -> MagicMock:
+def mock_construct_paths(mock_project_dir: Path) -> Generator[MagicMock, None, None]:
     """Mocks the construct_paths function to return predictable paths."""
     prompts_root_dir = mock_project_dir / "prompts"
 
@@ -151,7 +152,8 @@ def mock_construct_paths(mocker: MagicMock, mock_project_dir: Path) -> MagicMock
             lang,
         )
 
-    return mocker.patch("pdd.sync_main.construct_paths", side_effect=side_effect_func, autospec=True)
+    with patch("pdd.sync_main.construct_paths", side_effect=side_effect_func, autospec=True) as mock_cp:
+        yield mock_cp
 
 
 def create_mock_context(params: Dict[str, Any]) -> click.Context:
@@ -277,7 +279,7 @@ def test_validate_basename_with_subdirectory(mock_project_dir, mock_construct_pa
         ctx, "core/cloud", max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, target_coverage=90.0, dry_run=False
     )
 
-    assert results["overall_success"] is True
+    assert results["overall_success" ] is True
 
 
 @pytest.mark.parametrize("invalid_path", [
@@ -603,7 +605,7 @@ def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_constr
 # ============================================================================
 
 @pytest.fixture
-def mock_construct_paths_with_pddrc_config(mocker: MagicMock, mock_project_dir: Path) -> MagicMock:
+def mock_construct_paths_with_pddrc_config(mock_project_dir: Path) -> Generator[MagicMock, None, None]:
     """Mocks construct_paths to return .pddrc configuration values for max_attempts and budget."""
     prompts_dir = mock_project_dir / "prompts"
 
@@ -644,7 +646,8 @@ def mock_construct_paths_with_pddrc_config(mocker: MagicMock, mock_project_dir: 
             lang,
         )
 
-    return mocker.patch("pdd.sync_main.construct_paths", side_effect=side_effect_func, autospec=True)
+    with patch("pdd.sync_main.construct_paths", side_effect=side_effect_func, autospec=True) as mock_cp:
+        yield mock_cp
 
 
 def test_sync_pddrc_max_attempts_respected_when_cli_not_specified(
@@ -1440,3 +1443,246 @@ class TestIssue1048SyncMainIntegration:
             "Bug #1048: sync_main should accept bracket basename and complete successfully"
         assert mock_sync_orchestration.called, \
             "Bug #1048: sync_orchestration should have been called (validation passed)"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1095: Multi-step sync should call _auto_submit_example on success
+# ---------------------------------------------------------------------------
+
+
+def _make_pdd_files_for_sync(tmp_path: Path, basename: str = "my_module", language: str = "python") -> Dict[str, Path]:
+    """Create minimal PDD file structure for multi-step sync tests."""
+    prompt_file = tmp_path / "prompts" / f"{basename}_{language}.prompt"
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text("Module spec.\n")
+
+    code_file = tmp_path / "src" / f"{basename}.py"
+    code_file.parent.mkdir(parents=True, exist_ok=True)
+    code_file.write_text("def hello():\n    return 'world'\n")
+
+    example_file = tmp_path / "examples" / f"{basename}_example.py"
+    example_file.parent.mkdir(parents=True, exist_ok=True)
+
+    test_file = tmp_path / "tests" / f"test_{basename}.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "prompt": prompt_file,
+        "code": code_file,
+        "example": example_file,
+        "test": test_file,
+    }
+
+
+class TestMultiStepAutoSubmit:
+    """Issue #1095: Multi-step sync should call _auto_submit_example after success."""
+
+    def _make_ctx(self, quiet: bool = False, local: bool = False) -> MagicMock:
+        """Create a mock Click context with obj dict."""
+        ctx = MagicMock(spec=click.Context)
+        ctx.obj = {"quiet": quiet, "local": local}
+        return ctx
+
+    def _setup_mocks(self, mocks, pdd_files, success=True):
+        """Configure standard mock return values for multi-step sync path."""
+        prompt_file = pdd_files["prompt"]
+        # _find_prompt_in_contexts returns None (fall through to construct_paths)
+        mocks["find_prompt"].return_value = None
+        # First construct_paths call (discovery) returns prompts_dir
+        discovery_config = {"prompts_dir": str(prompt_file.parent)}
+        # Second construct_paths call (per-language) returns full config
+        lang_config = {
+            "code_dir": str(pdd_files["code"].parent),
+            "tests_dir": str(pdd_files["test"].parent),
+            "examples_dir": str(pdd_files["example"].parent),
+        }
+        mocks["construct"].side_effect = [
+            (discovery_config, {}, {}, None),
+            (lang_config, {}, {}, "python"),
+        ]
+        # _detect_languages_with_context returns single language
+        mocks["detect_langs"].return_value = {"python": prompt_file}
+        # get_pdd_file_paths returns our pdd_files
+        mocks["get_paths"].return_value = pdd_files
+        # sync_orchestration returns success or failure
+        mocks["orchestration"].return_value = {
+            "success": success,
+            "total_cost": 1.5 if success else 0.5,
+            "model_name": "claude-code",
+            "operations_completed": ["generate", "crash_fix", "verify"] if success else [],
+            "errors": [] if success else ["Something failed"],
+        }
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.sync_main.sync_orchestration")
+    @patch("pdd.sync_main.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_multi_step_sync_calls_auto_submit_on_success(
+        self, mock_construct, mock_get_paths, mock_orchestration, mock_submit,
+        mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """_auto_submit_example must be called after successful multi-step sync (not local)."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files_for_sync(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "orchestration": mock_orchestration, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=True)
+
+        ctx = self._make_ctx(local=False)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=False,
+        )
+
+        # Bug #1095: multi-step path should call _auto_submit_example
+        mock_submit.assert_called_once_with("my_module", "python", pdd_files, ctx)
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.sync_main.sync_orchestration")
+    @patch("pdd.sync_main.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_multi_step_sync_skips_auto_submit_when_local(
+        self, mock_construct, mock_get_paths, mock_orchestration, mock_submit,
+        mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """_auto_submit_example must NOT be called when local=True in multi-step sync."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files_for_sync(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "orchestration": mock_orchestration, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=True)
+
+        ctx = self._make_ctx(local=True)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=False,
+        )
+
+        mock_submit.assert_not_called()
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.sync_main.sync_orchestration")
+    @patch("pdd.sync_main.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_multi_step_sync_skips_auto_submit_on_failure(
+        self, mock_construct, mock_get_paths, mock_orchestration, mock_submit,
+        mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """_auto_submit_example must NOT be called when multi-step sync fails."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files_for_sync(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "orchestration": mock_orchestration, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=False)
+
+        ctx = self._make_ctx(local=False)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=False,
+        )
+
+        mock_submit.assert_not_called()
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.sync_main.sync_orchestration")
+    @patch("pdd.sync_main.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_multi_step_sync_handles_auto_submit_exception(
+        self, mock_construct, mock_get_paths, mock_orchestration, mock_submit,
+        mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """Auto-submit failure must not abort the sync — overall_success stays True."""
+        from pdd.sync_main import sync_main
+
+        pdd_files = _make_pdd_files_for_sync(tmp_path)
+        mocks = {
+            "construct": mock_construct, "get_paths": mock_get_paths,
+            "orchestration": mock_orchestration, "submit": mock_submit,
+            "find_prompt": mock_find_prompt, "detect_langs": mock_detect_langs,
+        }
+        self._setup_mocks(mocks, pdd_files, success=True)
+        mock_submit.side_effect = RuntimeError("API timeout")
+
+        ctx = self._make_ctx(local=False, quiet=False)
+        results, total_cost, model = sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=False,
+        )
+
+        # The auto-submit was attempted (this is the bug — currently not called at all)
+        mock_submit.assert_called_once()
+        # Sync should still succeed despite auto-submit failure
+        assert results["overall_success"] is True
+
+    @patch("pdd.sync_main._detect_languages_with_context")
+    @patch("pdd.sync_main._find_prompt_in_contexts")
+    @patch("pdd.sync_main._auto_submit_example")
+    @patch("pdd.sync_main.sync_orchestration")
+    @patch("pdd.sync_main.get_pdd_file_paths")
+    @patch("pdd.sync_main.construct_paths")
+    def test_multi_step_sync_multiple_languages_auto_submit_each(
+        self, mock_construct, mock_get_paths, mock_orchestration, mock_submit,
+        mock_find_prompt, mock_detect_langs, tmp_path
+    ):
+        """Auto-submit must be called once per successful language in multi-step sync."""
+        from pdd.sync_main import sync_main
+
+        # Create files for both languages
+        py_pdd = _make_pdd_files_for_sync(tmp_path / "py", basename="my_module", language="python")
+        ts_pdd = _make_pdd_files_for_sync(tmp_path / "ts", basename="my_module", language="typescript")
+
+        py_prompt = py_pdd["prompt"]
+        ts_prompt = ts_pdd["prompt"]
+
+        mock_find_prompt.return_value = None
+        # Two construct_paths calls for discovery + 2 per-language
+        mock_construct.side_effect = [
+            ({"prompts_dir": str(py_prompt.parent)}, {}, {}, None),
+            ({"code_dir": str(py_pdd["code"].parent), "tests_dir": str(py_pdd["test"].parent), "examples_dir": str(py_pdd["example"].parent)}, {}, {}, "python"),
+            ({"code_dir": str(ts_pdd["code"].parent), "tests_dir": str(ts_pdd["test"].parent), "examples_dir": str(ts_pdd["example"].parent)}, {}, {}, "typescript"),
+        ]
+        mock_detect_langs.return_value = {"python": py_prompt, "typescript": ts_prompt}
+        mock_get_paths.side_effect = [py_pdd, ts_pdd]
+
+        mock_orchestration.side_effect = [
+            {"success": True, "total_cost": 1.0, "model_name": "claude-code", "operations_completed": ["generate"], "errors": []},
+            {"success": True, "total_cost": 0.8, "model_name": "claude-code", "operations_completed": ["generate"], "errors": []},
+        ]
+
+        ctx = self._make_ctx(local=False)
+        sync_main(
+            ctx=ctx, basename="my_module", max_attempts=3, budget=20.0,
+            skip_verify=False, skip_tests=False, target_coverage=80.0,
+            dry_run=False, one_session=False,
+        )
+
+        # Bug #1095: Should be called twice — once per successful language
+        assert mock_submit.call_count == 2
+        # Verify each call used the correct language and pdd_files
+        calls = mock_submit.call_args_list
+        assert calls[0] == call("my_module", "python", py_pdd, ctx)
+        assert calls[1] == call("my_module", "typescript", ts_pdd, ctx)

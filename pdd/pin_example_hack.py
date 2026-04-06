@@ -1569,9 +1569,19 @@ def sync_orchestration(
                                 success = result.get('success', False)
                                 current_cost_ref[0] += result.get('cost', 0.0)
                             elif isinstance(result, tuple) and len(result) >= 3:
-                                if operation == 'test': success = pdd_files['test'].exists()
-                                else: success = bool(result[0])
-                                # Cost is always at index 1 in both 3-tuple and 4-tuple returns
+                                if operation == 'test':
+                                    # Issue #1072: Use agentic_success if available (TestResult NamedTuple)
+                                    agentic_flag = getattr(result, 'agentic_success', None) or (result[3] if len(result) >= 4 else None)
+                                    if agentic_flag is not None:
+                                        success = agentic_flag
+                                    else:
+                                        success = pdd_files['test'].exists()
+                                    # Extract error message if present
+                                    error_msg = getattr(result, 'error_message', '') or (result[4] if len(result) >= 5 else '')
+                                    if not success and error_msg:
+                                        errors.append(f"Agentic test generation failed: {error_msg}")
+                                else:
+                                    success = bool(result[0])
                                 cost = result[1] if len(result) >= 2 and isinstance(result[1], (int, float)) else 0.0
                                 current_cost_ref[0] += cost
                             else:
@@ -1581,17 +1591,17 @@ def sync_orchestration(
                             errors.append(f"Exception during '{operation}': {e}")
                             success = False
                     
-                        # Log update
+                        # Log update — extract cost/model regardless of success (#1072)
                         duration = time.time() - op_start_time
                         actual_cost = 0.0
                         model_name = "unknown"
+                        if isinstance(result, dict):
+                            actual_cost = result.get('cost', 0.0)
+                            model_name = result.get('model', 'unknown')
+                        elif isinstance(result, tuple) and len(result) >= 3:
+                            actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
+                            model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
                         if success:
-                            if isinstance(result, dict):
-                                 actual_cost = result.get('cost', 0.0)
-                                 model_name = result.get('model', 'unknown')
-                            elif isinstance(result, tuple) and len(result) >= 3:
-                                 actual_cost = result[1] if isinstance(result[1], (int, float)) else 0.0
-                                 model_name = result[2] if len(result) >= 3 and isinstance(result[2], str) else 'unknown'
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_operation_fingerprint(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state)

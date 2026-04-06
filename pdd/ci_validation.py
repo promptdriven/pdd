@@ -274,6 +274,17 @@ def _poll_required_checks(
             stderr_lower = (result.stderr or "").lower()
             if GH_NO_REQUIRED_CHECKS_PHRASE in stderr_lower:
                 return "no_checks", []
+            # GitHub App installation token may lack checks:read on fork repos.
+            # "resource not accessible by integration" means we can't read check
+            # status — treat as no required checks rather than polling until timeout.
+            if "resource not accessible by integration" in stderr_lower:
+                if not quiet:
+                    console.print(
+                        "[yellow]CI polling: cannot read check status "
+                        "(GitHub App may lack checks:read permission on this repo). "
+                        "Skipping CI validation.[/yellow]"
+                    )
+                return "no_checks", []
             # Ambiguous error (e.g. HTTP 401); keep polling.
             saw_ambiguous_error = True
             if not quiet:
