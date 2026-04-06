@@ -53,7 +53,10 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]" pytest-timeout
 
-      - name: Validate architecture vs prompt includes
+      - name: Validate architecture vs prompt includes (fixture smoke)
+        run: pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
+
+      - name: Validate architecture vs prompt includes (repo, non-sample trees)
         run: pdd checkup --validate-arch-includes
 
       - name: Run unit tests

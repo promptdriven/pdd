@@ -564,6 +564,17 @@ def test_pddcli_invoke_handles_system_exit_error(mock_handle_error):
     # PDDCLI catches SystemExit and calls ctx.exit(1) without calling handle_error
     mock_handle_error.assert_not_called()
 
+@patch('pdd.core.cli.handle_error')
+def test_pddcli_invoke_re_raises_click_exit_without_handle_error(mock_handle_error):
+    """click.exceptions.Exit(1) is intentional failure, not an unexpected error."""
+    def fail_cmd(): raise click.exceptions.Exit(1)
+    cmd = click.Command("fail", callback=fail_cmd)
+    group = PDDCLI(commands={"fail": cmd})
+    runner = CliRunner()
+    result = runner.invoke(group, ["fail"])
+    assert result.exit_code == 1
+    mock_handle_error.assert_not_called()
+
 @patch('pdd.core.cli._write_core_dump')
 def test_pddcli_invoke_captures_output_for_dump(mock_write_dump):
     # Create mocks for the capture objects

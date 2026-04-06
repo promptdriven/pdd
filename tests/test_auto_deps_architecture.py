@@ -4,12 +4,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pdd.json_atomic import atomic_write_json
+
 from pdd.auto_deps_architecture import (
     extract_include_paths_from_prompt_text,
     merge_auto_deps_includes_into_architecture,
     _minimal_dependencies_array_patch,
     _replace_dependencies_in_architecture_text,
 )
+from pdd.json_atomic import atomic_write_json
 
 
 def test_extract_include_paths_supports_attributes() -> None:
@@ -260,6 +263,10 @@ def test_replace_dependencies_in_architecture_text_round_trip() -> None:
     data = json.loads(out)
     assert data[0]["dependencies"] == ["b.prompt"]
     assert data[1]["dependencies"] == ["x.prompt"]
+def test_atomic_write_json_writes_parseable_file(tmp_path: Path) -> None:
+    path = tmp_path / "data.json"
+    atomic_write_json(path, [{"a": 1}])
+    assert path.read_text(encoding="utf-8").strip().startswith("[")
 
 
 def test_merge_does_not_add_dep_without_architecture_entry_for_peer(tmp_path: Path) -> None:
