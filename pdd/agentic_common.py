@@ -297,16 +297,23 @@ def _is_permanent_error(error_message: str) -> bool:
     """
     msg = error_message.lower()
     permanent_patterns = [
-        r"authentication\s+error",
+        r"authentication[_\s]error",
         r"authentication\s+failed",
+        r"failed\s+to\s+authenticate",
+        r"invalid\s+bearer",
         r"invalid\s+api\s+key",
         r"invalid\s+key",
         r"invalid\s+parameter",
-        r"temperature",
+        r"invalid.*temperature|temperature.*(?:not supported|out of range)",
+        r"\b401\b",
         r"not\s+supported\s+for\s+this\s+model",
         r"model\s+not\s+found",
         r"access\s+denied",
         r"permission\s+denied",
+        # Issue #1072: Quota exhaustion patterns
+        r"quota\s+(exhausted|exceeded)",
+        r"daily\s+quota",
+        r"terminal\s*quota\s*error",
     ]
     return any(re.search(p, msg) for p in permanent_patterns)
 
@@ -406,124 +413,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 AGENTIC_LOG_DIR = ".pdd/agentic-logs"
-AGENTIC_TRACE_DIR = ".pdd/agentic-traces"
 _AGENTIC_SESSION_ID: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
-# Trace Capture: find and copy provider session files after a run
-# ---------------------------------------------------------------------------
-
-def _find_gemini_project_slug(cwd: Path) -> Optional[str]:
-    """Read ~/.gemini/projects.json to find the slug for the given cwd."""
-    projects_file = Path.home() / ".gemini" / "projects.json"
-    if not projects_file.exists():
-        return None
-    try:
-        data = json.loads(projects_file.read_text(encoding="utf-8"))
-        projects = data.get("projects", {})
-        cwd_str = str(cwd.resolve())
-        best_match = None
-        best_len = 0
-        for path_str, slug in projects.items():
-            if cwd_str.startswith(path_str) and len(path_str) > best_len:
-                best_match = slug
-                best_len = len(path_str)
-        return best_match
-    except Exception:
-        return None
-
-
-def _find_gemini_session_file(cwd: Path, start_time: float) -> Optional[Path]:
-    """Find the Gemini session file created/updated after start_time."""
-    slug = _find_gemini_project_slug(cwd)
-    if not slug:
-        return None
-    chats_dir = Path.home() / ".gemini" / "tmp" / slug / "chats"
-    if not chats_dir.exists():
-        return None
-    candidates = [f for f in chats_dir.glob("session-*.json") if f.stat().st_mtime >= start_time]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda f: f.stat().st_mtime)
-
-
-def _find_claude_session_file(cwd: Path, start_time: float) -> Optional[Path]:
-    """Find the Claude Code session file created/updated after start_time."""
-    claude_projects = Path.home() / ".claude" / "projects"
-    if not claude_projects.exists():
-        return None
-    project_hash = str(cwd.resolve()).replace("/", "-")
-    project_dir = claude_projects / project_hash
-    if not project_dir.exists():
-        return None
-    candidates = [f for f in project_dir.glob("*.jsonl") if f.stat().st_mtime >= start_time]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda f: f.stat().st_mtime)
-
-
-def _save_trace(
-    provider: str,
-    cwd: Path,
-    start_time: float,
-    label: str,
-    duration: float,
-    success: bool,
-    cost: float,
-    prompt: str = "",
-) -> Optional[Path]:
-    """
-    Find the provider's session file and copy it to .pdd/agentic-traces/.
-
-    The trace file contains the full agent reasoning process: every tool call
-    (file reads, edits, shell commands), thinking/reasoning traces, token
-    counts per turn, and the model used.
-
-    Returns the path to the saved trace, or None if not found.
-    """
-    try:
-        if provider == "google":
-            source = _find_gemini_session_file(cwd, start_time)
-        elif provider == "anthropic":
-            source = _find_claude_session_file(cwd, start_time)
-        else:
-            return None
-
-        if source is None:
-            return None
-
-        trace_dir = Path(cwd) / AGENTIC_TRACE_DIR
-        trace_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_label = re.sub(r'[^\w\-]', '_', label) if label else "unlabeled"
-        ext = source.suffix  # .json for Gemini, .jsonl for Claude
-        trace_file = trace_dir / f"trace_{timestamp}_{safe_label}_{provider}{ext}"
-
-        metadata = {
-            "type": "pdd_trace_metadata",
-            "timestamp": datetime.now().isoformat(),
-            "label": label,
-            "provider": provider,
-            "success": success,
-            "cost_usd": cost,
-            "duration_seconds": round(duration, 2),
-            "source_file": str(source),
-            "cwd": str(cwd),
-            "prompt": prompt,
-        }
-
-        source_content = source.read_text(encoding="utf-8")
-        with open(trace_file, "w", encoding="utf-8") as f:
-            f.write(json.dumps(metadata) + "\n")
-            f.write(source_content)
-            if source_content and not source_content.endswith("\n"):
-                f.write("\n")
-
-        return trace_file
-    except Exception:
-        return None
 
 
 def _log_agentic_interaction(
@@ -970,12 +860,10 @@ def run_agentic_task(
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-                attempt_start_time = time.time()
                 success, output, cost = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                 )
-                attempt_duration = time.time() - attempt_start_time
                 last_output = output
 
                 # False Positive Detection
@@ -1007,16 +895,7 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success — save trace
-                        trace_path = _save_trace(
-                            provider=provider, cwd=cwd,
-                            start_time=attempt_start_time,
-                            label=label, duration=attempt_duration,
-                            success=True, cost=cost,
-                            prompt=full_instruction,
-                        )
-                        if trace_path and not quiet:
-                            console.print(f"[dim]Trace saved: {trace_path}[/dim]")
+                        # Real success — only log when verbose (success is not diagnostic)
                         if verbose:
                             _log_agentic_interaction(
                                 label=label,
@@ -1029,15 +908,6 @@ def run_agentic_task(
                                 cwd=cwd
                             )
                         return True, output, cost, provider
-
-                # Failed — save trace for debugging
-                _save_trace(
-                    provider=provider, cwd=cwd,
-                    start_time=attempt_start_time,
-                    label=label, duration=attempt_duration,
-                    success=False, cost=cost,
-                    prompt=full_instruction,
-                )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 if not success and _is_permanent_error(output):
@@ -1061,16 +931,17 @@ def run_agentic_task(
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
-                _log_agentic_interaction(
-                    label=label,
-                    prompt=full_instruction,
-                    response=last_output,
-                    cost=0.0,
-                    provider=provider,
-                    success=False,
-                    duration=time.time() - task_start_time,
-                    cwd=cwd
-                )
+            # Issue #1072: Always log failures (not just when verbose)
+            _log_agentic_interaction(
+                label=label,
+                prompt=full_instruction,
+                response=last_output,
+                cost=0.0,
+                provider=provider,
+                success=False,
+                duration=time.time() - task_start_time,
+                cwd=cwd
+            )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
@@ -1084,6 +955,80 @@ def run_agentic_task(
                 os.remove(prompt_path)
             except OSError:
                 pass
+
+
+import logging as _logging
+_scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
+
+
+def _revert_out_of_scope_changes(
+    cwd: Path,
+    allowed_paths: set[Path],
+) -> List[Path]:
+    """
+    Revert any git-tracked file changes outside the allowed set.
+
+    After an agentic task, this function detects deletions and modifications
+    to files not in *allowed_paths* and restores them to their ``HEAD`` state.
+
+    Skips silently when *cwd* is not a git repo, when git is unavailable,
+    or when none of the *allowed_paths* reside under *cwd*.
+
+    Args:
+        cwd: Root of the git repository.
+        allowed_paths: Set of resolved absolute paths the agent is permitted
+            to modify.
+
+    Returns:
+        List of paths that were reverted.
+    """
+    cwd_str = str(cwd.resolve())
+    if not any(str(p).startswith(cwd_str) for p in allowed_paths):
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), "status", "--porcelain", "-uno"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        _scope_guard_logger.warning("Scope guard: git status failed: %s", exc)
+        return []
+    if result.returncode != 0:
+        _scope_guard_logger.warning(
+            "Scope guard: git status returned %d: %s",
+            result.returncode, result.stderr.strip(),
+        )
+        return []
+    reverted: List[Path] = []
+    to_restore: List[str] = []
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        rel_path = line[3:].strip()
+        full_path = (cwd / rel_path).resolve()
+        if full_path not in allowed_paths:
+            to_restore.append(rel_path)
+            reverted.append(full_path)
+    if to_restore:
+        try:
+            subprocess.run(
+                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
+                capture_output=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+            _scope_guard_logger.warning(
+                "Scope guard: git checkout failed for %d file(s): %s",
+                len(to_restore), exc,
+            )
+            reverted.clear()
+        else:
+            if reverted:
+                _scope_guard_logger.info(
+                    "Scope guard reverted %d out-of-scope file(s): %s",
+                    len(reverted),
+                    ", ".join(str(p.name) for p in reverted[:10]),
+                )
+    return reverted
 
 def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
                     text=False, timeout=None, start_new_session=False, **kwargs):
@@ -1151,6 +1096,9 @@ def _run_with_provider(
     env["NO_COLOR"] = "1"
     env["CI"] = "1"
     env.pop("PDD_OUTPUT_COST_PATH", None)
+    # Force CLI agents to stay in the worktree instead of following
+    # the .git file pointer back to the main repo (Issue #894).
+    env["GIT_WORK_TREE"] = str(cwd)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
