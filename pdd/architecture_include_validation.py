@@ -8,9 +8,23 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List
+from typing import Any, Dict, FrozenSet, List, Optional
 
 from .sync_order import extract_includes_from_file, extract_module_from_include
+
+
+def _module_prompt_include_target(include_path: str) -> Optional[str]:
+    """
+    Map an <include> path to a module basename only when it names another module prompt.
+
+    Context/example files (e.g. ``context/foo_example.py``) are ignored so validation
+    matches architecture.json, which lists dependencies between module prompts, not
+    every referenced artifact.
+    """
+    p = (include_path or "").strip()
+    if not p.lower().endswith(".prompt"):
+        return None
+    return extract_module_from_include(p)
 
 # Top-level directories in the PDD repo that ship sample architecture (not app code).
 _BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str] = frozenset(
@@ -65,6 +79,44 @@ def collect_architecture_include_validation_warnings(
         for w in cross_validate_architecture_with_prompt_includes(data, base):
             warnings.append(f"{arch_path}: {w}")
     return warnings
+
+
+def run_validate_arch_includes_cli(
+    project_root: Path,
+    *,
+    strict: bool,
+    quiet: bool,
+) -> None:
+    """
+    Print validation messages and exit with code 1 if there are issues.
+
+    Used by ``pdd validate-arch-includes`` and ``pdd checkup --validate-arch-includes``.
+    """
+    import click
+
+    warnings = list_validate_arch_include_warnings(project_root, strict=strict)
+    if not warnings:
+        if not quiet:
+            click.echo("No architecture / <include> mismatches found.")
+        return
+    for w in warnings:
+        if not quiet:
+            click.echo(click.style(f"Warning: {w}", fg="yellow"), err=True)
+    raise click.exceptions.Exit(1)
+
+
+def list_validate_arch_include_warnings(project_root: Path, *, strict: bool) -> List[str]:
+    """
+    Return cross-validation issues for ``project_root``.
+
+    When ``strict`` is False (default CLI), skip bundled sample trees under
+    ``examples/``, ``example_project/``, etc. When True, validate those too
+    (useful for maintainer / CI runs against the full repo).
+    """
+    return collect_architecture_include_validation_warnings(
+        project_root,
+        skip_bundled_sample_arch=not strict,
+    )
 
 
 def print_architecture_include_validation_warnings(*, quiet: bool) -> None:
@@ -132,7 +184,7 @@ def cross_validate_architecture_with_prompt_includes(
         include_modules: set[str] = set()
         include_proof: Dict[str, str] = {}
         for inc in includes:
-            m = extract_module_from_include(inc)
+            m = _module_prompt_include_target(inc)
             if m and m != mod_base:
                 include_modules.add(m)
                 include_proof.setdefault(m, inc)

@@ -20,7 +20,6 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .architecture_include_validation import collect_architecture_include_validation_warnings
 from .architecture_registry import find_project_root as _find_project_root
 from .construct_paths import (
     _detect_context_from_basename,
@@ -28,7 +27,7 @@ from .construct_paths import (
     _find_pddrc_file,
     _load_pddrc_config,
 )
-from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
+from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -751,8 +750,7 @@ def _apply_architecture_corrections(
 
     if changes_made > 0:
         try:
-            with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(architecture, f, indent=2, ensure_ascii=False)
+            atomic_write_json(arch_path, architecture)
             if not quiet:
                 console.print(
                     f"[green]Wrote {changes_made} dependency correction(s) "
@@ -946,15 +944,6 @@ def run_agentic_sync(
     # 11. Build dependency graph
     if architecture is not None:
         dep_graph = build_dep_graph_from_architecture(arch_path, modules_to_sync)
-        if not quiet:
-            for w in collect_architecture_include_validation_warnings(project_root):
-                console.print(f"[yellow]Warning: {w}[/yellow]")
-            for w in warnings_for_arch_vs_include_sync_order(
-                dep_graph_from_architecture=dep_graph,
-                modules_to_sync=modules_to_sync,
-                project_root=project_root,
-            ):
-                console.print(f"[yellow]Warning: {w}[/yellow]")
     else:
         # Fallback: scan prompt files for <include> tags
         prompts_dir = project_root / "prompts"

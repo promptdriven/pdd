@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .architecture_include_validation import _resolve_architecture_prompt_path
+from .json_atomic import atomic_write_json
 from .architecture_registry import find_architecture_for_project, find_project_root
 from .sync_order import extract_module_from_include
 
@@ -143,10 +144,7 @@ def merge_auto_deps_includes_into_architecture(
     entry["dependencies"] = existing_deps
 
     if not dry_run:
-        arch_path.write_text(
-            json.dumps(arch_data, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        atomic_write_json(arch_path, arch_data)
 
     messages.append(
         f"Updated {arch_path.name}: added dependencies {added!r} for {current_fn!r}."

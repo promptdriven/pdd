@@ -328,21 +328,13 @@ def auto_deps(
 def validate_arch_includes(ctx: click.Context, project_root: Path, strict: bool) -> None:
     """Fail if architecture.json dependencies disagree with module <include> tags."""
     ctx.ensure_object(dict)
-    quiet = ctx.obj.get("quiet", False)
-    from ..architecture_include_validation import collect_architecture_include_validation_warnings
+    from ..architecture_include_validation import run_validate_arch_includes_cli
 
-    warnings = collect_architecture_include_validation_warnings(
+    run_validate_arch_includes_cli(
         project_root,
-        skip_bundled_sample_arch=not strict,
+        strict=strict,
+        quiet=ctx.obj.get("quiet", False),
     )
-    if not warnings:
-        if not quiet:
-            click.echo("No architecture / <include> mismatches found.")
-        return
-    for w in warnings:
-        if not quiet:
-            click.echo(click.style(f"Warning: {w}", fg="yellow"), err=True)
-    raise click.exceptions.Exit(1)
 
 
 @click.command("setup")
