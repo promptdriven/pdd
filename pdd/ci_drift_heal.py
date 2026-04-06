@@ -44,6 +44,11 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     env["CI"] = "1"
     env["NO_COLOR"] = "1"
     env["PDD_OUTPUT_COST_PATH"] = cost_csv_path
+    env["PDD_FORCE_LOCAL"] = "1"
+    # Disable local models (LM Studio) that hang connecting to localhost.
+    # Set a fake required API key so pdd's model selection skips them
+    # (empty api_key = "no auth needed" = always selected as cheapest).
+    env["PDD_SKIP_LOCAL_MODELS"] = "1"
     return env
 
 
@@ -260,8 +265,12 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
             if stderr_snippet:
                 console.print(f"[dim]{stderr_snippet}[/dim]")
             return False
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         console.print(f"[red]✗ Timeout healing {drift.basename}[/red]")
+        if e.stdout:
+            console.print(f"[dim]stdout (last 1000 chars): {e.stdout[-1000:]}[/dim]")
+        if e.stderr:
+            console.print(f"[dim]stderr (last 1000 chars): {e.stderr[-1000:]}[/dim]")
         return False
     except FileNotFoundError:
         console.print(

@@ -1,120 +1,258 @@
 full_path,file_summary,key_exports,dependencies,content_hash
-agentic_fallback_example/src/utils.py,This file defines a function to generate a greeting message using a user's first and last names.,"[""get_greeting""]",[],9f07fdb974f442153ef3e14aa511ce27600e67145d726c724fb8fd03259e14dd
-agentic_fallback_example_java_gradle/gradle/wrapper/gradle-wrapper.properties,"Configuration file for Gradle wrapper specifying distribution details, paths, and timeouts.",[],[],6009cea91ce8dbcc62cb2ea6dec6ddd4c87b65fc326872f5abfc7e77fd24aa36
-agentic_fallback_example/src/main.py,This file defines a function to create a greeting for John Doe using a utility and prints it when run as main.,"[""create_user_greeting""]","[""utils""]",47c76e47ddd279024ba4e5866e419b62ce7c8550e173ad5dac67f89fd825d93a
-agentic_fallback_example_java_gradle/gradlew,This script sets up the environment and launches the Gradle wrapper using Java on POSIX systems.,[],[],fb68debc1b1acf8ec55dc0d5e5495e1dedd0bd6b61f304bee61613eeb2bd9b92
-agentic_fallback_example/tests/test_main.py,Unit test file for verifying the create_user_greeting function from the main module.,[],"[""unittest"", ""os"", ""sys"", ""main""]",63f8c7a328637a3ed3bcbae83eb13fca8b6d14d80ac20ce69bfef5e1f814d160
-agentic_fallback_example_java_gradle/build.gradle,Gradle build script configuring a Java project with JUnit 5 testing dependencies and repositories.,[],[],67160308859d2eb7af2eee1522d3cbfc5a83a3999bcb2236028ff0fc86dda6c4
-agentic_fallback_example_java_gradle/.gitignore,"This file lists directories to ignore in version control, specifically build artifacts from Maven and Gradle projects.",[],[],ef9c44a12e866afb66c091252ec92db0c3e2eb30442c8ea2b3e9d9baf1f52275
-agentic_fallback_example_java_gradle/settings.gradle,Defines the root project name for a Gradle build.,[],[],65061d293729063e1c9143a81e9247105446bb3ed9f375e2da0c0174daa38215
-agentic_fallback_example_java_gradle/gradlew.bat,Windows batch script for launching the Gradle build tool via its wrapper.,[],[],9ca26d733ada3a45f27b2151288f54e75c9f95b287d1f82ef942ec5cc2d4f006
-agentic_fallback_example_java_gradle/src/main/java/Util.java,Defines a utility class with a static method for adding two integers.,"[""Util""]",[],dcbbb82ead0e9a64f99dd16eb6b3a25da7b9e91c63053d32de020c2c8b426992
-agentic_fallback_example_java_gradle/src/test/java/TestMain.java,Unit test class verifying the computeSomething method in the Main class.,[],"[""org.junit.jupiter.api""]",05693a6be62726e0e45c7d067d1a44fddae4d6cb44f48e2adcad27b5dcb5a754
-agentic_fallback_example_java_maven/src/main/java/Util.java,Defines a utility class with a static method for adding two integers.,"[""Util""]",[],0a89eb3e6c08a35ea388906bf8b73b7419fc5fd389f663102c125f71ae31e97e
-agentic_fallback_example_java_maven/.gitignore,"This file contains only the word 'target', possibly serving as a placeholder or simple configuration.",[],[],c97ecfda4d205190b973232dcfdb0c29748521c2534dd866bcc782f30b086738
-agentic_fallback_example_javascript/src/utils.js,This module exports a function for adding two numbers.,"[""add""]",[],0fab04cea4b98edd3220104f02ed2281c2e70544db4c2ff0a7adb600bc82719c
-agentic_fallback_example_javascript/package.json,"Configures a Node.js project for the PDD.AI Agentic Fallback Example in JavaScript, specifying metadata, main entry, and test script.",[],[],3c1b0a13fd25a723ddb6602d33983d5f27ce027401e7f55a5348d036e105d49b
-agentic_fallback_example_java_maven/src/test/java/TestMain.java,Unit test class verifying the xPlus3 method in the Main class.,[],"[""org.junit.jupiter.api""]",efbea4d854672094cd1d7dd32c4a88c7f55679a393d127540efe965e4231bbcd
-agentic_fallback_example_javascript/src/main.js,"Script that imports a utils module, adds two numbers, and logs the result.",[],"[""./utils""]",91bfb614d5ec1e96542a2194aff895302c7c782af957dc5e0e1a67955adb020c
-agentic_fallback_example_java_maven/pom.xml,Configures a basic Maven project for a Java application with JUnit testing and Surefire plugin.,[],[],c1266469eb641ed0b5bff6abc6f0310453a3159e0612e62455d59a210d8cc98b
-agentic_fallback_example_typescript/src/utils.ts,This file exports a simple function for adding two numbers.,"[""add""]",[],39441a0f0f37ba8f1a5ef3bf717953d53469cfd7a8450a8a2221959a67905497
-agentic_fallback_example_typescript/package.json,"Package configuration file for the PDD.AI Agentic Fallback Example TypeScript project, defining metadata, scripts, and development dependencies.",[],[],38f13e749992d9051a475900c04e85cc5d0fdd0746efbeec187a38cb45c55a08
-agentic_fallback_example_typescript/tsconfig.json,"Configures TypeScript compiler settings for the project, including target, module, and include paths.",[],[],236657d0f353d977c572ca4d763eba25ae62df5c9ff482750e04589f474fc193
-agentic_fallback_example_javascript/tests/test_main.js,Node.js test script that verifies the add function in utils and the output of main.js.,[],"[""assert"", ""child_process"", ""path"", ""../src/utils""]",ffbac2c43ff223e9d5634e00d2707bf7a7d90f176a6ffee8c9614945428deecd
-agentic_fallback_example_typescript/src/main.ts,A script that imports the add function from utils and logs the result of adding 2 and 3.,[],"[""./utils""]",eaf629704447aa00898ae88c4f14a0ba24a32004eeb13798cfdbd3e7e8c5207b
-agentic_fallback_example_java_gradle/src/main/java/Main.java,"Java class with a main method printing 'Hello, World!' and a test method computing a value using a utility.","[""Main"", ""testComputeSomething""]",[],b3061b77326a50c31658129cbe1c389badbdf8230e45ee26b14d18b30d6f42bd
-arch/architecture.json,JSON array of specifications for generating code files related to order management in a web application.,[],[],a21ee10bd2a3b3c1249613b08f7e89326cf230514332607ad1497ab1a006f5ef
-agentic_fallback_example_java_gradle/gradle/wrapper/gradle-wrapper.jar,This JAR file implements the Gradle wrapper for bootstrapping and running Gradle builds consistently.,"[""GradleWrapperMain"", ""Install"", ""Download"", ""WrapperExecutor"", ""Logger"", ""WrapperConfiguration"", ""PathAssembler"", ""GradleUserHomeLookup"", ""BootstrapMainStarter"", ""CommandLineParser"", ""ParsedCommandLine"", ""CommandLineOption"", ""ExclusiveFileAccessManager"", ""PathTraversalChecker"", ""WrapperDistributionUrlConverter""]",[],8fa15773fed36c34c39c021c4d29d2758e3a13d07afac94f5b553ab846cdadf3
-agentic_fallback_example_typescript/tests/test_main.ts,A test script that verifies the add function returns the correct sum and the main script prints the expected output.,[],"[""assert"", ""child_process"", ""path""]",18a4bd5ddf29999c29b11a8739a72719c37c582163d711aa8e6ac39be7358954
-arch/architecture_diagram.html,"HTML document presenting a Mermaid flowchart of the system architecture for an order management application, detailing frontend and backend modules and their dependencies.",[],[],16f24d36d1e058d50d51c20dde2422afc386b8ed416eb1316bd3fd244f8a67e1
-handpaint/cursor/handpaint.html,This HTML file creates a webcam-based hand-tracking application for drawing with the index finger and erasing with an open palm using MediaPipe.,[],"[""@mediapipe/hands"", ""@mediapipe/camera_utils"", ""@mediapipe/drawing_utils""]",917f03342b7303f9688ec413377478aba5ba080649258dd11d418f8bfe8e8ae7
-hello/.pdd/meta/hello_python.json,"Metadata JSON file capturing details of a 'test_extend' command execution in pdd, including version, timestamp, and various hashes.",[],[],d74b919c2b8f103eb02834da6ab83e38b5bbb191ea30cf8b80370e1720d5a070
-hello/.pddrc,"Defines default configuration contexts for paths, output directories, and language in a code generation tool.",[],[],46e68afc8679c6a7c9d89ebc1b562b57f6993b162a047524a5b3f16e885bc787
-hello/examples/hello_example.py,Demonstrates importing and calling a hello function from a custom module in a script.,[],"[""sys"", ""os"", ""hello""]",e56e6ff0a51cb99e4df40ef97471946651c5d2fee85797611a910b723eb04418
-agentic_fallback_example_java_maven/src/main/java/Main.java,"A Java class with a main method that prints 'Hello, World!' and a public static method to add 3 to an integer.","[""Main"", ""xPlus3""]",[],14144493078e4ba4ff0b5319ed6eb82dde723dc962ef266b740dfc41c25316ac
-image_prompt_example/describe.py,A script that prints a detailed textual description of a serene mountain lake landscape image.,[],[],c758b80cb0d6a427d378a5ee893e44a447f8946c28971b1ca9bfcb270ea9689f
-pi_calc/.pdd/meta/pi_calc_python.json,"Metadata file recording pdd version, timestamp, command, and hashes for prompt, code, example, and test.",[],[],c3c3e784997ce4b7de6c1d71f223fd98f16c72c00c6aa2fa234decd1fb001416
-hello/src/hello.py,A simple Python script that prints 'hello' when executed.,[],[],c85e92148d60665e9828e266ab41b764cf5a6c455a40bf187b53f4fbed8a78af
-pi_calc/examples/pi_calc_example.py,This file defines a function to approximate Pi using the Nilakantha series and includes example usage demonstrations.,"[""pi_calc""]","[""math""]",0cc65a0b41c161f6b13a250da643f7a05f69c13fd97e7b6ff15666182f1cf6f9
-pi_calc/examples/pi_calc_example_iteration_1.py,This file defines a function to approximate Pi using the Nilakantha series and includes example usage demonstrations.,"[""pi_calc""]","[""math""]",0cc65a0b41c161f6b13a250da643f7a05f69c13fd97e7b6ff15666182f1cf6f9
-pi_calc/.pdd/meta/pi_calc_python_run.json,"Records the results of a test run with timestamp, exit code, passed and failed tests, and coverage percentage.",[],[],a485e685f5cde2970819e4666744f0509cd77894d5c355e0e5bc4b34d50eeb01
-handpaint/pdd/handpaint_pdd.html,This HTML file implements an interactive hand-tracking drawing application using MediaPipe for gesture detection and Three.js for rendering on a webcam feed.,[],"[""@mediapipe/hands"", ""@mediapipe/camera_utils"", ""three""]",c3093777fcb9b926673ece288da6b5babb26e998c95df4ef7b724ff78b8cd8e9
-hello/tests/test_hello.py,"This file contains pytest tests verifying the hello function's output, return value, and properties using Z3.",[],"[""sys"", ""os"", ""pytest"", ""z3"", ""hello""]",d40dff068671e406bf0b4c99a052ec45f6d763abccd66d48c38248d8fd654de9
-pi_calc/pdd/pi_calc.py,This file defines a function to approximate Pi using the Nilakantha series with a given number of terms.,"[""pi_calc""]",[],adb7c478a8a950437b64273279f565f59f9fae024f97570ab6d4a49df724b58e
-pi_calc/pdd/pi_calc_1_2_2_0_20250715_122550.py,This file defines a function to approximate Pi using the Nilakantha series.,"[""pi_calc""]",[],adb7c478a8a950437b64273279f565f59f9fae024f97570ab6d4a49df724b58e
-image_prompt_example/image.heic,Binary HEIC image file (HEIF format) containing a photo taken with a Samsung SM-A326B smartphone.,[],[],c5c0de447683215255c3187d49405b98e96e4318302c02d67e0ca77525392930
-pi_calc/pdd/pi_calc_iteration_2.py,Defines a function to approximate Pi using the Nilakantha series with a specified number of terms.,"[""pi_calc""]",[],90a00f546de19525d6a927a99952ecacf3bdb5e70c51c919b4df76d62aeb255a
-pi_calc/examples/pi_calc_example_iteration_2.py,Defines a function to approximate Pi using the Nilakantha series.,"[""pi_calc""]","[""math""]",5dddb55f30fa5211d447021db0e152d69dc6f6561ecaec6edf3c79682cfe7e02
-pi_calc/pdd/pi_calc_iteration_1.py,This file defines a function to approximate Pi using the Nilakantha series.,"[""pi_calc""]",[],adb7c478a8a950437b64273279f565f59f9fae024f97570ab6d4a49df724b58e
-prompts_linter/.pddrc,"Configuration file defining contexts and default settings for project components including utils, cli, backend, frontend, and default.",[],[],0ac802a50df5c772acd051f8a8dc014f15d007a2d9f5e993ad9db9a900e4228f
-pi_calc/tests/test_pi_calc.py,This file contains pytest unit tests for the pi_calc function approximating Pi using the Nilakantha series.,"[""test_negative_input_raises_value_error"", ""test_non_integer_input_raises_type_error"", ""test_zero_terms"", ""test_one_term"", ""test_two_terms"", ""test_default_terms_approximation"", ""test_large_number_of_terms_approximation"", ""test_convergence""]","[""pytest"", ""math"", ""pi_calc""]",0303ccea81304e53aab14d4ae3bf5d33b92a2be53fec6186fff074c0468cd14d
-prompts_linter/architecture.json,"JSON array listing project source files with details on reasons, descriptions, dependencies, priorities, filenames, filepaths, tags, and interfaces.",[],[],9f8ea45eae2943ea44d7f24b3c507ea4f72677ec443ece8b3c44cd819bcbf092
-prompts_linter/examples/frontend_streamlit_example.py,Script to launch the PDD Prompt Linter Streamlit application using subprocess.,"[""run_streamlit_app""]","[""sys"", ""os"", ""subprocess"", ""pathlib""]",dd0b658846abbda014c90489b5adf66b62479385736202037f72955d641abb00
-prompts_linter/architecture_diagram.html,HTML file displaying the system architecture as an interactive Mermaid flowchart with module details and dependencies.,[],[],8b60d62d60e379d24cf79abcb1f7b57450a5103f89c1fbc347e662fb7f4da077
-prompts_linter/Makefile,"Automates development tasks for PDD Prompt Linter including setup, prompt generation, code synchronization, testing, and cleanup.",[],[],5b669d0d905ba6193f9202a41da9d48da289ccf23d2bbd1a8cd8ebf82cbfbae4
-prompts_linter/examples/llm_example.py,"This script demonstrates usage of the LLM utility module for analyzing prompts, model resolution, and configuration overrides.",[],"[""sys"", ""os"", ""logging"", ""src""]",82d9d81cb1659c1b95f1861a205360f2384838cd849f31e06ab3f9ab0010bf23
-prompts_linter/examples/cli_example.py,Demonstrates programmatic usage of the PDD Linter CLI by invoking commands with Typer's CliRunner and mocked linting.,[],"[""sys"", ""os"", ""typer"", ""unittest"", ""src""]",506c0a932002013e179412c039d4ad6e233d4dba869a6b0350b56c7d19b9e038
-prompts_linter/examples/fix_example.py,Example script demonstrating fixing a broken prompt text using a mock report and applying structural and content fixes.,[],"[""sys"", ""os"", ""logging"", ""src""]",fa14d48e5e99b79afdc54fccac84571997c8f7efa2b658078948a886d324622c
-prompts_linter/examples/models_example.py,"Demonstrates creation, validation, and serialization of Pydantic models for prompt linting issues and reports.",[],"[""sys"", ""os"", ""json"", ""pydantic"", ""src""]",a0f057933a42f652791de1a22d56b0de7e55e9796292b970aa2bda10752a3a57
-prompts_linter/examples/backend_api_example.py,This script demonstrates programmatic interaction with the PDD Linter API using a FastAPI test client for health checks and prompt linting.,[],"[""sys"", ""os"", ""json"", ""fastapi"", ""src""]",050d9bd1def8f60f930602dd6ea1ae01ba8170cda84713ae205bdcdfd1446573
-prompts_linter/examples/pipeline_example.py,"This script demonstrates usage scenarios for a prompt linting pipeline, including fast heuristic linting, full LLM analysis with fixes, and file-based linting.",[],"[""sys"", ""os"", ""logging"", ""pathlib"", ""src""]",f6d991c75cb36e3903c3055d98bd52a1c60b5de5ea5b9cac131a0325b38b1853
-prompts_linter/examples/helpers_example.py,"A demo script showcasing functionalities of the helpers module like file content normalization, tag detection, and code-text ratio analysis.",[],"[""sys"", ""os"", ""tempfile"", ""textwrap"", ""src""]",4bb026344e39f1595d272134af6fe54e71e9d755ac08d86668583604c1529935
-prompts_linter/src/frontend/frontend_streamlit.py,Streamlit application for linting prompt texts using PDD guidelines with LLM integration and user-configurable providers.,[],"[""sys"", ""os"", ""logging"", ""streamlit"", ""src""]",ad84ad0e8678cc5c92976097e5fe0de9f1c4e0a84aede5a813e754a0dd4459f3
-prompts_linter/project_dependencies.csv,"This CSV file catalogs example Python scripts and report files in the PDD Linter project, providing paths, concise summaries, and timestamps.",[],[],f0b0b2640146eb883099ba0a660776d1544e0980906234e9515464ad500500fb
-prompts_linter/src/backend/backend_api.py,"Implements a FastAPI backend API for prompt linting in Prompt Driven Development, with health check and lint endpoints.",[],"[""sys"", ""os"", ""logging"", ""typing"", ""fastapi"", ""pydantic"", ""src"", ""uvicorn""]",88070433ea690be8726d20db220d67336cde8ca49dd8b63169f84a7fe9b03d37
-prompts_linter/examples/rules_example.py,This script demonstrates prompt analysis using rules.analyze_text on example prompts and prints detected issues.,[],"[""sys"", ""os"", ""textwrap""]",757ce4cce320aeae46ad3c6b846a60fb6ec3b0b13e1b21618291a809639218cb
-prompts_linter/src/utils/fix.py,This module applies structural and LLM-based fixes to prompts for PDD compliance based on analysis reports.,"[""apply_fixes"", ""generate_scaffold""]","[""logging"", ""re"", ""typing"", ""src""]",63aef84e3f60a09bc240021f012110e50f6f5e91e2bcf36d83089cbd18ccede1
-prompts_linter/src/utils/models.py,Defines core data models and enumerations for the PDD Prompt Linter using Pydantic.,"[""Severity"", ""RuleCategory"", ""LLMProvider"", ""Issue"", ""LLMFixSuggestion"", ""LLMSuggestionDetail"", ""LLMResponse"", ""Report""]","[""enum"", ""typing"", ""pydantic""]",f7e7b46fb1149b22c79a4583fd28eed9731ddf9e61ad4e00984541ce922fc394
-prompts_linter/src/utils/helpers.py,"Provides utilities for file reading, text normalization, tag extraction, and code ratio calculation.","[""read_file_content"", ""normalize_text"", ""extract_tag_content"", ""count_tags"", ""calculate_code_ratio"", ""find_line_number"", ""TAG_PATTERN_TEMPLATE"", ""TAG_INCLUDE"", ""TAG_WEB"", ""TAG_SHELL"", ""CODE_LINE_PATTERN"", ""TEXT_LINE_PATTERN""]","[""re"", ""os"", ""pathlib"", ""typing""]",66e5a81a3a18f1c8f3df7e2dff27c564337d8cad9da66aedc4cf55ca2cfd3e5a
-prompts_linter/examples/report_example.py,"This script generates a mock report and demonstrates rendering it in text, JSON, and Markdown formats.",[],"[""sys"", ""os"", ""typing"", ""src""]",1a135235ee23d2e7c9a6bb3e331800f9aa5f9d934ad29d94595d078efd1589f5
-prompts_linter/src/utils/pipeline.py,"Implements a linting pipeline for text prompts, including heuristic analysis, optional LLM integration, scoring, and fix generation.","[""LintConfig"", ""PipelineReport"", ""lint_text"", ""lint_file""]","[""logging"", ""pathlib"", ""typing"", ""pydantic"", ""src""]",ff54c235528e8d4c8c285fdb639ef4e4c919458c4991e936c95dd1f0db392af8
-prompts_linter/src/utils/report.py,"This module provides functionality to render report objects in text, JSON, or Markdown formats with optional file output.","[""render_report""]","[""json"", ""typing"", ""rich"", ""src""]",40fef205880492524a0063020c98ff02996a1891f1fff495bd7a01620109a0eb
-prompts_linter/src/utils/llm.py,Module for analyzing prompt texts using LLMs to evaluate adherence to PDD principles and suggest improvements.,"[""DEFAULT_MODELS"", ""SYSTEM_PROMPT"", ""get_provider_and_model"", ""analyze_prompt""]","[""os"", ""json"", ""logging"", ""re"", ""warnings"", ""typing"", ""litellm"", ""pydantic"", ""src""]",7c2c2e8804f0e0a4ea945156fc7f557d3e1c740bda400f1386b7f41f7a463ad0
-prompts_linter/tests/test_fix.py,"Unit test file for the apply_fixes function, including mock classes, various test cases, and optional Z3 formal verification.",[],"[""pytest"", ""logging"", ""unittest"", ""dataclasses"", ""typing"", ""sys"", ""os"", ""src"", ""z3""]",b2d22b485a4c675846df421aac19c41ba7b9afe71b0e9607024da5177c5b3e74
-prompts_linter/tests/test_cli.py,"This file contains pytest unit tests for the CLI of a Prompt Driven Development tool, covering argument handling, configuration, error cases, and Z3 formal verification.",[],"[""sys"", ""os"", ""re"", ""pathlib"", ""pytest"", ""unittest"", ""typer"", ""z3"", ""src""]",b400b2dc113521b773923545692a9185afd31ddeb7851ea48bd7a2d8af40d35e
-prompts_linter/tests/test_backend_api.py,This file contains pytest unit tests for the FastAPI application's health and lint endpoints.,[],"[""sys"", ""os"", ""pytest"", ""unittest"", ""fastapi"", ""pydantic"", ""src""]",5d65fa04c6bd05b512454bf5bbc21c0849c495a5d829ed8365438e4e81dcb061
-prompts_linter/src/utils/rules.py,"This module analyzes prompt texts for compliance with Prompt-Driven Development rules, detecting issues in anatomy, determinism, modularity, context, requirements, and attention.","[""analyze_text"", ""print_issues"", ""main""]","[""re"", ""sys"", ""os"", ""textwrap"", ""typing"", ""src""]",71e1975fa1dbcb582393be2b0435fcbb1fcc56daae4d2cd062bf2738d87c2267
-prompts_linter/tests/test_helpers.py,"Unit tests and Z3 verifications for helper functions in file I/O, text normalization, tag extraction, code ratio calculation, and line number finding.",[],"[""os"", ""sys"", ""pytest"", ""textwrap"", ""pathlib"", ""z3"", ""src""]",fee30139c30a47b338ae08e7e089ef34217cd8df45e60ee278c07a6f7b6cb2db
-prompts_linter/tests/test_llm.py,"This file provides unit tests, formal verification with Z3, and edge case testing for LLM provider selection and prompt analysis functions.",[],"[""os"", ""json"", ""pytest"", ""unittest"", ""z3"", ""pydantic"", ""src"", ""litellm""]",01e72a9d579dccfb8d9c4732d17ab84f4af9ee801d7a8404d00f037da6fbc2a7
-template_example/.gitignore,"A .gitignore file specifying patterns to exclude common Python project artifacts, caches, and temporary files from version control.",[],[],2055e07b26049d5c94a660838203b1d33d18455a3d49632f3953d7dd5260f19a
-qrcode_sandwich/qrcode_sandwich.py,This script generates an image of a sandwich with an embedded QR code using Stable Diffusion and ControlNet.,"[""generate_qr_code_image"", ""resize_for_condition_image""]","[""torch"", ""PIL"", ""diffusers"", ""qrcode"", ""random"", ""io""]",a7cd6a2ad3aa5b6fe2ee43473a921d9be438ac01640a7bc7db1b7ce0f384dec0
-prompts_linter/tests/test_frontend_streamlit.py,"Unit test suite for the Streamlit frontend of the PDD Prompt Linter, featuring pytest fixtures, mocks, UI and logic tests, and Z3 formal verifications.",[],"[""sys"", ""os"", ""importlib"", ""pytest"", ""unittest"", ""z3"", ""src""]",9b482320ef5777bcfd495ccc778afe34e8d19d95b1fdb64e7187e0a2da020ed6
-template_example/.pddrc,"Configuration file for PDD defining default output paths, language, coverage target, and strength for project file structure.",[],[],bbfb24d0edeb8939f2d048a91c965ee4f8510ce9c3df5b722060a33c10fd83a4
-prompts_linter/tests/test_rules.py,"Pytest script containing unit tests, integration tests, and Z3 formal verifications for the rules module that analyzes prompt texts for compliance issues.",[],"[""pytest"", ""sys"", ""os"", ""unittest.mock"", ""src.utils"", ""src.utils.models""]",4cc7d9cb58d808e0587fa37de0c853714af004107e1f704b65e930937b263967
-prompts_linter/src/cli/cli.py,"Implements the command-line interface for the PDD Prompt Linter, handling argument parsing, configuration, linting, and output rendering.","[""OutputFormat"", ""FailOnLevel"", ""LLMProvider"", ""CLIConfig"", ""main""]","[""sys"", ""pathlib"", ""typing"", ""enum"", ""typing_extensions"", ""typer"", ""click"", ""rich""]",98c093a0a52610b29fa1eab5c8515eeaf1b22b59b576569f0c80a5d95975d47e
-template_example/architecture_diagram.html,HTML file displaying an interactive Mermaid flowchart of the edit-file-tool project's module structure and dependencies.,[],"[""mermaid""]",d7bda97e4f098f1760a83719479c5f834c469add5bde7d57840c50a4ec945ff5
-template_example/data/llm_model.csv,"This file contains a CSV list of AI providers and models with details on costs, ELO ratings, API configurations, and reasoning parameters.",[],[],018bf8243290a89fbebc28e9bb10a9a7b27fc916ec5c135732e7f098300b8f9e
-template_example/architecture.json,"JSON metadata array describing components of the edit-file-tool Python package, including configurations, CLI, core functions, and utilities.",[],[],0af0c82a680ab440c411acc71e93bd219775eab3e63f63273e9691948704ca02
-prompts_linter/tests/test_models.py,"This file contains a test plan and pytest tests for validating enums, Pydantic models, and logic in src/utils/models.py, including Z3 formal verifications.",[],"[""json"", ""pytest"", ""pydantic"", ""z3"", ""src""]",79f319c044581051e122a3a9cdc58e50161f1c19cf86611fa4b44c11b4c51b09
-template_example/Makefile,"Makefile automating development tasks for edit-file-tool project, including architecture generation, prompt creation, code/test synchronization, cleaning, and testing using PDD.",[],[],ff92e34c5f109bf5476270b092b969db6619b1c6622493e96bf22e86b5ce3b81
-template_example/example.py,A standalone Python script that implements a command-line Tic-Tac-Toe game where the user plays against a basic AI opponent.,[],[],0967df7b8e16d4db86e8f11129ed0175bf9f6d46392c668ce2e154b193a731e1
-template_example/pyproject.toml,"Defines project configuration for the edit-file-tool package, including metadata, dependencies, and build settings.",[],[],2f69c8acb1674af502a7206fada703a6c6f5154b364eb10ce84d1da700d1d1c2
-prompts_linter/tests/test_pipeline.py,"This file contains unit tests and formal verifications for the prompt linting pipeline, including Z3-based scoring checks and lint function behaviors.",[],"[""sys"", ""pytest"", ""unittest"", ""pathlib"", ""typing"", ""z3""]",62e15ca01c78033d50297bfcd6d425ad46e431ddf4be49e19d36c897213d5a93
-prompts_linter/tests/test_report.py,"This file outlines a test plan and implements pytest unit tests for the report.py module's rendering of reports in text, JSON, and Markdown formats.",[],"[""sys"", ""os"", ""pytest"", ""unittest"", ""pathlib"", ""enum"", ""src""]",089358c2594af195099515205ca42d8f3f6041982deb0fcadd468d69ad4e00d0
-template_example/src/edit_file_tool/cache_manager_utility.py,"Utility module to determine if prompt caching should be enabled for file edit requests based on size, complexity, and user preferences.","[""should_use_cache""]","[""logging"", ""pathlib"", ""typing""]",0112b993672581e4370dff90d1436dd2b6596df1b8c313a0d3f61ba65258aa2d
-template_example/project_dependencies.csv,"This file lists paths, summaries, and dates for example scripts demonstrating features of the edit_file_tool package.",[],[],97e676b36e6b63efbed98d2cca21dfc358ba9c89f8b88430d28b8de008bbc02d
-template_example/src/edit_file_tool/__init__.py,Initializes the edit-file-tool package with metadata and re-exports core functions for file editing.,"[""edit_file"", ""EditTool20250124"", ""__version__"", ""__title__""]","[""importlib""]",1784805d4cdf5a1d0f33c852fc0f3c242f198d0530ad24de74e889eb61877ed8
-template_example/src/edit_file_tool/cli.py,"CLI entry point for editing files using LLM-driven instructions, handling argument parsing, validation, and execution.","[""build_parser"", ""main""]","[""argparse"", ""asyncio"", ""sys"", ""pathlib"", ""typing"", ""edit_file_tool""]",e96957ac95c2bd75f4d7466c89f8c53ad6d6d010cf751232989a04d53f03c154
-template_example/src/edit_file_tool/cost_tracker_utility.py,"Module for calculating USD costs of Anthropic API calls based on token usage, including caching.","[""calculate_cost""]","[""typing""]",d40aaf9eff2665e4886a89d7451da476f2b800426c8425bfc6e0cda0086ca25a
-template_example/src/edit_file_tool/core.py,This module provides an asynchronous function to orchestrate AI-driven file editing with tools and caching.,"[""edit_file""]","[""os"", ""json"", ""logging"", ""pathlib"", ""typing"", ""edit_file_tool""]",11ef9ba5ee90dfb6612cb71e786e808b34cdee20f8fbbbf32bf6e461db0fdbda
-template_example/src/edit_file_tool/think_tool_capability.py,"Utility module for invoking Claude API via litellm with extended thinking support, returning Anthropic-formatted responses and USD costs.","[""invoke_with_thinking"", ""THINKING_SUPPORTED_MODELS"", ""HAIKU_MODELS""]","[""os"", ""json"", ""logging"", ""typing"", ""litellm"", ""edit_file_tool""]",1caebf63b6e45a45e2b7c9461fa9d573b2e2b6b42cc6262f6afd5ac7d7dc9f1d
-template_example/src/examples/__init___example.py,This script demonstrates the usage of the edit_file_tool library by editing a test file and initializing a tool class.,[],"[""asyncio"", ""os"", ""sys"", ""edit_file_tool""]",6ca458faa7e4ab1e626169e6e0ff6ca03e2b878c4b84df7a520e412f94d43e95
-template_example/src/examples/cache_manager_utility_example.py,Demonstrates cache usage decisions for files of varying sizes and a missing file using the should_use_cache function.,[],"[""sys"", ""pathlib"", ""logging"", ""shutil"", ""tempfile"", ""edit_file_tool""]",65d5de605e35884d39c229084b1b9ab00f9ba5d107939d7712768f5cfbb5bbca
-template_example/src/examples/cli_example.py,This script demonstrates the usage of edit_file_tool's CLI with simulated successful and failed edit scenarios.,[],"[""asyncio"", ""sys"", ""pathlib"", ""edit_file_tool""]",e493ff4624dda3c5c807b4ccbb220c5f0702c69b13d8f291060fbe338bb315bd
-template_example/src/examples/core_example.py,This script demonstrates using edit_file to modify a sample text file with validation and reporting.,[],"[""asyncio"", ""os"", ""sys"", ""pathlib"", ""edit_file_tool""]",1dfd121f69bdf2ddc5da7019bd93c6d32a4f44389807a42bbceeaa9498e8b7f6
-template_example/src/examples/generated_xml/example_mod.xml,"This XML file defines configuration for an example module demonstrating shared XML helpers, including name, ID, version, author, description, and submodule details.",[],[],747c8e6d4ebf54c41d9831a65e14a2b4730cdce174ab7fc5e432f31fd4cfcf9f
-template_example/src/examples/think_tool_capability_example.py,"Demonstrates usage of invoke_with_thinking for AI model interaction with extended thinking capabilities, including setup and response processing.",[],"[""asyncio"", ""os"", ""sys"", ""pathlib"", ""edit_file_tool""]",93f3d5637fa14ab3f88a8514f47fd769460e7274b089fe6fdc037371768ffb2a
-template_example/src/examples/cost_tracker_utility_example.py,This script demonstrates usage of cost tracker utilities for calculating AI model costs with various scenarios.,[],"[""logging"", ""sys"", ""pathlib"", ""edit_file_tool""]",67317736c404293c53fb646eb1babfd5504590b68d15caacb17c22270c974280
-template_example/src/tests/test_cache_manager_utility.py,"Unit tests for the should_use_cache function, verifying cache decisions based on overrides, file sizes, and complexity.",[],"[""pathlib"", ""pytest"", ""z3"", ""edit_file_tool""]",3ae0c0ef9fc1658f1f769cd8ebef56e6acf3b27228fe08806f6793a982c3d044
-test_generation_benchmark/benchmark_results/code_based/test_email_validator.py,"This file contains unit tests, Z3 formal verification tests, and integration tests for the EmailValidator module.",[],"[""pytest"", ""z3"", ""sys"", ""os"", ""email_validator""]",1b7cf79d73661dd2bba04eaeb64f8c9148d51d071a6091b3f9c6119f201e9202
-template_example/src/tests/test___init__.py,"Tests metadata attributes, import fallbacks, version handling, and invariants for the edit-file-tool package.",[],"[""sys"", ""pytest"", ""importlib"", ""unittest"", ""z3""]",6d916b61aec496faca939ee180f29df40bf8e21fca0c64befd6f1b16aa56792e
-template_example/src/tests/test_core.py,"Unit test suite for the edit_file function, including validation, workflow orchestration, tool execution, and formal verification using Z3.",[],"[""pytest"", ""asyncio"", ""os"", ""json"", ""pathlib"", ""unittest"", ""typing"", ""edit_file_tool""]",b5f66617865af73516b48f3902aabeb7ed8d05cda919558e622b5d9def5a1da3
-template_example/src/tests/test_think_tool_capability.py,This file contains unit tests and formal verification for the invoke_with_thinking function in handling AI model thinking capabilities.,[],"[""pytest"", ""asyncio"", ""json"", ""os"", ""unittest"", ""litellm"", ""edit_file_tool"", ""z3""]",8896e17d4ed00a64e647e5068d2d663dd17180e793d2ec57e062548a060c3952
-template_example/src/tests/test_cost_tracker_utility.py,"This file contains pytest tests for the calculate_cost function, covering various token scenarios and a Z3 proof of non-negative costs.",[],"[""z3"", ""pytest"", ""edit_file_tool""]",361979514bbf303e7d9db323b4b43c97a40d6cbe7fb60f9314e4677a6fc7ddb3
-template_example/src/tests/test_cli.py,This file contains unit tests and formal verifications for the CLI functionality of the edit_file_tool.,[],"[""asyncio"", ""edit_file_tool"", ""pathlib"", ""pytest"", ""sys"", ""unittest"", ""z3""]",e1090b5d538ece9a70de364a38d695b519a57cf7ac068b7f696719fd683f08c2
-test_generation_benchmark/src/email_validator.py,Defines classes for validating email addresses based on structural rules and returning validation results.,"[""ValidationResult"", ""EmailValidator""]","[""dataclasses"", ""typing"", ""re""]",92178ce463ce65edafa3b436b4ee9478e6a2963e2ca1bfc74d57b81541a3edf5
-test_generation_benchmark/examples/email_validator_example.py,This script demonstrates the usage of the EmailValidator class by testing and printing validation results for various email examples.,[],"[""sys"", ""os"", ""email_validator""]",e897d2e8adfa2674eb8ec81f9d745ef618aa79a0e48470af764c86fe6ebcc2dd
-test_generation_benchmark/Makefile,Makefile for automating benchmarking of code-based versus example-based test generation for an email validator using PDD.,[],[],68920a32ee7ac25e63e4c953a679e44782e4e86dac0e74750dc1524806a0d35c
-test_generation_benchmark/benchmark_results/example_based/test_email_validator.py,This file contains unit tests and optional Z3 formal verification for the EmailValidator module to ensure correct email validation and normalization.,[],"[""sys"", ""os"", ""pytest"", ""dataclasses"", ""typing"", ""email_validator"", ""z3"", ""time""]",d1bbbc25b3d935072f4614926b677bdb118d5c44888f734a89f5f98075f74b25
-tictactoe/tictactoe_architecture.json,"JSON array describing files, their purposes, dependencies, and interfaces for a Tic-Tac-Toe React application.",[],[],382d8ad15973e217f41cf30c68444ad334314c624df232468da64d6ba8101de2
-tictactoe/tictactoe_architecture_diagram.html,HTML document displaying a Mermaid flowchart of the Tic-Tac-Toe game project structure with interactive tooltips for file details.,[],"[""mermaid""]",bdc8a7d29d5d3b33d35178671024dce806a0435498cdcb625531b8115c6539f5
+DSPy_example.py,This script configures DSPy with OpenAI and defines a ChainOfThought module for question answering.,"[""chainofthought""]","[""context""]",403910f924da848e2016f2a19cd9283759b6eac67f969f4d0bd5c573e39784f7
+__init__example.py,Demonstrates initialization of the main Click CLI group and registration of subcommands for the PDD tool.,[],"[""click"", ""sys"", ""os"", ""pdd""]",84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a
+agentic_architecture_example.py,This script demonstrates the agentic architecture workflow using a mocked GitHub issue for architecture generation.,[],"[""sys"", ""pathlib"", ""unittest"", ""pdd""]",dd66c9f68f5798dcb8f9f684da1bb88a6b2399e4e3b54b39e92a7d59576cc6be
+agentic_architecture_orchestrator_example.py,This script demonstrates usage of the agentic_architecture_orchestrator by mocking dependencies to simulate architecture generation for a sample e-commerce PRD.,[],"[""sys"", ""tempfile"", ""pathlib"", ""unittest"", ""pdd""]",baa4e221c6f4d96766479b34fa6e5db52b51941cdb3304beea7e4f797fe76acc
+agentic_bug_example.py,Demonstrates the agentic bug investigation workflow using a mocked GitHub issue.,[],"[""sys"", ""pathlib"", ""unittest"", ""pdd""]",96e35df4e8425a9173ff6a30281892c2bd8b81361cff72b732e488172ddf52f5
+agentic_bug_orchestrator_example.py,Simulates the agentic bug orchestrator workflow with mocks for testing bug handling in a sample issue.,[],"[""sys"", ""pathlib"", ""unittest"", ""subprocess"", ""shutil"", ""pdd""]",00db52821223449eeb381e3d57e0fff538628415ac57aacc3266d8cf83f46121
+agentic_change_example.py,Demonstrates the agentic change workflow with a mocked GitHub issue for prompt modification.,[],"[""sys"", ""pathlib"", ""unittest"", ""pdd""]",be4da4499b5007ee7e8e7b464dc9f0cb5c9a04aaf5de192ae9cbb0133db06d85
+agentic_change_orchestrator_example.py,Demonstrates the agentic change orchestrator by simulating a feature addition workflow with mocked dependencies.,[],"[""sys"", ""tempfile"", ""pathlib"", ""unittest"", ""pdd""]",26a09cdbb0b010106128bf51f6eca9e59fa8d15692a73dea94e8b6d77496f6aa
+agentic_checkup_example.py,Demonstrates usage of run_agentic_checkup for GitHub issue-based project health checks with mocked dependencies.,[],"[""sys"", ""pathlib"", ""unittest"", ""pdd"", ""json""]",9495b1288fc198f535a5aba128d0d7a406aa6e3f6f5070b76d35acbeb5a30764
+agentic_checkup_orchestrator_example.py,Demonstrates simulated execution of the agentic checkup orchestrator for a CRM app using mocked dependencies.,[],"[""sys"", ""pathlib"", ""unittest"", ""pdd""]",6855fd29b1d0474a877d0eec215b98643a7c8d7e6468a3ad9b2d754c6a9f626a
+agentic_common_example.py,This script demonstrates example usages of agentic workflow functions from pdd.agentic_common for testing and illustration.,[],"[""__future__"", ""json"", ""os"", ""subprocess"", ""sys"", ""pathlib"", ""tempfile"", ""unittest"", ""rich"", ""pdd""]",113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d
+agentic_crash_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_e2e_fix_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_e2e_fix_orchestrator_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_fix_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_langtest_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_sync_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_sync_runner_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_test_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_test_orchestrator_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_update_example.py,Error processing file: All candidate models failed.,[],[],error
+agentic_verify_example.py,Error processing file: All candidate models failed.,[],[],error
+anthropic_counter_example.py,Error processing file: All candidate models failed.,[],[],error
+anthropic_thinking_test.py,Error processing file: All candidate models failed.,[],[],error
+anthropic_tool_example.py,Error processing file: All candidate models failed.,[],[],error
+api_key_scanner_example.py,Error processing file: All candidate models failed.,[],[],error
+architecture_sync_example.py,Error processing file: All candidate models failed.,[],[],error
+auth_service_example.py,Error processing file: All candidate models failed.,[],[],error
+auto_deps_main_example.py,Error processing file: All candidate models failed.,[],[],error
+auto_include_example.py,Error processing file: All candidate models failed.,[],[],error
+auto_update_example.py,Error processing file: All candidate models failed.,[],[],error
+autotokenizer_example.py,Error processing file: All candidate models failed.,[],[],error
+bug_main_example.py,Error processing file: All candidate models failed.,[],[],error
+bug_to_unit_test_example.py,Error processing file: All candidate models failed.,[],[],error
+bug_to_unit_test_failure_example.py,Error processing file: All candidate models failed.,[],[],error
+change/1/initial_code_generator.py,Error processing file: All candidate models failed.,[],[],error
+change/10/initial_fix_errors_from_unit_tests.py,Error processing file: All candidate models failed.,[],[],error
+change/11/initial_code_generator.py,Error processing file: All candidate models failed.,[],[],error
+change/12/initial_postprocess.py,Error processing file: All candidate models failed.,[],[],error
+change/13/initial_split.py,Error processing file: All candidate models failed.,[],[],error
+change/14/initial_change.py,Error processing file: All candidate models failed.,[],[],error
+change/15/initial_cli.py,Error processing file: All candidate models failed.,[],[],error
+change/16/fix_code_module_errors_example.py,Error processing file: All candidate models failed.,[],[],error
+change/16/fix_error_loop.py,Error processing file: All candidate models failed.,[],[],error
+change/16/fix_errors_from_unit_tests_example.py,Error processing file: All candidate models failed.,[],[],error
+change/17/continue_generation.py,Error processing file: All candidate models failed.,[],[],error
+change/18/code_generator.py,Error processing file: All candidate models failed.,[],[],error
+change/19/context_generator.py,Error processing file: All candidate models failed.,[],[],error
+change/2/initial_context_generator.py,Error processing file: All candidate models failed.,[],[],error
+change/20/generate_test.py,Error processing file: All candidate models failed.,[],[],error
+change/21/auto_include.py,Error processing file: All candidate models failed.,[],[],error
+change/22/preprocess.py,Error processing file: All candidate models failed.,[],[],error
+change/3/intial_test_generator.py,Error processing file: All candidate models failed.,[],[],error
+change/4/initial_postprocess.py,Error processing file: All candidate models failed.,[],[],error
+change/5/initial_split.py,Error processing file: All candidate models failed.,[],[],error
+change/6/initial_xml_tagger.py,Error processing file: All candidate models failed.,[],[],error
+change/7/initial_fix_errors.py,Error processing file: All candidate models failed.,[],[],error
+change/8/initial_fix_errors_from_unit_tests.py,Error processing file: All candidate models failed.,[],[],error
+change/9/initial_fix_error_loop.py,Error processing file: All candidate models failed.,[],[],error
+change_example.py,Error processing file: All candidate models failed.,[],[],error
+change_main_example.py,Error processing file: All candidate models failed.,[],[],error
+ci_drift_heal_example.py,Error processing file: All candidate models failed.,[],[],error
+ci_validation_example.py,Error processing file: All candidate models failed.,[],[],error
+cli_detector_example.py,Error processing file: All candidate models failed.,[],[],error
+cli_example.py,Error processing file: All candidate models failed.,[],[],error
+click_example.py,Error processing file: All candidate models failed.,[],[],error
+click_executor_example.py,Error processing file: All candidate models failed.,[],[],error
+cloud_example.py,Error processing file: All candidate models failed.,[],[],error
+cloud_function_call.py,Error processing file: All candidate models failed.,[],[],error
+cmd_test_main_example.py,Error processing file: All candidate models failed.,[],[],error
+code_generator_example.py,Error processing file: All candidate models failed.,[],[],error
+code_generator_main_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/__init___example.py,Error processing file: All candidate models failed.,[],[],error
+commands/analysis_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/auth_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/connect_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/fix_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/generate_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/maintenance_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/misc_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/modify_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/sessions_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/templates_example.py,Error processing file: All candidate models failed.,[],[],error
+commands/utility_example.py,Error processing file: All candidate models failed.,[],[],error
+comment_line_example.py,Error processing file: All candidate models failed.,[],[],error
+config_example.py,Error processing file: All candidate models failed.,[],[],error
+conflicts_in_prompts_example.py,Error processing file: All candidate models failed.,[],[],error
+conflicts_main_example.py,Error processing file: All candidate models failed.,[],[],error
+construct_paths_example.py,Error processing file: All candidate models failed.,[],[],error
+content_selector_example.py,Error processing file: All candidate models failed.,[],[],error
+context_generator_example.py,Error processing file: All candidate models failed.,[],[],error
+context_generator_main_example.py,Error processing file: All candidate models failed.,[],[],error
+continue_generation_example.py,Error processing file: All candidate models failed.,[],[],error
+core/cli_example.py,Error processing file: All candidate models failed.,[],[],error
+core/cloud_example.py,Error processing file: All candidate models failed.,[],[],error
+core/dump_example.py,Error processing file: All candidate models failed.,[],[],error
+core/errors_example.py,Error processing file: All candidate models failed.,[],[],error
+core/utils_example.py,Error processing file: All candidate models failed.,[],[],error
+crash_main_example.py,Error processing file: All candidate models failed.,[],[],error
+create_gcp_credential.py,Error processing file: All candidate models failed.,[],[],error
+detect_change/2/change_detect.csv,Error processing file: All candidate models failed.,[],[],error
+detect_change/2/prompt_list.json,Error processing file: All candidate models failed.,[],[],error
+detect_change_example.py,Error processing file: All candidate models failed.,[],[],error
+detect_change_main_example.py,Error processing file: All candidate models failed.,[],[],error
+dict_utils_example.py,Error processing file: All candidate models failed.,[],[],error
+edit_file_example.py,Error processing file: All candidate models failed.,[],[],error
+embed_retrieve_example.py,Error processing file: All candidate models failed.,[],[],error
+execute_bug_to_unit_test_failure.py,Error processing file: All candidate models failed.,[],[],error
+extracts_prune_example.py,Error processing file: All candidate models failed.,[],[],error
+fastapi_example.py,Error processing file: All candidate models failed.,[],[],error
+final_llm_output.py,Error processing file: All candidate models failed.,[],[],error
+find_section_example.py,Error processing file: All candidate models failed.,[],[],error
+firecrawl_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_code_loop_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_code_module_errors_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_error_loop_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/1/conflicts_in_prompts.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/1/test_conflicts_in_prompts.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/2/code_generator.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/2/test_code_generator.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/3/context_generator.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/3/test_context_generator.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/4/detect_change.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/4/detect_change_1_0_1.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/4/test_detect_change.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/4/test_detect_change_1_0_1.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/5/continue_generation.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/5/continue_generation_2_0_1.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/5/test_continue_generation.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests/5/test_continue_generation_2_0_1.py,Error processing file: All candidate models failed.,[],[],error
+fix_errors_from_unit_tests_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_main_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_verification_errors_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_verification_errors_loop_example.py,Error processing file: All candidate models failed.,[],[],error
+fix_verification_main_example.py,Error processing file: All candidate models failed.,[],[],error
+gcs_hmac_test.py,Error processing file: All candidate models failed.,[],[],error
+gemini_may_pro_example.py,Error processing file: All candidate models failed.,[],[],error
+generate/1/fix_errors_from_unit_tests.py,Error processing file: All candidate models failed.,[],[],error
+generate/2/cli.py,Error processing file: All candidate models failed.,[],[],error
+generate/3/cli.py,Error processing file: All candidate models failed.,[],[],error
+generate/4/cli.py,Error processing file: All candidate models failed.,[],[],error
+generate/5/generate_output_paths.py,Error processing file: All candidate models failed.,[],[],error
+generate/6/conflicts_main.py,Error processing file: All candidate models failed.,[],[],error
+generate/7/code_generator_main.py,Error processing file: All candidate models failed.,[],[],error
+generate/8/llm_invoke.py,Error processing file: All candidate models failed.,[],[],error
+generate_output_paths_example.py,Error processing file: All candidate models failed.,[],[],error
+generate_test_example.py,Error processing file: All candidate models failed.,[],[],error
+get_comment_example.py,Error processing file: All candidate models failed.,[],[],error
+get_extension_example.py,Error processing file: All candidate models failed.,[],[],error
+get_jwt_token_example.py,Error processing file: All candidate models failed.,[],[],error
+get_language_example.py,Error processing file: All candidate models failed.,[],[],error
+get_run_command_example.py,Error processing file: All candidate models failed.,[],[],error
+get_test_command_example.py,Error processing file: All candidate models failed.,[],[],error
+git_update_example.py,Error processing file: All candidate models failed.,[],[],error
+include_query_extractor_example.py,Error processing file: All candidate models failed.,[],[],error
+increase_tests_example.py,Error processing file: All candidate models failed.,[],[],error
+incremental_code_generator_example.py,Error processing file: All candidate models failed.,[],[],error
+insert_includes_example.py,Error processing file: All candidate models failed.,[],[],error
+install_completion_example.py,Error processing file: All candidate models failed.,[],[],error
+job_manager_example.py,Error processing file: All candidate models failed.,[],[],error
+langchain_lcel_example.py,Error processing file: All candidate models failed.,[],[],error
+list_stats_example.py,Error processing file: All candidate models failed.,[],[],error
+litellm_bedrock_sonnet.py,Error processing file: All candidate models failed.,[],[],error
+llm_invoke_example.py,Error processing file: All candidate models failed.,[],[],error
+llm_model_ranges_example.py,Error processing file: All candidate models failed.,[],[],error
+llm_selector_example.py,Error processing file: All candidate models failed.,[],[],error
+load_prompt_template_example.py,Error processing file: All candidate models failed.,[],[],error
+logo_animation_example.py,Error processing file: All candidate models failed.,[],[],error
+model_tester_example.py,Error processing file: All candidate models failed.,[],[],error
+o4-mini-test.ipynb,Error processing file: All candidate models failed.,[],[],error
+one_session_sync_example.py,Error processing file: All candidate models failed.,[],[],error
+operation_log_example.py,Error processing file: All candidate models failed.,[],[],error
+path_resolution_example.py,Error processing file: All candidate models failed.,[],[],error
+pddrc_initializer_example.py,Error processing file: All candidate models failed.,[],[],error
+postprocess_0_example.py,Error processing file: All candidate models failed.,[],[],error
+postprocess_example.py,Error processing file: All candidate models failed.,[],[],error
+postprocessed_runnable_llm_output.py,Error processing file: All candidate models failed.,[],[],error
+preprocess_example.py,Error processing file: All candidate models failed.,[],[],error
+preprocess_main_example.py,Error processing file: All candidate models failed.,[],[],error
+process_csv_change_example.py,Error processing file: All candidate models failed.,[],[],error
+prompt_caching.ipynb,Error processing file: All candidate models failed.,[],[],error
+provider_manager_example.py,Error processing file: All candidate models failed.,[],[],error
+pytest_example.py,Error processing file: All candidate models failed.,[],[],error
+pytest_isolation_example.py,Error processing file: All candidate models failed.,[],[],error
+pytest_output_example.py,Error processing file: All candidate models failed.,[],[],error
+python_env_detector_example.py,Error processing file: All candidate models failed.,[],[],error
+range_validator_example.py,Error processing file: All candidate models failed.,[],[],error
+regression_example.sh,Error processing file: All candidate models failed.,[],[],error
+remote_session_example.py,Error processing file: All candidate models failed.,[],[],error
+render_mermaid_example.py,Error processing file: All candidate models failed.,[],[],error
+resolve_effective_config_example.py,Error processing file: All candidate models failed.,[],[],error
+server/__init___example.py,Error processing file: All candidate models failed.,[],[],error
+server/app_example.py,Error processing file: All candidate models failed.,[],[],error
+server/click_executor_example.py,Error processing file: All candidate models failed.,[],[],error
+server/executor_example.py,Error processing file: All candidate models failed.,[],[],error
+server/jobs_example.py,Error processing file: All candidate models failed.,[],[],error
+server/models_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/__init___example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/architecture_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/auth_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/commands_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/config_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/extracts_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/files_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/prompts_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/session_example.py,Error processing file: All candidate models failed.,[],[],error
+server/routes/websocket_example.py,Error processing file: All candidate models failed.,[],[],error
+server/security_example.py,Error processing file: All candidate models failed.,[],[],error
+server/terminal_spawner_example.py,Error processing file: All candidate models failed.,[],[],error
+server/token_counter_example.py,Error processing file: All candidate models failed.,[],[],error
+setup_tool_example.py,Error processing file: All candidate models failed.,[],[],error
+simple_math.py,Error processing file: All candidate models failed.,[],[],error
+split/1/pdd.py,Error processing file: All candidate models failed.,[],[],error
+split/1/split_get_extension.py,Error processing file: All candidate models failed.,[],[],error
+split/2/pdd.py,Error processing file: All candidate models failed.,[],[],error
+split/2/split_pdd_construct_output_path.py,Error processing file: All candidate models failed.,[],[],error
+split/3/postprocess.py,Error processing file: All candidate models failed.,[],[],error
+split/3/split_postprocess_find_section.py,Error processing file: All candidate models failed.,[],[],error
+split/4/construct_paths.py,Error processing file: All candidate models failed.,[],[],error
+split/4/split_construct_paths_generate_output_filename.py,Error processing file: All candidate models failed.,[],[],error
+split/5/cli.py,Error processing file: All candidate models failed.,[],[],error
+split/5/split_track_cost.py,Error processing file: All candidate models failed.,[],[],error
+split/6/cli.py,Error processing file: All candidate models failed.,[],[],error
+split/6/split_conflicts.py,Error processing file: All candidate models failed.,[],[],error
+split/7/cli.py,Error processing file: All candidate models failed.,[],[],error
+split/7/split_trace_main.py,Error processing file: All candidate models failed.,[],[],error
+split/8/change_main.py,Error processing file: All candidate models failed.,[],[],error
+split/8/cli.py,Error processing file: All candidate models failed.,[],[],error
+split/9/cli.py,Error processing file: All candidate models failed.,[],[],error
+split/9/install_completion.py,Error processing file: All candidate models failed.,[],[],error
+split/simple_math/split_example.py,Error processing file: All candidate models failed.,[],[],error
+split/simple_math/split_script.py,Error processing file: All candidate models failed.,[],[],error
+split_example.py,Error processing file: All candidate models failed.,[],[],error
+split_main_example.py,Error processing file: All candidate models failed.,[],[],error
+summarize_directory_example.py,Error processing file: All candidate models failed.,[],[],error
+sync_animation_example.py,Error processing file: All candidate models failed.,[],[],error
+sync_code_main_example.py,Error processing file: All candidate models failed.,[],[],error
+sync_determine_operation_example.py,Error processing file: All candidate models failed.,[],[],error
+sync_main_example.py,Error processing file: All candidate models failed.,[],[],error
+sync_orchestration_example.py,Error processing file: All candidate models failed.,[],[],error
+sync_order_example.py,Error processing file: All candidate models failed.,[],[],error
+tiktoken_example.py,Error processing file: All candidate models failed.,[],[],error
+trace_example.py,Error processing file: All candidate models failed.,[],[],error
+trace_main_example.py,Error processing file: All candidate models failed.,[],[],error
+track_cost_example.py,Error processing file: All candidate models failed.,[],[],error
+unfinished_prompt_example.py,Error processing file: All candidate models failed.,[],[],error
+unrunnable_raw_llm_output.py,Error processing file: All candidate models failed.,[],[],error
+update/1/initial_change.py,Error processing file: All candidate models failed.,[],[],error
+update/1/modified_change.py,Error processing file: All candidate models failed.,[],[],error
+update/2/initial_continue_generation.py,Error processing file: All candidate models failed.,[],[],error
+update/2/modified_continue_generation.py,Error processing file: All candidate models failed.,[],[],error
+update_main_example.py,Error processing file: All candidate models failed.,[],[],error
+update_model_costs_example.py,Error processing file: All candidate models failed.,[],[],error
+update_prompt_example.py,Error processing file: All candidate models failed.,[],[],error
+vertex_ai_litellm.py,Error processing file: All candidate models failed.,[],[],error
+websocket_example.py,Error processing file: All candidate models failed.,[],[],error
+xml_tagger_example.py,Error processing file: All candidate models failed.,[],[],error
