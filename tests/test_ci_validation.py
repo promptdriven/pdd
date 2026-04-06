@@ -451,3 +451,174 @@ def test_ci_validation_loop_succeeds_without_fix_loop_when_no_required_checks(tm
     assert message == "No CI checks detected"
     assert cost == 0.0
     assert not fix_was_called, "LLM fix loop should not be entered when no required checks exist"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1114: partial check data + permission error bypasses handler
+# ---------------------------------------------------------------------------
+
+PARTIAL_CHECKS_STDOUT = (
+    '[{"name":"build","state":"PENDING","bucket":"pending","link":""}]'
+)
+RESOURCE_NOT_ACCESSIBLE_STDERR = (
+    "GraphQL: Resource not accessible by integration "
+    "(node.statusCheckRollup.nodes.0.commit.statusCheckRollup)"
+)
+
+
+def test_poll_returns_no_checks_on_resource_not_accessible_with_partial_data(
+    tmp_path: Path,
+) -> None:
+    """When gh pr checks returns partial check data in stdout AND a 'Resource
+    not accessible by integration' error in stderr, the poller should return
+    ('no_checks', []) immediately — not poll until timeout.
+
+    Bug: the handler at ci_validation.py:280 is gated behind
+    `not latest_checks`, so it is skipped when partial data makes
+    latest_checks non-empty."""
+    partial_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=PARTIAL_CHECKS_STDOUT,
+        stderr=RESOURCE_NOT_ACCESSIBLE_STDERR,
+    )
+
+    # Provide enough monotonic values: 0 (start), 1 (first iter check),
+    # then 9999 to exceed MAX_POLL_SECONDS if the bug causes continued polling.
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=partial_result) as mock_run, \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "no_checks", (
+        f"Expected 'no_checks' when partial data accompanies permission error, got '{status}'. "
+        "The 'resource not accessible' handler must fire even when latest_checks is non-empty."
+    )
+    assert checks == []
+    # Should exit on the first poll iteration, not retry
+    assert mock_run.call_count == 1
+
+
+def test_poll_emits_permission_warning_with_partial_data(tmp_path: Path) -> None:
+    """When partial check data + permission error occurs and quiet=False,
+    the yellow 'checks:read permission' warning should be printed."""
+    partial_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=PARTIAL_CHECKS_STDOUT,
+        stderr=RESOURCE_NOT_ACCESSIBLE_STDERR,
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=partial_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]), \
+         patch("pdd.ci_validation.console") as mock_console:
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=False,
+        )
+
+    assert status == "no_checks"
+    assert checks == []
+    # Verify the permission warning was printed
+    printed_args = [str(call) for call in mock_console.print.call_args_list]
+    joined = " ".join(printed_args)
+    assert "checks:read" in joined, (
+        f"Expected 'checks:read' permission warning in console output, got: {printed_args}"
+    )
+
+
+def test_ci_validation_loop_succeeds_on_partial_data_permission_error(
+    tmp_path: Path,
+) -> None:
+    """Integration: run_ci_validation_loop should return success when the
+    poller encounters partial check data + 'Resource not accessible' error,
+    not time out and post a failure comment."""
+    partial_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=PARTIAL_CHECKS_STDOUT,
+        stderr=RESOURCE_NOT_ACCESSIBLE_STDERR,
+    )
+
+    fix_was_called = False
+
+    def fail_if_called(**kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
+
+    # Provide generous monotonic values — the loop and poller both call
+    # time.monotonic.  When the bug is present the poller times out,
+    # consuming extra calls, so supply enough to reach the timeout path.
+    monotonic_values = [float(i) for i in range(20)] + [9999.0] * 5
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=partial_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=monotonic_values):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1114,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True, (
+        f"Expected success=True when partial data + permission error, got False with message: {message}"
+    )
+    assert message == "No CI checks detected"
+    assert cost == 0.0
+    assert not fix_was_called, "LLM fix loop should not be entered on permission error"
+
+
+def test_poll_returns_no_checks_on_no_required_checks_with_partial_data(
+    tmp_path: Path,
+) -> None:
+    """The 'no required checks' handler at ci_validation.py:275 has the same
+    `not latest_checks` guard bug — it should also fire when partial check
+    data is present in stdout."""
+    partial_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=PARTIAL_CHECKS_STDOUT,
+        stderr="no required checks reported on the 'fix/issue-1114' branch",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=partial_result) as mock_run, \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "no_checks", (
+        f"Expected 'no_checks' when 'no required checks' stderr accompanies partial data, got '{status}'."
+    )
+    assert checks == []
+    assert mock_run.call_count == 1
