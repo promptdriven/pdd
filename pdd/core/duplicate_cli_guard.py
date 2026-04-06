@@ -2,11 +2,13 @@
 Detect consecutive duplicate expensive CLI invocations (sync / generate / fix).
 
 Warns or blocks when the same command is re-run within a time window with the
-same git HEAD, to reduce accidental double spend on LLM-heavy flows.
+same argv, project root, and input fingerprint (git HEAD plus ``git status
+--porcelain``), so uncommitted prompt edits are not treated as duplicates.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -16,6 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import click
+
+from ..architecture_registry import find_project_root
 
 # Subcommands that typically incur many LLM calls.
 GUARDED_SUBCOMMANDS = frozenset({"sync", "generate", "fix"})
@@ -53,8 +57,8 @@ def _duplicate_window_seconds() -> float:
     return max(1.0, minutes * 60.0)
 
 
-def _last_run_path(cwd: str) -> Path:
-    return Path(cwd) / ".pdd" / _LAST_RUN_FILENAME
+def _last_run_path(project_root: Path) -> Path:
+    return project_root / ".pdd" / _LAST_RUN_FILENAME
 
 
 def _git_head(cwd: str) -> str:
@@ -72,6 +76,32 @@ def _git_head(cwd: str) -> str:
     except (OSError, subprocess.TimeoutExpired):
         pass
     return ""
+
+
+def _git_porcelain(project_root: str) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if proc.returncode == 0:
+            return proc.stdout or ""
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return ""
+
+
+def _run_fingerprint(project_root: Path) -> str:
+    """Stable hash of HEAD + working tree status so uncommitted edits change the fingerprint."""
+    root_s = str(project_root.resolve())
+    head = _git_head(root_s)
+    porcelain = _git_porcelain(root_s)
+    raw = (f"{head}\n{porcelain}").encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def normalized_argv(argv: Optional[List[str]] = None) -> List[str]:
@@ -96,8 +126,8 @@ def _allow_duplicate(ctx: click.Context) -> bool:
     return False
 
 
-def load_last_run(cwd: str) -> Optional[Dict[str, Any]]:
-    path = _last_run_path(cwd)
+def load_last_run(project_root: Path) -> Optional[Dict[str, Any]]:
+    path = _last_run_path(project_root)
     if not path.is_file():
         return None
     try:
@@ -110,18 +140,19 @@ def load_last_run(cwd: str) -> Optional[Dict[str, Any]]:
 
 
 def save_last_run(
-    cwd: str,
+    project_root: Path,
     argv_tail: List[str],
-    head: str,
     subcommand: str,
 ) -> None:
-    path = _last_run_path(cwd)
+    path = _last_run_path(project_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        root_s = str(project_root.resolve())
         payload = {
             "argv": argv_tail,
-            "cwd": cwd,
-            "git_head": head,
+            "project_root": root_s,
+            "fingerprint": _run_fingerprint(project_root),
+            "git_head": _git_head(root_s),
             "subcommand": subcommand,
             "timestamp": time.time(),
         }
@@ -130,10 +161,25 @@ def save_last_run(
         pass
 
 
+def _duplicate_inputs_match(prev: Dict[str, Any], project_root: Path, argv_tail: List[str], sub: str) -> bool:
+    """Return True if prev record matches current argv, project root, and fingerprint (or legacy HEAD)."""
+    if prev.get("argv") != argv_tail:
+        return False
+    if prev.get("subcommand") != sub:
+        return False
+    root_s = str(project_root.resolve())
+    prev_root = prev.get("project_root") or prev.get("cwd")
+    if prev_root != root_s:
+        return False
+    if prev.get("fingerprint") is not None:
+        return prev.get("fingerprint") == _run_fingerprint(project_root)
+    return prev.get("git_head") == _git_head(root_s)
+
+
 def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     """
-    If the next subcommand is guarded and matches the last run (argv, cwd, head)
-    within the time window, warn / block / prompt per policy.
+    If the next subcommand is guarded and matches the last run (argv, project root,
+    fingerprint) within the time window, warn / block / prompt per policy.
 
     Call from the root group callback after ``ctx.invoked_subcommand`` is set.
     """
@@ -147,10 +193,9 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     if _allow_duplicate(ctx):
         return
 
-    cwd = os.getcwd()
+    project_root = find_project_root()
     argv_tail = normalized_argv()
-    head = _git_head(cwd)
-    prev = load_last_run(cwd)
+    prev = load_last_run(project_root)
     if prev is None:
         return
 
@@ -162,19 +207,14 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     if time.time() - prev_ts > _duplicate_window_seconds():
         return
 
-    if prev.get("argv") != argv_tail:
-        return
-    if prev.get("cwd") != cwd:
-        return
-    if prev.get("git_head") != head:
-        return
-    if prev.get("subcommand") != sub:
+    if not _duplicate_inputs_match(prev, project_root, argv_tail, sub):
         return
 
     mins = _duplicate_window_seconds() / 60.0
     msg = (
         f"PDD: Same command was run within the last ~{mins:.0f} minutes with the same "
-        "git HEAD. Re-running may duplicate LLM cost.\n"
+        "inputs (argv, project root, and no new git changes vs last run). "
+        "Re-running may duplicate LLM cost.\n"
         f"  (Use --force or set {_ENV_ALLOW}=1 to skip this check.)\n"
     )
 
@@ -219,5 +259,4 @@ def record_after_guarded_command(ctx: click.Context) -> None:
     if sub not in GUARDED_SUBCOMMANDS:
         return
 
-    cwd = os.getcwd()
-    save_last_run(cwd, normalized_argv(), _git_head(cwd), sub)
+    save_last_run(find_project_root(), normalized_argv(), sub)

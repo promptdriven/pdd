@@ -7,6 +7,8 @@ from pathlib import Path
 from pdd.auto_deps_architecture import (
     extract_include_paths_from_prompt_text,
     merge_auto_deps_includes_into_architecture,
+    _minimal_dependencies_array_patch,
+    _replace_dependencies_in_architecture_text,
 )
 
 
@@ -198,6 +200,66 @@ def test_merge_maps_example_path_include_to_module_arch_entry(tmp_path: Path) ->
     data = json.loads((tmp_path / "architecture.json").read_text(encoding="utf-8"))
     api = next(e for e in data if e["filename"] == "api_Python.prompt")
     assert api["dependencies"] == ["models_Python.prompt"]
+
+
+def test_merge_preserves_text_after_second_entry_when_only_first_changes(tmp_path: Path) -> None:
+    """Surgical write must not reformat later architecture entries."""
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "child_Python.prompt").write_text("%\n", encoding="utf-8")
+    (prompts / "parent_Python.prompt").write_text("%\n", encoding="utf-8")
+    raw = """[
+  {
+    "filename": "child_Python.prompt",
+    "dependencies": []
+  },
+  {
+    "filename": "parent_Python.prompt",
+    "dependencies": []
+  }
+]"""
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(raw, encoding="utf-8")
+
+    merge_auto_deps_includes_into_architecture(
+        tmp_path,
+        prompts / "child_Python.prompt",
+        "%\n",
+        '%\n<include>parent_python.prompt</include>\n',
+    )
+    after = arch_path.read_text(encoding="utf-8")
+    marker = '"filename": "parent_Python.prompt"'
+    assert after[after.find(marker) :] == raw[raw.find(marker) :]
+
+
+def test_minimal_append_only_inserts_before_closing_bracket() -> None:
+    """Suffix-append should leave existing array bytes (except new insert) unchanged."""
+    old = """[
+      "a.prompt"
+    ]"""
+    out = _minimal_dependencies_array_patch(old, ["a.prompt", "b.prompt"])
+    assert out is not None
+    assert out == """[
+      "a.prompt",
+      "b.prompt"
+    ]"""
+    # Compact one-line array: only grow before ]
+    compact = '["a.prompt"]'
+    out_c = _minimal_dependencies_array_patch(compact, ["a.prompt", "b.prompt"])
+    assert out_c == '["a.prompt", "b.prompt"]'
+
+
+def test_replace_dependencies_in_architecture_text_round_trip() -> None:
+    raw = """[
+  {"filename": "a.prompt", "dependencies": []},
+  {"filename": "b.prompt", "dependencies": ["x.prompt"]}
+]"""
+    out = _replace_dependencies_in_architecture_text(raw, 0, ["b.prompt"])
+    assert out is not None
+    data = json.loads(out)
+    assert data[0]["dependencies"] == ["b.prompt"]
+    assert data[1]["dependencies"] == ["x.prompt"]
 
 
 def test_merge_does_not_add_dep_without_architecture_entry_for_peer(tmp_path: Path) -> None:

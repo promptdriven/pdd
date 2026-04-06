@@ -640,7 +640,7 @@ def sync_main(
         if not quiet:
             rprint(Panel(f"Displaying sync analysis for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Dry Run", expand=False))
 
-        print_architecture_include_validation_warnings(quiet=quiet)
+        print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
 
         for lang, prompt_file_path in lang_to_path.items():
             if not quiet:
@@ -692,7 +692,7 @@ def sync_main(
     if not quiet and display_budget < 1.0:
         console.log(f"[yellow]Warning:[/] Budget of ${display_budget:.2f} is low. Complex operations may exceed this limit.")
 
-    print_architecture_include_validation_warnings(quiet=quiet)
+    print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
 
     if not quiet:
         summary_panel = Panel(
