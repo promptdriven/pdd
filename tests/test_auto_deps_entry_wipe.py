@@ -283,6 +283,83 @@ class TestUnnecessaryResummarization:
             "cache lookup."
         )
 
+    def test_parent_dir_scan_reuses_subdir_cache(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """If the CSV was built by scanning 'pdd/' (entries like 'cli.py'),
+        then scanning '.' should still cache-hit on pdd/cli.py because it's
+        the same physical file.
+
+        This is the real-world scenario: project_dependencies.csv has entries
+        from scanning pdd/ (bare filenames). A later scan from the project
+        root produces 'pdd/cli.py' as the relative path. The cache lookup
+        must recognize these as the same file via content hash.
+        """
+        # Create subdir/module.py
+        subdir = tmp_path / "pkg"
+        subdir.mkdir()
+        content = "def hello(): pass"
+        (subdir / "module.py").write_text(content)
+
+        # CSV has entry from a prior scan of subdir (bare filename)
+        existing_csv = _make_csv([{
+            'full_path': 'module.py',
+            'file_summary': 'Cached summary from subdir scan',
+            'key_exports': '["hello"]',
+            'dependencies': '[]',
+            'content_hash': _content_hash(content),
+        }])
+
+        # Now scan from parent (tmp_path) — file becomes "pkg/module.py"
+        csv_output, cost, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=existing_csv,
+        )
+
+        # Same physical file, same content hash — should NOT re-summarize
+        assert cost == 0, (
+            f"File was re-summarized (cost={cost}) when scanning from a "
+            "parent directory. The CSV had 'module.py' but the scan produced "
+            "'pkg/module.py'. Cache should match by content hash when paths "
+            "differ but content is identical."
+        )
+
+    def test_subdir_scan_reuses_parent_cache(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Inverse of above: CSV has 'pkg/module.py' from scanning root,
+        now scanning 'pkg/' produces 'module.py'. Should still cache-hit."""
+        subdir = tmp_path / "pkg"
+        subdir.mkdir()
+        content = "x = 42"
+        (subdir / "module.py").write_text(content)
+
+        # CSV has entry from a prior scan of root (prefixed path)
+        existing_csv = _make_csv([{
+            'full_path': 'pkg/module.py',
+            'file_summary': 'Cached summary from root scan',
+            'key_exports': '["x"]',
+            'dependencies': '[]',
+            'content_hash': _content_hash(content),
+        }])
+
+        # Now scan just subdir — file becomes "module.py"
+        csv_output, cost, _ = summarize_directory(
+            directory_path=str(subdir),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=existing_csv,
+        )
+
+        assert cost == 0, (
+            f"File was re-summarized (cost={cost}) when scanning a subdirectory. "
+            "The CSV had 'pkg/module.py' but the scan produced 'module.py'. "
+            "Cache should match by content hash when paths differ but content "
+            "is identical."
+        )
+
     def test_trailing_slash_does_not_invalidate_cache(
         self, tmp_path, mock_load_prompt_template, mock_llm_invoke
     ):
