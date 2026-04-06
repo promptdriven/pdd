@@ -990,6 +990,12 @@ def _select_model_candidates(
     # Allow models with empty api_key (e.g., Bedrock using AWS creds, local models)
     available_df = model_df[model_df['api_key'].notna()].copy()
 
+    # In CI / headless environments, exclude local models (lm_studio, ollama)
+    # that require a running local server — they hang on connection attempts.
+    if os.environ.get("PDD_SKIP_LOCAL_MODELS"):
+        local_providers = {"lm_studio", "ollama"}
+        available_df = available_df[~available_df['provider'].str.lower().isin(local_providers)]
+
     # --- Check if the initial DataFrame itself was empty ---
     if model_df.empty:
         raise ValueError("Loaded model data is empty. Check CSV file.")

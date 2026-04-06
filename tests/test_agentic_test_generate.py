@@ -246,7 +246,7 @@ def test_missing_template(mock_load, mock_env):
     """Test that the function returns failure if the prompt template cannot be loaded."""
     mock_load.return_value = None
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -261,7 +261,7 @@ def test_no_agents_available(mock_agents, mock_env):
     """Test that the function returns failure if no agents are available."""
     mock_agents.return_value = []
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -287,7 +287,7 @@ def test_successful_generation(mock_agents, mock_load, mock_run, mock_env):
 
     mock_run.side_effect = side_effect
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -306,7 +306,7 @@ def test_agent_returns_invalid_json(mock_agents, mock_load, mock_run, mock_env):
     mock_load.return_value = "Template"
     mock_run.return_value = (True, "I generated the tests", 0.1, "anthropic")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -341,7 +341,7 @@ def test_success_inferred_when_json_missing_but_test_file_exists(
 
     mock_run.side_effect = side_effect
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -366,7 +366,7 @@ def test_detects_test_file_at_different_path(mock_agents, mock_load, mock_run, m
 
     mock_run.side_effect = side_effect
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"],
         quiet=True, verbose=True
     )
@@ -392,7 +392,7 @@ def test_json_in_markdown_block(mock_agents, mock_load, mock_run, mock_env):
     '''
     mock_run.return_value = (True, agent_output, 0.2, "anthropic")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -415,7 +415,7 @@ def test_handles_missing_input_files(mock_agents, mock_load, mock_run, mock_env)
     mock_env["code"].unlink()
 
     # Should not crash, just proceed with empty content
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"],
         quiet=True, verbose=True
     )
@@ -434,7 +434,7 @@ def test_model_name_formatting(mock_agents, mock_load, mock_run, mock_env):
     mock_load.return_value = "Template"
     mock_run.return_value = (True, '{"success": true}', 0.1, "google")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -451,7 +451,7 @@ def test_model_name_fallback(mock_agents, mock_load, mock_run, mock_env):
     mock_load.return_value = "Template"
     mock_run.return_value = (True, '{"success": true}', 0.1, "")
 
-    content, cost, model, success = run_agentic_test_generate(
+    content, cost, model, success, error_msg = run_agentic_test_generate(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
@@ -489,3 +489,165 @@ class TestAgenticTestPromptContent:
         assert "sys.path" in prompt_content, (
             "Agentic test prompt must contain sys.path setup instructions for Python"
         )
+
+
+# --- Issue #1072 Tests: Error message dropped from return value ---
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_error_message_returned_when_all_providers_fail(mock_agents, mock_load, mock_run, mock_env):
+    """Issue #1072: run_agentic_test_generate must return the error message as a 5th tuple element.
+
+    When all agent providers fail, run_agentic_task returns
+    (False, "All agent providers failed: ...", 0.0, ""). The error string is stored
+    in local variable `message` at line 266 but NEVER returned — the function returns
+    a 4-tuple (content, cost, model_name, final_success) at line 310, silently
+    dropping the error.
+
+    This test verifies the fix: a 5-tuple is returned where result[4] contains
+    the provider failure error message.
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = (
+        "Template {prompt_path} {code_path} {test_path} "
+        "{project_root} {prompt_content} {code_content}"
+    )
+    error_msg = "All agent providers failed: anthropic: Exit code 1; google: TerminalQuotaError"
+    mock_run.return_value = (False, error_msg, 0.0, "")
+
+    result = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    assert len(result) == 5, (
+        f"Expected 5-tuple but got {len(result)}-tuple — "
+        f"error message is silently dropped at agentic_test_generate.py:310"
+    )
+    content, cost, model, success, returned_error = result
+    assert success is False
+    assert content == ""
+    assert "All agent providers failed" in returned_error, (
+        f"Expected error message containing provider failure, got: {returned_error!r}"
+    )
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_error_message_from_json_failure_report(mock_agents, mock_load, mock_run, mock_env):
+    """Issue #1072: When agent returns JSON with success=false, the parsed message must
+    be included as the 5th tuple element.
+
+    run_agentic_task returns (True, '{"success": false, "message": "Tests failed: ..."}', ...).
+    The code parses this JSON and stores the message in the local `message` variable
+    (line 269/272) but never returns it in the tuple (line 310).
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = (
+        "Template {prompt_path} {code_path} {test_path} "
+        "{project_root} {prompt_content} {code_content}"
+    )
+    json_output = json.dumps({
+        "success": False,
+        "message": "Tests failed: 3 of 10 failed"
+    })
+    mock_run.return_value = (True, json_output, 0.15, "anthropic")
+
+    result = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    assert len(result) == 5, (
+        f"Expected 5-tuple but got {len(result)}-tuple — "
+        f"error message is silently dropped at agentic_test_generate.py:310"
+    )
+    content, cost, model, success, returned_error = result
+    assert success is False
+    assert "Tests failed: 3 of 10 failed" in returned_error, (
+        f"Expected JSON-parsed failure message in 5th element, got: {returned_error!r}"
+    )
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_empty_error_on_successful_generation(mock_agents, mock_load, mock_run, mock_env):
+    """Issue #1072: On success, the 5th tuple element must be an empty string (no error).
+
+    Regression guard: ensures the 5-tuple fix doesn't accidentally return
+    success messages as error messages.
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = (
+        "Template {prompt_path} {code_path} {test_path} "
+        "{project_root} {prompt_content} {code_content}"
+    )
+
+    def side_effect(*args, **kwargs):
+        test_content = "describe('add', () => { it('adds numbers', () => {}); });"
+        mock_env["test"].write_text(test_content)
+        return (True, '{"success": true, "message": "Generated tests"}', 0.15, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    result = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    assert len(result) == 5, (
+        f"Expected 5-tuple but got {len(result)}-tuple"
+    )
+    content, cost, model, success, returned_error = result
+    assert success is True
+    assert returned_error == "", (
+        f"Expected empty error on success, got: {returned_error!r}"
+    )
+
+
+# Scope addition: covers expansion item "early returns at agentic_test_generate.py:190 201 235
+# must also return 5-tuples with error messages" identified by Step 6 but absent from Step 8's plan
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_early_return_no_agents_returns_5_tuple_with_error(mock_agents, mock_env):
+    """Issue #1072 (Step 6 expansion): Early return at line 190 (no agents available)
+    must also return a 5-tuple with an error message, not a 4-tuple.
+    """
+    mock_agents.return_value = []
+
+    result = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    assert len(result) == 5, (
+        f"Early return (no agents) at line 190 returns {len(result)}-tuple, "
+        f"expected 5-tuple with error message"
+    )
+    content, cost, model, success, returned_error = result
+    assert success is False
+    assert returned_error != "", (
+        "Early return (no agents) should include a non-empty error message"
+    )
+
+
+# Scope addition: covers expansion item "early returns at agentic_test_generate.py:190 201 235"
+@patch("pdd.agentic_test_generate.load_prompt_template")
+def test_early_return_missing_template_returns_5_tuple_with_error(mock_load, mock_env):
+    """Issue #1072 (Step 6 expansion): Early return at line 201 (missing template)
+    must also return a 5-tuple with an error message.
+    """
+    mock_load.return_value = None
+
+    result = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    assert len(result) == 5, (
+        f"Early return (missing template) at line 201 returns {len(result)}-tuple, "
+        f"expected 5-tuple with error message"
+    )
+    content, cost, model, success, returned_error = result
+    assert success is False
+    assert returned_error != "", (
+        "Early return (missing template) should include a non-empty error message"
+    )
