@@ -1,3 +1,13 @@
+## v0.0.199 (2026-04-05)
+
+### Fix
+
+- auto-heal end-to-end — skip local models, force local LLM, log timeouts
+- simplify auto-heal credentials to use GEMINI_API_KEY
+- use Vertex AI credentials for auto-heal LLM calls
+- pass API keys, increase timeout, and soften push-mode failures in auto-heal
+- scope auto-heal drift to changed modules only
+
 ## v0.0.198 (2026-04-04)
 
 ### Feat
