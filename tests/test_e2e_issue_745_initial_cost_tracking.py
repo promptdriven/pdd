@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pdd.agentic_sync_runner import AsyncSyncRunner, DepGraphFromArchitectureResult, ModuleState
+from pdd.agentic_sync_runner import AsyncSyncRunner
 
 
 @pytest.mark.e2e
