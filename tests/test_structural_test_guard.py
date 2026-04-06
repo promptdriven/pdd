@@ -7,10 +7,14 @@ satisfied the structural test without implementing real behavior.
 
 The guard function `detect_structural_test_patterns()` scans generated test files
 for banned patterns and returns a list of violations.
+
+Issue #990 added start_line support so the validator only flags patterns in
+newly generated lines, not pre-existing code in the same file.
 """
 
 import textwrap
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -431,3 +435,313 @@ class TestEdgeCases:
 
         violations = detect_structural_test_patterns(str(test_file))
         assert violations == []
+
+
+# --- start_line support (issue #990) ---
+# Helpers build anti-pattern lines via concatenation so this test file itself
+# does not contain the literal patterns that the validator would flag.
+
+_MOD = "inspect"
+
+
+def _sig_check_lines() -> List[str]:
+    """Return lines containing a signature-check anti-pattern."""
+    return [
+        "def test_old_sig():",
+        "    sig = " + _MOD + "." + "signature(module.func)",
+        "    " + 'assert "param" in sig.parameters',
+    ]
+
+
+def _getsource_lines() -> List[str]:
+    """Return lines containing a getsource anti-pattern."""
+    return [
+        "def test_old_source():",
+        "    source = " + _MOD + "." + "getsource(module.main)",
+        "    " + 'assert "signal" in source',
+    ]
+
+
+def _hasattr_lines() -> List[str]:
+    """Return lines containing a hasattr anti-pattern."""
+    prefix = "    "
+    kw = "hasattr"
+    return [
+        "def test_old_attr():",
+        prefix + "assert " + kw + "(module, 'attr')",
+    ]
+
+
+def _clean_test_lines(count: int = 5) -> List[str]:
+    """Return *count* innocuous test lines."""
+    lines: List[str] = ["import os", ""]
+    for i in range(count):
+        lines.append(f"def test_clean_{i}():")
+        lines.append(f"    assert {i} == {i}")
+        lines.append("")
+    return lines
+
+
+def _write_fixture(path: Path, sections: List[List[str]]) -> None:
+    """Write a fixture file from a list of line-groups."""
+    all_lines: List[str] = []
+    for section in sections:
+        all_lines.extend(section)
+        all_lines.append("")  # blank separator
+    path.write_text("\n".join(all_lines) + "\n")
+
+
+class TestStartLineFiltersPreexistingPatterns:
+    """Pre-existing anti-patterns are excluded when start_line skips them."""
+
+    def test_preexisting_patterns_not_reported_with_start_line(
+        self, tmp_path: Path
+    ) -> None:
+        """When start_line is past all pre-existing violations, result is empty."""
+        test_file = tmp_path / "test_example.py"
+        _write_fixture(test_file, [
+            _sig_check_lines(),
+            _getsource_lines(),
+            _hasattr_lines(),
+        ])
+        pre_line_count = len(test_file.read_text().splitlines())
+
+        clean = _clean_test_lines(3)
+        with open(test_file, "a") as f:
+            f.write("\n".join(clean) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=pre_line_count + 1
+        )
+
+        assert violations == [], (
+            f"Pre-existing patterns should be ignored when start_line is set. "
+            f"Got {len(violations)} violation(s): {violations}"
+        )
+
+
+class TestStartLineCatchesNewViolations:
+    """New violations appearing after start_line are still caught."""
+
+    def test_new_violations_detected_after_start_line(
+        self, tmp_path: Path
+    ) -> None:
+        """Violations on lines >= start_line must still be reported."""
+        test_file = tmp_path / "test_example.py"
+
+        clean = _clean_test_lines(5)
+        pre_line_count = len(clean) + 1
+
+        bad_section = _sig_check_lines() + [""] + _hasattr_lines()
+        all_lines = clean + [""] + bad_section
+        test_file.write_text("\n".join(all_lines) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=pre_line_count
+        )
+
+        assert len(violations) >= 2, (
+            f"Expected at least 2 violations in new section, got {len(violations)}: "
+            f"{violations}"
+        )
+        violation_text = " ".join(violations).lower()
+        assert "signature" in violation_text or "hasattr" in violation_text, (
+            f"Expected signature or hasattr violations, got: {violations}"
+        )
+
+
+class TestStartLineMixedScenario:
+    """Only new-section violations are reported, old ones are ignored."""
+
+    def test_mixed_old_and_new_violations(self, tmp_path: Path) -> None:
+        """File has violations both before and after start_line."""
+        test_file = tmp_path / "test_example.py"
+
+        old_section = _sig_check_lines()
+        old_line_count = len(old_section) + 1  # +1 for blank separator
+
+        new_section = _hasattr_lines()
+
+        _write_fixture(test_file, [old_section, new_section])
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=old_line_count + 1
+        )
+
+        assert len(violations) >= 1, (
+            f"Expected at least 1 new-section violation, got: {violations}"
+        )
+        violation_text = " ".join(violations).lower()
+        assert "hasattr" in violation_text, (
+            f"Expected hasattr violation from new section, got: {violations}"
+        )
+        assert not any("Line 2:" in v for v in violations), (
+            f"Old-section violations should not be reported: {violations}"
+        )
+
+
+class TestStartLineSourceStringMatching:
+    """Source-string-matching (second scan phase) respects start_line."""
+
+    def test_source_read_pattern_filtered_by_start_line(
+        self, tmp_path: Path
+    ) -> None:
+        """The read_text + assert-in-var pattern should be filtered by start_line."""
+        test_file = tmp_path / "test_example.py"
+
+        rt_call = '    src_txt = Path("module.py")' + ".read_text()"
+        rt_assert = '    assert "def main" in ' + "src_txt"
+        old_lines = [
+            "from pathlib import Path",
+            "",
+            "def test_old_source_read():",
+            rt_call,
+            rt_assert,
+        ]
+        old_line_count = len(old_lines) + 1
+
+        new_lines = [
+            "def test_new_clean():",
+            "    assert 1 + 1 == 2",
+        ]
+
+        all_lines = old_lines + [""] + new_lines
+        test_file.write_text("\n".join(all_lines) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=old_line_count + 1
+        )
+
+        assert violations == [], (
+            f"Old source-string-matching should be ignored with start_line. "
+            f"Got: {violations}"
+        )
+
+
+class TestBackwardCompatNoStartLine:
+    """Omitting start_line (or passing None) still scans everything."""
+
+    def test_no_start_line_scans_full_file(self, tmp_path: Path) -> None:
+        """Passing start_line=None should behave identically to the old API."""
+        test_file = tmp_path / "test_example.py"
+        _write_fixture(test_file, [
+            _sig_check_lines(),
+            _hasattr_lines(),
+        ])
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=None
+        )
+
+        assert len(violations) >= 2, (
+            f"With start_line=None, all violations should be found. "
+            f"Got {len(violations)}: {violations}"
+        )
+
+    def test_no_start_line_arg_scans_full_file(self, tmp_path: Path) -> None:
+        """Omitting start_line entirely preserves backward-compatible behavior."""
+        test_file = tmp_path / "test_example.py"
+        _write_fixture(test_file, [
+            _sig_check_lines(),
+            _hasattr_lines(),
+        ])
+
+        violations = detect_structural_test_patterns(str(test_file))
+
+        assert len(violations) >= 2, (
+            f"Without start_line, all violations should be found. "
+            f"Got {len(violations)}: {violations}"
+        )
+
+
+class TestStartLineTruncationSafety:
+    """When start_line exceeds file length, clamp to 1 and scan everything.
+
+    This handles the case where Step 9 rewrites a file shorter than the
+    pre-step-9 snapshot — the offset would overshoot EOF, so clamping to 1
+    ensures violations in the rewritten content are still caught.
+    """
+
+    def test_start_line_beyond_eof_scans_full_file(self, tmp_path: Path) -> None:
+        """When start_line exceeds file length, all violations are reported."""
+        test_file = tmp_path / "test_example.py"
+        _write_fixture(test_file, [
+            _sig_check_lines(),
+            _getsource_lines(),
+        ])
+        total_lines = len(test_file.read_text().splitlines())
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=total_lines + 100
+        )
+
+        assert len(violations) >= 2, (
+            f"start_line beyond EOF should clamp to 1 and scan everything. "
+            f"Got {len(violations)}: {violations}"
+        )
+
+    def test_truncated_file_scans_from_line_1(self, tmp_path: Path) -> None:
+        """Simulates a file rewritten shorter than the snapshot line count."""
+        test_file = tmp_path / "test_example.py"
+        # Write a short file with violations (5 lines)
+        _write_fixture(test_file, [_hasattr_lines()])
+        current_lines = len(test_file.read_text().splitlines())
+
+        # Pass a start_line as if the original file had 50 lines
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=50
+        )
+
+        assert current_lines < 50, "Precondition: file is shorter than start_line"
+        assert len(violations) >= 1, (
+            f"Truncated file should be fully scanned. Got: {violations}"
+        )
+
+
+class TestStartLineCrossBoundaryVarTracking:
+    """Source-var tracking scans full file but only reports new-line violations."""
+
+    def test_new_assertion_using_old_getsource_var_is_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        """New code that asserts on a variable assigned via getsource in old code
+        should still be flagged — the assertion is new structural code."""
+        test_file = tmp_path / "test_example.py"
+
+        # Old section: assigns source var via getsource (line ~2)
+        old_lines = _getsource_lines()
+        old_line_count = len(old_lines) + 1  # +1 for blank separator
+
+        # New section: uses the same var name in a new assertion
+        # (In reality new code wouldn't reference old locals, but this
+        # tests that the tracking logic scans the full file.)
+        new_assert = '    assert "new_thing" in ' + "source"
+        new_lines = [
+            "def test_new_but_structural():",
+            new_assert,
+        ]
+
+        all_lines = old_lines + [""] + new_lines
+        test_file.write_text("\n".join(all_lines) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), start_line=old_line_count + 1
+        )
+
+        # The getsource on the old line should NOT be reported.
+        old_line_violations = [v for v in violations if f"Line 2:" in v]
+        assert old_line_violations == [], (
+            f"Old-line getsource should not be reported: {violations}"
+        )
+
+        # The NEW source-string-matching assertion SHOULD be reported.
+        # Pre-existing getsource must not suppress new-line violations.
+        new_line_num = old_line_count + 2  # blank separator + def line + assert line
+        new_line_violations = [
+            v
+            for v in violations
+            if f"Line {new_line_num}:" in v and "source string matching" in v
+        ]
+        assert len(new_line_violations) == 1, (
+            f"New source-string assertion should be flagged: {violations}"
+        )

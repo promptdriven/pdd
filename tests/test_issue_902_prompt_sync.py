@@ -22,8 +22,13 @@ PROMPTS_DIR = Path(__file__).parent.parent / "pdd" / "prompts"
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.private_prompt
 class TestAgenticCommonPromptSync:
-    """The agentic_common prompt must specify key features from the code."""
+    """The agentic_common prompt must specify key features from the code.
+
+    These tests check the full private _python.prompt content which is not
+    synced to the public repo. Marked private_prompt so public CI skips them.
+    """
 
     @pytest.fixture
     def prompt_content(self) -> str:

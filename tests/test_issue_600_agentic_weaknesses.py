@@ -223,9 +223,11 @@ class TestStep11E2EVerification:
 
         run_agentic_bug_orchestrator(**default_args)
 
-        mock_verify_e2e.assert_called_once()
-        call_args = mock_verify_e2e.call_args
-        assert "e2e/test_waitlist.spec.ts" in str(call_args)
+        # Step 9 subprocess verification (#960) also calls _verify_e2e_tests,
+        # so expect 2 calls: once for Step 9 unit tests, once for Step 11 E2E.
+        assert mock_verify_e2e.call_count == 2
+        step11_call = mock_verify_e2e.call_args_list[-1]
+        assert "e2e/test_waitlist.spec.ts" in str(step11_call)
 
     def test_step11_e2e_verification_failure_is_logged(
         self, bug_mock_deps, default_args
@@ -254,7 +256,8 @@ class TestStep11E2EVerification:
 
         run_agentic_bug_orchestrator(**default_args)
 
-        mock_verify_e2e.assert_called_once()
+        # Step 9 subprocess verification (#960) also calls _verify_e2e_tests.
+        assert mock_verify_e2e.call_count == 2
 
     def test_step11_skips_verification_when_e2e_skip(
         self, bug_mock_deps, default_args
@@ -284,4 +287,8 @@ class TestStep11E2EVerification:
 
         run_agentic_bug_orchestrator(**default_args)
 
-        mock_verify_e2e.assert_not_called()
+        # Step 9 subprocess verification (#960) still calls _verify_e2e_tests
+        # for unit test files, but Step 11 E2E_SKIP should prevent the E2E call.
+        assert mock_verify_e2e.call_count == 1
+        step9_call = mock_verify_e2e.call_args_list[0]
+        assert "tests/test_fix.py" in str(step9_call)

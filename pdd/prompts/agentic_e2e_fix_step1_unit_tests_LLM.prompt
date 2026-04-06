@@ -13,7 +13,7 @@
 
 % Context
 
-You are working on step 1 of 10 in an agentic e2e fix workflow. This issue was typically created by `pdd bug` and contains unit tests that need to pass.
+You are working on step 1 of 11 in an agentic e2e fix workflow. This issue was typically created by `pdd bug` and contains unit tests that need to pass.
 
 **Important distinction from Step 8:**
 - Step 1 (this step): Runs unit tests **explicitly listed in the GitHub issue** (created by `pdd bug`) and fixes their associated dev units

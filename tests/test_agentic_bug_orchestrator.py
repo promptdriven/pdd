@@ -1,3 +1,12 @@
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
 """
 Test Plan for pdd.agentic_bug_orchestrator
 
@@ -46,7 +55,6 @@ def mock_dependencies(tmp_path):
     - run_agentic_task
     - load_prompt_template
     - console (to suppress output during tests)
-    - _setup_worktree (for git worktree isolation)
     - preprocess (template preprocessing)
     - save_workflow_state / load_workflow_state / clear_workflow_state
     - _get_git_root
@@ -182,6 +190,118 @@ def test_hard_stop_step_3_needs_info(mock_dependencies, default_args):
     assert "Stopped at step 3" in msg
     assert "info" in msg.lower()
     assert mock_run.call_count == 3
+
+
+def test_fast_track_skips_steps_4_and_5(mock_dependencies, default_args):
+    """
+    Issue #836: When Step 3 outputs FAST_TRACK:, Steps 4 (api_research)
+    and 5 (reproduce) should be skipped. The root cause provided by the
+    issue author is injected into step outputs 4 and 5 so later steps
+    see it as context.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    fast_track_summary = "Bug in orchestrator.py:1043 — missing path prefix check"
+    calls = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        calls.append(label)
+        if label == 'step3':
+            return (True, f"Status: Fast-Track\nFAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    # Steps 4 and 5 must NOT have been called
+    assert 'step4' not in calls, f"Step 4 should be skipped on FAST_TRACK, but was called. Calls: {calls}"
+    assert 'step5' not in calls, f"Step 5 should be skipped on FAST_TRACK, but was called. Calls: {calls}"
+    # All other steps should have been called
+    assert 'step1' in calls
+    assert 'step3' in calls
+    assert 'step6' in calls
+    assert 'step9' in calls
+    assert 'step12' in calls
+    # Total: 12 steps - 2 skipped = 10 LLM calls
+    assert mock_run.call_count == 10, f"Expected 10 calls (12 - 2 skipped), got {mock_run.call_count}"
+
+
+@pytest.mark.parametrize("fast_track_summary", [
+    "{test_user_id}-approve-{8hex} is not validated",
+    '{"key": "value", "nested": {"a": 1}}',
+    "f-string bug: value was {:.2f} instead of {:d}",
+])
+def test_fast_track_with_curly_braces_does_not_crash(mock_dependencies, default_args, fast_track_summary):
+    """
+    Issue #974: FAST_TRACK summary containing curly braces must not cause
+    KeyError/IndexError. The old code used .format() on a string containing
+    LLM output, which interpreted braces as named placeholders.
+    """
+    mock_run, _, _ = mock_dependencies
+    calls = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        calls.append(label)
+        if label == 'step3':
+            return (True, f"Status: Fast-Track\nFAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True, f"Should not crash on curly braces in FAST_TRACK summary: {msg}"
+    assert 'step4' not in calls
+    assert 'step5' not in calls
+    assert mock_run.call_count == 10
+
+
+def test_fast_track_curly_braces_preserved_in_step_outputs(mock_dependencies, default_args):
+    """
+    Issue #974: Curly braces from FAST_TRACK summary must appear verbatim in
+    step4/step5 outputs — not escaped, stripped, or mangled. Downstream steps
+    depend on accurate root-cause context.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    fast_track_summary = "Bug in {user_handler} parsing {json_payload}"
+
+    def side_effect_load(name):
+        # Step 6 template references step4_output so we can verify braces flow through
+        if "step6" in name:
+            return "Previous root cause: {step4_output}"
+        return "Prompt for {issue_number}"
+
+    mock_load.side_effect = side_effect_load
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step3':
+            return (True, f"FAST_TRACK: {fast_track_summary}", 0.1, "model")
+        if label == 'step9':
+            return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+
+    # Step 6 is the first step after the skip — its prompt should contain the braces verbatim
+    step6_call = [c for c in mock_run.call_args_list if c.kwargs.get('label') == 'step6']
+    assert len(step6_call) == 1
+    step6_prompt = step6_call[0].kwargs.get('instruction', '')
+    assert "{user_handler}" in step6_prompt, \
+        f"Curly braces should be preserved verbatim in downstream prompts, got: {step6_prompt[:300]}"
 
 
 def test_hard_stop_step_5_5_prompt_review(mock_dependencies, default_args):
@@ -1059,7 +1179,6 @@ def test_step_5_5_runs_in_worktree_directory(tmp_path):
     Issue #352: Verify that step 7 (prompt classification) runs with the worktree path as cwd.
 
     Step 5.5 should run in the worktree so that any prompt edits land on the
-    isolated branch, not the main branch.
     """
     mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
     mock_worktree_path.mkdir(parents=True, exist_ok=True)
@@ -2396,12 +2515,12 @@ def test_changed_files_restored_from_state_on_resume(default_args, tmp_path):
     """
     default_args["cwd"] = tmp_path
 
-    # Simulate a prior run that completed through step 9 with persisted changed_files
+    # Simulate a prior run that completed through step 11 with persisted changed_files
     prior_state = {
         "workflow": "bug",
         "issue_number": default_args["issue_number"],
         "issue_url": default_args["issue_url"],
-        "last_completed_step": 9,
+        "last_completed_step": 11,
         "step_outputs": {
             "1": "ok",
             "2": "ok",
@@ -2410,9 +2529,11 @@ def test_changed_files_restored_from_state_on_resume(default_args, tmp_path):
             "5": "ok",
             "5.5": "ok",
             "6": "ok",
-            "7": "FILES_CREATED: tests/test_persisted.py",
+            "7": "DEFECT_TYPE: code",
             "8": "ok",
-            "9": "E2E_FILES_CREATED: tests/e2e/test_e2e_persisted.py",
+            "9": "FILES_CREATED: tests/test_persisted.py",
+            "10": "ok",
+            "11": "E2E_FILES_CREATED: tests/e2e/test_e2e_persisted.py",
         },
         "total_cost": 0.9,
         "model_used": "gpt-4",
@@ -2580,10 +2701,10 @@ def test_step7_filesystem_fallback_when_no_markers(mock_dependencies, default_ar
 
     # Patch _get_modified_and_untracked to simulate filesystem detection
     with patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_fs:
-        # Before step 7: no files. After step 7: new test file appeared.
         mock_fs.side_effect = [
-            [],  # pre-step7 snapshot
-            ["tests/test_new.py"],  # post-step7 files
+            [],  # pre-step-7 snapshot (used by Step 7 prompt-file filesystem fallback)
+            [],  # pre-step-9 snapshot
+            ["tests/test_new.py"],  # post-step-9: new test file appeared
         ]
 
         success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
@@ -2872,3 +2993,3891 @@ class TestOrchestratorPreStaging:
                 f"{ga} at index {ga_idx} came AFTER step12_run at {step12_idx}. "
                 f"Orchestrator must stage files before Step 12 dispatch. Log: {call_log}"
             )
+
+
+# --- Step 9 Structural Guard Retry Tests (Issue #929) ---
+
+
+def test_step9_retry_addendum_includes_violating_code_lines(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): The retry addendum must include the actual
+    violating code lines from the generated test files, not just violation
+    description strings like 'Line 4: assert hasattr() — ...'.
+
+    Without the actual code, the LLM receives nearly identical input on retry
+    and regenerates the same structural violations.
+
+    This test:
+    1. Creates a real test file on disk with an assert hasattr() violation
+    2. Mocks run_agentic_task so first call returns output pointing to that file
+    3. Captures the retry call's instruction parameter
+    4. Asserts the instruction contains the actual code line from the file
+    """
+    # Create the worktree directory structure
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # The violating code line we expect to see in the retry addendum
+    violating_code_line = 'assert hasattr(some_module, "target_func")'
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                test_file.write_text(
+                    "from pdd import some_module\n"
+                    "\n"
+                    "def test_bug():\n"
+                    f"    {violating_code_line}\n"
+                )
+                # First step9 call: return output pointing to the violating file
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                # This is the retry call — capture the instruction
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    # The retry must have been triggered (structural violations detected)
+    assert captured_retry_instruction is not None, (
+        "Expected a retry call for step9 due to structural violations, "
+        "but no retry was captured"
+    )
+
+    # BUG: The current code only includes violation descriptions like
+    # "Line 4: assert hasattr() — checks attribute existence..."
+    # but does NOT include the actual violating code line.
+    # The fix should include the actual code so the LLM knows what to rewrite.
+    assert violating_code_line in captured_retry_instruction, (
+        f"Retry addendum must include the actual violating code line "
+        f"'{violating_code_line}' so the LLM knows what to rewrite. "
+        f"Currently it only includes violation descriptions."
+    )
+
+
+def test_step9_retry_addendum_includes_source_string_matching_code(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): When source-string-matching violations are
+    detected, the retry addendum must include the actual assertion lines,
+    not just 'Line N: source string matching — asserts keyword presence...'.
+
+    This is the most common violation type from the original bug report
+    (27 violations in the real case).
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # Construct the violating lines using concatenation so the detector
+    # doesn't see "content = ....read_text()" on a single line in THIS file
+    src_read = 'content = Path("pdd/module.py").read' + '_text()'
+    src_assertion = 'assert "def target_func" in content'
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                file_lines = [
+                    "from pathlib import Path",
+                    "",
+                    "def test_function_exists():",
+                    f"    {src_read}",
+                    f"    {src_assertion}",
+                ]
+                test_file.write_text("\n".join(file_lines) + "\n")
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert captured_retry_instruction is not None, (
+        "Expected a retry call for step9 due to source string matching violations"
+    )
+
+    # BUG: The retry addendum only says "Line 5: source string matching — ..."
+    # It should include the actual assertion code so the LLM can rewrite it
+    expected_violation = src_assertion
+    assert expected_violation in captured_retry_instruction, (
+        f"Retry addendum must include the actual violating assertion line "
+        f"'{expected_violation}' so the LLM can rewrite it. "
+        f"Currently it only includes generic violation descriptions."
+    )
+
+
+def test_step9_retry_addendum_includes_rewrite_guidance(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): The retry addendum must include concrete
+    rewrite guidance — a before/after example showing how to convert a
+    structural test into a behavioral test.
+
+    Without rewrite examples, the LLM has no model for what a correct
+    rewrite looks like and regenerates the same structural tests.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Prepare directory — file written inside mock (after pre-step9 snapshot).
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    violating_code_line = 'assert hasattr(module, "func_a")'
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                # Simulate Step 9 writing the file during execution
+                test_file.write_text(
+                    "from pdd import module\n"
+                    "\n"
+                    "def test_one():\n"
+                    f"    {violating_code_line}\n"
+                )
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert captured_retry_instruction is not None, "Retry step9 call not captured"
+
+    # The retry addendum must include BOTH:
+    # 1. The actual violating code (so the LLM sees what it produced)
+    # 2. A concrete rewrite showing a behavioral alternative
+    #
+    # Without both, the LLM has no before/after model and regenerates
+    # the same structural tests.
+
+    # Check that the actual violating code line is shown
+    assert violating_code_line in captured_retry_instruction, (
+        f"Retry addendum must include the actual violating code "
+        f"'{violating_code_line}' so the LLM sees what it produced. "
+        f"Currently it only includes generic descriptions "
+        f"like 'Line 4: assert hasattr() — ...'."
+    )
+
+    # Check that a behavioral alternative is provided alongside the violating code
+    # The addendum should show how to rewrite: call the function and assert on output
+    instruction_lower = captured_retry_instruction.lower()
+    has_behavioral_alternative = (
+        ("result" in instruction_lower or "return" in instruction_lower)
+        and "assert" in instruction_lower
+    ) or (
+        "call" in instruction_lower
+        and "assert" in instruction_lower
+    )
+    assert has_behavioral_alternative, (
+        "Retry addendum must include a concrete behavioral alternative "
+        "showing how to rewrite the structural test (e.g., call the function "
+        "and assert on the result). Currently it only says 'do not use X' "
+        "without showing what to do instead."
+    )
+
+
+def test_step9_retry_includes_code_from_multiple_files(tmp_path):
+    """
+    BUG REPRODUCTION (Issue #929): When multiple generated files have violations,
+    the retry addendum must include violating code from ALL files, not just
+    file-agnostic descriptions.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Prepare directory — files written inside mock (after pre-step9 snapshot).
+    tests_dir = worktree_path / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+
+    violation_a = 'assert hasattr(alpha, "run_pipeline")'
+    file_a = tests_dir / "test_fix_a.py"
+
+    violation_b = 'assert hasattr(beta, "execute_task")'
+    file_b = tests_dir / "test_fix_b.py"
+
+    captured_retry_instruction = None
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal captured_retry_instruction, first_step9
+        label = kwargs.get("label", "")
+
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                # Simulate Step 9 writing both files during execution
+                file_a.write_text(
+                    "from pdd import alpha\n"
+                    "\n"
+                    "def test_alpha():\n"
+                    f"    {violation_a}\n"
+                )
+                file_b.write_text(
+                    "from pdd import beta\n"
+                    "\n"
+                    "def test_beta():\n"
+                    f"    {violation_b}\n"
+                )
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_fix_a.py, tests/test_fix_b.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                captured_retry_instruction = kwargs.get("instruction", "")
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_fix_a.py, tests/test_fix_b.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert captured_retry_instruction is not None, (
+        "Expected retry for step9 with violations from both files"
+    )
+
+    # The retry must include actual code from BOTH files
+    assert violation_a in captured_retry_instruction, (
+        f"Retry addendum missing violating code from test_fix_a.py: '{violation_a}'"
+    )
+    assert violation_b in captured_retry_instruction, (
+        f"Retry addendum missing violating code from test_fix_b.py: '{violation_b}'"
+    )
+
+
+# --- Direct unit tests for _extract_violation_snippets ---
+
+from pdd.agentic_bug_orchestrator import _extract_violation_snippets
+
+
+def test_extract_violation_snippets_shows_correct_line(tmp_path):
+    """Snippet output includes the violating line marked with >>>."""
+    test_file = tmp_path / "test_foo.py"
+    test_file.write_text(
+        "import os\n"
+        "\n"
+        "def test_one():\n"
+        '    assert hasattr(mod, "fn")\n'
+    )
+    result = _extract_violation_snippets(
+        {"test_foo.py": ["Line 4: assert hasattr() — checks attribute existence"]},
+        tmp_path,
+    )
+    assert '>>> 4:' in result
+    assert 'assert hasattr(mod, "fn")' in result
+
+
+def test_extract_violation_snippets_missing_file_falls_back(tmp_path):
+    """When the file doesn't exist, violations are included as plain text."""
+    result = _extract_violation_snippets(
+        {"nonexistent.py": ["Line 1: some violation"]},
+        tmp_path,
+    )
+    assert "Line 1: some violation" in result
+    assert ">>>" not in result
+
+
+def test_extract_violation_snippets_missing_file_not_dropped_alongside_snippets(tmp_path):
+    """Violations from a missing file must appear even when another file has snippets."""
+    # File A exists and will produce snippets
+    file_a = tmp_path / "test_a.py"
+    file_a.write_text(
+        "import os\n"
+        "\n"
+        "def test_one():\n"
+        '    assert hasattr(mod, "fn")\n'
+    )
+    # File B doesn't exist — its 3 violations must still appear
+    result = _extract_violation_snippets(
+        {
+            "test_a.py": ["Line 4: hasattr check"],
+            "nonexistent.py": [
+                "Line 1: violation one",
+                "Line 2: violation two",
+                "Line 3: violation three",
+            ],
+        },
+        tmp_path,
+    )
+    # File A snippet is present
+    assert ">>>" in result
+    assert "hasattr" in result
+    # File B violations are NOT silently dropped
+    assert "violation one" in result
+    assert "violation two" in result
+    assert "violation three" in result
+
+
+def test_extract_violation_snippets_line_out_of_range(tmp_path):
+    """Line number beyond file length doesn't crash."""
+    test_file = tmp_path / "short.py"
+    test_file.write_text("x = 1\n")
+    result = _extract_violation_snippets(
+        {"short.py": ["Line 999: out of range violation"]},
+        tmp_path,
+    )
+    # No snippet lines extracted (line 999 doesn't exist), falls back
+    assert "Line 999: out of range violation" in result
+
+
+def test_extract_violation_snippets_no_line_number_in_violation(tmp_path):
+    """Violations without 'Line N:' prefix are included as plain text."""
+    test_file = tmp_path / "test_foo.py"
+    test_file.write_text("x = 1\n")
+    result = _extract_violation_snippets(
+        {"test_foo.py": ["general violation without line number"]},
+        tmp_path,
+    )
+    assert "general violation without line number" in result
+
+
+def test_extract_violation_snippets_no_line_number_alongside_snippets(tmp_path):
+    """Violations without Line N: are included even when other violations have snippets."""
+    test_file = tmp_path / "test_foo.py"
+    test_file.write_text(
+        "import os\n"
+        "\n"
+        "def test_one():\n"
+        '    assert hasattr(mod, "fn")\n'
+    )
+    result = _extract_violation_snippets(
+        {"test_foo.py": [
+            "Line 4: hasattr check",
+            "general violation without line number",
+        ]},
+        tmp_path,
+    )
+    # Snippet from Line 4 is present
+    assert ">>>" in result
+    # The no-line-number violation is NOT silently dropped
+    assert "general violation without line number" in result
+
+
+    """Violations from file A don't produce snippets from file B."""
+    file_a = tmp_path / "test_a.py"
+    file_a.write_text(
+        "line1\n"
+        "line2\n"
+        "line3\n"
+        "violation_a_here\n"
+    )
+    file_b = tmp_path / "test_b.py"
+    file_b.write_text(
+        "innocent1\n"
+        "innocent2\n"
+        "innocent3\n"
+        "innocent4\n"
+    )
+    # Only file A has the violation — file B's line 4 should NOT appear
+    result = _extract_violation_snippets(
+        {"test_a.py": ["Line 4: some violation"]},
+        tmp_path,
+    )
+    assert "violation_a_here" in result
+    assert "innocent4" not in result
+
+
+# --- Issue #932 comment #1: Backup/restore on retry failure ---
+
+
+def test_step9_retry_failure_restores_original_files(tmp_path):
+    """If retry fails, original test files must be restored (not left deleted)."""
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    violating_content = (
+        "from pdd import some_module\n"
+        "\n"
+        "def test_bug():\n"
+        '    assert hasattr(some_module, "target_func")\n'
+    )
+    test_file.write_text(violating_content)
+
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal first_step9
+        label = kwargs.get("label", "")
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                # Retry FAILS
+                return (False, "LLM error", 0.1, "model")
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Original file must be restored after retry failure
+    assert test_file.exists(), (
+        "Original test file should be restored when retry fails, "
+        "not left deleted"
+    )
+    assert test_file.read_text() == violating_content
+    # Backup file should not linger
+    backup = test_file.with_suffix(".py.bak")
+    assert not backup.exists(), "Backup file should be cleaned up after restore"
+
+
+def test_step9_retry_success_cleans_up_backups(tmp_path):
+    """If retry succeeds, .bak files must be removed."""
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bug_fix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "from pdd import some_module\n"
+        "\n"
+        "def test_bug():\n"
+        '    assert hasattr(some_module, "target_func")\n'
+    )
+
+    first_step9 = True
+
+    def mock_run_side_effect(*args, **kwargs):
+        nonlocal first_step9
+        label = kwargs.get("label", "")
+        if label == "step9":
+            if first_step9:
+                first_step9 = False
+                return (
+                    True,
+                    "Generated tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+            else:
+                # Retry succeeds — write a new clean file
+                test_file.write_text(
+                    "from pdd import some_module\n"
+                    "\n"
+                    "def test_bug():\n"
+                    "    result = some_module.target_func()\n"
+                    "    assert result is not None\n"
+                )
+                return (
+                    True,
+                    "Fixed tests\nFILES_CREATED: tests/test_bug_fix.py",
+                    0.1,
+                    "model",
+                )
+        return (True, f"Output for {label}", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = mock_run_side_effect
+        mock_load.return_value = "Prompt for {issue_number}"
+        mock_worktree.return_value = (worktree_path, None)
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Backup must be cleaned up after successful retry
+    backup = test_file.with_suffix(".py.bak")
+    assert not backup.exists(), (
+        ".bak backup file should be removed after successful retry"
+    )
+
+
+# --- Issue #932 comment #3: Path variable regex robustness ---
+
+
+def test_path_var_regex_rejects_url_concat():
+    """URL string concatenation like url = base + '/' + 'endpoint' must NOT be
+    tracked as a path variable — it would cause false negatives in the detector."""
+    from pdd.agentic_bug_orchestrator import detect_structural_test_patterns
+    import tempfile, os
+
+    code = (
+        'url = base + "/" + "endpoint"\n'
+        'content = url_var.read_text()\n'
+        'assert "keyword" in content\n'
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        f.flush()
+        try:
+            violations = detect_structural_test_patterns(f.name)
+        finally:
+            os.unlink(f.name)
+    # The read_text + assert pattern should be flagged (url is NOT a path variable)
+    assert len(violations) > 0, (
+        "URL concatenation should not be treated as a path variable; "
+        "the read_text + assert pattern should still be flagged"
+    )
+
+
+def test_path_var_regex_tracks_multi_segment_path():
+    """Multi-segment path like p = Path(tmpdir) / subdir / 'file.json' must be
+    tracked so that p.read_text() is not falsely flagged."""
+    from pdd.agentic_bug_orchestrator import detect_structural_test_patterns
+    import tempfile, os
+
+    code = (
+        'p = Path(tmpdir) / subdir / "architecture.json"\n'
+        'data = json.loads(p.read_text())\n'
+        'assert "key" in data\n'
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        f.flush()
+        try:
+            violations = detect_structural_test_patterns(f.name)
+        finally:
+            os.unlink(f.name)
+    # p points to a .json file — should NOT be flagged as source reading
+    assert len(violations) == 0, (
+        f"Multi-segment path to .json should not be flagged, got: {violations}"
+    )
+
+
+# --- Step 9 Cross-Validation Tests (Issue #924) ---
+
+
+def test_cross_validation_triggers_retry_when_tests_dropped(mock_dependencies, default_args, tmp_path):
+    """
+    Test that the orchestrator retries Step 9 when fewer tests are generated
+    than Step 8 planned. This is the primary bug reproduction for issue #924.
+
+    Step 8 plans 5 tests, Step 9 only generates 3 → orchestrator should
+    detect the mismatch and retry Step 9.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    # The mock worktree path where files will be created
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create a test file in the worktree with only 3 test functions
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_first_scenario():\n"
+        "    assert 1 == 1\n\n"
+        "def test_second_scenario():\n"
+        "    assert 2 == 2\n\n"
+        "def test_third_scenario():\n"
+        "    assert 3 == 3\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            # Step 8 plans 5 tests with PLANNED_TEST_COUNT marker
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: First scenario\nVerify first behavior\n"
+                "#### Test 2: Second scenario\nVerify second behavior\n"
+                "#### Test 3: Third scenario\nVerify third behavior\n"
+                "#### Test 4: Fourth scenario (E2E)\nVerify E2E behavior\n"
+                "#### Test 5: Fifth scenario (cross-framework)\nVerify cross-framework\n"
+                "\nPLANNED_TEST_COUNT: 5"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                # First attempt: only 3 tests generated (dropped 2)
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                # Retry: generate the missing tests
+                retry_file = worktree_path / "tests" / "test_bugfix.py"
+                retry_file.write_text(
+                    "import pytest\n\n"
+                    "def test_first_scenario():\n    assert 1 == 1\n\n"
+                    "def test_second_scenario():\n    assert 2 == 2\n\n"
+                    "def test_third_scenario():\n    assert 3 == 3\n\n"
+                    "def test_fourth_scenario_e2e():\n    assert 4 == 4\n\n"
+                    "def test_fifth_scenario_cross_framework():\n    assert 5 == 5\n"
+                )
+                return (True, "Generated missing tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # The orchestrator should have retried Step 9 due to test count mismatch
+    # On buggy code: step9_call_count == 1 (no retry), so this assertion fails
+    assert step9_call_count >= 2, (
+        f"Expected Step 9 to be retried due to test count mismatch "
+        f"(planned=5, generated=3), but Step 9 was only called {step9_call_count} time(s). "
+        f"The orchestrator did not cross-validate Step 9 output against Step 8 plan."
+    )
+
+
+def test_no_retry_when_test_counts_match(mock_dependencies, default_args, tmp_path):
+    """
+    Test that no cross-validation retry occurs when Step 9 generates
+    the same number of tests as Step 8 planned (happy path).
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Create test file with exactly 3 test functions
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_alpha():\n    assert True\n\n"
+        "def test_beta():\n    assert True\n\n"
+        "def test_gamma():\n    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            # Step 8 plans exactly 3 tests with marker
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: Alpha test\nVerify alpha\n"
+                "#### Test 2: Beta test\nVerify beta\n"
+                "#### Test 3: Gamma test\nVerify gamma\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Step 9 should only be called once — no retry needed
+    assert step9_call_count == 1, (
+        f"Expected Step 9 to be called exactly once (counts match), "
+        f"but it was called {step9_call_count} times."
+    )
+
+
+def test_marker_absent_falls_back_to_headers(mock_dependencies, default_args, tmp_path):
+    """
+    Test that cross-validation still works when PLANNED_TEST_COUNT marker
+    is absent, falling back to counting #### Test N: headers.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_only_one():\n    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            # No PLANNED_TEST_COUNT marker — should fall back to header count
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: First test\nVerify first\n"
+                "#### Test 2: Second test\nVerify second\n"
+                "#### Test 3: Third test\nVerify third\n"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                test_file.write_text(
+                    "def test_first():\n    assert True\n\n"
+                    "def test_second():\n    assert True\n\n"
+                    "def test_third():\n    assert True\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Fallback to headers should still detect mismatch (1 vs 3) and retry
+    assert step9_call_count >= 2, (
+        f"Expected Step 9 retry via header fallback (planned=3, generated=1), "
+        f"but Step 9 was only called {step9_call_count} time(s)."
+    )
+
+
+def test_stub_tests_detected_and_trigger_retry(mock_dependencies, default_args, tmp_path):
+    """
+    Test that stub tests (functions with only pass/ellipsis) are detected
+    and subtracted from the count, triggering a retry.
+
+    Step 8 plans 3 tests, Step 9 generates 3 functions but 2 are stubs →
+    only 1 real test → retry should fire.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_real_test():\n"
+        '    """A real test."""\n'
+        "    result = compute()\n"
+        "    assert result == 42\n\n"
+        "def test_stub_one():\n"
+        '    """TODO: implement."""\n'
+        "    pass\n\n"
+        "def test_stub_two():\n"
+        "    ...\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "## Test Plan\n"
+                "#### Test 1: Real test\n#### Test 2: Stub one\n"
+                "#### Test 3: Stub two\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                test_file.write_text(
+                    "import pytest\n\n"
+                    "def test_real_test():\n    assert compute() == 42\n\n"
+                    "def test_stub_one():\n    assert validate() is True\n\n"
+                    "def test_stub_two():\n    assert transform('x') == 'y'\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Stubs should be detected (3 total - 2 stubs = 1 real vs 3 planned) → retry
+    assert step9_call_count >= 2, (
+        f"Expected Step 9 retry because 2 of 3 test functions were stubs "
+        f"(planned=3, real=1), but Step 9 was only called {step9_call_count} time(s)."
+    )
+
+
+def test_retry_falls_short_logs_warning_and_proceeds(mock_dependencies, default_args, tmp_path):
+    """
+    Test that if the retry still produces fewer tests than planned,
+    the orchestrator logs a warning and proceeds (single-retry guarantee).
+    """
+    mock_run, mock_load, mock_console = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_only_one():\n    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: First\n#### Test 2: Second\n"
+                "#### Test 3: Third\n#### Test 4: Fourth\n"
+                "\nPLANNED_TEST_COUNT: 4"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            # Both attempts only produce 1 test
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Use quiet=False to capture console output
+    default_args["quiet"] = False
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Should retry once, then proceed despite still falling short
+    assert step9_call_count >= 2, (
+        f"Expected at least one retry for cross-validation mismatch, "
+        f"but Step 9 was only called {step9_call_count} time(s)."
+    )
+    # Should NOT retry more than twice (single-retry guarantee)
+    assert step9_call_count <= 2, (
+        f"Expected at most one retry (single-retry guarantee), "
+        f"but Step 9 was called {step9_call_count} times."
+    )
+
+
+def test_count_planned_tests_parsing():
+    """
+    Unit test for _count_planned_tests helper function.
+    Verifies it uses PLANNED_TEST_COUNT marker, falling back to headers.
+    """
+    from pdd.agentic_bug_orchestrator import _count_planned_tests
+
+    # With marker — should use marker value
+    with_marker = (
+        "#### Test 1: Login\n#### Test 2: Logout\n"
+        "\nPLANNED_TEST_COUNT: 5"
+    )
+    assert _count_planned_tests(with_marker) == 5, "Should use marker, not header count"
+
+    # Without marker — should fall back to header count
+    without_marker = (
+        "## Test Plan\n\n"
+        "#### Test 1: Verify login flow\n"
+        "#### Test 2: Verify logout\n"
+        "#### Test 3: Verify token refresh\n"
+    )
+    assert _count_planned_tests(without_marker) == 3, "Should fall back to header count"
+
+    # Empty output
+    assert _count_planned_tests("") == 0
+
+
+def test_count_generated_tests_with_real_files(tmp_path):
+    """
+    Unit test for _count_generated_tests helper function.
+    Verifies it counts test functions and detects stubs.
+    """
+    from pdd.agentic_bug_orchestrator import _count_generated_tests
+
+    test_file = tmp_path / "test_example.py"
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_real_one():\n"
+        "    result = do_thing()\n"
+        "    assert result == 42\n\n"
+        "def test_real_two():\n"
+        '    """Check second thing."""\n'
+        "    assert check() is True\n\n"
+        "async def test_real_async():\n"
+        "    result = await fetch()\n"
+        "    assert result\n\n"
+        "def test_stub_pass():\n"
+        '    """Not implemented yet."""\n'
+        "    pass\n\n"
+        "def test_stub_ellipsis():\n"
+        "    ...\n\n"
+        "def helper_not_a_test():\n    return 42\n"
+    )
+
+    total, stubs = _count_generated_tests(["test_example.py"], tmp_path)
+    assert total == 5, f"Expected 5 total test functions, got {total}"
+    assert stubs == 2, f"Expected 2 stub functions, got {stubs}"
+
+    # Missing file should be skipped
+    total, stubs = _count_generated_tests(["nonexistent.py"], tmp_path)
+    assert total == 0 and stubs == 0
+
+
+def test_retry_prompt_includes_missing_test_descriptions(mock_dependencies, default_args, tmp_path):
+    """
+    Test that when Step 9 retries due to dropped tests, the retry prompt
+    includes descriptions of the missing tests from Step 8's plan.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def test_first():\n    assert True\n"
+    )
+
+    step9_calls = []
+
+    def side_effect_run(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: First scenario\nCheck first behavior\n"
+                "#### Test 2: Second scenario (E2E)\nCheck E2E flow\n"
+                "#### Test 3: Third scenario (cross-framework)\nCheck cross-framework\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_calls.append(kwargs.get('instruction', args[0] if args else ''))
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # If cross-validation exists, there should be a retry call
+    assert len(step9_calls) >= 2, (
+        f"Expected Step 9 retry with missing test info, "
+        f"but Step 9 was only called {len(step9_calls)} time(s)."
+    )
+
+    # The retry prompt should mention the count mismatch
+    retry_instruction = step9_calls[1]
+    assert "1" in retry_instruction and "3" in retry_instruction, (
+        f"Retry prompt should reference count mismatch (1 of 3), "
+        f"but got: {retry_instruction[:200]}..."
+    )
+
+
+def test_async_test_functions_counted(mock_dependencies, default_args, tmp_path):
+    """
+    Test that async def test_ functions are counted correctly by
+    the cross-validation logic, not just sync def test_ functions.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # 2 sync + 1 async = 3 total, matching the plan
+    test_file.write_text(
+        "import pytest\n\n"
+        "def test_sync_one():\n    assert True\n\n"
+        "def test_sync_two():\n    assert True\n\n"
+        "async def test_async_one():\n    result = await fetch()\n    assert result\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: Sync one\n#### Test 2: Sync two\n"
+                "#### Test 3: Async one\n"
+                "\nPLANNED_TEST_COUNT: 3"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # async tests should be counted — no retry needed since counts match
+    assert step9_call_count == 1, (
+        f"Expected no retry since 3 tests (2 sync + 1 async) match 3 planned, "
+        f"but Step 9 was called {step9_call_count} times. "
+        f"Async test functions may not be counted correctly."
+    )
+
+
+def test_structural_guard_and_cross_validation_both_fire(mock_dependencies, default_args, tmp_path):
+    """
+    Test that both the structural test guard AND cross-validation can fire
+    in sequence. If Step 9 produces structural violations, the structural
+    guard retries first. Then cross-validation should check the retry output.
+
+    This test verifies the two validation layers work together.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_bugfix.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get('label', '')
+        if label == 'step8':
+            return (True, (
+                "#### Test 1: First\n#### Test 2: Second\n"
+                "#### Test 3: Third\n#### Test 4: Fourth\n"
+                "\nPLANNED_TEST_COUNT: 4"
+            ), 0.1, "gpt-4")
+        if label == 'step9':
+            step9_call_count += 1
+            if step9_call_count == 1:
+                # First attempt: has structural violations (will be caught by structural guard)
+                # Write a file that the mocked detector will flag as structural
+                test_file.write_text(
+                    "def test_structural():\n"
+                    "    # FLAGGED_STRUCTURAL_PATTERN\n"
+                    "    assert True\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            elif step9_call_count == 2:
+                # After structural retry: fixed structural issues but only 2 of 4 tests
+                test_file.write_text(
+                    "def test_first():\n    assert compute() == 1\n\n"
+                    "def test_second():\n    assert compute() == 2\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+            else:
+                # After cross-validation retry: all 4 tests
+                test_file.write_text(
+                    "def test_first():\n    assert compute() == 1\n\n"
+                    "def test_second():\n    assert compute() == 2\n\n"
+                    "def test_third():\n    assert compute() == 3\n\n"
+                    "def test_fourth():\n    assert compute() == 4\n"
+                )
+                return (True, "Generated tests\nFILES_CREATED: tests/test_bugfix.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    # Need to patch detect_structural_test_patterns to detect the violation
+    with patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns") as mock_detect:
+        def detect_side_effect(path, start_line=None):
+            content = Path(path).read_text() if Path(path).exists() else ""
+            if "FLAGGED_STRUCTURAL_PATTERN" in content:
+                return ["Uses structural pattern to test code shape"]
+            return []
+
+        mock_detect.side_effect = detect_side_effect
+
+        success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    # Structural guard fires (call 1→2), then cross-validation fires (call 2→3)
+    # On buggy code: only structural retry fires (step9_call_count == 2), no cross-validation
+    assert step9_call_count >= 3, (
+        f"Expected Step 9 to be called at least 3 times "
+        f"(initial + structural retry + cross-validation retry), "
+        f"but it was called {step9_call_count} times. "
+        f"Cross-validation did not fire after structural guard retry."
+    )
+
+
+# --- Helper function unit tests ---
+
+
+from pdd.agentic_bug_orchestrator import (
+    _validate_repro_path,
+    _extract_repro_test_content,
+    _copy_repro_files_to_worktree,
+    _check_hard_stop,
+    _parse_changed_files,
+    _count_planned_tests,
+    _count_generated_tests,
+    _verify_e2e_tests,
+    _get_state_dir,
+    detect_structural_test_patterns,
+    _extract_violation_snippets,
+)
+
+
+class TestValidateReproPath:
+    """Tests for _validate_repro_path helper."""
+
+    def test_accepts_relative_path_under_base(self, tmp_path):
+        """Relative path that resolves under base_dir is accepted."""
+        result = _validate_repro_path("tests/test_repro.py", tmp_path)
+        assert result is not None
+        assert result == (tmp_path / "tests/test_repro.py").resolve()
+
+    def test_rejects_absolute_path(self, tmp_path):
+        """Absolute paths are rejected."""
+        result = _validate_repro_path("/etc/passwd", tmp_path)
+        assert result is None
+
+    def test_rejects_traversal_path(self, tmp_path):
+        """Paths with .. that escape base_dir are rejected."""
+        result = _validate_repro_path("../../etc/passwd", tmp_path)
+        assert result is None
+
+    def test_rejects_empty_path(self, tmp_path):
+        """Empty string is rejected."""
+        result = _validate_repro_path("", tmp_path)
+        assert result is None
+
+    def test_accepts_nested_relative_path(self, tmp_path):
+        """Deeply nested relative paths are accepted."""
+        result = _validate_repro_path("a/b/c/test.py", tmp_path)
+        assert result is not None
+
+
+class TestExtractReproTestContent:
+    """Tests for _extract_repro_test_content helper."""
+
+    def test_reads_content_from_repro_file(self, tmp_path):
+        """Reads file content when REPRO_FILES_CREATED marker is present."""
+        repro_file = tmp_path / "test_repro.py"
+        repro_file.write_text("def test_bug(): pass\n")
+        output = "Some output\nREPRO_FILES_CREATED: test_repro.py\nMore output"
+        result = _extract_repro_test_content(output, tmp_path)
+        assert "def test_bug(): pass" in result
+
+    def test_returns_empty_when_no_marker(self, tmp_path):
+        """Returns empty string when no REPRO_FILES_CREATED marker."""
+        output = "Some output with no marker"
+        result = _extract_repro_test_content(output, tmp_path)
+        assert result == ""
+
+    def test_handles_nonexistent_file(self, tmp_path):
+        """Returns empty when referenced file doesn't exist."""
+        output = "REPRO_FILES_CREATED: nonexistent.py"
+        result = _extract_repro_test_content(output, tmp_path)
+        assert result == ""
+
+    def test_concatenates_multiple_files(self, tmp_path):
+        """Reads and concatenates content from multiple files."""
+        f1 = tmp_path / "test1.py"
+        f1.write_text("content1\n")
+        f2 = tmp_path / "test2.py"
+        f2.write_text("content2\n")
+        output = "REPRO_FILES_CREATED: test1.py, test2.py"
+        result = _extract_repro_test_content(output, tmp_path)
+        assert "content1" in result
+        assert "content2" in result
+
+
+class TestCopyReproFilesToWorktree:
+    """Tests for _copy_repro_files_to_worktree helper."""
+
+    def test_copies_files_to_worktree(self, tmp_path):
+        """Copies reproduction test files from cwd to worktree."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+
+        src_file = cwd / "test_repro.py"
+        src_file.write_text("test content")
+
+        output = "REPRO_FILES_CREATED: test_repro.py"
+        result = _copy_repro_files_to_worktree(output, cwd, worktree)
+
+        assert "test_repro.py" in result
+        assert (worktree / "test_repro.py").exists()
+        assert (worktree / "test_repro.py").read_text() == "test content"
+
+    def test_skips_nonexistent_source(self, tmp_path):
+        """Skips files that don't exist in cwd."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+
+        output = "REPRO_FILES_CREATED: missing.py"
+        result = _copy_repro_files_to_worktree(output, cwd, worktree)
+        assert result == []
+
+    def test_does_not_overwrite_existing(self, tmp_path):
+        """Does not overwrite files that already exist in worktree."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+
+        src_file = cwd / "test_repro.py"
+        src_file.write_text("source content")
+        dst_file = worktree / "test_repro.py"
+        dst_file.write_text("existing content")
+
+        output = "REPRO_FILES_CREATED: test_repro.py"
+        result = _copy_repro_files_to_worktree(output, cwd, worktree)
+
+        # File should be in result (path is valid) but content should be unchanged
+        assert "test_repro.py" in result
+        assert dst_file.read_text() == "existing content"
+
+    def test_returns_empty_with_no_marker(self, tmp_path):
+        """Returns empty list when no REPRO_FILES_CREATED marker."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+
+        output = "Some output without marker"
+        result = _copy_repro_files_to_worktree(output, cwd, worktree)
+        assert result == []
+
+
+class TestCheckHardStop:
+    """Direct tests for _check_hard_stop helper."""
+
+    def test_step1_duplicate(self):
+        """Detects duplicate at step 1."""
+        result = _check_hard_stop(1, "This is Duplicate of #42", True)
+        assert result is not None
+        assert "duplicate" in result.lower()
+
+    def test_step1_no_duplicate(self):
+        """No hard stop at step 1 without duplicate marker."""
+        result = _check_hard_stop(1, "Not a duplicate, unique issue", True)
+        assert result is None
+
+    def test_step2_feature_request(self):
+        """Detects feature request at step 2."""
+        result = _check_hard_stop(2, "Feature Request (Not a Bug)", True)
+        assert result is not None
+
+    def test_step2_user_error(self):
+        """Detects user error at step 2."""
+        result = _check_hard_stop(2, "User Error (Not a Bug)", True)
+        assert result is not None
+
+    def test_step3_needs_more_info(self):
+        """Detects needs more info at step 3."""
+        result = _check_hard_stop(3, "Needs More Info from the author", True)
+        assert result is not None
+
+    def test_step7_prompt_review(self):
+        """Detects prompt review at step 7."""
+        result = _check_hard_stop(7, "PROMPT_REVIEW: ambiguous case", True)
+        assert result is not None
+
+    def test_step9_no_files_extracted(self):
+        """Detects no files generated at step 9."""
+        result = _check_hard_stop(9, "Some output", False)
+        assert result is not None
+        assert "No test file" in result
+
+    def test_step9_with_files_extracted(self):
+        """No hard stop at step 9 when files are extracted."""
+        result = _check_hard_stop(9, "Some output", True)
+        assert result is None
+
+    def test_step10_fail(self):
+        """Detects test verification failure at step 10."""
+        result = _check_hard_stop(10, "FAIL: Test does not work as expected", True)
+        assert result is not None
+
+    def test_step11_e2e_fail(self):
+        """Detects E2E failure at step 11."""
+        result = _check_hard_stop(11, "E2E_FAIL: Test does not catch bug correctly", True)
+        assert result is not None
+
+    def test_step11_no_e2e_fail(self):
+        """No hard stop at step 11 without failure marker."""
+        result = _check_hard_stop(11, "E2E test passed", True)
+        assert result is None
+
+    def test_unrelated_step_no_stop(self):
+        """Steps without defined hard stop conditions return None."""
+        result = _check_hard_stop(4, "Any output", True)
+        assert result is None
+
+
+class TestVerifyE2eTests:
+    """Tests for _verify_e2e_tests helper."""
+
+    @patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output")
+    def test_python_test_with_failures(self, mock_pytest, tmp_path):
+        """Python test file with failures (expected for bug detection)."""
+        mock_pytest.return_value = {
+            "test_results": [{
+                "failures": 1,
+                "errors": 0,
+                "passed": 0,
+                "standard_output": "AssertionError: bug detected"
+            }]
+        }
+        ok, output = _verify_e2e_tests(["test_e2e.py"], tmp_path)
+        assert ok is True  # Failures are expected
+        assert "bug detected" in output
+
+    @patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output")
+    def test_python_test_all_passed(self, mock_pytest, tmp_path):
+        """Python test file with all passing tests."""
+        mock_pytest.return_value = {
+            "test_results": [{
+                "failures": 0,
+                "errors": 0,
+                "passed": 3,
+                "standard_output": ""
+            }]
+        }
+        ok, output = _verify_e2e_tests(["test_e2e.py"], tmp_path)
+        assert ok is True
+        assert "3 passed" in output
+
+    @patch("pdd.agentic_bug_orchestrator.run_pytest_and_capture_output")
+    def test_python_test_setup_error(self, mock_pytest, tmp_path):
+        """Python test file with no results (setup error)."""
+        mock_pytest.return_value = None
+        ok, output = _verify_e2e_tests(["test_e2e.py"], tmp_path)
+        assert ok is False
+        assert "setup error" in output
+
+    @patch("pdd.agentic_bug_orchestrator.get_test_command_for_file")
+    @patch("pdd.agentic_bug_orchestrator.subprocess.run")
+    def test_non_python_test_failure(self, mock_subproc, mock_get_cmd, tmp_path):
+        """Non-Python test file that fails (expected)."""
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest test_e2e.js", cwd=None)
+        mock_subproc.return_value = MagicMock(
+            returncode=1,
+            stdout="test failed output",
+            stderr=""
+        )
+        ok, output = _verify_e2e_tests(["test_e2e.js"], tmp_path)
+        assert ok is True  # Non-zero exit is expected
+        assert "bug detected" in output
+
+    @patch("pdd.agentic_bug_orchestrator.get_test_command_for_file")
+    def test_non_python_no_runner(self, mock_get_cmd, tmp_path):
+        """Non-Python test file with no available test runner."""
+        mock_get_cmd.return_value = None
+        ok, output = _verify_e2e_tests(["test_e2e.rb"], tmp_path)
+        assert ok is False
+        assert "no test runner" in output
+
+    @patch("pdd.agentic_bug_orchestrator.get_test_command_for_file")
+    @patch("pdd.agentic_bug_orchestrator.subprocess.run")
+    def test_non_python_test_timeout(self, mock_subproc, mock_get_cmd, tmp_path):
+        """Non-Python test file that times out."""
+        from pdd.get_test_command import TestCommand
+        mock_get_cmd.return_value = TestCommand(command="npx jest test_e2e.js", cwd=None)
+        import subprocess as sp
+        mock_subproc.side_effect = sp.TimeoutExpired(cmd="npx jest", timeout=120)
+        ok, output = _verify_e2e_tests(["test_e2e.js"], tmp_path)
+        assert ok is False
+        assert "timeout" in output.lower()
+
+
+class TestGetStateDir:
+    """Tests for _get_state_dir helper."""
+
+    @patch("pdd.agentic_bug_orchestrator._get_git_root")
+    def test_returns_bug_state_path(self, mock_root, tmp_path):
+        """Returns .pdd/bug-state relative to git root."""
+        mock_root.return_value = tmp_path
+        result = _get_state_dir(tmp_path)
+        assert result == tmp_path / ".pdd" / "bug-state"
+
+    @patch("pdd.agentic_bug_orchestrator._get_git_root")
+    def test_falls_back_to_cwd(self, mock_root, tmp_path):
+        """Falls back to cwd when no git root."""
+        mock_root.return_value = None
+        result = _get_state_dir(tmp_path)
+        assert result == tmp_path / ".pdd" / "bug-state"
+
+
+# --- Additional orchestrator flow tests ---
+
+
+def test_step5_repro_files_tracked_in_changed_files(mock_dependencies, default_args):
+    """
+    Test that REPRO_FILES_CREATED from step 5 output adds files to changed_files.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step5':
+            return (True, "Reproduced bug\nREPRO_FILES_CREATED: test_repro.py", 0.1, "model")
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: test_fix.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+    assert "test_repro.py" in changed_files
+    assert "test_fix.py" in changed_files
+
+
+def test_clear_agentic_progress_called_on_start_and_completion(default_args, tmp_path):
+    """
+    Verify clear_agentic_progress is called at start and on successful completion.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt"), \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_set, \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear:
+
+        mock_run.side_effect = run_side_effect
+
+        run_agentic_bug_orchestrator(**default_args)
+
+    # clear_agentic_progress should be called at least twice (start + end)
+    assert mock_clear.call_count >= 2
+
+
+def test_set_agentic_progress_called_for_each_executed_step(mock_dependencies, default_args):
+    """
+    Verify set_agentic_progress is called before each step execution.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    with patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_set:
+        run_agentic_bug_orchestrator(**default_args)
+
+    # Should be called once per step (12 steps)
+    assert mock_set.call_count == 12
+
+
+def test_step_completion_marker_printed(default_args, tmp_path):
+    """
+    Verify step completion marker is printed for credential waterfall detection.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Use non-quiet mode to check console output
+    default_args["quiet"] = False
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt"), \
+         patch("pdd.agentic_bug_orchestrator.console") as mock_console, \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = run_side_effect
+        run_agentic_bug_orchestrator(**default_args)
+
+    # Check that "Step N complete." was printed for at least some steps
+    print_calls = [str(c) for c in mock_console.print.call_args_list]
+    completion_calls = [c for c in print_calls if "complete" in c.lower()]
+    assert len(completion_calls) > 0, "Step completion markers should be printed"
+
+
+def test_e2e_needed_no_in_step10_skips_step11(mock_dependencies, default_args):
+    """
+    Test that E2E_NEEDED: no in step 10 output causes step 11 to be skipped.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    executed_labels = []
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        executed_labels.append(label)
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        if label == 'step10':
+            return (True, "Test verified.\nE2E_NEEDED: no", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert 'step11' not in executed_labels, "Step 11 should be skipped when E2E_NEEDED: no"
+    assert 'step12' in executed_labels, "Step 12 should still execute"
+
+
+def test_e2e_needed_missing_runs_step11(mock_dependencies, default_args):
+    """
+    Test backward compatibility: if E2E_NEEDED marker is missing, step 11 runs.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    executed_labels = []
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        executed_labels.append(label)
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        if label == 'step10':
+            return (True, "Test verified and passes", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    assert 'step11' in executed_labels, "Step 11 should run when E2E_NEEDED marker is absent"
+
+
+def test_step11_e2e_skip_continues_to_step12(mock_dependencies, default_args):
+    """
+    Test that E2E_SKIP: in step 11 output allows workflow to continue to step 12.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    executed_labels = []
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        executed_labels.append(label)
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        if label == 'step11':
+            return (True, "E2E_SKIP: Environment not available for E2E testing", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert 'step12' in executed_labels
+
+
+def test_step11_e2e_fail_hard_stop(mock_dependencies, default_args):
+    """
+    Test that E2E_FAIL in step 11 output triggers hard stop.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        if label == 'step11':
+            return (True, "E2E_FAIL: Test does not catch bug correctly", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert "Stopped at step 11" in msg
+
+
+def test_step12_pre_stages_changed_files(mock_dependencies, default_args, tmp_path):
+    """
+    Test that changed files are git-added before step 12 runs.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    git_add_calls = []
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: test.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    with patch("pdd.agentic_bug_orchestrator.subprocess.run") as mock_subproc:
+        mock_subproc.return_value = MagicMock(returncode=0, stderr="")
+        run_agentic_bug_orchestrator(**default_args)
+
+        # Check that git add was called for changed files before step 12
+        for call_obj in mock_subproc.call_args_list:
+            args = call_obj[0][0] if call_obj[0] else call_obj.kwargs.get("args", [])
+            if isinstance(args, list) and len(args) >= 2 and args[0] == "git" and args[1] == "add":
+                git_add_calls.append(args)
+
+    assert len(git_add_calls) > 0, "git add should be called before step 12"
+
+
+def test_state_validation_corrects_last_completed_step(default_args, tmp_path):
+    """
+    Test that state validation corrects last_completed_step when
+    step outputs contain FAILED: entries.
+    """
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # State claims step 5 completed but step 3 was FAILED
+    loaded_state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "ok",
+            "2": "ok",
+            "3": "FAILED: some error",
+            "4": "ok",
+            "5": "ok",
+        },
+        "total_cost": 0.5,
+        "model_used": "model",
+    }
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt"), \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(loaded_state, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+        mock_run.side_effect = run_side_effect
+        run_agentic_bug_orchestrator(**default_args)
+
+    # Should resume from step 3 (the first FAILED step), not step 6
+    labels = [c.kwargs.get('label', '') for c in mock_run.call_args_list]
+    assert 'step3' in labels, "Should re-run step 3 because it was FAILED"
+
+
+def test_consecutive_provider_failure_resets_on_success(mock_dependencies, default_args):
+    """
+    Test that consecutive provider failure counter resets when a step succeeds.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step1':
+            return (False, "All agent providers failed", 0.1, "model")
+        if label == 'step2':
+            return (False, "All agent providers failed", 0.1, "model")
+        # Step 3 succeeds, resetting counter
+        if label == 'step3':
+            return (True, "ok", 0.1, "model")
+        if label == 'step4':
+            return (False, "All agent providers failed", 0.1, "model")
+        if label == 'step5':
+            return (False, "All agent providers failed", 0.1, "model")
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    # Should NOT abort because the counter was reset by step 3 success
+    assert "Aborting" not in msg or success is True
+
+
+def test_pr_url_extracted_from_step12_output(mock_dependencies, default_args):
+    """
+    Test that PR URL is extracted from step 12 output.
+    """
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        if label == 'step12':
+            return (True, "Created PR: https://github.com/owner/repo/pull/42", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is True
+    assert "https://github.com/owner/repo/pull/42" in msg
+
+
+def test_detect_structural_test_patterns_empty_file(tmp_path):
+    """detect_structural_test_patterns returns empty list for empty files."""
+    f = tmp_path / "test_empty.py"
+    f.write_text("")
+    violations = detect_structural_test_patterns(str(f))
+    assert violations == []
+
+
+def test_detect_structural_test_patterns_nonexistent_file():
+    """detect_structural_test_patterns returns empty list for nonexistent file."""
+    violations = detect_structural_test_patterns("/nonexistent/test.py")
+    assert violations == []
+
+
+def test_detect_structural_test_patterns_getsource(tmp_path):
+    """detect_structural_test_patterns detects inspect.getsource usage."""
+    f = tmp_path / "test_structural.py"
+    f.write_text(
+        "import inspect\n"
+        "def test_something():\n"
+        "    source = inspect.getsource(my_func)\n"
+        '    assert "keyword" in source\n'
+    )
+    violations = detect_structural_test_patterns(str(f))
+    assert len(violations) > 0
+    assert any("getsource" in v for v in violations)
+
+
+def test_detect_structural_test_patterns_hasattr(tmp_path):
+    """detect_structural_test_patterns detects hasattr assertions."""
+    f = tmp_path / "test_hasattr.py"
+    f.write_text(
+        "def test_attr():\n"
+        "    assert hasattr(module, 'func')\n"
+    )
+    violations = detect_structural_test_patterns(str(f))
+    assert len(violations) > 0
+    assert any("hasattr" in v for v in violations)
+
+
+def test_detect_structural_test_patterns_clean_file(tmp_path):
+    """detect_structural_test_patterns returns empty for behavioral tests."""
+    f = tmp_path / "test_behavioral.py"
+    f.write_text(
+        "def test_compute():\n"
+        "    result = compute(42)\n"
+        "    assert result == 84\n"
+    )
+    violations = detect_structural_test_patterns(str(f))
+    assert violations == []
+
+
+def test_detect_structural_test_patterns_config_file_reading(tmp_path):
+    """detect_structural_test_patterns allows reading non-source config files."""
+    f = tmp_path / "test_config.py"
+    f.write_text(
+        'p = Path(tmpdir) / "config.json"\n'
+        'content = p.read_text()\n'
+        'assert "key" in content\n'
+    )
+    violations = detect_structural_test_patterns(str(f))
+    assert violations == [], f"Config file reading should not be flagged: {violations}"
+
+
+def test_worktree_path_in_context_for_steps_after_7(mock_dependencies, default_args):
+    """
+    Verify worktree_path is added to context for steps 7+.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    def load_side_effect(name):
+        if "step12" in name:
+            return "Worktree at: {worktree_path}"
+        return "Prompt"
+
+    mock_load.side_effect = load_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = run_side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    # Check that step 12 received worktree_path in its prompt
+    step12_call = None
+    for call_obj in mock_run.call_args_list:
+        if call_obj.kwargs.get('label') == 'step12':
+            step12_call = call_obj
+            break
+
+    assert step12_call is not None
+    instruction = step12_call.kwargs['instruction']
+    # worktree_path should be substituted (not the literal placeholder)
+    assert "{worktree_path}" not in instruction or "worktrees" in instruction
+
+
+def test_default_timeout_for_unlisted_step(mock_dependencies, default_args):
+    """
+    Steps not in BUG_STEP_TIMEOUTS get default timeout of 340.0.
+    """
+    from pdd.agentic_bug_orchestrator import BUG_STEP_TIMEOUTS
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get('label', '')
+        timeout = call_obj.kwargs.get('timeout')
+        step_str = label.replace('step', '').replace('_', '.')
+        try:
+            step_num = float(step_str) if '.' in step_str else int(step_str)
+        except ValueError:
+            continue
+        expected = BUG_STEP_TIMEOUTS.get(step_num, 340.0)
+        assert timeout == expected
+
+
+def test_max_retries_passed_to_run_agentic_task(mock_dependencies, default_args):
+    """
+    Verify DEFAULT_MAX_RETRIES is passed to every run_agentic_task call.
+    """
+    from pdd.agentic_bug_orchestrator import DEFAULT_MAX_RETRIES
+
+    mock_run, _, _ = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get('label', '')
+        if label == 'step9':
+            return (True, "gen\nFILES_CREATED: f.py", 0.1, "model")
+        return (True, "ok", 0.1, "model")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    for call_obj in mock_run.call_args_list:
+        assert call_obj.kwargs.get('max_retries') == DEFAULT_MAX_RETRIES
+
+
+def test_bug_step_timeouts_has_expected_steps():
+    """Verify BUG_STEP_TIMEOUTS matches the spec (12 integer-keyed steps)."""
+    from pdd.agentic_bug_orchestrator import BUG_STEP_TIMEOUTS
+    for step in range(1, 13):
+        assert step in BUG_STEP_TIMEOUTS, f"Step {step} missing from BUG_STEP_TIMEOUTS"
+    assert 5.5 not in BUG_STEP_TIMEOUTS, "Float key 5.5 should not exist"
+
+
+def test_parse_changed_files_empty_output():
+    """_parse_changed_files returns empty list for output without marker."""
+    result = _parse_changed_files("no marker here", "FILES_CREATED")
+    assert result == []
+
+
+def test_parse_changed_files_with_whitespace():
+    """_parse_changed_files strips whitespace from paths."""
+    result = _parse_changed_files("FILES_CREATED:  a.py , b.py  ", "FILES_CREATED")
+    assert result == ["a.py", "b.py"]
+
+
+def test_count_planned_tests_no_marker():
+    """_count_planned_tests returns 0 when no marker or headers found."""
+    result = _count_planned_tests("Just some text with no markers")
+    assert result == 0
+
+
+def test_count_planned_tests_marker():
+    """_count_planned_tests parses PLANNED_TEST_COUNT marker."""
+    result = _count_planned_tests("Some plan text\nPLANNED_TEST_COUNT: 7\nMore text")
+    assert result == 7
+
+
+def test_count_planned_tests_header_fallback():
+    """_count_planned_tests falls back to counting #### Test N: headers."""
+    result = _count_planned_tests(
+        "#### Test 1: First\n"
+        "#### Test 2: Second\n"
+        "#### Test 3: Third\n"
+    )
+    assert result == 3
+
+
+def test_count_generated_tests_no_files(tmp_path):
+    """_count_generated_tests returns (0, 0) for nonexistent files."""
+    total, stubs = _count_generated_tests(["nonexistent.py"], tmp_path)
+    assert total == 0
+    assert stubs == 0
+
+
+def test_count_generated_tests_with_stubs(tmp_path):
+    """_count_generated_tests detects stub functions."""
+    f = tmp_path / "test_stubs.py"
+    f.write_text(
+        "def test_real():\n"
+        "    assert 1 == 1\n\n"
+        "def test_stub():\n"
+        "    pass\n"
+    )
+    total, stubs = _count_generated_tests(["test_stubs.py"], tmp_path)
+    assert total == 2
+    assert stubs >= 1  # At least the stub is detected
+
+
+def _make_mock_dependencies(tmp_path):
+    """Create and return a mock worktree directory path under the given tmp_path."""
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+    return mock_worktree_path
+
+
+# ---------------------------------------------------------------------------
+# Test 1: Step 7 execution — prompt files recovered via filesystem fallback
+#          when PROMPT_FIXED markers absent from step_output
+# ---------------------------------------------------------------------------
+
+class TestStep7PromptFilesDropped:
+    """Issue #966/#969 Bug 1: Step 7 classifies Prompt Defect but LLM omits
+    PROMPT_FIXED markers from step_output. The orchestrator should detect
+    modified .prompt files via filesystem fallback, but currently does not."""
+
+    def test_step7_prompt_defect_filesystem_fallback_when_markers_absent(self, tmp_path, default_args):
+        """Step 7 returns DEFECT_TYPE: prompt without PROMPT_FIXED markers.
+        The .prompt file is modified on disk. Orchestrator should detect it
+        via filesystem fallback and include it in changed_files.
+
+        FAILS on buggy code: no fallback exists, changed_files has no prompt file.
+        """
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            # Step 7 returns DEFECT_TYPE: prompt but NO PROMPT_FIXED markers
+            # Step 9 returns FILES_CREATED for a test file
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "Classification: Prompt Defect\nDEFECT_TYPE: prompt", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            # Simulate filesystem: before Step 7, no modified files.
+            # After Step 7, the prompt file appears on disk.
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7 snapshot
+                ["pdd/prompts/orchestrator_python.prompt"],  # post-Step 7 fallback
+                ["pdd/prompts/orchestrator_python.prompt", "tests/test_fix.py"],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+            assert "pdd/prompts/orchestrator_python.prompt" in changed_files, (
+                f"Prompt file should be in changed_files via filesystem fallback. "
+                f"Got: {changed_files}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests 2-4: Resume re-extraction — wrong markers for Steps 7, 9, 11
+# ---------------------------------------------------------------------------
+
+class TestResumeReExtractionMarkers:
+    """Issue #966/#969 Bugs 2-4: Resume path re-extraction block (lines 774-785)
+    has copy-paste errors where markers are shifted by one step."""
+
+    def test_step7_resume_parses_prompt_fixed_markers(self, tmp_path, default_args):
+        """Bug 2: When resuming from Step 8+, cached step7_output contains
+        PROMPT_FIXED markers. The resume re-extraction should parse PROMPT_FIXED,
+        but currently parses FILES_CREATED/FILES_MODIFIED (wrong markers).
+
+        FAILS on buggy code: _parse_changed_files(step7_output, "FILES_CREATED")
+        returns [] because the output only has PROMPT_FIXED markers.
+        """
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        state = {
+            "workflow": "bug",
+            "issue_number": 1,
+            "issue_url": "http://github.com/owner/repo/issues/1",
+            "last_completed_step": 8,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Step 3 output",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "DEFECT_TYPE: prompt\nPROMPT_FIXED: pdd/prompts/orchestrator_python.prompt",
+                "8": "Test plan output",
+            },
+            "total_cost": 0.8,
+            "model_used": "model",
+            "worktree_path": str(mock_worktree),
+        }
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+            # Bug: step 7 resume parses FILES_CREATED/FILES_MODIFIED instead of
+            # PROMPT_FIXED, so the prompt file is never extracted.
+            assert "pdd/prompts/orchestrator_python.prompt" in changed_files, (
+                f"Step 7 resume should extract PROMPT_FIXED markers. Got: {changed_files}"
+            )
+
+    def test_step9_resume_parses_files_created_markers(self, tmp_path, default_args):
+        """Bug 3: When resuming from Step 10+, cached step9_output contains
+        FILES_CREATED/FILES_MODIFIED markers. The resume re-extraction should
+        parse those, but currently parses E2E_FILES_CREATED (wrong marker).
+
+        FAILS on buggy code: _parse_changed_files(step9_output, "E2E_FILES_CREATED")
+        returns [] because the output only has FILES_CREATED/FILES_MODIFIED markers.
+        """
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        state = {
+            "workflow": "bug",
+            "issue_number": 1,
+            "issue_url": "http://github.com/owner/repo/issues/1",
+            "last_completed_step": 10,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Step 3 output",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "DEFECT_TYPE: code\nCode bug analysis",
+                "8": "Test plan output",
+                "9": "FILES_CREATED: tests/test_fix.py\nFILES_MODIFIED: tests/conftest.py",
+                "10": "E2E_NEEDED: no",
+            },
+            "total_cost": 1.0,
+            "model_used": "model",
+            "worktree_path": str(mock_worktree),
+        }
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+            # Bug: step 9 resume parses E2E_FILES_CREATED instead of
+            # FILES_CREATED/FILES_MODIFIED, so test files are never extracted.
+            assert "tests/test_fix.py" in changed_files, (
+                f"Step 9 resume should extract FILES_CREATED markers. Got: {changed_files}"
+            )
+            assert "tests/conftest.py" in changed_files, (
+                f"Step 9 resume should extract FILES_MODIFIED markers. Got: {changed_files}"
+            )
+
+    def test_step11_resume_parses_e2e_files_created(self, tmp_path, default_args):
+        """Bug 4: When resuming from Step 12, cached step11_output contains
+        E2E_FILES_CREATED markers. No resume handler exists for Step 11.
+
+        FAILS on buggy code: the resume block jumps from Step 9 handler
+        straight to deduplication — Step 11 output is never parsed.
+        """
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        state = {
+            "workflow": "bug",
+            "issue_number": 1,
+            "issue_url": "http://github.com/owner/repo/issues/1",
+            "last_completed_step": 11,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Step 3 output",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "DEFECT_TYPE: code\nCode bug analysis",
+                "8": "Test plan output",
+                "9": "FILES_CREATED: tests/test_fix.py",
+                "10": "Verification output",
+                "11": "E2E_FILES_CREATED: tests/test_e2e_fix.py",
+            },
+            "total_cost": 1.1,
+            "model_used": "model",
+            "worktree_path": str(mock_worktree),
+        }
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
+
+            mock_run.return_value = (True, "PR created\nhttps://github.com/owner/repo/pull/42", 0.1, "model")
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+            # Bug: no resume handler for step 11, so E2E_FILES_CREATED never parsed.
+            assert "tests/test_e2e_fix.py" in changed_files, (
+                f"Step 11 resume should extract E2E_FILES_CREATED markers. Got: {changed_files}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Pre-Step 12 staging — prompt files from fallback reach git-add
+# ---------------------------------------------------------------------------
+
+class TestPreStep12StagingWithFallback:
+    """Issue #966/#969 Bug 5: Pre-Step 12 deterministic staging depends on
+    changed_files being populated. If upstream bugs starve it, prompt files
+    are never git-added."""
+
+    def test_prompt_files_from_fallback_staged_before_step12(self, tmp_path, default_args):
+        """When Step 7 classifies prompt defect without markers and the
+        fallback should detect modified prompt files, those files must be
+        staged (git add) before Step 12 runs.
+
+        FAILS on buggy code: no filesystem fallback means changed_files has no
+        prompt file, so git add is never called for it.
+        """
+        mock_worktree = _make_mock_dependencies(tmp_path)
+        call_log = []
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step12":
+                    call_log.append("step12_run")
+                if label == "step7":
+                    return (True, "Classification: Prompt Defect\nDEFECT_TYPE: prompt", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            # Filesystem: empty before Step 7, prompt file after, both after Step 9
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7 snapshot
+                ["pdd/prompts/orchestrator_python.prompt"],  # post-Step 7 fallback
+                ["pdd/prompts/orchestrator_python.prompt", "tests/test_fix.py"],  # pre-Step 9
+            ]
+
+            def subprocess_side_effect(*args, **kwargs):
+                cmd = args[0] if args else kwargs.get("args", [])
+                if isinstance(cmd, list) and len(cmd) >= 3 and cmd[0] == "git" and cmd[1] == "add":
+                    call_log.append(f"git_add:{cmd[2]}")
+                return MagicMock(returncode=0, stdout="", stderr="")
+
+            mock_subprocess.run.side_effect = subprocess_side_effect
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+            # Bug: without filesystem fallback, only test files are staged
+            git_adds = [c for c in call_log if c.startswith("git_add:")]
+            prompt_staged = any("orchestrator_python.prompt" in ga for ga in git_adds)
+            assert prompt_staged, (
+                f"Prompt file should be git-added before Step 12. "
+                f"git add calls: {git_adds}"
+            )
+
+            # Also verify ordering: git adds before Step 12 run
+            if "step12_run" in call_log:
+                step12_idx = call_log.index("step12_run")
+                for ga in git_adds:
+                    ga_idx = call_log.index(ga)
+                    assert ga_idx < step12_idx, (
+                        f"git add must come before Step 12 run. Order: {call_log}"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Full resume chain — all step markers correctly re-extracted
+# ---------------------------------------------------------------------------
+
+class TestFullResumeChainMarkerExtraction:
+    """Issue #966/#969 Bug 6: When resuming from Step 12 with cached outputs
+    from Steps 5.5, 7, 9, and 11, all four files should appear in
+    changed_files. Currently only Step 5.5's file is extracted (1/4)."""
+
+    def test_all_resume_markers_correctly_extracted(self, tmp_path, default_args):
+        """Resume from Step 12 with all step outputs cached.
+        Steps 5.5, 7, 9, and 11 each contribute files via their respective
+        markers. All must be present in changed_files.
+
+        FAILS on buggy code: Step 7 uses wrong markers (FILES_CREATED instead
+        of PROMPT_FIXED), Step 9 uses wrong markers (E2E_FILES_CREATED instead
+        of FILES_CREATED), Step 11 has no handler. Only Step 5.5's file
+        (correct handler) is extracted — 3/4 files dropped.
+        """
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        state = {
+            "workflow": "bug",
+            "issue_number": 1,
+            "issue_url": "http://github.com/owner/repo/issues/1",
+            "last_completed_step": 11,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Step 3 output",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "5.5": "PROMPT_FIXED: prompts/fix.prompt",
+                "6": "Step 6 output",
+                "7": "DEFECT_TYPE: prompt\nPROMPT_FIXED: pdd/prompts/orchestrator.prompt",
+                "8": "Test plan output",
+                "9": "FILES_CREATED: tests/test_fix.py",
+                "10": "Verification output",
+                "11": "E2E_FILES_CREATED: tests/test_e2e.py",
+            },
+            "total_cost": 1.2,
+            "model_used": "model",
+            "worktree_path": str(mock_worktree),
+        }
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
+
+            mock_run.return_value = (True, "PR created\nhttps://github.com/owner/repo/pull/42", 0.1, "model")
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+            # Step 5.5: PROMPT_FIXED → correct handler (passes)
+            assert "prompts/fix.prompt" in changed_files, (
+                f"Step 5.5 PROMPT_FIXED file should be in changed_files. Got: {changed_files}"
+            )
+
+            # Step 7: PROMPT_FIXED → buggy handler parses FILES_CREATED (fails)
+            assert "pdd/prompts/orchestrator.prompt" in changed_files, (
+                f"Step 7 PROMPT_FIXED file should be in changed_files. Got: {changed_files}"
+            )
+
+            # Step 9: FILES_CREATED → buggy handler parses E2E_FILES_CREATED (fails)
+            assert "tests/test_fix.py" in changed_files, (
+                f"Step 9 FILES_CREATED file should be in changed_files. Got: {changed_files}"
+            )
+
+            # Step 11: E2E_FILES_CREATED → no handler exists (fails)
+            assert "tests/test_e2e.py" in changed_files, (
+                f"Step 11 E2E_FILES_CREATED file should be in changed_files. Got: {changed_files}"
+            )
+
+            # All 4 files must be present
+            assert len([f for f in changed_files if f in [
+                "prompts/fix.prompt",
+                "pdd/prompts/orchestrator.prompt",
+                "tests/test_fix.py",
+                "tests/test_e2e.py",
+            ]]) == 4, (
+                f"All 4 files from resume should be in changed_files. Got: {changed_files}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Issue #966 — Additional Step 7 prompt-defect fallback tests
+# Covers remaining scenarios from the Step 8 test plan
+# ---------------------------------------------------------------------------
+
+
+class TestStep7FallbackFiltersPromptExtension:
+    """Issue #966: The filesystem fallback must only pick up .prompt files,
+    not unrelated modifications that happen to exist in the worktree."""
+
+    def test_fallback_filters_to_prompt_extension_only(self, tmp_path, default_args):
+        """Step 7 modifies a .prompt file and other files exist on disk.
+        Only .prompt files should be added via fallback.
+
+        FAILS on buggy code: no fallback exists at all, so nothing is added.
+        With fix: only .prompt files are added, not .py or other extensions."""
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "DEFECT_TYPE: prompt\nFixed on disk.", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            # Post-Step-7: prompt file + unrelated .py and .md files
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7 snapshot
+                [
+                    "pdd/prompts/fix.prompt",
+                    "pdd/utils.py",
+                    "README.md",
+                ],  # post-Step 7 fallback
+                [
+                    "pdd/prompts/fix.prompt",
+                    "pdd/utils.py",
+                    "README.md",
+                    "tests/test_fix.py",
+                ],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+        # Only .prompt file should be added via fallback
+        assert "pdd/prompts/fix.prompt" in changed_files, (
+            f"Prompt file should be in changed_files. Got: {changed_files}"
+        )
+        # Non-prompt files should NOT be added by fallback (Step 9 adds its own files)
+        assert "pdd/utils.py" not in changed_files, (
+            f"Non-prompt file utils.py should NOT be in changed_files. Got: {changed_files}"
+        )
+        assert "README.md" not in changed_files, (
+            f"Non-prompt file README.md should NOT be in changed_files. Got: {changed_files}"
+        )
+
+
+class TestStep7MarkersStillWorkWhenPresent:
+    """Issue #966 regression guard: when PROMPT_FIXED markers ARE present
+    in step_output, the original marker-based path must still work."""
+
+    def test_markers_present_extracts_prompt_files(self, tmp_path, default_args):
+        """Step 7 returns both DEFECT_TYPE: prompt AND PROMPT_FIXED: markers.
+        The marker-based path should extract the prompt file without needing
+        the filesystem fallback.
+
+        PASSES on both buggy and fixed code (regression guard)."""
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "DEFECT_TYPE: prompt\nPROMPT_FIXED: pdd/prompts/orchestrator.prompt", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7 snapshot
+                ["pdd/prompts/orchestrator.prompt", "tests/test_fix.py"],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+        assert "pdd/prompts/orchestrator.prompt" in changed_files, (
+            f"Prompt file should be in changed_files via markers. Got: {changed_files}"
+        )
+
+
+class TestStep7WarningWhenNoPromptFilesDetected:
+    """Issue #966: When DEFECT_TYPE is 'prompt' but no .prompt files are
+    found (via markers OR fallback), a warning must be emitted."""
+
+    def test_warning_emitted_when_prompt_defect_but_no_files(self, tmp_path, default_args):
+        """Step 7 classifies as prompt defect, but neither markers exist in
+        output NOR prompt files on disk. A warning should be logged.
+
+        FAILS on buggy code: no warning logic exists at all."""
+        mock_worktree = _make_mock_dependencies(tmp_path)
+        default_args["quiet"] = False
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console") as mock_console, \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "DEFECT_TYPE: prompt\nFixed on disk.", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            # No prompt files on disk at all
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7 snapshot
+                [],  # post-Step 7 fallback — no prompt files
+                ["tests/test_fix.py"],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+        # Should emit a warning about DEFECT_TYPE=prompt but no .prompt files
+        warning_calls = [
+            str(c)
+            for c in mock_console.print.call_args_list
+            if "Warning" in str(c) and "prompt" in str(c).lower()
+        ]
+        assert len(warning_calls) > 0, (
+            f"Should emit warning when DEFECT_TYPE=prompt but no .prompt files found. "
+            f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
+        )
+
+
+class TestStep7FallbackIgnoresPreexistingFiles:
+    """Issue #966: The filesystem fallback must only detect files that were
+    NEWLY modified by Step 7, not files that were already modified before."""
+
+    def test_fallback_ignores_preexisting_modifications(self, tmp_path, default_args):
+        """Pre-Step-7 snapshot has an already-modified prompt file.
+        Step 7 adds a new prompt file. Only the new one should be added.
+
+        FAILS on buggy code: no fallback exists at all."""
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "DEFECT_TYPE: prompt\nFixed on disk.", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            # Pre-Step 7: old.prompt already existed
+            # Post-Step 7: old.prompt still there + new.prompt added by Step 7
+            mock_git_files.side_effect = [
+                ["pdd/prompts/old.prompt"],  # pre-Step 7: already modified
+                ["pdd/prompts/old.prompt", "pdd/prompts/new.prompt"],  # post-Step 7
+                ["pdd/prompts/old.prompt", "pdd/prompts/new.prompt", "tests/test_fix.py"],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+        # Only new.prompt should be added via fallback (not old.prompt)
+        assert "pdd/prompts/new.prompt" in changed_files, (
+            f"Newly modified prompt file should be in changed_files. Got: {changed_files}"
+        )
+        assert "pdd/prompts/old.prompt" not in changed_files, (
+            f"Pre-existing prompt file should NOT be in changed_files. Got: {changed_files}"
+        )
+
+
+class TestStep7FallbackMultiplePromptFiles:
+    """Issue #966: When Step 7 edits multiple .prompt files, the fallback
+    must detect ALL of them, not just the first."""
+
+    def test_multiple_prompt_files_all_detected(self, tmp_path, default_args):
+        """Step 7 modifies 3 prompt files. All should appear in changed_files.
+
+        FAILS on buggy code: no fallback exists."""
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "DEFECT_TYPE: prompt\nFixed all three prompt files.", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7: nothing modified
+                [
+                    "pdd/prompts/a.prompt",
+                    "pdd/prompts/b.prompt",
+                    "pdd/prompts/c.prompt",
+                ],  # post-Step 7: 3 prompt files
+                [
+                    "pdd/prompts/a.prompt",
+                    "pdd/prompts/b.prompt",
+                    "pdd/prompts/c.prompt",
+                    "tests/test_fix.py",
+                ],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            success, msg, cost, model, changed_files = run_agentic_bug_orchestrator(**default_args)
+
+        for prompt_file in ["pdd/prompts/a.prompt", "pdd/prompts/b.prompt", "pdd/prompts/c.prompt"]:
+            assert prompt_file in changed_files, (
+                f"{prompt_file} should be in changed_files via fallback. Got: {changed_files}"
+            )
+
+
+class TestStep7FilesToStageContextPropagation:
+    """Issue #966: Prompt files detected via fallback must propagate to
+    context['files_to_stage'] so the Step 12 template receives them."""
+
+    def test_files_to_stage_includes_fallback_prompt_files(self, tmp_path, default_args):
+        """When Step 7 fallback detects prompt files, they must appear in
+        the Step 12 instruction via the {files_to_stage} template variable.
+
+        FAILS on buggy code: prompt files never enter changed_files, so
+        files_to_stage only has test files."""
+        mock_worktree = _make_mock_dependencies(tmp_path)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked") as mock_git_files, \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests", return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)):
+
+            def load_side_effect(name):
+                if "step12" in name:
+                    return "Stage these files:\n{files_to_stage}\nNow commit."
+                return "Prompt for {issue_number}"
+
+            mock_load.side_effect = load_side_effect
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step7":
+                    return (True, "DEFECT_TYPE: prompt\nFixed on disk.", 0.1, "model")
+                if label == "step9":
+                    return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+
+            mock_git_files.side_effect = [
+                [],  # pre-Step 7 snapshot
+                ["pdd/prompts/fix.prompt"],  # post-Step 7 fallback
+                ["pdd/prompts/fix.prompt"],  # pre-Step 9
+            ]
+
+            mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+            run_agentic_bug_orchestrator(**default_args)
+
+        # Find the Step 12 call and check instruction contains prompt file
+        step12_calls = [
+            c for c in mock_run.call_args_list
+            if c.kwargs.get("label", "") == "step12"
+        ]
+        assert len(step12_calls) == 1, "Step 12 should run exactly once"
+
+        step12_instruction = step12_calls[0].kwargs.get("instruction", "")
+        assert "pdd/prompts/fix.prompt" in step12_instruction, (
+            f"Prompt file not found in Step 12 instruction. "
+            f"files_to_stage did not propagate. Instruction: {step12_instruction}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #952: Structured fix locations from Step 6 flow to downstream steps
+# ---------------------------------------------------------------------------
+
+
+class TestParseFixLocations:
+    """Unit tests for _parse_fix_locations helper."""
+
+    def test_parses_single_file(self):
+        """Single FIX_LOCATIONS line with one file."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "Some analysis\nFIX_LOCATIONS: pdd/commands/generate.py\nMore text"
+        assert _parse_fix_locations(output) == ["pdd/commands/generate.py"]
+
+    def test_parses_comma_separated_files(self):
+        """FIX_LOCATIONS with multiple comma-separated files."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "FIX_LOCATIONS: pdd/commands/generate.py, pdd/cmd_test_main.py"
+        assert _parse_fix_locations(output) == [
+            "pdd/commands/generate.py",
+            "pdd/cmd_test_main.py",
+        ]
+
+    def test_parses_multiple_marker_lines(self):
+        """Multiple FIX_LOCATIONS lines are all collected."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = (
+            "FIX_LOCATIONS: pdd/commands/generate.py\n"
+            "FIX_LOCATIONS: pdd/cmd_test_main.py\n"
+        )
+        result = _parse_fix_locations(output)
+        assert "pdd/commands/generate.py" in result
+        assert "pdd/cmd_test_main.py" in result
+
+    def test_returns_empty_when_no_marker(self):
+        """No FIX_LOCATIONS marker returns empty list."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "Root cause is in generate.py:375"
+        assert _parse_fix_locations(output) == []
+
+    def test_strips_whitespace_and_backticks(self):
+        """File paths with backticks or extra whitespace are cleaned."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = "FIX_LOCATIONS: `pdd/generate.py` , `pdd/main.py` "
+        result = _parse_fix_locations(output)
+        assert result == ["pdd/generate.py", "pdd/main.py"]
+
+
+class TestFixLocationsFlowToDownstreamSteps:
+    """Orchestrator injects parsed fix_locations into Steps 8/9/10 context."""
+
+    STEP6_OUTPUT_WITH_MARKER = (
+        "## Root Cause Analysis\n"
+        "The `--manual` flag is accepted by generate.py but never forwarded.\n\n"
+        "### Fix Location\n"
+        "**File(s) to modify:**\n"
+        "1. `pdd/commands/generate.py:375` — caller\n"
+        "2. `pdd/cmd_test_main.py:120` — callee\n\n"
+        "FIX_LOCATIONS: pdd/commands/generate.py, pdd/cmd_test_main.py\n"
+    )
+
+    # Template that includes {fix_locations} placeholder for downstream steps
+    TEMPLATE_WITH_FIX_LOCATIONS = (
+        "Prompt for issue {issue_number}.\n"
+        "<step1_output>{step1_output}</step1_output>\n"
+        "<step2_output>{step2_output}</step2_output>\n"
+        "<step3_output>{step3_output}</step3_output>\n"
+        "<step4_output>{step4_output}</step4_output>\n"
+        "<step5_output>{step5_output}</step5_output>\n"
+        "<step6_output>{step6_output}</step6_output>\n"
+        "<step7_output>{step7_output}</step7_output>\n"
+        "<step8_output>{step8_output}</step8_output>\n"
+        "<step9_output>{step9_output}</step9_output>\n"
+        "<fix_locations>{fix_locations}</fix_locations>\n"
+    )
+
+    @pytest.fixture()
+    def run_orchestrator_and_capture(self, tmp_path):
+        """Run orchestrator with Step 6 FIX_LOCATIONS marker, return captured instructions."""
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        captured = {}
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            captured[label] = kwargs.get("instruction", "")
+
+            if label == "step6":
+                return (True, self.STEP6_OUTPUT_WITH_MARKER, 0.1, "model")
+            if label == "step8":
+                return (True, "## Test Plan\nPLANNED_TEST_COUNT: 3", 0.1, "model")
+            if label == "step9":
+                return (True, "Generated tests\nFILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS: Tests correct\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+            mock_run.side_effect = mock_run_side_effect
+            mock_load.return_value = self.TEMPLATE_WITH_FIX_LOCATIONS
+            mock_worktree.return_value = (worktree_path, None)
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        return captured
+
+    @pytest.mark.parametrize("step_label", ["step8", "step9"])
+    def test_fix_locations_injected_into_downstream_steps(
+        self, run_orchestrator_and_capture, step_label
+    ):
+        """Parsed fix_locations from Step 6 appear in downstream step instructions."""
+        captured = run_orchestrator_and_capture
+        instruction = captured.get(step_label, "")
+
+        assert instruction, f"{step_label} was never captured"
+
+        # The structured fix_locations should appear in the instruction
+        assert "pdd/commands/generate.py" in instruction, (
+            f"{step_label} instruction missing first fix location"
+        )
+        assert "pdd/cmd_test_main.py" in instruction, (
+            f"{step_label} instruction missing second fix location"
+        )
+
+    def test_fix_locations_defaults_to_none_when_no_marker(self, tmp_path):
+        """When Step 6 has no FIX_LOCATIONS marker, fix_locations is 'none'."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output_no_marker = "Root cause is in generate.py but no marker"
+        result = _parse_fix_locations(output_no_marker)
+        assert result == []
+
+
+class TestFixLocationsInRealPrompts:
+    """Verify that prompt files using {fix_locations} contain the placeholder."""
+
+    @pytest.mark.parametrize("prompt_file", [
+        "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt",
+        "pdd/prompts/agentic_bug_step9_generate_LLM.prompt",
+    ])
+    def test_real_prompt_contains_fix_locations_placeholder(self, prompt_file):
+        """Prompt files that use fix_locations must contain the placeholder."""
+        prompt_path = Path(__file__).parent.parent / prompt_file
+        content = prompt_path.read_text()
+        assert "{fix_locations}" in content, (
+            f"{prompt_file} is missing {{fix_locations}} placeholder — "
+            f"orchestrator injects this but the prompt won't use it"
+        )
+
+    def test_step10_prompt_does_not_contain_fix_locations(self):
+        """Step 10 should NOT have {fix_locations} — coverage is checked deterministically."""
+        prompt_path = (
+            Path(__file__).parent.parent
+            / "pdd/prompts/agentic_bug_step10_verify_LLM.prompt"
+        )
+        content = prompt_path.read_text()
+        assert "{fix_locations}" not in content, (
+            "Step 10 prompt should not contain {fix_locations} — "
+            "the orchestrator verifies coverage deterministically after Step 9"
+        )
+
+
+class TestParseFixLocationsDeduplication:
+    """Verify fix locations are deduplicated."""
+
+    def test_deduplicates_repeated_files(self):
+        """Duplicate file paths from multiple markers are deduplicated."""
+        from pdd.agentic_bug_orchestrator import _parse_fix_locations
+        output = (
+            "FIX_LOCATIONS: pdd/generate.py, pdd/main.py\n"
+            "FIX_LOCATIONS: pdd/generate.py\n"
+        )
+        result = _parse_fix_locations(output)
+        assert result == ["pdd/generate.py", "pdd/main.py"]
+
+
+class TestVerifyFixLocationCoverage:
+    """Unit tests for _verify_fix_location_coverage helper."""
+
+    def test_single_file_always_passes(self, tmp_path):
+        """Single fix location needs no cross-file check."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py"], [], tmp_path
+        )
+        assert result == []
+
+    def test_both_files_covered(self, tmp_path):
+        """When test files reference both fix locations, returns empty."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from unittest.mock import patch\n"
+            "from pdd.commands.generate import run_generate\n"
+            "from pdd.cmd_test_main import cmd_test_main\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == []
+
+    def test_detects_missing_coverage(self, tmp_path):
+        """When a fix location has no reference in tests, it's returned as uncovered."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "from pdd.commands.generate import run_generate\n"
+            "def test_something(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == ["pdd/cmd_test_main.py"]
+
+    def test_matches_via_patch_target(self, tmp_path):
+        """Coverage detected via patch('module.path') string."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "@patch('pdd.commands.generate.run_generate')\n"
+            "@patch('pdd.cmd_test_main.cmd_test_main')\n"
+            "def test_caller(mock_callee, mock_caller): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == []
+
+    def test_matches_via_basename(self, tmp_path):
+        """Coverage detected via basename reference (e.g., 'generate' or 'cmd_test_main')."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "# Tests for generate and cmd_test_main\n"
+            "def test_generate_forwards(): pass\n"
+            "def test_cmd_test_main_receives(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        assert result == []
+
+    def test_basename_substring_not_false_positive(self, tmp_path):
+        """Basename as substring of another word should NOT count as coverage."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        test_file = tmp_path / "tests" / "test_fix.py"
+        test_file.parent.mkdir(parents=True)
+        test_file.write_text(
+            "# This test generates reports and uses cmd_test_main_helper\n"
+            "def test_generate_report(): pass\n"
+            "def test_generated_output(): pass\n"
+        )
+        result = _verify_fix_location_coverage(
+            ["pdd/commands/generate.py", "pdd/cmd_test_main.py"],
+            ["tests/test_fix.py"],
+            tmp_path,
+        )
+        # Neither module_path nor word-boundary basename matches
+        assert "pdd/commands/generate.py" in result
+        assert "pdd/cmd_test_main.py" in result
+
+    def test_missing_test_file_skipped(self, tmp_path):
+        """Non-existent test files are skipped gracefully."""
+        from pdd.agentic_bug_orchestrator import _verify_fix_location_coverage
+        result = _verify_fix_location_coverage(
+            ["pdd/a.py", "pdd/b.py"],
+            ["tests/nonexistent.py"],
+            tmp_path,
+        )
+        assert result == ["pdd/a.py", "pdd/b.py"]
+
+
+class TestFixLocationsResumePathExtraction:
+    """Verify fix_locations is re-extracted on resume when step6_output exists."""
+
+    def test_resume_extracts_fix_locations_from_saved_step6(self, tmp_path):
+        """On resume, fix_locations should be parsed from saved step6_output."""
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        saved_state = {
+            "last_completed_step": 7,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Step 3 output",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": (
+                    "Root cause analysis\n"
+                    "FIX_LOCATIONS: pdd/commands/generate.py, pdd/cmd_test_main.py\n"
+                ),
+                "7": "DEFECT_TYPE: code\nCode bug.",
+            },
+            "total_cost": 0.5,
+            "model_used": "test-model",
+            "worktree_path": str(worktree_path),
+        }
+
+        captured = {}
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            captured[label] = kwargs.get("instruction", "")
+            if label == "step8":
+                return (True, "PLANNED_TEST_COUNT: 2", 0.1, "model")
+            if label == "step9":
+                return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        template = (
+            "Prompt for issue {issue_number}.\n"
+            "<fix_locations>{fix_locations}</fix_locations>\n"
+            "<step1_output>{step1_output}</step1_output>\n"
+            "<step2_output>{step2_output}</step2_output>\n"
+            "<step3_output>{step3_output}</step3_output>\n"
+            "<step4_output>{step4_output}</step4_output>\n"
+            "<step5_output>{step5_output}</step5_output>\n"
+            "<step6_output>{step6_output}</step6_output>\n"
+            "<step7_output>{step7_output}</step7_output>\n"
+            "<step8_output>{step8_output}</step8_output>\n"
+            "<step9_output>{step9_output}</step9_output>\n"
+        )
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(saved_state, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"):
+
+            mock_run.side_effect = mock_run_side_effect
+            mock_load.return_value = template
+            mock_worktree.return_value = (worktree_path, None)
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        # Step 8 should have fix_locations from the resumed step6 output
+        step8_instruction = captured.get("step8", "")
+        assert "pdd/commands/generate.py" in step8_instruction, (
+            "Resume path: Step 8 missing fix location from saved step6_output"
+        )
+        assert "pdd/cmd_test_main.py" in step8_instruction, (
+            "Resume path: Step 8 missing second fix location from saved step6_output"
+        )
+
+
+class TestMissingFixLocationsMarkerWarning:
+    """Verify warning is logged when Step 6 output has no FIX_LOCATIONS marker."""
+
+    def test_logs_warning_when_marker_missing(self, tmp_path):
+        """Step 6 without FIX_LOCATIONS emits a logger.warning."""
+        worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        worktree_path.mkdir(parents=True, exist_ok=True)
+
+        step6_output_no_marker = "Root cause is in generate.py:375\nNo marker here."
+
+        def mock_run_side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step6":
+                return (True, step6_output_no_marker, 0.1, "model")
+            if label == "step8":
+                return (True, "PLANNED_TEST_COUNT: 1", 0.1, "model")
+            if label == "step9":
+                return (True, "FILES_CREATED: tests/test_fix.py", 0.1, "model")
+            if label == "step10":
+                return (True, "PASS\nE2E_NEEDED: no", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        template = (
+            "Prompt {issue_number} {fix_locations}\n"
+            "{step1_output}{step2_output}{step3_output}"
+            "{step4_output}{step5_output}{step6_output}"
+            "{step7_output}{step8_output}{step9_output}"
+        )
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
+             patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.logger") as mock_logger:
+
+            mock_run.side_effect = mock_run_side_effect
+            mock_load.return_value = template
+            mock_worktree.return_value = (worktree_path, None)
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        # Check that logger.warning was called about missing FIX_LOCATIONS
+        warning_calls = [
+            str(c) for c in mock_logger.warning.call_args_list
+        ]
+        assert any("FIX_LOCATIONS" in w for w in warning_calls), (
+            f"Expected warning about missing FIX_LOCATIONS marker. "
+            f"Warning calls: {warning_calls}"
+        )
+
+
+# -----------------------------------------------------------------------
+# Issue #1026: Content regression guard for structural retry
+# -----------------------------------------------------------------------
+
+from pdd.agentic_bug_orchestrator import _cleanup_backups_with_regression_guard
+
+
+class TestIssue1026ContentRegressionGuard:
+    """Tests for _cleanup_backups_with_regression_guard — the safety net
+    that restores from .bak when a retry loses >50% of lines (#1026).
+
+    These tests exercise the extracted function directly with real files
+    on disk — no orchestrator mocking required.
+    """
+
+    def _make_pair(self, tmp_path, name, backup_content, current_content):
+        """Helper: create an original file and its .bak, return the pair."""
+        original = tmp_path / name
+        backup = original.with_suffix(".py.bak")
+        original.write_text(current_content)
+        backup.write_text(backup_content)
+        return original, backup
+
+    def test_restores_on_major_loss(self, tmp_path):
+        """100-line backup, 2-line current → restore from backup."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "def test_clean():\n    assert True\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_large.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == [original]
+        assert original.read_text() == backup_content
+        assert not backup.exists()  # consumed by rename
+
+    def test_boundary_exactly_50_percent_no_restore(self, tmp_path):
+        """100-line backup, 50-line current (exactly 50%) → no restore."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "\n".join(f"# kept {i}" for i in range(50)) + "\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_boundary.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert original.read_text() == current_content  # unchanged
+        assert not backup.exists()  # cleaned up
+
+    def test_boundary_49_percent_triggers_restore(self, tmp_path):
+        """100-line backup, 49-line current (49%) → restore."""
+        backup_content = "\n".join(f"# line {i}" for i in range(100)) + "\n"
+        current_content = "\n".join(f"# kept {i}" for i in range(49)) + "\n"
+        original, backup = self._make_pair(
+            tmp_path, "test_b49.py", backup_content, current_content,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == [original]
+        assert original.read_text() == backup_content
+
+    def test_zero_line_backup_no_crash(self, tmp_path):
+        """Empty backup (0 lines) must not crash and should not restore."""
+        original, backup = self._make_pair(
+            tmp_path, "test_empty.py", "", "def test_ok(): assert True\n",
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert not backup.exists()  # cleaned up
+
+    def test_multi_file_selective_restore(self, tmp_path):
+        """Two files backed up — only the regressed one is restored."""
+        good_backup = "\n".join(f"# good {i}" for i in range(100)) + "\n"
+        good_current = "\n".join(f"# kept {i}" for i in range(80)) + "\n"
+        good_orig, good_bak = self._make_pair(
+            tmp_path, "test_good.py", good_backup, good_current,
+        )
+
+        bad_backup = "\n".join(f"# bad {i}" for i in range(100)) + "\n"
+        bad_current = "\n".join(f"# shrunk {i}" for i in range(10)) + "\n"
+        bad_orig, bad_bak = self._make_pair(
+            tmp_path, "test_bad.py", bad_backup, bad_current,
+        )
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(good_orig, good_bak), (bad_orig, bad_bak)], quiet=True,
+        )
+
+        assert restored == [bad_orig]
+        # good: kept as-is, .bak cleaned up
+        assert good_orig.read_text() == good_current
+        assert not good_bak.exists()
+        # bad: restored from backup
+        assert bad_orig.read_text() == bad_backup
+        assert not bad_bak.exists()
+
+    def test_backup_missing_original_exists(self, tmp_path):
+        """If backup doesn't exist, nothing happens (no crash)."""
+        original = tmp_path / "test_no_bak.py"
+        backup = original.with_suffix(".py.bak")
+        original.write_text("def test_ok(): pass\n")
+        # backup intentionally not created
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert original.read_text() == "def test_ok(): pass\n"
+
+    def test_original_missing_backup_cleaned_up(self, tmp_path):
+        """If original is gone but .bak exists, .bak is cleaned up."""
+        original = tmp_path / "test_gone.py"
+        backup = original.with_suffix(".py.bak")
+        backup.write_text("# old content\n")
+        # original intentionally not created
+
+        restored = _cleanup_backups_with_regression_guard(
+            [(original, backup)], quiet=True,
+        )
+
+        assert restored == []
+        assert not backup.exists()
+
+
+# ============================================================================
+# Issue #1080: Non-Python test verification uses wrong cwd — breaks monorepos
+# ============================================================================
+
+class TestIssue1080MonorepoCwd:
+    """Tests for issue #1080: _verify_e2e_tests must use config dir as cwd.
+
+    Bug: _verify_e2e_tests() runs non-Python tests from the repo root instead of
+    the directory containing the test runner config, breaking monorepos.
+    """
+
+    # --- Test 11: _verify_e2e_tests uses config dir cwd ---
+
+    @patch("pdd.agentic_bug_orchestrator.subprocess.run")
+    def test_verify_e2e_tests_uses_config_dir_not_repo_root(self, mock_subproc, tmp_path):
+        """_verify_e2e_tests must pass the test runner config directory as cwd.
+
+        Before fix: subprocess.run(cwd=str(repo_root)) — always repo root
+        After fix: subprocess.run(cwd=str(config_dir)) — where jest.config.js lives
+
+        Uses real filesystem so get_test_command_for_file finds the config naturally.
+        """
+        # Set up monorepo: frontend/jest.config.js + frontend/src/__test__/api.test.ts
+        config_dir = tmp_path / "frontend"
+        config_dir.mkdir()
+        (config_dir / "jest.config.js").write_text("module.exports = {};")
+
+        test_dir = config_dir / "src" / "__test__"
+        test_dir.mkdir(parents=True)
+        (test_dir / "api.test.ts").write_text("test('api', () => {});")
+
+        mock_subproc.return_value = MagicMock(
+            returncode=1, stdout="test failed output", stderr=""
+        )
+
+        ok, output = _verify_e2e_tests(
+            ["frontend/src/__test__/api.test.ts"], tmp_path
+        )
+
+        mock_subproc.assert_called_once()
+        actual_cwd = mock_subproc.call_args.kwargs['cwd']
+        assert actual_cwd == str(config_dir), (
+            f"Bug #1080: Expected cwd={config_dir} (where jest.config.js lives), "
+            f"got cwd={actual_cwd} (repo root). _verify_e2e_tests uses wrong cwd, "
+            f"breaking monorepo test verification."
+        )
+
+
+# ============================================================================
+# Issue #1083: BUG_STEP_TIMEOUTS stale numbering — behavioral tests
+# ============================================================================
+
+
+def _run_issue_1083_fresh(tmp_path, **extra_kwargs):
+    """Run orchestrator with standard patches for Issue #1083 fresh-run tests.
+
+    Returns mock_run for assertion in the caller.
+    """
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+         patch("pdd.agentic_bug_orchestrator.console"), \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \
+         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
+         patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]):
+
+        def side_effect_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "Generated test\nFILES_CREATED: test_file.py", 0.1, "model")
+            return (True, f"Output for {label}", 0.1, "model")
+
+        mock_run.side_effect = side_effect_run
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            **extra_kwargs,
+        )
+
+    return mock_run
+
+
+def _run_issue_1083_resume(tmp_path, last_completed_step, quiet=True):
+    """Run orchestrator with resume state for Issue #1083 resume tests.
+
+    Returns (mock_run, mock_console, mock_worktree_path) for assertion.
+    """
+    mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+    state = {
+        "workflow": "bug",
+        "issue_number": 1,
+        "issue_url": "http://github.com/owner/repo/issues/1",
+        "last_completed_step": last_completed_step,
+        "step_outputs": {str(i): f"Output for step{i}" for i in range(1, last_completed_step + 1)},
+        "total_cost": last_completed_step * 0.1,
+        "model_used": "model",
+        "changed_files": [],
+        "worktree_path": str(mock_worktree_path),
+    }
+
+    with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_bug_orchestrator.load_prompt_template", return_value="Prompt for {issue_number}"), \
+         patch("pdd.agentic_bug_orchestrator.console") as mock_console, \
+         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree_path, None)), \
+         patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(state, None)), \
+         patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+         patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "ok")), \
+         patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked", return_value=[]), \
+         patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns", return_value=[]), \
+         patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess:
+
+        mock_subprocess.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.return_value = (True, "Output for step", 0.1, "model")
+
+        run_agentic_bug_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1",
+            issue_content="Bug description",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1,
+            issue_author="user",
+            issue_title="Bug Title",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=quiet,
+        )
+
+    return mock_run, mock_console, mock_worktree_path
+
+
+# Correct timeouts per the 12-step prompt specification
+_EXPECTED_STEP_TIMEOUTS = {
+    1: 240.0,    # Duplicate Check
+    2: 400.0,    # Docs Check
+    3: 400.0,    # Triage
+    4: 400.0,    # API Research
+    5: 600.0,    # Reproduce (Complex)
+    6: 600.0,    # Root Cause (Complex)
+    7: 600.0,    # Prompt Classification
+    8: 340.0,    # Test Plan
+    9: 1000.0,   # Generate Unit Test (Most Complex)
+    10: 600.0,   # Verify Unit Test
+    11: 2000.0,  # E2E Test (Complex)
+    12: 240.0,   # Create PR
+}
+
+
+def test_all_12_steps_receive_correct_prompt_specified_timeouts(tmp_path):
+    """All 12 steps must receive the correct timeout from the prompt spec."""
+    mock_run = _run_issue_1083_fresh(tmp_path)
+
+    assert mock_run.call_count == 12, f"Expected 12 steps, got {mock_run.call_count}"
+
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        actual_timeout = call_obj.kwargs.get("timeout")
+        step_str = label.replace("step", "").replace("_", ".")
+        step_num = float(step_str) if "." in step_str else int(step_str)
+        expected = _EXPECTED_STEP_TIMEOUTS.get(step_num)
+
+        assert actual_timeout == expected, (
+            f"Step {step_num} ({label}): expected timeout={expected}, got {actual_timeout}"
+        )
+
+
+def test_steps_11_and_12_do_not_fall_back_to_default_timeout(tmp_path):
+    """Steps 11 (e2e_test) and 12 (pr) must have explicit timeouts, not 340.0 default."""
+    mock_run = _run_issue_1083_fresh(tmp_path)
+
+    step11_timeout = None
+    step12_timeout = None
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        if label == "step11":
+            step11_timeout = call_obj.kwargs.get("timeout")
+        elif label == "step12":
+            step12_timeout = call_obj.kwargs.get("timeout")
+
+    assert step11_timeout == 2000.0, f"Step 11 timeout should be 2000.0, got {step11_timeout}"
+    assert step12_timeout == 240.0, f"Step 12 timeout should be 240.0, got {step12_timeout}"
+
+
+def test_timeout_adder_correctly_sums_with_steps_11_and_12(tmp_path):
+    """timeout_adder=60 must sum correctly: step 11=2060.0, step 12=300.0."""
+    mock_run = _run_issue_1083_fresh(tmp_path, timeout_adder=60.0)
+
+    step11_timeout = None
+    step12_timeout = None
+    for call_obj in mock_run.call_args_list:
+        label = call_obj.kwargs.get("label", "")
+        if label == "step11":
+            step11_timeout = call_obj.kwargs.get("timeout")
+        elif label == "step12":
+            step12_timeout = call_obj.kwargs.get("timeout")
+
+    assert step11_timeout == 2060.0, f"Step 11 with adder=60 should be 2060.0, got {step11_timeout}"
+    assert step12_timeout == 300.0, f"Step 12 with adder=60 should be 300.0, got {step12_timeout}"
+
+
+def test_resume_at_step_11_restores_worktree(tmp_path):
+    """Resume at step 11 must restore worktree as working directory."""
+    mock_run, _, mock_worktree_path = _run_issue_1083_resume(tmp_path, last_completed_step=10)
+
+    step11_call = next(
+        (c for c in mock_run.call_args_list if c.kwargs.get("label") == "step11"),
+        None,
+    )
+    assert step11_call is not None, "Step 11 should have been called"
+    assert step11_call.kwargs.get("cwd") == mock_worktree_path, (
+        f"Step 11 should run in worktree, but ran in {step11_call.kwargs.get('cwd')}"
+    )
+
+
+def test_resume_at_step_12_restores_worktree(tmp_path):
+    """Resume at step 12 must restore worktree as working directory."""
+    mock_run, _, mock_worktree_path = _run_issue_1083_resume(tmp_path, last_completed_step=11)
+
+    step12_call = next(
+        (c for c in mock_run.call_args_list if c.kwargs.get("label") == "step12"),
+        None,
+    )
+    assert step12_call is not None, "Step 12 should have been called"
+    assert step12_call.kwargs.get("cwd") == mock_worktree_path, (
+        f"Step 12 should run in worktree, but ran in {step12_call.kwargs.get('cwd')}"
+    )
+
+
+def test_resume_at_step_11_prints_progress_message(tmp_path):
+    """Resume at step 11 must print 'Resuming...' progress message."""
+    _, mock_console, _ = _run_issue_1083_resume(tmp_path, last_completed_step=10, quiet=False)
+
+    print_calls = [str(c) for c in mock_console.print.call_args_list]
+    resume_msg = next((c for c in print_calls if "Resuming" in c), None)
+
+    assert resume_msg is not None, (
+        f"Resume message should be printed when resuming at step 11. "
+        f"Print calls: {print_calls[:5]}"
+    )
+
+
+def test_prompt_file_timeout_spec_matches_code_dict():
+    """Prompt file BUG_STEP_TIMEOUTS spec must have 12 integer-keyed steps and
+    the code dict must match the prompt spec.
+
+    The prompt at pdd/prompts/agentic_bug_orchestrator_python.prompt is the
+    specification for the orchestrator. Its Per-Step Timeouts code block was
+    fixed in Step 7 to use 12 integer keys. This test evaluates the spec dict
+    and cross-checks it against the code dict to ensure they stay in sync.
+
+    Fix location: pdd/prompts/agentic_bug_orchestrator_python.prompt
+    Fails on buggy code: code dict has stale keys (5.5, missing 11/12) that
+    don't match the corrected prompt spec.
+    """
+    import ast
+    import re
+
+    # Load the prompt file (the specification for the orchestrator)
+    prompt_path = Path(__file__).resolve().parents[1] / "pdd" / "prompts" / "agentic_bug_orchestrator_python.prompt"
+    content = prompt_path.read_text()
+
+    # Extract the BUG_STEP_TIMEOUTS dict from the Per-Step Timeouts code block
+    match = re.search(r'BUG_STEP_TIMEOUTS[^=]*=\s*(\{[^}]+\})', content, re.DOTALL)
+    assert match is not None, "Could not find BUG_STEP_TIMEOUTS dict in prompt file"
+
+    # Strip inline comments and evaluate the dict
+    dict_str = re.sub(r'#[^\n]*', '', match.group(1))
+    spec_dict = ast.literal_eval(dict_str)
+
+    # Prompt spec must have integer keys 1-12 with no float 5.5
+    assert 5.5 not in spec_dict, (
+        f"Prompt file still has float key 5.5 — prompt_classification is now step 7"
+    )
+    for step in range(1, 13):
+        assert step in spec_dict, (
+            f"Prompt file missing timeout for step {step}"
+        )
+
+    # Cross-check: code dict must match the prompt specification
+    from pdd.agentic_bug_orchestrator import BUG_STEP_TIMEOUTS
+
+    for step, expected_timeout in spec_dict.items():
+        actual = BUG_STEP_TIMEOUTS.get(step)
+        assert actual == expected_timeout, (
+            f"Code BUG_STEP_TIMEOUTS[{step}] = {actual} but prompt spec says {expected_timeout}. "
+            f"The code dict is out of sync with the prompt specification."
+        )

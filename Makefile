@@ -125,7 +125,14 @@ ifdef MODULE
 else
 	# Code for generating all examples (nested)
 	@echo "Generating all example files (nested in $(CONTEXT_DIR))"
-	@$(foreach prompt_file,$(PY_PROMPTS),\n\t\t$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))\n\t\t$(eval py_file := $(PDD_DIR)/$(module_path).py)\n\t\t$(eval example_file := $(CONTEXT_DIR)/$(module_path)_example.py)\n\t\techo "Generating example for $(module_path) -> $(example_file)";\n\t\tmkdir -p $(dir $(example_file));\n\t\tPYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;\n\t)
+	@$(foreach prompt_file,$(PY_PROMPTS),
+		$(eval module_path := $(patsubst $(PROMPTS_DIR)/%_python.prompt,%,$(prompt_file)))
+		$(eval py_file := $(PDD_DIR)/$(module_path).py)
+		$(eval example_file := $(CONTEXT_DIR)/$(module_path)_example.py)
+		echo "Generating example for $(module_path) -> $(example_file)";
+		mkdir -p $(dir $(example_file));
+		PYTHONPATH=$(STAGING_DIR) pdd --strength .8 example --output $(example_file) $(prompt_file) $(py_file) || true;
+	)
 endif
 
 # Generate Python files
@@ -436,6 +443,7 @@ else
 	@echo "Running repository-wide prompt update"
 	conda run -n pdd --no-capture-output pdd --verbose update --directory pdd --extensions py
 endif
+
 
 # Generate requirements.txt
 requirements:

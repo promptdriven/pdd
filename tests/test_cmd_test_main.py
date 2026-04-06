@@ -283,7 +283,7 @@ def test_cmd_test_main_successful_generate_test_no_coverage(mock_ctx_fixture, mo
         handle.write.assert_called_once_with("unit_test_code")
 
         # Verify the result (4th element is agentic_success, None for Python)
-        assert result == ("unit_test_code", 0.10, "model_v1", None)
+        assert result == ("unit_test_code", 0.10, "model_v1", None, "")
 
 
 # pylint: disable=redefined-outer-name
@@ -325,7 +325,7 @@ def test_cmd_test_main_successful_increase_test_with_coverage(mock_ctx_fixture, 
         handle = m_file()
         handle.write.assert_called_once_with("more_tests")
         # 4th element is agentic_success, None for Python
-        assert result == ("more_tests", 0.20, "model_v2", None)
+        assert result == ("more_tests", 0.20, "model_v2", None, "")
 
 
 # pylint: disable=redefined-outer-name
@@ -401,7 +401,7 @@ def test_cmd_test_main_output_directory_path_uses_resolved_file(mock_ctx_fixture
         )
 
         # 4th element is agentic_success, None for Python
-        assert result == ("unit_test_code", 0.10, "model_v1", None)
+        assert result == ("unit_test_code", 0.10, "model_v1", None, "")
         m_open.assert_called_once_with(str(resolved_file), "w", encoding="utf-8")
         handle = m_open()
         handle.write.assert_called_once_with("unit_test_code")
@@ -422,7 +422,7 @@ def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx
     # Do NOT create expected_output or its parent - verify cmd_test_main creates the directory when missing.
     generated_content = "test('add', () => { expect(1 + 2).toBe(3); });"
 
-    mock_agentic = MagicMock(return_value=(generated_content, 0.1, "agentic-cli", True))
+    mock_agentic = MagicMock(return_value=(generated_content, 0.1, "agentic-cli", True, ""))
     with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
          patch("pdd.agentic_test_generate.run_agentic_test_generate", mock_agentic):
 
@@ -706,6 +706,7 @@ def mock_cloud_env_vars(monkeypatch):
     """Set required environment variables for cloud authentication."""
     monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test_firebase_key")
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_id")
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
 
 
 # B. Cloud Execution Tests
@@ -1337,8 +1338,8 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     # Capture output to verify cloud execution
     captured = capsys.readouterr()
 
-    # Verify we got valid test code back (4th element is agentic_success)
-    generated_test, cost, model, _ = result
+    # Verify we got valid test code back (TestResult NamedTuple)
+    generated_test, cost, model, _, _ = result
     assert len(generated_test) > 0, "Cloud should return generated test code"
     assert "def test" in generated_test.lower() or "class test" in generated_test.lower(), \
         "Should contain test functions or test class"
@@ -1402,7 +1403,7 @@ def test_cmd_test_main_example_file_detection(mock_ctx_fixture, mock_files_fixtu
         assert "example content" in call_kwargs["example"], "Should contain example content"
 
         # Verify result (4th element is agentic_success)
-        generated_test, cost, _, _ = result
+        generated_test, cost, _, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST
 
@@ -1461,7 +1462,7 @@ def test_cmd_test_main_non_example_file_uses_code(mock_ctx_fixture, mock_files_f
         assert "def add" in call_kwargs["code"], "Should contain code content"
 
         # Verify result (4th element is agentic_success)
-        generated_test, cost, _, _ = result
+        generated_test, cost, _, _, _ = result
         assert generated_test == DEFAULT_MOCK_GENERATED_TEST
         assert cost == DEFAULT_MOCK_COST
 
@@ -1491,7 +1492,7 @@ def test_agentic_python_test_gets_sys_path_preamble(mock_ctx_fixture, mock_files
             {"output": mock_files_fixture["output"]},
             "python"
         )
-        mock_agentic.return_value = (raw_agent_output, 0.05, "agent_model", True)
+        mock_agentic.return_value = (raw_agent_output, 0.05, "agent_model", True, "")
 
         result = cmd_test_main(
             ctx=mock_ctx_fixture,
@@ -1511,3 +1512,275 @@ def test_agentic_python_test_gets_sys_path_preamble(mock_ctx_fixture, mock_files
         assert "sys.path.insert(0, str(project_root))" in generated_content
         # Original test code must still be present
         assert "def test_greet():" in generated_content
+
+
+def test_python_agentic_merge_uses_native_path(mock_ctx_fixture, mock_files_fixture):
+    """
+    Regression test: when agentic_mode=True for Python with merge=True
+    (i.e., test_extend), cmd_test_main must use the native Python test
+    generation path — NOT the agentic path.
+
+    The agentic path calls run_agentic_test_generate which ignores
+    existing_tests and merge, overwriting the existing test file entirely.
+    The native path properly handles merge by reading existing tests and
+    extending them.
+
+    This is the root cause of pdd-sync failing with 0% coverage on large
+    Python modules: test_extend overwrites 3600-line test files (88%
+    coverage) with small LLM-generated files (0% coverage).
+    """
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", side_effect=AssertionError(
+             "run_agentic_test_generate should NOT be called for Python merge"
+         )) as mock_agentic, \
+         patch("pdd.cmd_test_main.resolve_effective_config", return_value={
+             "strength": 0.5, "temperature": 0.0, "time": 0.25
+         }), \
+         patch("pdd.cmd_test_main.generate_test", return_value=(
+             "def test_new(): assert True", 0.05, "model"
+         )) as mock_generate:
+
+        mock_construct_paths.return_value = (
+            {},  # resolved_config
+            {"prompt_file": "prompt_contents", "code_file": "code_contents"},
+            {"output": mock_files_fixture["output"]},
+            "python"
+        )
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=[mock_files_fixture["output"]],
+            target_coverage=80.0,
+            merge=True,
+        )
+
+    # run_agentic_test_generate must NOT have been called
+    mock_agentic.assert_not_called()
+    # The native generate_test path must have been used instead
+    assert mock_generate.called, (
+        "Native generate_test should be called for Python merge (test_extend)"
+    )
+
+# ===========================================================================
+# Issue #717: pdd test --manual ignores --manual flag
+# ===========================================================================
+
+
+# Test 1 (parametrized): manual=True skips agentic for non-Python languages
+@pytest.mark.parametrize("language,output_path", [
+    ("shell", "tests/infra/test_deploy_script.sh"),
+    ("javascript", "tests/test_app.test.js"),
+    ("ruby", "tests/test_app_spec.rb"),
+    ("go", "tests/handler_test.go"),
+])
+def test_issue_717_manual_skips_agentic_for_non_python(
+    mock_ctx_fixture, language, output_path
+):
+    """
+    Issue #717: When manual=True, cmd_test_main must use the legacy single-LLM
+    path (generate_test) even for non-Python languages. The agentic pipeline
+    must NOT be invoked.
+
+    Parametrized across multiple non-Python languages to ensure the guard is
+    language-independent.
+    """
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic, \
+         patch("builtins.open", mock_open()):
+
+        mock_cp.return_value = (
+            {},
+            {"prompt_file": "prompt contents", "code_file": "code contents"},
+            {"output": output_path},
+            language,
+        )
+        mock_gen.return_value = ("legacy test code", 0.05, "test_model")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="fake.prompt",
+            code_file="fake.code",
+            output=output_path,
+            language=None,
+            manual=True,
+        )
+
+        # Legacy path called, agentic NOT called
+        mock_gen.assert_called_once()
+        mock_agentic.assert_not_called()
+        # Return tuple 4th element should be None (legacy path)
+        assert result[3] is None
+
+
+# Test 3: manual=True overrides agentic_mode=True
+def test_issue_717_manual_overrides_agentic_mode(mock_ctx_fixture):
+    """
+    Issue #717: When both manual=True and agentic_mode=True are set,
+    manual must take precedence — the legacy single-LLM path must be used.
+    """
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic, \
+         patch("builtins.open", mock_open()):
+
+        mock_cp.return_value = (
+            {},
+            {"prompt_file": "prompt contents", "code_file": "code contents"},
+            {"output": "tests/test_app.sh"},
+            "shell",
+        )
+        mock_gen.return_value = ("legacy test code", 0.04, "test_model")
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="fake.prompt",
+            code_file="fake.sh",
+            output="tests/test_app.sh",
+            language=None,
+            manual=True,
+        )
+
+        # Manual takes precedence: legacy path, not agentic
+        mock_gen.assert_called_once()
+        mock_agentic.assert_not_called()
+        assert result[3] is None
+
+
+# Test 4: Default (no manual) still uses agentic for non-Python
+def test_issue_717_default_non_python_uses_agentic(mock_ctx_fixture, tmp_path):
+    """
+    Issue #717 backward compatibility: When manual is not passed (defaults to
+    False), non-Python languages must still use the agentic pipeline.
+    """
+    output_path = str(tmp_path / "test_deploy.sh")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_cp, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate") as mock_agentic, \
+         patch("pdd.cmd_test_main.generate_test") as mock_gen:
+
+        mock_cp.return_value = (
+            {},
+            {"prompt_file": "prompt contents", "code_file": "code contents"},
+            {"output": output_path},
+            "shell",
+        )
+        mock_agentic.return_value = ("agentic code", 0.10, "agentic_model", True, "")
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="fake.prompt",
+            code_file="fake.sh",
+            output=output_path,
+            language=None,
+            # manual not passed — defaults to False
+        )
+
+        mock_agentic.assert_called_once()
+        mock_gen.assert_not_called()
+
+
+# Test 5: CLI integration — test --manual forwards manual=True in kwargs
+def test_issue_717_cli_integration_manual_kwarg_forwarded():
+    """
+    Issue #717: End-to-end CLI integration test. Invoking `pdd test --manual`
+    must forward `manual=True` to cmd_test_main. We mock cmd_test_main and
+    verify the call_args contain manual=True.
+    """
+    from click.testing import CliRunner
+    from pdd.commands.generate import test as test_cmd
+
+    with patch("pdd.cmd_test_main.cmd_test_main") as mock_cmd_test:
+        mock_cmd_test.return_value = ("test code", 0.05, "model", None)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            test_cmd,
+            [
+                "--manual",
+                "prompts/deploy_Shell.prompt",
+                "src/deploy.sh",
+                "--output", "tests/test_deploy.sh",
+            ],
+            obj={
+                "verbose": False,
+                "strength": 0.5,
+                "temperature": 0.0,
+                "force": False,
+                "quiet": False,
+                "local": True,
+                "agentic_mode": False,
+                "context": None,
+                "confirm_callback": None,
+                "time": 0.25,
+            },
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, f"CLI exited with code {result.exit_code}: {result.output}"
+        mock_cmd_test.assert_called_once()
+        kwargs = mock_cmd_test.call_args.kwargs
+        assert "manual" in kwargs, (
+            f"'manual' not in cmd_test_main call kwargs: {kwargs}"
+        )
+        assert kwargs["manual"] is True, (
+            f"Expected manual=True, got manual={kwargs['manual']}"
+        )
+
+
+# --- Issue #1072 Tests: Error propagation through cmd_test_main ---
+
+
+def test_cmd_test_main_propagates_error_from_agentic_failure(mock_ctx_fixture, mock_files_fixture, tmp_path):
+    """Issue #1072: cmd_test_main must propagate the 5th element (error_message)
+    from run_agentic_test_generate through to its own return value.
+
+    Before the fix, cmd_test_main unpacks only 4 values from run_agentic_test_generate
+    at line 143:
+        generated_content, total_cost, model_name, agentic_success = run_agentic_test_generate(...)
+    This causes ValueError when run_agentic_test_generate returns a 5-tuple.
+
+    After the fix, cmd_test_main unpacks 5 values and includes the error in its return.
+    """
+    error_msg = "All agent providers failed: anthropic: Exit code 1"
+    mock_agentic = MagicMock(return_value=("", 0.0, "agentic-anthropic", False, error_msg))
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", mock_agentic):
+
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(tmp_path / "test_output.ts")},
+            "typescript",  # Non-Python triggers agentic mode
+        )
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.ts",
+            output=str(tmp_path / "test_output.ts"),
+            language="typescript",
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+    assert len(result) >= 5, (
+        f"cmd_test_main returned {len(result)}-tuple, expected 5-tuple with error message. "
+        f"ValueError: too many values to unpack (expected 4) at cmd_test_main.py:143"
+    )
+    assert result[3] is False, "agentic_success should be False"
+    assert error_msg in result[4], (
+        f"Expected error message propagated through cmd_test_main, got: {result[4]!r}"
+    )

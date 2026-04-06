@@ -7,26 +7,44 @@ for a given test file based on:
 2. Smart detection via default_verify_cmd_for()
 3. None (triggers agentic fallback)
 """
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 import csv
 
 from .agentic_langtest import default_verify_cmd_for
 from .get_language import get_language
 
 
-def _detect_ts_test_runner(test_path: Path) -> Optional[str]:
-    """Detect Jest or Vitest config by walking up from the test file.
+@dataclass
+class TestCommand:
+    """Bundles a test command string with its required working directory.
 
-    Returns 'npx jest --no-coverage' or 'npx vitest run' if a config is found,
-    otherwise None (fall through to CSV default).
+    cwd=None means the caller decides the working directory (backward compatible).
+    cwd=Path(...) means the test runner config was found there and must be used as cwd.
     """
+    __test__ = False  # Prevent pytest from collecting this as a test class
+    command: str
+    cwd: Optional[Path] = None
+
+
+def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
+    """Detect Playwright, Jest, or Vitest config by walking up from the test file.
+
+    For .spec.ts/.spec.tsx files, checks for playwright.config first.
+    Returns (command, config_directory) tuple if a config is found, otherwise None.
+    The config_directory is where the test runner config lives — callers must use it as cwd.
+    """
+    is_spec = test_path.name.endswith(('.spec.ts', '.spec.tsx'))
     search_dir = test_path.resolve().parent
     for _ in range(5):  # Walk up at most 5 levels
+        # For .spec.ts/.spec.tsx files, check Playwright first
+        if is_spec and any((search_dir / cfg).exists() for cfg in ('playwright.config.ts', 'playwright.config.js', 'playwright.config.mjs')):
+            return ("npx playwright test", search_dir)
         if any((search_dir / cfg).exists() for cfg in ('jest.config.js', 'jest.config.ts', 'jest.config.mjs')):
-            return "npx jest --no-coverage --"
+            return ("npx jest --no-coverage --", search_dir)
         if any((search_dir / cfg).exists() for cfg in ('vitest.config.ts', 'vitest.config.js', 'vitest.config.mjs')):
-            return "npx vitest run"
+            return ("npx vitest run", search_dir)
         parent = search_dir.parent
         if parent == search_dir:
             break
@@ -55,21 +73,24 @@ def _load_language_format() -> dict:
     return {}
 
 
-def get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[str]:
+def get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[TestCommand]:
     """
     Get the appropriate test command for a test file.
 
     Resolution order:
-    1. CSV run_test_command (if non-empty)
-    2. Smart detection via default_verify_cmd_for()
-    3. None (triggers agentic fallback)
+    1. For TS/TSX: smart runner detection via _detect_ts_test_runner() which returns
+       both the command and the config directory (cwd). Critical for monorepos where
+       test runner configs live in subdirectories (e.g., frontend/jest.config.js).
+    2. CSV run_test_command (if non-empty). cwd=None (caller decides).
+    3. Smart detection via default_verify_cmd_for(). cwd=None.
+    4. None (triggers agentic fallback)
 
     Args:
         test_file: Path to the test file
         language: Optional language override
 
     Returns:
-        Test command string with {file} placeholder replaced, or None
+        TestCommand with command string and optional cwd, or None
     """
     test_path = Path(test_file)
     ext = test_path.suffix
@@ -80,22 +101,23 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
 
     # 1. For TypeScript/TSX: detect Jest or Vitest config and use appropriate runner
     if ext in ('.ts', '.tsx') and resolved_language and resolved_language.lower() in ('typescript', 'typescriptreact'):
-        runner = _detect_ts_test_runner(test_path)
-        if runner:
-            return f"{runner} {test_file}"
+        runner_result = _detect_ts_test_runner(test_path)
+        if runner_result:
+            runner_cmd, config_dir = runner_result
+            return TestCommand(command=f"{runner_cmd} {test_path.resolve()}", cwd=config_dir)
 
     # 2. Check CSV for run_test_command
     lang_formats = _load_language_format()
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
-            return csv_cmd.replace('{file}', str(test_file))
+            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)), cwd=None)
 
-    # 2. Smart detection
+    # 3. Smart detection
     if resolved_language:
         smart_cmd = default_verify_cmd_for(resolved_language.lower(), str(test_file))
         if smart_cmd:
-            return smart_cmd
+            return TestCommand(command=smart_cmd, cwd=None)
 
-    # 3. No command available
+    # 4. No command available
     return None

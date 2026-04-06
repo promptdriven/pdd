@@ -770,9 +770,22 @@ If you've successfully generated code that uses a dependency before, grounding o
 **Prefer explicit `<include>` for:** External APIs, critical contracts, cross-team interfaces
 **Rely on grounding for:** Internal modules with established patterns
 
+### Documentation as Dependencies
+
+In addition to code examples, prompts can include documentation files (schema docs, API references, PRD sections) as dependencies. This prevents prompts from becoming "islands" that duplicate shared information.
+
+Use `pdd auto-deps` to automatically discover both code and documentation dependencies. The command will:
+- Find relevant `.md`, `.txt`, and `.rst` files alongside code examples
+- Insert `<include>` directives for discovered documents
+- Remove redundant inline content that duplicates what the included documents provide
+
+**Prefer `<include>` over inline duplication:**
+- Good: `<include>docs/api_schema.md</include>` (single source of truth, auto-updates)
+- Bad: Copy-pasting the schema content directly into the prompt (creates drift)
+
 ### Token Efficiency
 
-Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of tokens. Use `pdd auto-deps` to automatically populate relevant examples.
+Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of tokens. Use `pdd auto-deps` to automatically populate relevant examples and documentation references.
 
 ```mermaid
 flowchart LR

@@ -711,6 +711,10 @@ def run_agentic_architecture_orchestrator(
                             console.print("[yellow]⏹️  PRD is too complex for single-project generation.[/yellow]")
                             console.print("   Sub-issues have been created. Run pdd generate on each sub-issue.")
                             console.print("   Use --force-single to override this check.")
+                        # Emit the STOP_CONDITION: tag so the executor's extract_stop_condition() can
+                        # detect the split (issue #671).  The console.print lines above are human-
+                        # readable Rich messages; they don't contain the tag pattern the executor expects.
+                        print("STOP_CONDITION: Issue was split into sub-issues due to complexity", flush=True)
                         state["last_completed_step"] = 1.5
                         save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                         return False, "PRD too complex - sub-issues created, run pdd generate on each", total_cost, model_used, []

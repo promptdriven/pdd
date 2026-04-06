@@ -13,6 +13,7 @@ from pdd.agentic_common import (
     _calculate_codex_cost,
     _extract_json_from_output,
     _find_cli_binary,
+    _is_permanent_error,
     _log_agentic_interaction,
     ANTHROPIC_PRICING_BY_FAMILY,
     GEMINI_PRICING_BY_FAMILY,
@@ -777,9 +778,10 @@ def test_step_timeouts_dictionary_exists():
     assert isinstance(BUG_STEP_TIMEOUTS, dict), "BUG_STEP_TIMEOUTS must be a dictionary"
 
     # Verify complex steps have longer timeouts
-    # Steps 4 (reproduce), 5 (root cause), 5.5 (prompt classification),
-    # 7 (generate), 8 (verify), 9 (E2E test) need >= 600 seconds
-    complex_steps = [4, 5, 5.5, 7, 8, 9]
+    # Steps 5 (reproduce), 6 (root cause), 7 (prompt classification),
+    # 9 (generate), 10 (verify), 11 (e2e test) need >= 600 seconds
+    # Note: step 4 is API Research (400s) — correctly not a complex step
+    complex_steps = [5, 6, 7, 9, 10, 11]
     for step in complex_steps:
         assert step in BUG_STEP_TIMEOUTS, f"BUG_STEP_TIMEOUTS missing entry for step {step}"
         assert BUG_STEP_TIMEOUTS[step] >= 600.0, (
@@ -788,9 +790,9 @@ def test_step_timeouts_dictionary_exists():
         )
 
     # Verify medium complexity step (Test Plan) has increased timeout
-    assert 6 in BUG_STEP_TIMEOUTS, "BUG_STEP_TIMEOUTS missing entry for step 6"
-    assert BUG_STEP_TIMEOUTS[6] >= 300.0, (
-        f"Step 6 timeout ({BUG_STEP_TIMEOUTS[6]}) should be >= 300 seconds "
+    assert 8 in BUG_STEP_TIMEOUTS, "BUG_STEP_TIMEOUTS missing entry for step 8"
+    assert BUG_STEP_TIMEOUTS[8] >= 300.0, (
+        f"Step 8 timeout ({BUG_STEP_TIMEOUTS[8]}) should be >= 300 seconds "
         f"for test plan operations"
     )
 
@@ -2172,7 +2174,10 @@ class TestAgenticDebugLogging:
     def test_run_agentic_task_no_log_when_not_verbose(
         self, mock_shutil_which, mock_subprocess_run, tmp_path
     ):
-        """run_agentic_task should NOT log when verbose=False."""
+        """run_agentic_task should NOT log successful interactions when verbose=False.
+
+        Only failures are always logged (#1072). Success logging stays verbose-only.
+        """
         import pdd.agentic_common
 
         # Reset session ID
@@ -2194,11 +2199,11 @@ class TestAgenticDebugLogging:
 
         assert success
 
-        # No log entries should be written when verbose=False
+        # No log entries should be written for success when verbose=False
         log_dir = tmp_path / AGENTIC_LOG_DIR
         if log_dir.exists():
             log_files = list(log_dir.glob("*.jsonl"))
-            assert len(log_files) == 0, "No JSONL log files should be written when verbose=False"
+            assert len(log_files) == 0, "No JSONL log files should be written for success when verbose=False"
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
@@ -4134,3 +4139,428 @@ class TestIssue830SaveWorkflowStateDivergence:
             f"Expected a warning about GitHub state save failure. "
             f"Console calls: {[str(c) for c in mock_console.print.call_args_list]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# GIT_WORK_TREE worktree isolation (Issue #894)
+# ---------------------------------------------------------------------------
+
+
+def test_git_work_tree_set_to_cwd_in_subprocess_env(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """GIT_WORK_TREE must be set to cwd so CLI agents stay in the worktree.
+
+    Without this, agents follow the worktree's .git file pointer back to
+    the main repo and write files there instead of in the worktree.
+    See: https://github.com/gltanaka/pdd/issues/894
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert "GIT_WORK_TREE" in env_passed, "GIT_WORK_TREE not set — CLI agent will escape worktree"
+    assert env_passed["GIT_WORK_TREE"] == str(mock_cwd)
+
+
+def test_git_work_tree_overrides_inherited_value(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """A pre-existing GIT_WORK_TREE from the parent env must be overwritten.
+
+    If the parent process already has GIT_WORK_TREE pointing elsewhere,
+    the subprocess must use the worktree cwd, not the inherited value.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    os.environ["GIT_WORK_TREE"] = "/some/other/repo"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    assert env_passed["GIT_WORK_TREE"] == str(mock_cwd), (
+        f"GIT_WORK_TREE should be {mock_cwd}, got {env_passed.get('GIT_WORK_TREE')}"
+    )
+
+
+def test_git_work_tree_matches_subprocess_cwd(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """GIT_WORK_TREE and the subprocess cwd kwarg must agree.
+
+    If they diverge, git operations may resolve to a different directory
+    than file writes, causing split-brain behavior.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Done. Task completed successfully with sufficient output text.",
+        "total_cost_usd": 0.01,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    run_agentic_task("instruction", mock_cwd)
+
+    args, kwargs = mock_subprocess.call_args
+    env_passed = kwargs["env"]
+    cwd_passed = kwargs["cwd"]
+    assert "GIT_WORK_TREE" in env_passed, "GIT_WORK_TREE not set in subprocess env"
+    assert str(env_passed["GIT_WORK_TREE"]) == str(cwd_passed), (
+        f"GIT_WORK_TREE ({env_passed['GIT_WORK_TREE']}) != cwd ({cwd_passed})"
+    )
+
+# -----------------------------------------------------------------------------
+# Scope Guard Tests (_revert_out_of_scope_changes)
+# -----------------------------------------------------------------------------
+
+import subprocess as _subprocess
+
+
+def _init_test_git_repo(path):
+    """Initialize a git repo at *path* with all existing files committed."""
+    env = {**os.environ, "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "t@t"}
+    _subprocess.run(["git", "init", str(path)], check=True, capture_output=True, env=env)
+    _subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, capture_output=True, env=env)
+    _subprocess.run(
+        ["git", "-C", str(path), "commit", "-m", "initial", "--allow-empty"],
+        check=True, capture_output=True, env=env,
+    )
+
+
+class TestRevertOutOfScopeChanges:
+    """Tests for _revert_out_of_scope_changes scope guard utility."""
+
+    def test_reverts_deleted_files(self, tmp_path):
+        """Deleted files outside allowed set must be restored."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("def main(): pass")
+        (proj / "unrelated.py").write_text("def other(): pass")
+        _init_test_git_repo(proj)
+
+        # Simulate agent deleting unrelated file
+        (proj / "unrelated.py").unlink()
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").exists(), "Deleted file should be restored"
+        assert (proj / "unrelated.py").read_text() == "def other(): pass"
+        assert len(reverted) == 1
+
+    def test_preserves_allowed_changes(self, tmp_path):
+        """Changes to files in the allowed set must not be reverted."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("def main(): pass")
+        _init_test_git_repo(proj)
+
+        (proj / "code.py").write_text("def main(): return 42")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "code.py").read_text() == "def main(): return 42"
+        assert len(reverted) == 0
+
+    def test_reverts_modifications_outside_scope(self, tmp_path):
+        """Modified files outside allowed set must be reverted."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("def main(): pass")
+        (proj / "unrelated.py").write_text("original content")
+        _init_test_git_repo(proj)
+
+        (proj / "unrelated.py").write_text("CORRUPTED")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").read_text() == "original content"
+        assert len(reverted) == 1
+
+    def test_noop_when_not_in_git_repo(self, tmp_path):
+        """Should silently return empty list when not in a git repo."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "not_a_repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("content")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert reverted == []
+
+    def test_noop_when_allowed_paths_not_under_cwd(self, tmp_path):
+        """Should skip when allowed paths are outside cwd (test scenario guard)."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "code.py").write_text("content")
+        _init_test_git_repo(proj)
+
+        # allowed paths in a completely different directory
+        other = tmp_path / "other"
+        other.mkdir()
+        allowed = {(other / "file.py").resolve()}
+
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+        assert reverted == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #1060: _is_permanent_error() misses Claude OAuth failures
+# ---------------------------------------------------------------------------
+
+class TestIsPermanentErrorClaudeOAuth:
+    """Tests for _is_permanent_error() detecting Claude CLI OAuth error formats."""
+
+    def test_authentication_error_with_underscore(self):
+        """authentication_error with underscore separator should be detected as permanent.
+
+        Claude CLI returns 'authentication_error' (underscore) but the pattern
+        r'authentication\\s+error' requires whitespace.
+        """
+        error_msg = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
+        assert _is_permanent_error(error_msg) is True
+
+    def test_failed_to_authenticate_reversed_word_order(self):
+        """'Failed to authenticate' (reversed word order) should be detected as permanent.
+
+        Claude CLI returns 'Failed to authenticate' but the existing pattern
+        r'authentication\\s+failed' expects the opposite word order.
+        """
+        error_msg = (
+            'Failed to authenticate. API Error: 401 '
+            '{"type":"error","error":{"type":"authentication_error",'
+            '"message":"Invalid bearer token"}}'
+        )
+        assert _is_permanent_error(error_msg) is True
+
+    def test_invalid_bearer_token(self):
+        """'Invalid bearer token' should be detected as permanent.
+
+        No existing pattern matches 'invalid bearer'.
+        """
+        assert _is_permanent_error("Invalid bearer token") is True
+
+    def test_full_claude_cli_oauth_error_verbatim(self):
+        """JSON-only Claude CLI OAuth error body should be permanent.
+
+        This is just the JSON body without the 'Failed to authenticate' prefix,
+        ensuring the authentication_error pattern fires on JSON alone.
+        """
+        error_msg = '{"type":"error","error":{"type":"authentication_error","message":"Invalid bearer token"}}'
+        assert _is_permanent_error(error_msg) is True
+
+    def test_existing_permanent_patterns_still_work(self):
+        """Existing permanent error patterns must not regress."""
+        assert _is_permanent_error("Authentication error: invalid key") is True
+        assert _is_permanent_error("Invalid parameter: model_name") is True
+        assert _is_permanent_error("Model not found: gpt-5") is True
+        assert _is_permanent_error("Permission denied: access denied") is True
+
+    def test_transient_errors_still_return_false(self):
+        """Transient errors must still be retried (return False)."""
+        assert _is_permanent_error("Rate limit exceeded") is False
+        assert _is_permanent_error("Timeout expired") is False
+        assert _is_permanent_error("500 Internal Server Error") is False
+
+    def test_401_status_code_detected_as_permanent(self):
+        """Bare 401 status code in error message should be permanent."""
+        assert _is_permanent_error("HTTP 401 Unauthorized") is True
+        assert _is_permanent_error("Error: 401") is True
+        # Should not match 4010 or other numbers containing 401
+        assert _is_permanent_error("Error code 4010") is False
+
+    def test_temperature_pattern_narrow(self):
+        """Only invalid-temperature errors should be permanent, not incidental mentions."""
+        # Should be flagged as permanent
+        assert _is_permanent_error("invalid value for temperature") is True
+        assert _is_permanent_error("temperature is not supported for this model") is True
+        assert _is_permanent_error("temperature out of range") is True
+        # Should NOT be flagged as permanent (transient/unrelated mention)
+        assert _is_permanent_error("server temperature threshold exceeded") is False
+
+
+# --- Issue #1072 Tests: Missing quota patterns and verbose-gated logging ---
+
+
+class TestIssue1072PermanentErrors:
+    """Tests for _is_permanent_error() recognizing quota exhaustion patterns.
+
+    Issue #1072: _is_permanent_error() at agentic_common.py:292-310 doesn't match
+    quota errors like TerminalQuotaError, causing Google quota exhaustion to waste
+    3x10-minute retries before failing.
+    """
+
+    def test_is_permanent_error_recognizes_terminal_quota_error(self):
+        """_is_permanent_error must return True for 'TerminalQuotaError'.
+
+        This is the exact error string from the issue's production logs
+        (Google provider quota exhaustion). Before the fix, _is_permanent_error
+        returns False, wasting 3x10-minute retries.
+        """
+        assert _is_permanent_error("google: TerminalQuotaError") is True, (
+            "_is_permanent_error('google: TerminalQuotaError') returned False — "
+            "quota errors waste retries because no quota pattern exists in "
+            "permanent_patterns at agentic_common.py:298-312"
+        )
+
+    def test_is_permanent_error_recognizes_quota_exhausted(self):
+        """_is_permanent_error must return True for 'quota exhausted' messages."""
+        assert _is_permanent_error("API quota exhausted for project-12345") is True, (
+            "_is_permanent_error('API quota exhausted ...') returned False — "
+            "missing quota pattern in permanent_patterns"
+        )
+
+    def test_is_permanent_error_recognizes_daily_quota_variants(self):
+        """_is_permanent_error must return True for 'daily quota' messages."""
+        assert _is_permanent_error("daily quota exceeded") is True, (
+            "_is_permanent_error('daily quota exceeded') returned False"
+        )
+        assert _is_permanent_error("Quota Exceeded — daily limit reached") is True, (
+            "_is_permanent_error('Quota Exceeded — daily limit reached') returned False"
+        )
+
+    def test_existing_permanent_patterns_unaffected_by_quota_addition(self):
+        """Regression: Adding quota patterns must not break existing permanent error detection."""
+        assert _is_permanent_error("authentication_error") is True
+        assert _is_permanent_error("Invalid API key") is True
+        assert _is_permanent_error("model not found") is True
+        assert _is_permanent_error("access denied") is True
+
+    def test_transient_errors_still_not_permanent(self):
+        """Regression: Transient errors must still be retried."""
+        assert _is_permanent_error("Rate limit exceeded") is False
+        assert _is_permanent_error("Timeout expired") is False
+        assert _is_permanent_error("Connection reset by peer") is False
+
+
+class TestIssue1072FailureLogging:
+    """Tests for _log_agentic_interaction being called even when verbose=False.
+
+    Issue #1072: agentic_common.py:925 gates _log_agentic_interaction behind
+    `if verbose:`, so batch sync (which runs non-verbose) never logs provider
+    failures to JSONL files.
+    """
+
+    def test_provider_failure_logged_when_not_verbose(
+        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    ):
+        """Provider failures must be logged to JSONL even with verbose=False.
+
+        Before the fix, _log_agentic_interaction at agentic_common.py:929 is only
+        called inside `if verbose:` (line 928). Batch sync runs non-verbose, so no
+        provider failure logs are ever written — failures are completely invisible.
+
+        This test directly contradicts the existing test
+        test_run_agentic_task_no_log_when_not_verbose (which validates the bug).
+        After the fix, that test should be updated to expect failure logs ARE written.
+        """
+        import pdd.agentic_common
+
+        # Reset session ID
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # Only anthropic available, and it fails all retries
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 1
+        mock_subprocess_run.return_value.stdout = ""
+        mock_subprocess_run.return_value.stderr = "Exit code 1: rate limited"
+
+        success, msg, cost, provider = run_agentic_task(
+            "Generate tests for calculator",
+            tmp_path,
+            verbose=False,  # NOT verbose — batch sync mode
+            label="test-generate",
+            max_retries=1,  # Single retry to keep test fast
+        )
+
+        assert not success
+
+        # The fix: failure logs MUST be written even without verbose mode
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        assert log_dir.exists(), (
+            f"No agentic-logs directory created at {log_dir} — "
+            "_log_agentic_interaction is gated behind `if verbose:` "
+            "at agentic_common.py:928, so batch sync never logs provider failures"
+        )
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) >= 1, (
+            "No JSONL log files written for provider failure — "
+            "_log_agentic_interaction gated behind `if verbose:` at line 928"
+        )
+
+        # Verify the log entry records the failure
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            lines = f.read().strip().splitlines()
+        assert len(lines) >= 1
+        entry = json.loads(lines[-1])
+        assert entry["success"] is False, (
+            f"Expected failure log entry, got success={entry['success']}"
+        )
+
+    # Scope addition: covers expansion item "agentic_common.py:895 success logging
+    # is also verbose-only and should be ungated" identified by Step 6 but absent
+    # from Step 8's plan
+    def test_success_not_logged_when_not_verbose(
+        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    ):
+        """Issue #1072: Success interactions remain verbose-only (not diagnostic).
+
+        Only failures need always-on logging for post-mortem diagnosis.
+        Success logging stays behind `if verbose:` to avoid unnecessary I/O.
+        """
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Task completed successfully with enough output characters.",
+            "total_cost_usd": 0.05
+        })
+
+        success, msg, cost, provider = run_agentic_task(
+            "Generate tests",
+            tmp_path,
+            verbose=False,
+            label="test-generate",
+        )
+
+        assert success
+
+        # Success logging stays verbose-only — no JSONL written
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        if log_dir.exists():
+            log_files = list(log_dir.glob("session_*.jsonl"))
+            assert len(log_files) == 0, (
+                "Success should not be logged when verbose=False — "
+                "only failures need always-on logging"
+            )
+

@@ -347,7 +347,7 @@ def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_inv
 
 
 def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
-    """Test summarization of non-Python files."""
+    """Test summarization of non-Python doc files when include_docs=True."""
     # Create non-Python files
     file1 = tmp_path / "file1.txt"
     file1.write_text("Just some text.")
@@ -365,7 +365,8 @@ def test_non_python_files(tmp_path, mock_load_prompt_template, mock_llm_invoke):
         strength=strength,
         temperature=temperature,
         verbose=verbose,
-        csv_file=csv_file
+        csv_file=csv_file,
+        include_docs=True,
     )
 
     # Parse CSV output
@@ -1155,6 +1156,12 @@ def test_summarize_directory_handles_subdirectories(tmp_path, mock_load_prompt_t
 class TestGitLsFilesIntegration:
     """Tests for _get_files_from_git() helper function."""
 
+    @pytest.fixture(autouse=True)
+    def _clean_git_env(self, monkeypatch):
+        """Remove GIT_WORK_TREE/GIT_DIR so nested git init works in tmp_path."""
+        monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+        monkeypatch.delenv("GIT_DIR", raising=False)
+
     def test_get_files_from_git_returns_list_in_git_repo(self, tmp_path):
         """Test that _get_files_from_git returns a list when in a git repo."""
         from pdd.summarize_directory import _get_files_from_git
@@ -1354,6 +1361,12 @@ class TestBinaryFiltering:
 
 class TestGitPreferredOverGlob:
     """Tests ensuring git ls-files is preferred over glob."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_git_env(self, monkeypatch):
+        """Remove GIT_WORK_TREE/GIT_DIR so nested git init works in tmp_path."""
+        monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+        monkeypatch.delenv("GIT_DIR", raising=False)
 
     def test_summarize_directory_uses_git_when_available(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """Test that summarize_directory prefers git over glob in a git repo."""
@@ -1753,3 +1766,145 @@ class TestBinaryExtensionsAdditional:
         from pdd.summarize_directory import BINARY_EXTENSIONS
         for ext in ['.exe', '.dll', '.so', '.dylib']:
             assert ext in BINARY_EXTENSIONS
+
+
+# ============================================================================
+# Tests for include_docs parameter
+# ============================================================================
+
+class TestIncludeDocs:
+    """Tests for include_docs parameter that controls doc file discovery."""
+
+    def test_doc_files_excluded_by_default(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """When include_docs=False (default), .md/.txt/.rst files are not summarized."""
+        (tmp_path / "code.py").write_text("print('hello')")
+        (tmp_path / "readme.md").write_text("# README")
+        (tmp_path / "notes.txt").write_text("Some notes")
+        (tmp_path / "docs.rst").write_text("Documentation")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path / "*"),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 1, f"Only code.py should be included, got: {paths}"
+        assert any("code.py" in p for p in paths)
+
+    def test_doc_files_included_when_flag_true(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """When include_docs=True, .md/.txt/.rst files are also summarized."""
+        (tmp_path / "code.py").write_text("print('hello')")
+        (tmp_path / "readme.md").write_text("# README")
+        (tmp_path / "notes.txt").write_text("Some notes")
+        (tmp_path / "docs.rst").write_text("Documentation")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(tmp_path / "*"),
+            strength=0.5,
+            temperature=0.0,
+            include_docs=True,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        paths = [r['full_path'] for r in rows]
+
+        assert len(rows) == 4, f"All 4 files should be included, got: {paths}"
+        assert any("code.py" in p for p in paths)
+        assert any("readme.md" in p for p in paths)
+        assert any("notes.txt" in p for p in paths)
+        assert any("docs.rst" in p for p in paths)
+
+    def test_doc_extensions_not_in_binary_extensions(self):
+        """Doc extensions must NOT be in BINARY_EXTENSIONS per spec."""
+        from pdd.summarize_directory import BINARY_EXTENSIONS
+        for ext in ['.md', '.txt', '.rst']:
+            assert ext not in BINARY_EXTENSIONS, f"{ext} must not be in BINARY_EXTENSIONS"
+
+
+# ============================================================================
+# Tests for max_workers parameter (parallel LLM calls)
+# ============================================================================
+
+class TestMaxWorkers:
+    """Tests for max_workers parameter that controls LLM call parallelism."""
+
+    def test_max_workers_default_is_sequential(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Default max_workers=1 should process files sequentially."""
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        csv_output, cost, model = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert len(rows) == 2
+        assert cost == 0.02  # 2 files * 0.01
+
+    def test_max_workers_parallel_produces_same_results(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """max_workers>1 should produce the same CSV content as sequential."""
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        csv_output, cost, model = summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.0,
+            max_workers=2,
+        )
+
+        reader = csv.DictReader(StringIO(csv_output))
+        rows = list(reader)
+        assert len(rows) == 2
+        assert cost == 0.02
+        assert model == "TestModel"
+
+    def test_max_workers_with_progress_callback(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        """Progress callback should be called for each file even with parallel workers."""
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        progress_calls = []
+        def callback(current, total):
+            progress_calls.append((current, total))
+
+        summarize_directory(
+            directory_path=str(tmp_path / "*.py"),
+            strength=0.5,
+            temperature=0.0,
+            max_workers=2,
+            progress_callback=callback,
+        )
+
+        assert len(progress_calls) == 2
+        # All calls should have total=2
+        for _, total in progress_calls:
+            assert total == 2
+
+    def test_max_workers_thread_safe_cost_accumulation(self, tmp_path, mock_load_prompt_template):
+        """Total cost should be correctly accumulated across threads."""
+        for i in range(5):
+            (tmp_path / f"file{i}.py").write_text(f"content_{i}")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
+            mock_llm.return_value = {
+                'result': FileSummary(file_summary="Summary", key_exports=["x"], dependencies=["y"]),
+                'cost': 0.1,
+                'model_name': "TestModel"
+            }
+            _, cost, _ = summarize_directory(
+                directory_path=str(tmp_path / "*.py"),
+                strength=0.5,
+                temperature=0.0,
+                max_workers=3,
+            )
+
+        assert abs(cost - 0.5) < 1e-9, f"Expected 0.5 total cost for 5 files, got {cost}"

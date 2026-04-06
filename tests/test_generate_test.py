@@ -43,6 +43,7 @@ def mock_console():
     return Console()
 
 # Test successful generation
+
 def test_generate_test_successful(valid_inputs):
     result = generate_test(**valid_inputs)
     assert isinstance(result, tuple)
@@ -55,6 +56,7 @@ def test_generate_test_successful(valid_inputs):
     assert len(model_name) > 0
 
 # Test verbose output
+
 def test_generate_test_verbose(valid_inputs):
     valid_inputs['verbose'] = True
     result = generate_test(**valid_inputs)
@@ -97,12 +99,14 @@ def test_generate_test_invalid_template(valid_inputs, monkeypatch):
         generate_test(**valid_inputs)
 
 # Test edge cases
+
 def test_generate_test_minimum_values(valid_inputs):
     valid_inputs['strength'] = 0.31
     valid_inputs['temperature'] = 0.0
     result = generate_test(**valid_inputs)
     assert isinstance(result, tuple)
     assert len(result) == 3
+
 
 
 def test_generate_test_maximum_values(valid_inputs):
@@ -113,6 +117,7 @@ def test_generate_test_maximum_values(valid_inputs):
     assert len(result) == 3
 
 # Test different languages
+
 def test_generate_test_different_languages(monkeypatch):
     # Avoid dependence on structured output in continuation by stubbing continue_generation
     def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
@@ -189,6 +194,7 @@ class TestContextFileExists:
 
 
 # Tests for Issue #212: Example file support
+
 def test_generate_test_with_example_parameter(monkeypatch):
     """Test that generate_test works with example parameter instead of code."""
     def _stub_continue(formatted_input_prompt, llm_output, strength, temperature, time=0.25, language=None, verbose=False):
@@ -220,6 +226,7 @@ def test_generate_test_uses_example_template(mock_postprocess, mock_llm_invoke, 
     mock_load_template.assert_called_once_with("generate_test_from_example_LLM")
 
 
+@pytest.mark.usefixtures()
 class TestSysPathIsolation:
     """Tests for Issue #342: Verify generated tests include sys.path isolation preamble.
 
@@ -228,6 +235,7 @@ class TestSysPathIsolation:
     installed packages. This prevents tests from importing the wrong version of the
     code when the package is also installed in site-packages.
     """
+
 
     def test_generated_test_has_syspath_isolation(self):
         """Verify generated Python tests include sys.path.insert for local code isolation.
@@ -265,6 +273,7 @@ class TestSysPathIsolation:
             "Generated test must use sys.path.insert(0, ...) to prepend local repo path. "
             "This ensures local code takes precedence over installed packages."
         )
+
 
     def test_syspath_before_imports(self):
         """Verify sys.path isolation preamble appears BEFORE imports from code under test.
@@ -319,6 +328,7 @@ class TestSysPathIsolation:
                 "Otherwise Python may still resolve imports to site-packages."
             )
 
+
     def test_syspath_uses_pathlib_for_repo_root(self):
         """Verify sys.path isolation uses pathlib to calculate repository root.
 
@@ -349,6 +359,7 @@ class TestSysPathIsolation:
             "Generated test should use __file__ to calculate repository root "
             "relative to test file location."
         )
+
 
     def test_non_python_skips_syspath_preamble(self):
         """Verify non-Python tests don't include Python-specific sys.path preamble.

@@ -9,6 +9,7 @@ Implements fingerprint-based state analysis and deterministic operation selectio
 import os
 import re
 import sys
+import glob
 import json
 import hashlib
 import subprocess
@@ -35,6 +36,7 @@ except ImportError:
 # Import PDD internal modules
 from pdd.construct_paths import (
     _detect_context,
+    _extract_prefix_from_prompts_dir,
     _find_pddrc_file,
     _get_relative_basename,
     _load_pddrc_config,
@@ -302,12 +304,7 @@ def _relative_basename_for_context(basename: str, context_name: Optional[str]) -
 
     prompts_dir = defaults.get("prompts_dir", "")
     if prompts_dir:
-        normalized = prompts_dir.rstrip("/")
-        prefix = normalized
-        if normalized == "prompts":
-            prefix = ""
-        elif normalized.startswith("prompts/"):
-            prefix = normalized[len("prompts/"):]
+        prefix = _extract_prefix_from_prompts_dir(prompts_dir)
 
         if prefix and (basename == prefix or basename.startswith(prefix + "/")):
             relative = basename[len(prefix) + 1 :] if basename != prefix else basename.split("/")[-1]
@@ -421,8 +418,11 @@ def _generate_paths_from_templates(
     if 'prompt' not in result:
         result['prompt'] = Path(prompt_path)
 
-    # Ensure example and test paths are always present (fallback to defaults)
-    # This maintains compatibility with sync workflow that expects these keys
+    # Ensure code, example, and test paths are always present (fallback to defaults)
+    # This maintains compatibility with sync workflow that expects these keys.
+    # sync_orchestration.py accesses pdd_files['code'] directly (20+ places).
+    if 'code' not in result:
+        result['code'] = Path(f"{dir_prefix}{name}.{extension}")
     if 'example' not in result:
         result['example'] = Path(f"examples/{name}_example.{extension}")
     if 'test' not in result:
@@ -432,9 +432,9 @@ def _generate_paths_from_templates(
     if 'test' in result:
         test_path = result['test']
         test_dir_path = test_path.parent
-        test_stem = f"test_{name}"
+        test_stem = f"test_{glob.escape(name)}"
         if test_dir_path.exists():
-            matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+            matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{glob.escape(extension)}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
         result['test_files'] = matching_test_files or [test_path]
@@ -464,12 +464,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 context_config = config.get('contexts', {}).get(context_name or '', {})
                 prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
                 if prompts_dir_config:
-                    normalized = prompts_dir_config.rstrip('/')
-                    prefix = normalized
-                    if normalized == 'prompts':
-                        prefix = ''
-                    elif normalized.startswith('prompts/'):
-                        prefix = normalized[len('prompts/'):]
+                    prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
                     # Only prepend prefix if prompts_root doesn't already end with it
                     # (when prompts_dir is passed as an absolute path like
                     # /path/to/prompts/recruiting, prompts_root already contains the prefix)
@@ -587,9 +582,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
                 # Bug #156: Find all matching test files
                 test_dir_path = test_path.parent
-                test_stem = f"test_{name_part}"
+                test_stem = f"test_{glob.escape(name_part)}"
                 if test_dir_path.exists():
-                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
+                    matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{glob.escape(extension)}"))
                 else:
                     matching_test_files = [test_path] if test_path.exists() else []
 
@@ -612,7 +607,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 fallback_test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
                 # Bug #156: Find matching test files even in fallback
                 if Path('.').exists():
-                    fallback_matching = sorted(Path('.').glob(f"{dir_prefix}test_{name_part}*.{extension}"))
+                    fallback_matching = sorted(Path('.').glob(f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}*.{glob.escape(extension)}"))
                 else:
                     fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
@@ -779,10 +774,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Bug #156: Find all matching test files
         test_dir = test_path.parent
         _, name_part_for_glob = _extract_name_part(basename)
-        test_stem = f"test_{name_part_for_glob}"
+        test_stem = f"test_{glob.escape(name_part_for_glob)}"
         extension = get_extension(language)
         if test_dir.exists():
-            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{glob.escape(extension)}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
 
@@ -801,9 +796,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
         # Bug #156: Try to find matching test files even in fallback
         test_dir = Path('.')
-        test_stem = f"{dir_prefix}test_{name_part}"
+        test_stem = f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}"
         if test_dir.exists():
-            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{extension}"))
+            matching_test_files = sorted(test_dir.glob(f"{test_stem}*.{glob.escape(extension)}"))
         else:
             matching_test_files = [test_path] if test_path.exists() else []
         prompts_root = _resolve_prompts_root(prompts_dir)
@@ -1404,7 +1399,7 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     
     # Strategy 2b: Look for historical run reports with exit_code == 0
     # Check all run report files in the meta directory that match the pattern
-    run_report_pattern = f"{_safe_basename(basename)}_{language.lower()}_run"
+    run_report_pattern = f"{glob.escape(_safe_basename(basename))}_{language.lower()}_run"
     for file in meta_dir.glob(f"{run_report_pattern}*.json"):
         try:
             with open(file, 'r') as f:

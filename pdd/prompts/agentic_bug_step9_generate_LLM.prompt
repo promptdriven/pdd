@@ -1,3 +1,5 @@
+<pdd-reason>Generates failing unit tests that detect the bug, with scope cross-check against Step 6 findings.</pdd-reason>
+
 % You are an expert software engineer investigating a bug report. Your task is to generate a failing unit test that detects the bug.
 
 % Context
@@ -50,11 +52,12 @@ You are working on step 9 of 12 in an agentic bug investigation workflow. Previo
 
 % Critical: Testing Caller Behavior Bugs
 
-When the bug involves incorrect function call arguments (e.g., caller uses `limit=` but callee expects `k=`):
+The fix locations for this bug are: `{fix_locations}`. When the fix spans multiple files (caller + callee), you MUST test BOTH sides — not just the callee.
 
 **DO: Mock the callee and verify caller behavior**
 - Use `@patch` or `with patch()` to mock the called function
 - Invoke the caller's code path
+- Assert the mock was called (`assert_called()`) before inspecting `call_args`
 - Use `mock.call_args.kwargs` to verify the caller passed correct parameter names
 
 Example:
@@ -64,13 +67,12 @@ from unittest.mock import patch
 def test_caller_uses_correct_parameter():
     with patch('module.callee_function') as mock_callee:
         caller_function()  # This triggers the call
-        # Verify caller used 'k=' not 'limit='
+        mock_callee.assert_called()  # Fails clearly if caller never invoked callee
         assert 'k' in mock_callee.call_args.kwargs
 ```
 
-**DO NOT: Test that the callee rejects wrong parameters**
-- This anti-pattern tests the callee's signature, not the caller's behavior
-- Such tests always pass because the callee was never broken
+**DO NOT: Test only the callee**
+- Such tests always pass because the callee was never broken — the bug is in the caller
 - Example of WRONG approach: `pytest.raises(TypeError, lambda: callee(limit=5))`
 
 % Critical: No Structural/Shape Tests — Behavioral Assertions Only
@@ -84,6 +86,36 @@ Your generated tests must verify **observable behavior**, not code structure.
 **GOOD test (behavioral — ALWAYS generate this instead):** A test that calls the function with the relevant input, and asserts on the observable output or side effect. Example: calling the function with the new parameter and asserting that the output changes, a dependency is called differently, or a side effect occurs.
 
 **Self-check:** Before writing each test, ask: "Could this test pass if someone just changed the function signature or added an empty stub without implementing any actual logic?" If yes, the test is structural — rewrite it to verify observable behavior.
+
+**Concrete Python examples:**
+
+BAD (structural — reads source, checks keywords):
+```python
+def test_handles_signal():
+    source = inspect.getsource(module.main)
+    assert 'signal' in source
+```
+
+GOOD (behavioral — calls function, asserts on outcome):
+```python
+def test_handles_signal():
+    result = module.main()
+    assert result is not None
+```
+
+BAD (structural — reads file content, checks for definition):
+```python
+def test_function_exists():
+    content = Path("pdd/module.py").read_text()
+    assert "def target_func" in content
+```
+
+GOOD (behavioral — imports and calls the function):
+```python
+def test_function_exists():
+    output = module.target_func(test_input)
+    assert output == expected_value
+```
 
 % Critical: No Vacuous waitFor Negative Assertions
 
@@ -117,6 +149,16 @@ Before writing any mock or stub, verify it against the investigation findings:
 
 3. If you cannot write a mock that is both consistent with Steps 4-6 findings AND demonstrates the fix working, this is a signal that the proposed fix direction may be wrong. It is better to flag an impossible test than to write a test with incorrect mocks.
 
+% Scope Expansion Items
+
+Step 6's independent analysis identified these items beyond what the issue proposes:
+
+```
+{step6_expansion_items}
+```
+
+If this value is not `none`, you MUST generate at least one test for each listed item. If Step 8's plan did not include a test for an expansion item, generate it anyway and add a comment above the test: `# Scope addition: covers expansion item "<item>" identified by Step 6 but absent from Step 8's plan`. This makes the addition visible to Step 10's verification. Step 6's independent analysis is the authoritative scope.
+
 % Worktree Setup
 
 You are now working in an isolated git worktree at: {worktree_path}
@@ -136,6 +178,26 @@ You are now working in an isolated git worktree at: {worktree_path}
 3. Verify the test environment works:
    - Try running an existing test to confirm the setup is correct
    - If tests fail due to missing config, investigate and fix before proceeding
+
+% Step 5 Reproduction Tests
+
+If Step 5 wrote reproduction tests, their content is provided below. These tests call existing code and prove the bug exists on current code. You MUST incorporate them into your test file as regression tests, alongside your new tests for the fix.
+
+<step5_reproduction_tests>
+{step5_reproduction_tests}
+</step5_reproduction_tests>
+
+If the above is empty, Step 5 did not write reproduction tests — proceed normally.
+
+When incorporating reproduction tests:
+- Preserve their assertions and test logic
+- Adapt imports/fixtures to match your test file's structure
+- Keep them as separate test functions (don't merge into your fix-detection tests)
+- Add a comment above each marking it as a reproduction test from Step 5
+
+% Test Count Verification
+
+Step 8 planned {planned_test_count} tests. You MUST generate exactly that many `def test_` (or `async def test_`) functions with real assertions. Before finishing, count your test functions and verify the count matches. Do NOT generate stub functions that contain only `pass`, `...`, or a docstring with no assertions.
 
 % Your Task
 

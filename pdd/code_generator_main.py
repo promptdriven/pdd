@@ -1,4 +1,5 @@
 import ast
+import glob
 import os
 import re
 import json
@@ -21,7 +22,7 @@ from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
 from .incremental_code_generator import incremental_code_generator as incremental_code_generator_func
-from .core.cloud import CloudConfig, get_cloud_timeout
+from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from .python_env_detector import detect_host_python_executable
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
@@ -371,7 +372,7 @@ def _find_default_test_files(tests_dir: Optional[str], code_file_path: Optional[
     # Look for files starting with test_{code_stem}
     # We look for test_{code_stem}*.{code_suffix}
     # e.g., hello.py -> test_hello.py, test_hello_1.py
-    pattern = f"test_{code_stem}*{code_suffix}"
+    pattern = f"test_{glob.escape(code_stem)}*{glob.escape(code_suffix)}"
     found_files = list(tests_path.glob(pattern))
 
     return [str(p) for p in sorted(found_files)]
@@ -965,6 +966,17 @@ def code_generator_main(
                 preprocess_prompt=False
             )
 
+            # Safety net: if incremental returned identical code, fall back to full generation.
+            # The root-cause check lives in incremental_code_generator itself; this is
+            # defense-in-depth in case a caller passes a different generator function.
+            if (was_incremental_operation
+                    and generated_code_content is not None
+                    and existing_code_content is not None
+                    and generated_code_content == existing_code_content):
+                was_incremental_operation = False
+                if verbose:
+                    console.print("[yellow]Incremental patch produced no changes. Falling back to full generation.[/yellow]")
+
             if not was_incremental_operation:
                 if verbose:
                     console.print(Panel("Incremental generator suggested full regeneration. Falling back.", title="[yellow]Fallback[/yellow]", expand=False))
@@ -1013,7 +1025,7 @@ def code_generator_main(
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_timeout())
+                        response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_request_timeout())
                         response.raise_for_status()
                         
                         response_data = response.json()

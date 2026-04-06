@@ -37,12 +37,13 @@ from .agentic_verify import run_agentic_verify
 
 # Cloud configuration
 try:
-    from .core.cloud import CloudConfig, get_cloud_timeout
+    from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
     CLOUD_AVAILABLE = True
 except ImportError:
     CLOUD_AVAILABLE = False
     CloudConfig = None
     get_cloud_timeout = None
+    get_cloud_request_timeout = None
 
 
 def cloud_verify_fix(
@@ -87,7 +88,7 @@ def cloud_verify_fix(
     }
     cloud_url = CloudConfig.get_endpoint_url("verifyCode")
 
-    timeout = get_cloud_timeout() if get_cloud_timeout else 900
+    timeout = get_cloud_request_timeout() if get_cloud_request_timeout else (30, 900)
     response = requests.post(
         cloud_url,
         json=payload,

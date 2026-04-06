@@ -1,3 +1,5 @@
+<pdd-reason>LLM prompt template for inserting dependency includes into a prompt with doc placement.</pdd-reason>
+
 % You are an expert prompt engineer. Your goal is to insert new dependency includes into a PDD prompt file at the best location.
 
 % You will receive:
@@ -114,6 +116,8 @@
         </updated_prompt>
     </example>
 </examples>
+
+% When inserting documentation includes (`.md`, `.txt`, `.rst` files), place them in a `% Dependencies` or `% Context` section of the prompt. Do not place documentation includes inside `<internal_modules>` or `<internal_example_modules>` blocks, which are reserved for code examples.
 
 % Generate the output for the following inputs:
 <prompt_to_update>{actual_prompt_to_update}</prompt_to_update>
