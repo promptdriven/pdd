@@ -1,7 +1,8 @@
 """
-Checkup command — GitHub issue-driven project health check.
+Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
 import click
+from pathlib import Path
 from typing import Optional, Tuple
 
 from ..agentic_checkup import run_agentic_checkup
@@ -11,7 +12,27 @@ from ..core.errors import handle_error
 
 
 @click.command("checkup")
-@click.argument("target", required=True)
+@click.argument("target", required=False, default=None)
+@click.option(
+    "--validate-arch-includes",
+    "validate_arch_includes",
+    is_flag=True,
+    default=False,
+    help="Cross-check architecture.json against module <include> tags (no GitHub issue).",
+)
+@click.option(
+    "--project-root",
+    "project_root",
+    type=click.Path(exists=True, path_type=Path, file_okay=False),
+    default=None,
+    help="With --validate-arch-includes: directory to scan (default: current directory).",
+)
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help="With --validate-arch-includes: also validate bundled sample trees (examples/, …).",
+)
 @click.option(
     "--no-fix",
     is_flag=True,
@@ -34,24 +55,51 @@ from ..core.errors import handle_error
 @track_cost
 def checkup(
     ctx: click.Context,
-    target: str,
+    target: Optional[str],
+    validate_arch_includes: bool,
+    project_root: Optional[Path],
+    strict: bool,
     no_fix: bool,
     timeout_adder: float,
     no_github_state: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Run agentic health checkup on a PDD project from a GitHub issue.
+    Run agentic health checkup from a GitHub issue, or local diagnostics.
 
-    TARGET is a GitHub issue URL describing what to check.
+    \b
+    GitHub mode (default): TARGET is an issue URL.
+    Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
+    architecture.json entries against module prompt <include> tags — same check
+    as ``pdd validate-arch-includes``.
     """
+    ctx.ensure_object(dict)
+
+    if validate_arch_includes:
+        if target is not None:
+            raise click.BadParameter(
+                "Do not pass TARGET when using --validate-arch-includes.",
+                param_hint="'TARGET'",
+            )
+        root = project_root if project_root is not None else Path.cwd()
+        from ..architecture_include_validation import run_validate_arch_includes_cli
+
+        run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
+        return "validate-arch-includes: ok", 0.0, ""
+
+    if not target:
+        raise click.UsageError(
+            "Missing argument 'TARGET'. For local checks use "
+            "`pdd checkup --validate-arch-includes`."
+        )
+
     if not _is_github_issue_url(target):
         raise click.BadParameter(
             "TARGET must be a GitHub issue URL "
-            "(e.g., https://github.com/org/repo/issues/123)",
+            "(e.g., https://github.com/org/repo/issues/123), "
+            "or use --validate-arch-includes for architecture / include validation.",
             param_hint="'TARGET'",
         )
 
-    ctx.ensure_object(dict)
     quiet = ctx.obj.get("quiet", False)
     verbose = ctx.obj.get("verbose", False)
 

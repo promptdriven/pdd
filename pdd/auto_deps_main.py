@@ -121,6 +121,7 @@ def auto_deps_main(
                         for line in arch_report["messages"]:
                             rprint(f"[dim]{line}[/dim]")
                 except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
+                except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
                     if not ctx.obj.get("quiet", False):
                         rprint(
                             f"[yellow]Warning: Could not update architecture.json after auto-deps: "

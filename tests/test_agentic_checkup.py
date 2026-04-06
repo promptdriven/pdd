@@ -459,6 +459,47 @@ class TestRunAgenticCheckup:
 class TestCheckupCommand:
     """Test the Click command interface."""
 
+    def test_validate_arch_includes_mode_ok(self, tmp_path):
+        """--validate-arch-includes runs without TARGET (fixture-style layout)."""
+        from click.testing import CliRunner
+        from pdd.commands.checkup import checkup
+
+        (tmp_path / ".git").mkdir()
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "child_Python.prompt").write_text(
+            "%\n<include>parent_python.prompt</include>\n", encoding="utf-8"
+        )
+        (prompts / "parent_Python.prompt").write_text("%\n", encoding="utf-8")
+        import json
+
+        arch = [
+            {"filename": "child_Python.prompt", "dependencies": ["parent_Python.prompt"]},
+            {"filename": "parent_Python.prompt", "dependencies": []},
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch), encoding="utf-8")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            ["--validate-arch-includes", "--project-root", str(tmp_path)],
+            obj={"quiet": False},
+        )
+        assert result.exit_code == 0
+        assert "No architecture" in result.output or "mismatches" in result.output
+
+    def test_validate_arch_includes_rejects_extra_target(self):
+        from click.testing import CliRunner
+        from pdd.commands.checkup import checkup
+
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            ["https://github.com/o/r/issues/1", "--validate-arch-includes"],
+            obj={"quiet": False},
+        )
+        assert result.exit_code != 0
+
     def test_rejects_non_url_target(self):
         """The command should reject non-URL targets."""
         from click.testing import CliRunner

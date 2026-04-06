@@ -724,7 +724,6 @@ def sync_main(
         console.log(f"[yellow]Warning:[/] Budget of ${display_budget:.2f} is low. Complex operations may exceed this limit.")
 
     print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
-
     if not quiet:
         summary_panel = Panel(
             f"Basename: [bold cyan]{basename}[/bold cyan]\n"
