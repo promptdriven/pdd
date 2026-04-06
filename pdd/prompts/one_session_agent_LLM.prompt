@@ -89,9 +89,15 @@ Write this plan as a comment block at the top of `{test_path}`.
 
 ### 4b. Write
 
-Read the code file (`{code_path}`) first — use exact function names, parameters, and return types. If `{test_path}` exists, read it and run `pytest -xvs {test_path}` first. Fix any failing tests before writing new ones — update tests that no longer match the spec or code, but do not delete tests that still test valid behavior. Match the existing style and conventions. Then add new tests for uncovered behaviors. If no test file exists, write one from scratch.
+Read the code file (`{code_path}`) first — use exact function names, parameters, and return types.
 
-Group tests by requirement (one test class per behavioral rule).
+**If `{test_path}` already exists**: Read it, then run `pytest -xvs {test_path}`. Fix any failing tests first. Then identify gaps — what behaviors from the spec are not yet covered? Add NEW test functions for those gaps. Rules for existing test files:
+- Do NOT rewrite, rename, or reorganize existing tests that pass. Keep them exactly as they are.
+- Do NOT change the structure (e.g., do not convert standalone functions to classes or vice versa).
+- Match the existing style — if existing tests are standalone functions, write new ones as standalone functions.
+- Only modify a test if it is actually failing or testing behavior that contradicts the spec.
+
+**If `{test_path}` does not exist**: Write a new test file from scratch. Group tests by requirement (one test class per behavioral rule).
 
 **Assertions must check specific expected values** — not just types or field existence. Bad: `assert "name" in result`. Good: `assert result["name"] == "Alice"`. Ask: "would this pass if the function returned a hardcoded dummy?" If yes, it's too weak.
 

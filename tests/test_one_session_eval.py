@@ -10,6 +10,7 @@ Requires: PDD_RUN_AGENTIC_TESTS=1 and an agentic CLI (claude/gemini/codex)
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
@@ -167,8 +168,11 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
     Tests: exit {current_test_exit} | Test count: {current_test_count}
     Example: exit {current_example_exit}
 
-    Final files produced:
-    {current_final_files}
+    Changes made (unified diff against reference files):
+    {current_diffs}
+
+    New files created by this version (full content):
+    {current_new_files}
 
     Sync stdout (contains agent progress markers, fix attempts, and phase transitions):
     {current_stdout}
@@ -178,8 +182,11 @@ COMPARATIVE_EVALUATOR_PROMPT = textwrap.dedent("""\
     Tests: exit {original_test_exit} | Test count: {original_test_count}
     Example: exit {original_example_exit}
 
-    Final files produced:
-    {original_final_files}
+    Changes made (unified diff against reference files):
+    {original_diffs}
+
+    New files created by this version (full content):
+    {original_new_files}
 
     Sync stdout:
     {original_stdout}
@@ -652,12 +659,13 @@ S3_CODE_BUG = {
     ),
     "expected_behavior": (
         "Agent detects failing tests, identifies the code bug (>= should be >), "
-        "fixes the code, all tests pass. Tests should not be modified."
+        "fixes the code, all tests pass. Existing tests must be preserved — adding new tests is fine."
     ),
     "evaluation_guidance": (
         "Did the agent fix the CODE (change >= to > in apply_discount), or did it wrongly fix the TEST? "
         "Compare src/shopping_cart.py — the only needed change is >= to > on the discount line. "
-        "Do all tests pass after the fix? Did it preserve the existing tests or rewrite them? "
+        "Do all tests pass after the fix? Did it preserve the existing tests? "
+        "(Adding new tests is fine and should not be penalized — only penalize if existing tests were deleted or rewritten.) "
         "Did it break the example? Check sync stdout for diagnostic reasoning — "
         "did it correctly identify the root cause? Did it get stuck in crash-fix loops "
         "(look for crash_fix_attempt markers)? "
@@ -931,7 +939,7 @@ S4_MINIMAL_COVERAGE = {
         "Subtraction and multiplication? Malformed expressions (too few operands, too many values)? "
         "Invalid tokens? Empty expression? "
         "Do all tests pass? Did it make unnecessary code changes to src/stack_calculator.py? "
-        "Did the agent introduce any bugs (e.g., f-string escaping issues like {{token}} instead of {token})? "
+        "Did the agent introduce any bugs (e.g., f-string escaping issues like '{{token}}' instead of '{token}')? "
         "Ideal outcome: Original 3 tests preserved, many new tests added covering all 7 requirements, "
         "no code changes, all tests pass."
     ),
@@ -1762,19 +1770,110 @@ def _collect_final_files(project_dir: Path) -> Dict[str, str]:
 def _format_files_for_prompt(files: Dict[str, str], max_chars: int = 50000) -> str:
     """Format file contents for inclusion in the evaluator prompt.
 
-    Escapes curly braces in file contents so they survive str.format().
+    Prioritizes test and example files (the artifacts the judge needs to compare)
+    over code and prompt files (which are mostly unchanged between variants).
+    Large code files are truncated to head+tail to stay within budget.
     """
+    # Prioritize: tests > examples > prompts > src (code files are largest, least likely to differ)
+    def _sort_key(path: str) -> tuple:
+        if path.startswith("tests/"):
+            return (0, path)
+        if path.startswith("examples/"):
+            return (1, path)
+        if path.startswith("prompts/"):
+            return (2, path)
+        return (3, path)
+
     parts = []
     total = 0
-    for path, content in sorted(files.items()):
-        safe_content = content.replace("{", "{{").replace("}", "}}")
-        entry = f"--- {path} ---\n{safe_content}\n"
+    for path in sorted(files.keys(), key=_sort_key):
+        content = files[path]
+        entry = f"--- {path} ---\n{content}\n"
+
         if total + len(entry) > max_chars:
-            parts.append(f"--- (truncated, {len(files) - len(parts)} files remaining) ---")
+            # For large files, include head + tail instead of skipping entirely
+            remaining = max_chars - total - 200  # leave room for markers
+            if remaining > 2000:
+                head_size = remaining // 2
+                tail_size = remaining // 2
+                truncated = (
+                    content[:head_size]
+                    + f"\n\n--- [{path}: truncated {len(content) - head_size - tail_size} chars] ---\n\n"
+                    + content[-tail_size:]
+                )
+                entry = f"--- {path} ---\n{truncated}\n"
+                parts.append(entry)
+            else:
+                parts.append(
+                    f"--- {path} (omitted, {len(content)} chars) ---\n"
+                )
             break
         parts.append(entry)
         total += len(entry)
     return "\n".join(parts)
+
+
+def _compute_diffs(
+    reference_files: Dict[str, str],
+    final_files: Dict[str, str],
+    max_chars: int = 40000,
+) -> str:
+    """Compute unified diffs between reference (starting) and final files.
+
+    For files that exist in final but not reference, shows the full content as
+    a new-file diff. For files unchanged, notes 'no changes'. Escapes curly
+    braces for str.format() safety.
+    """
+    parts = []
+    total = 0
+
+    all_paths = sorted(set(reference_files.keys()) | set(final_files.keys()))
+
+    for path in all_paths:
+        ref = reference_files.get(path, "")
+        final = final_files.get(path, "")
+
+        if ref == final:
+            entry = f"--- {path}: no changes ---\n"
+        elif not ref:
+            # New file created by the agent
+            lines = final.splitlines(keepends=True)
+            diff_lines = [f"+{line}" for line in lines]
+            diff_text = f"--- /dev/null\n+++ {path}\n" + "".join(diff_lines)
+            entry = f"--- {path} (NEW FILE, {len(final)} chars) ---\n{diff_text}\n"
+        else:
+            diff_lines = list(difflib.unified_diff(
+                ref.splitlines(keepends=True),
+                final.splitlines(keepends=True),
+                fromfile=f"reference/{path}",
+                tofile=f"final/{path}",
+                n=3,
+            ))
+            if not diff_lines:
+                entry = f"--- {path}: no changes ---\n"
+            else:
+                diff_text = "".join(diff_lines)
+                entry = f"{diff_text}\n"
+
+        if total + len(entry) > max_chars:
+            parts.append(f"--- (diff output truncated, {len(all_paths) - len(parts)} files remaining) ---")
+            break
+        parts.append(entry)
+        total += len(entry)
+
+    return "\n".join(parts)
+
+
+def _get_new_files(
+    reference_files: Dict[str, str],
+    final_files: Dict[str, str],
+) -> Dict[str, str]:
+    """Return only files that exist in final but not in reference (newly created)."""
+    return {
+        path: content
+        for path, content in final_files.items()
+        if path not in reference_files
+    }
 
 
 def _setup_prompt_override(variant_dir: Path, variant: str) -> Optional[str]:
@@ -1838,36 +1937,45 @@ def _evaluate_comparative(
     """Use LLM-as-judge to compare improved vs original prompt results."""
     from pdd.llm_invoke import llm_invoke
 
-    def _escape(s: str) -> str:
-        """Escape curly braces so they survive str.format()."""
-        return s.replace("{", "{{").replace("}", "}}")
+    reference_files = scenario["files"]
 
-    prompt_text = COMPARATIVE_EVALUATOR_PROMPT.format(
-        scenario_description=scenario["description"],
-        expected_behavior=scenario["expected_behavior"],
-        evaluation_guidance=scenario.get("evaluation_guidance", "No specific guidance."),
-        reference_files=_format_files_for_prompt(scenario["files"], max_chars=20000),
-        current_cost=improved_run["sync"]["cost"],
-        current_time=improved_run["sync"]["wall_time"],
-        current_exit=improved_run["sync"]["exit_code"],
-        current_test_exit=improved_run["test"]["exit_code"],
-        current_test_count=improved_run["test"]["test_count"],
-        current_example_exit=improved_run["example"]["exit_code"],
-        current_final_files=_format_files_for_prompt(improved_run["final_files"], max_chars=20000),
-        current_stdout=_escape(improved_run["sync"]["stdout"][:8000]),
-        original_cost=original_run["sync"]["cost"],
-        original_time=original_run["sync"]["wall_time"],
-        original_exit=original_run["sync"]["exit_code"],
-        original_test_exit=original_run["test"]["exit_code"],
-        original_test_count=original_run["test"]["test_count"],
-        original_example_exit=original_run["example"]["exit_code"],
-        original_final_files=_format_files_for_prompt(original_run["final_files"], max_chars=20000),
-        original_stdout=_escape(original_run["sync"]["stdout"][:8000]),
-    )
+    # Build prompt via str.replace to avoid .format() brace interpretation issues.
+    # All dynamic content can contain literal curly braces (Python code, f-strings,
+    # diffs, error messages) which .format() would misinterpret as template variables.
+    replacements = {
+        "{scenario_description}": scenario["description"],
+        "{expected_behavior}": scenario["expected_behavior"],
+        "{evaluation_guidance}": scenario.get("evaluation_guidance", "No specific guidance."),
+        "{reference_files}": _format_files_for_prompt(reference_files, max_chars=20000),
+        "{current_cost:.4f}": f"{improved_run['sync']['cost']:.4f}",
+        "{current_time:.1f}": f"{improved_run['sync']['wall_time']:.1f}",
+        "{current_exit}": str(improved_run["sync"]["exit_code"]),
+        "{current_test_exit}": str(improved_run["test"]["exit_code"]),
+        "{current_test_count}": str(improved_run["test"]["test_count"]),
+        "{current_example_exit}": str(improved_run["example"]["exit_code"]),
+        "{current_diffs}": _compute_diffs(reference_files, improved_run["final_files"]),
+        "{current_new_files}": _format_files_for_prompt(
+            _get_new_files(reference_files, improved_run["final_files"]), max_chars=40000,
+        ),
+        "{current_stdout}": improved_run["sync"]["stdout"][:8000],
+        "{original_cost:.4f}": f"{original_run['sync']['cost']:.4f}",
+        "{original_time:.1f}": f"{original_run['sync']['wall_time']:.1f}",
+        "{original_exit}": str(original_run["sync"]["exit_code"]),
+        "{original_test_exit}": str(original_run["test"]["exit_code"]),
+        "{original_test_count}": str(original_run["test"]["test_count"]),
+        "{original_example_exit}": str(original_run["example"]["exit_code"]),
+        "{original_diffs}": _compute_diffs(reference_files, original_run["final_files"]),
+        "{original_new_files}": _format_files_for_prompt(
+            _get_new_files(reference_files, original_run["final_files"]), max_chars=40000,
+        ),
+        "{original_stdout}": original_run["sync"]["stdout"][:8000],
+    }
+    prompt_text = COMPARATIVE_EVALUATOR_PROMPT
+    for placeholder, value in replacements.items():
+        prompt_text = prompt_text.replace(placeholder, value)
 
     response = llm_invoke(
-        prompt=prompt_text,
-        input_json={},
+        messages=[{"role": "user", "content": prompt_text}],
         strength=0.5,
         temperature=0.1,
         output_pydantic=ComparativeResult,
@@ -1992,7 +2100,17 @@ def _run_comparative_test(
         )
         if s["exit_code"] != 0:
             print(f"  >> {label} stderr: {s['stderr'][:500]}")
-            print(f"  >> {label} stdout (tail): {s['stdout'][-500:]}")
+            print(f"  >> {label} stdout (last 2000 chars):\n{s['stdout'][-2000:]}")
+
+    # Always run the LLM judge — even if one variant failed or timed out, the
+    # judge's analysis of the partial stdout and diffs is valuable for understanding
+    # what went wrong and improving the prompt.
+    comparison = _evaluate_comparative(
+        scenario, improved_run, original_run,
+    )
+
+    # Log everything
+    _log_comparative_result(scenario_name, comparison, improved_run, original_run)
 
     # Hard assertions: current variant must at least complete
     assert improved_run["sync"]["exit_code"] == 0, (
@@ -2003,14 +2121,6 @@ def _run_comparative_test(
     # Scenario-specific hard assertions on improved variant
     if hard_assertions_fn:
         hard_assertions_fn(improved_run, original_run, scenario)
-
-    # Side-by-side comparative evaluation (single LLM call sees both outputs)
-    comparison = _evaluate_comparative(
-        scenario, improved_run, original_run,
-    )
-
-    # Log everything
-    _log_comparative_result(scenario_name, comparison, improved_run, original_run)
 
     return comparison
 
