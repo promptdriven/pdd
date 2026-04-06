@@ -310,6 +310,10 @@ def _is_permanent_error(error_message: str) -> bool:
         r"model\s+not\s+found",
         r"access\s+denied",
         r"permission\s+denied",
+        # Issue #1072: Quota exhaustion patterns
+        r"quota\s+(exhausted|exceeded)",
+        r"daily\s+quota",
+        r"terminal\s*quota\s*error",
     ]
     return any(re.search(p, msg) for p in permanent_patterns)
 
@@ -891,7 +895,7 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success
+                        # Real success — only log when verbose (success is not diagnostic)
                         if verbose:
                             _log_agentic_interaction(
                                 label=label,
@@ -927,16 +931,17 @@ def run_agentic_task(
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
-                _log_agentic_interaction(
-                    label=label,
-                    prompt=full_instruction,
-                    response=last_output,
-                    cost=0.0,
-                    provider=provider,
-                    success=False,
-                    duration=time.time() - task_start_time,
-                    cwd=cwd
-                )
+            # Issue #1072: Always log failures (not just when verbose)
+            _log_agentic_interaction(
+                label=label,
+                prompt=full_instruction,
+                response=last_output,
+                cost=0.0,
+                provider=provider,
+                success=False,
+                duration=time.time() - task_start_time,
+                cwd=cwd
+            )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break

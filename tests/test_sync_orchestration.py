@@ -7327,3 +7327,197 @@ class TestIssue1080MonorepoCwd:
             f"got cwd={actual_cwd}. Fix operation uses pdd_files['test'].parent "
             f"instead of config dir."
         )
+
+
+# --- Issue #1072 Tests: Error propagation and cost/model extraction in sync ---
+
+
+def test_sync_logs_error_from_failed_agentic_test(orchestration_fixture):
+    """Issue #1072: When agentic test generation fails, the error message from the
+    result tuple must be captured in the errors list, not silently dropped.
+
+    Before the fix, sync_orchestration.py:2427 logs `error=errors[-1] if errors and
+    not success else None`, but the `errors` list is empty because no Python exception
+    was raised and error messages from result tuples are never extracted (line 2384-2398).
+    This causes failed test operations to show `error=None` in sync logs.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+
+    error_msg = "All agent providers failed: anthropic: Exit code 1; google: TerminalQuotaError"
+
+    # cmd_test_main returns failure with error message
+    # Using current 4-tuple (buggy code) — the fix changes this to 5-tuple
+    def mock_test_failure(*args, **kwargs):
+        return ("", 0.0, "agentic-anthropic", False, error_msg)
+
+    mock_test.side_effect = mock_test_failure
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Spy on append_log_entry to capture what gets logged
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append:
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # The errors list should contain the SPECIFIC error from the tuple, not just
+    # the generic "Operation 'test' failed." fallback from line 2520.
+    # Before the fix: errors = ["Operation 'test' failed."] (generic, no provider detail)
+    # After the fix: errors should include "All agent providers failed: ..." (specific)
+    found_specific_error = any(
+        "All agent providers failed" in str(e) for e in result.get('errors', [])
+    )
+    assert found_specific_error, (
+        f"Expected specific provider failure message 'All agent providers failed' in "
+        f"errors list, but got only generic errors: {result.get('errors', [])}. "
+        f"sync_orchestration never extracts error messages from result tuples — "
+        f"the 5th tuple element is silently dropped."
+    )
+
+
+def test_sync_extracts_cost_and_model_on_failed_test(orchestration_fixture):
+    """Issue #1072: Cost and model must be extracted from result tuples even when
+    the test operation fails — not gated behind `if success:`.
+
+    Before the fix, sync_orchestration.py:2416 gates cost/model extraction behind
+    `if success:`, so failed ops always log cost=0.0 and model='unknown' even when
+    the result tuple contains real values (e.g., cost=2.78, model='agentic-anthropic').
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+
+    # cmd_test_main returns failure BUT with real cost and model values
+    def mock_test_failure_with_cost(*args, **kwargs):
+        return ("", 2.78, "agentic-anthropic", False, "Rate limited")
+
+    mock_test.side_effect = mock_test_failure_with_cost
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Spy on append_log_entry to capture the logged entry dict
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append:
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Find the append_log_entry call for the test operation
+    test_entries = []
+    for call_obj in mock_append.call_args_list:
+        entry = call_obj.args[2] if len(call_obj.args) > 2 else call_obj[0][2]
+        if isinstance(entry, dict) and entry.get('operation') == 'test':
+            test_entries.append(entry)
+
+    assert len(test_entries) >= 1, (
+        "No log entry found for 'test' operation in append_log_entry calls"
+    )
+    test_entry = test_entries[0]
+
+    assert test_entry.get('actual_cost') == pytest.approx(2.78), (
+        f"Expected cost=2.78 for failed test op, got cost={test_entry.get('actual_cost')} — "
+        f"cost extraction is gated behind `if success:` at sync_orchestration.py:2416"
+    )
+    assert test_entry.get('model') == "agentic-anthropic", (
+        f"Expected model='agentic-anthropic' for failed test op, got model='{test_entry.get('model')}' — "
+        f"model extraction is gated behind `if success:` at sync_orchestration.py:2416"
+    )
+
+
+def test_sync_successful_test_logs_no_spurious_error(orchestration_fixture):
+    """Issue #1072 regression guard: A successful test operation must still log
+    error=None, not accidentally inject the success message as an error.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_test = mocks['cmd_test_main']
+    mock_get_paths = mocks['get_pdd_file_paths']
+    tmp_path = Path(mock_get_paths.return_value['prompt']).parent.parent
+
+    def mock_test_success(*args, **kwargs):
+        test_file = tmp_path / 'tests' / 'test_calculator.py'
+        test_file.write_text("# Generated test content")
+        return ("test_content", 0.06, "agentic-anthropic", True, "")
+
+    mock_test.side_effect = mock_test_success
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='test', reason='Tests missing'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Spy on append_log_entry to capture the logged entry dict
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append:
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # Find the append_log_entry call for the test operation
+    test_entries = []
+    for call_obj in mock_append.call_args_list:
+        entry = call_obj.args[2] if len(call_obj.args) > 2 else call_obj[0][2]
+        if isinstance(entry, dict) and entry.get('operation') == 'test':
+            test_entries.append(entry)
+
+    assert len(test_entries) >= 1, (
+        "No log entry found for 'test' operation"
+    )
+    test_entry = test_entries[0]
+
+    assert test_entry.get('error') is None, (
+        f"Successful test should log error=None, got: {test_entry.get('error')!r}"
+    )
+    assert test_entry.get('actual_cost') == pytest.approx(0.06), (
+        f"Expected cost=0.06 for successful test, got: {test_entry.get('actual_cost')}"
+    )
+    assert test_entry.get('model') == "agentic-anthropic", (
+        f"Expected model='agentic-anthropic', got: {test_entry.get('model')!r}"
+    )
+
+
+# Scope addition: covers expansion item "sync_orchestration.py:2398 should also
+# extract crash/fix error messages from result[1]" identified by Step 6 but absent
+# from Step 8's plan
+def test_sync_extracts_error_from_crash_fix_result_tuple(orchestration_fixture):
+    """Issue #1072 (Step 6 expansion): crash/fix operations return error messages in
+    result[1], but sync_orchestration.py:2398 only does `success = bool(result[0])` —
+    it never extracts the error from result[1]. Failed crash/fix ops should also log
+    their error messages.
+    """
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_crash = mocks['crash_main']
+
+    crash_error_msg = "Crash fix failed: could not resolve merge conflict"
+    mock_crash.return_value = (False, crash_error_msg, 0.0, "unknown", "", [])
+
+    # Create the required files so the crash operation doesn't skip due to missing files
+    pdd_files = mocks['get_pdd_file_paths'].return_value
+    pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
+    pdd_files['code'].write_text("# code file")
+    pdd_files['example'].parent.mkdir(parents=True, exist_ok=True)
+    pdd_files['example'].write_text("# example file")
+
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Code has errors'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    # Mock _run_example_with_error_detection to simulate a crash (nonzero exit)
+    # so has_crash=True and crash_main actually gets called
+    with patch('pdd.sync_orchestration.append_log_entry') as mock_append, \
+         patch('pdd.sync_orchestration._run_example_with_error_detection', return_value=(1, "", "Traceback: error")), \
+         patch('pdd.sync_orchestration.read_run_report', return_value=None):
+        result = sync_orchestration(basename="calculator", language="python")
+
+    # The errors list should contain the SPECIFIC crash error from result[1],
+    # not just the generic "Operation 'crash' failed." fallback.
+    found_specific_error = any(
+        "Crash fix failed" in str(e) for e in result.get('errors', [])
+    )
+    assert found_specific_error, (
+        f"Expected specific crash error 'Crash fix failed: ...' in errors list, "
+        f"got only: {result.get('errors', [])}. "
+        f"sync_orchestration never extracts error messages from crash/fix result[1]."
+    )
