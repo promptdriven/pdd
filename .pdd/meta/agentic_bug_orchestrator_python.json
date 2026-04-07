@@ -1,15 +1,19 @@
 {
-  "pdd_version": "0.0.164",
-  "timestamp": "2026-03-03T17:53:38.286996+00:00",
-  "command": "update",
-  "prompt_hash": "3b6b96a30c152367595bcb5145f5d28297f0199515bde7a48363003bcec4dd76",
-  "code_hash": "40256fedcd85222487338314043a84a7621e75ce65fa0dd1cb9342744f20570d",
-  "example_hash": null,
-  "test_hash": null,
-  "test_files": null,
+  "pdd_version": "0.0.179",
+  "timestamp": "2026-04-07T04:03:50.202975+00:00",
+  "command": "auto-deps",
+  "prompt_hash": "dba4d62bafdb7c68c8746c3ce8db87c2665aecbe38be7d8124ec424db186b401",
+  "code_hash": "0a20169a4c360ba5f6fced53e34b3cdcc50136b1763e9a71fe38779f5141c985",
+  "example_hash": "00db52821223449eeb381e3d57e0fff538628415ac57aacc3266d8cf83f46121",
+  "test_hash": "2501f270bf146398d621c8ba97b64752195fbf87a911e2f5de334b01ece90c3a",
+  "test_files": {
+    "test_agentic_bug_orchestrator.py": "2501f270bf146398d621c8ba97b64752195fbf87a911e2f5de334b01ece90c3a",
+    "test_agentic_bug_orchestrator_1.py": "2f8ba8ce40f8f1fcba01c98eadc57e77f34e517358e9a26c655aa9cb654103f4"
+  },
   "include_deps": {
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/agentic_common_example.py": "5c2a5da7c0281a5277e775bda0e64e1de379f546b59eef359179052fafe7dea9",
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "/Users/caijiamin/Desktop/PDD_PRIVATE/pdd-fix-crash-hang/context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/preprocess_example.py": "2832dc5fa6943c47696bac16f1063dfa209ccf5a61c440e0147095a185f60d76",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }
