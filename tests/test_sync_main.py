@@ -77,6 +77,36 @@ from pdd import DEFAULT_STRENGTH
 #       - Verify the structure and content of the returned dictionary.
 
 
+@pytest.fixture(autouse=True)
+def _disable_auto_submit_for_all_tests(monkeypatch):
+    """Force-disable the post-sync ``_auto_submit_example`` HTTP path
+    for the entire ``test_sync_main`` suite.
+
+    Many tests in this file mock ``sync_orchestration`` to return
+    ``{"success": True, ...}`` and call ``sync_main`` with a default
+    (non-local) context. After a successful sync, ``sync_main`` calls
+    ``_auto_submit_example`` which makes a real ``get_jwt_token`` HTTPS
+    request unless either ``local=True`` or the env var
+    ``PDD_FORCE_LOCAL`` is set.
+
+    On dev machines ``PDD_FORCE_LOCAL`` is typically set, so the auto-
+    submit short-circuits in microseconds and tests pass. On the cloud
+    test runner the env var is unset, so the network call hangs and
+    chunks containing this file blow past the per-task max runtime
+    (35 min), failing the whole cloud-test run with a confusing
+    "no result file" error.
+
+    Belt-and-braces: set the env var (so the existing early return
+    fires) AND patch the helper to a no-op (in case some test path
+    bypasses the env var gate). This applies to every test in this
+    module via ``autouse=True``.
+    """
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setattr(
+        "pdd.sync_main._auto_submit_example", lambda *a, **k: None
+    )
+
+
 @pytest.fixture
 def runner() -> CliRunner:
     """Provides a Click test runner."""
@@ -1263,23 +1293,12 @@ class TestOneSessionSyncOutputFromConfig:
 
     @pytest.mark.timeout(30)
     def test_one_session_passes_output_from_config_true(
-        self, mock_project_dir, mock_construct_paths, monkeypatch
+        self, mock_project_dir, mock_construct_paths
     ):
+        # Note: ``_auto_submit_example`` is auto-disabled by the
+        # module-level ``_disable_auto_submit_for_all_tests`` fixture,
+        # so the post-sync HTTP path can't hang this test on cloud.
         from unittest.mock import MagicMock, patch
-
-        # ``_auto_submit_example`` (called after a successful one-session
-        # sync) makes a real ``get_jwt_token`` HTTP call when ``local`` is
-        # False AND ``PDD_FORCE_LOCAL`` is unset. On the cloud test runner
-        # the env var is unset, so the call hangs and times out the whole
-        # pytest chunk. Force-set it to keep this test hermetic — we're
-        # asserting on the call signature into ``code_generator_main``,
-        # not on cloud submission behaviour.
-        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-        # Belt-and-braces: also patch ``_auto_submit_example`` to a no-op
-        # in case the env-var gate is bypassed by some other code path.
-        monkeypatch.setattr(
-            "pdd.sync_main._auto_submit_example", lambda *a, **k: None
-        )
 
         # Real prompt file so _detect_languages picks it up.
         (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
