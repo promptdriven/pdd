@@ -268,8 +268,9 @@ class TestIssue830NoLoopControlTokenE2E:
             use_github_state=False,
         )
 
-        # 1 cycle = 8 steps at $0.10 + 1 step at $0.26 = $1.06
-        one_cycle_cost = (8 * COST_PER_STEP) + STEP9_COST
+        # 1 cycle + a single Step 9 retry:
+        # 8 steps at $0.10 + 2 steps at $0.26 = $1.32
+        one_cycle_cost = (8 * COST_PER_STEP) + (2 * STEP9_COST)
         # Allow small margin for floating point
         assert total_cost <= one_cycle_cost + 0.01, (
             f"BUG DETECTED (Issue #830): Total cost ${total_cost:.2f} exceeds single cycle "

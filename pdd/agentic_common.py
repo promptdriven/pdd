@@ -153,12 +153,16 @@ def classify_step_output(
         model: LiteLLM model identifier for classification.
 
     Returns:
-        TokenMatch if classified, None if classification fails or returns NONE.
+        TokenMatch when classified to a known token.
+        None when the classifier confidently returns NONE.
+        TokenMatch(token="CLASSIFICATION_ERROR") when classification fails
+        (timeout/rate-limit/provider error/parse failure), allowing callers to
+        distinguish "no token" from "classifier unavailable".
     """
     try:
         from pdd.llm_invoke import llm_invoke
     except ImportError:
-        return None
+        return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
 
     token_list = ", ".join(expected_tokens)
     prompt = (
@@ -190,14 +194,14 @@ def classify_step_output(
         raw = result.get("result") or result.get("output", "")
         parsed = json.loads(raw) if isinstance(raw, str) else raw
         if not parsed:
-            return None
+            return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
         status = parsed.get("status", "NONE")
         if status == "NONE" or status not in expected_tokens:
             return None
         cost = result.get("cost")
         return TokenMatch(tier="llm_classification", token=status, cost=cost)
     except Exception:
-        return None
+        return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
 
 
 def substitute_template_variables(

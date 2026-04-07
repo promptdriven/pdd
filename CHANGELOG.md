@@ -1,3 +1,22 @@
+## v0.0.200 (2026-04-06)
+
+### Feat
+
+- add prompt definition for track_cost decorator to log command execution costs
+- add patch verification gate to incremental code generator (#1076)
+
+### Fix
+
+- update test mock to return DepGraphFromArchitectureResult instead of plain dict
+- port #733 dep graph warnings and dependency preservation from PR #736
+- skip BUG_STEP_TIMEOUTS prompt-vs-code test when code prompt unavailable
+- **e2e**: robust Step 9 loop-control handling (cherry-pick from promptdriven/pdd#708)
+- **e2e**: robust Step 9 loop-control handling (cherry-pick from promptdriven/pdd#708)
+- **e2e**: unify Step 9 retry with primary
+- replace LLM verifier with root-cause patcher prompt fix (#1076)
+- address PR review feedback for verification gate (#1076)
+- deduplicate verbose output, add graceful degradation for verification (#1076)
+
 ## v0.0.199 (2026-04-05)
 
 ### Fix

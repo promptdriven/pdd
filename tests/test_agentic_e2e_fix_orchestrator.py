@@ -3151,10 +3151,11 @@ class TestIssue830MissingLoopControlToken:
             **e2e_fix_default_args
         )
 
-        # Should only run 9 steps (1 cycle), NOT 18+ (2+ cycles)
-        assert mock_run.call_count == 9, (
-            f"Expected exactly 9 step calls (1 cycle only) but got {mock_run.call_count}. "
-            f"Missing loop control token should break the loop, not default to CONTINUE_CYCLE."
+        # Should only run 1 cycle worth of steps plus a single Step 9 retry:
+        # 9 initial steps + 1 retry call = 10 total, NOT 18+ (2+ full cycles).
+        assert mock_run.call_count == 10, (
+            f"Expected 10 step calls (1 cycle + Step 9 retry) but got {mock_run.call_count}. "
+            "Missing loop control token should not start Cycle 2."
         )
 
     def test_no_loop_control_token_logs_warning(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
@@ -3757,7 +3758,7 @@ class TestClassifyStepOutputWiring:
         # Return None for Step 3 classify (not a bug), TokenMatch for Step 9
         def classify_side_effect(output, tokens, **kwargs):
             if "ALL_TESTS_PASS" in tokens:
-                return TokenMatch(tier="llm_classification")
+                return TokenMatch(tier="llm_classification", token="CONTINUE_CYCLE")
             return None
 
         mock_classify.side_effect = classify_side_effect
@@ -3798,7 +3799,7 @@ class TestClassifyStepOutputWiring:
 
         def classify_side_effect(output, tokens, **kwargs):
             if "ALL_TESTS_PASS" in tokens:
-                return TokenMatch(tier="llm_classification")
+                return TokenMatch(tier="llm_classification", token="CONTINUE_CYCLE")
             return None
 
         mock_classify.side_effect = classify_side_effect
@@ -3859,7 +3860,7 @@ class TestClassifyStepOutputWiring:
         from pdd.agentic_common import TokenMatch
 
         mock_run, _, _ = e2e_fix_mock_dependencies
-        mock_classify.return_value = TokenMatch(tier="llm_classification")
+        mock_classify.return_value = TokenMatch(tier="llm_classification", token="NOT_A_BUG")
 
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
@@ -3876,7 +3877,7 @@ class TestClassifyStepOutputWiring:
     def test_step9_classify_failure_falls_through_to_safety_stop(
         self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
     ):
-        """If classify_step_output returns None, safety stop should still trigger."""
+        """If classify_step_output returns confident NONE, safety stop should still trigger."""
         from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
         mock_run, _, _ = e2e_fix_mock_dependencies
@@ -3892,6 +3893,39 @@ class TestClassifyStepOutputWiring:
         success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert "no loop control token" in msg.lower() or "stopped" in msg.lower()
+
+    @patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output")
+    def test_step9_classify_error_continues_cycle(
+        self, mock_classify, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """If tier-4 classifier fails, Step 9 should continue cycle (not terminal-stop)."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+        from pdd.agentic_common import TokenMatch
+
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 2
+        cycle = [0]
+
+        def classify_side_effect(output, tokens, **kwargs):
+            if "ALL_TESTS_PASS" in tokens:
+                return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
+            return None
+
+        mock_classify.side_effect = classify_side_effect
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                cycle[0] += 1
+                if cycle[0] >= 2:
+                    return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, "Ambiguous results.", 0.1, "gpt-4")
+            return (True, "Step output", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert success is True, f"Expected cycle to continue after classifier error, got msg={msg}"
 
 
 class TestSemanticTierConsoleLogging:

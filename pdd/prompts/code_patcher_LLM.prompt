@@ -39,10 +39,10 @@ CHANGE_DESCRIPTION:
 Based on the change description and differences between the prompts, carefully update the existing code.
 
 Remember to:
-1. Only modify what's necessary to implement the changes
-2. Maintain consistency with the existing code style and structure
-3. Ensure all functionality from the original code still works correctly
-4. Implement all new requirements from the updated prompt
+1. Implement all new requirements from the updated prompt
+2. Propagate changes everywhere they are needed — when a function signature, class interface, or data structure changes, update ALL call sites, constructors, and references throughout the code, not just the definition
+3. Maintain consistency with the existing code style and structure
+4. Ensure all functionality from the original code still works correctly
 5. Test the logic of your changes to ensure correctness
 6. Include appropriate error handling for any new code
 
