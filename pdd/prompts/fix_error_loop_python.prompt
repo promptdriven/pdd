@@ -47,13 +47,19 @@ def cloud_fix_errors(
     temperature: float,
     verbose: bool = False,
     time: float = DEFAULT_TIME,
-    code_file_ext: str = ".py"
+    code_file_ext: str = ".py",
+    protect_tests: bool = False,
+    failure_classification: str | None = None,
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
 
     This function has the same interface as fix_errors_from_unit_tests to allow
     seamless switching between local and cloud execution in the fix loop.
+
+    Args:
+        protect_tests: When True, prevents the LLM from modifying test files.
+        failure_classification: Optional classification string to send to cloud.
 
     Returns: (update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name)
 

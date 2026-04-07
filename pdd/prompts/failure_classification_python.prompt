@@ -21,7 +21,7 @@ Pure helpers used by `fix_error_loop` (and optionally other callers). No I/O, no
 
 4. **`extract_failure_signature(output: str) -> str`** — Produce a **stable, comparable** signature for “same failure as last iteration” (e.g. normalized error type + location hints). Used to detect unchanged syntax/import failures across fix attempts.
 
-5. **`failure_classification_hint(kind: FailureKind, *, attempt: int, signature: str, ...) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next.
+5. **`failure_classification_hint(kind: FailureKind) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next.
 
 6. **`format_signature_hint(...)`** — Format signature + hint for console (callers may apply Rich yellow styling); keep messages aligned with product copy:
    - Syntax/import early stop: e.g. stopping after repeated identical signature — may need imports/env or missing files.
