@@ -13,7 +13,7 @@
       - 'env_vars' - An optional dictionary `Dict[str, str]` containing template variables passed from the CLI via `-e/--env`.
       - 'verbose' - A boolean flag for detailed logging output.
       - 'quiet' - A boolean flag to suppress non-error output.
-      - 'output_from_config' - A boolean (default False) indicating whether the `output` argument was derived from `.pddrc` (`generate_output_path`) rather than an explicit `--output` CLI flag. When True, a front-matter `output:` value (if present) takes precedence over the .pddrc default; when False, the explicit CLI `--output` always wins. Preserves the documented precedence: CLI > front-matter > .pddrc. This parameter is set by the sync orchestration paths (one-session and agentic) so they consistently honor front-matter overrides.
+      - 'output_from_config' - Boolean (default False). Set to True when `output` came from `.pddrc` (`generate_output_path`) rather than an explicit `--output` CLI flag. Lets the function honor a front-matter `output:` value over the `.pddrc` default while still letting an explicit CLI `--output` win. Preserves precedence: CLI > front-matter > `.pddrc`. Sync paths set this; the standalone `pdd generate` command leaves it at the default.
    Outputs:
       - Returns a tuple containing (`str`, `bool`, `float`, `str`):
             - `str`: The generated or updated code.
@@ -233,10 +233,8 @@
       * Do NOT send the YAML to the LLM; treat it as human/CLI metadata.
     - Merge variable defaults from front matter into `env_vars` (without overwriting explicit `-e` values). Validate required variables; if missing, raise a friendly `click.UsageError` listing the missing keys.
     - Honor `language` from front matter if present (overrides detection).
-    - **Front-matter `output:` precedence (CLI > front-matter > .pddrc):**
-        * Honor `output` from front matter when *either* (a) the caller passed no `output` (explicit `--output` flag was omitted) *or* (b) `output_from_config=True` (the supplied `output` came from `.pddrc generate_output_path`, not an explicit CLI flag).
-        * When the caller passed an explicit CLI `--output` (`output_from_config=False` and `output is not None`), front-matter `output:` must NOT override it.
-        * Wrap the front-matter resolution in `try/except`. **On any exception** (permission error, broken expansion, invalid path, etc.), do NOT swallow it silently — print a yellow `console.print` warning of the form `"Warning: Could not resolve front-matter output path '{value}': {error}. Falling back to default output path."` (gated on `not quiet`) and fall back to the caller-supplied `output_path`. Silent fallback writes code to the wrong location and confuses users.
+    - Front-matter `output:` precedence is `--output` (CLI) > `output:` (front matter) > `.pddrc generate_output_path`. Concretely: honor a front-matter `output:` value when the caller passed no `output` argument *or* when `output_from_config=True` (i.e. the supplied `output` came from `.pddrc`, not an explicit CLI flag). When the caller passed an explicit CLI `--output` (`output_from_config=False` and `output is not None`), front-matter `output:` must NOT override it.
+    - Wrap front-matter `output:` resolution in `try/except`. On any exception (permission error, broken expansion, invalid path, etc.), do NOT swallow silently — print a yellow `console.print` warning of the form `"Warning: Could not resolve front-matter output path '{value}': {error}. Falling back to default output path."` (gated on `not quiet`) and fall back to the caller-supplied `output_path`. Silent fallback writes code to the wrong location and confuses users.
     - Support `llm` field in front matter to enable/disable LLM generation (boolean, defaults to true).
     - Support `post_process_python` field in front matter to specify a Python script to run after generation.
     - Support `post_process_args` field in front matter to specify arguments for the post-process script (list of strings with placeholder support).

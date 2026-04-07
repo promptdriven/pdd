@@ -251,7 +251,7 @@ When `skip_verify` or `skip_tests` is set:
 
 ### Operation Dispatch
 
-- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). **Always pass `output_from_config=True`** because the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output` flag. This lets a front-matter `output:` value in the prompt override the .pddrc default and matches the precedence the standalone `pdd generate` command honors. The one-session sync path in `sync_main` follows the same convention.
+- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. The one-session sync path in `sync_main` follows the same convention.
 
 ### Post-Operation Validation
 
