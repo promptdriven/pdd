@@ -159,7 +159,7 @@ class PDDCLI(click.Group):
             # Successful exit: propagate for Click to finish cleanly.
             if e.exit_code == 0:
                 raise
-            # Intentional failure (e.g. validate-arch-includes, failed sync): do not
+            # Intentional failure (e.g. checkup --validate-arch-includes, failed sync): do not
             # route through handle_error — that misreports "unexpected error" after
             # the command already printed diagnostics.
             raise

@@ -236,7 +236,7 @@ def test_validate_arch_includes_cli_ok(mock_auto_update, tmp_path: Path) -> None
     runner = CliRunner()
     result = runner.invoke(
         cli.cli,
-        ["validate-arch-includes", "--project-root", str(tmp_path)],
+        ["checkup", "--validate-arch-includes", "--project-root", str(tmp_path)],
     )
     assert result.exit_code == 0
     assert "No architecture" in result.output or "mismatches" in result.output
@@ -257,7 +257,7 @@ def test_validate_arch_includes_cli_fails_on_mismatch(mock_auto_update, tmp_path
     runner = CliRunner()
     result = runner.invoke(
         cli.cli,
-        ["validate-arch-includes", "--project-root", str(tmp_path)],
+        ["checkup", "--validate-arch-includes", "--project-root", str(tmp_path)],
     )
     assert result.exit_code == 1
     assert "mismatch" in result.output.lower()

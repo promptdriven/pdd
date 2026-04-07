@@ -90,7 +90,7 @@ def run_validate_arch_includes_cli(
     """
     Print validation messages and exit with code 1 if there are issues.
 
-    Used by ``pdd validate-arch-includes`` and ``pdd checkup --validate-arch-includes``.
+    Used by ``pdd checkup --validate-arch-includes``.
     """
     import click
 
