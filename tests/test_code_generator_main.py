@@ -1362,6 +1362,86 @@ Generate module.
     assert not fm_output.resolve().exists(), "Front-matter should NOT override CLI --output"
 
 
+def test_front_matter_resolution_failure_warns_and_falls_back(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    mock_rich_console_fixture,
+    monkeypatch,
+):
+    """When front-matter ``output:`` resolution raises (e.g. bad path,
+    permission error), the CLI must:
+        1. log a yellow warning to the console
+        2. fall back to the .pddrc / CLI-supplied output path
+        3. NOT crash silently
+
+    Regression: the bare ``except Exception: pass`` previously swallowed
+    these errors, so users would see code written to the wrong location
+    with no indication why.
+    """
+    import pdd.code_generator_main as cgm
+
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['quiet'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "fm_broken.prompt"
+
+    fallback_output = temp_dir_setup["output_dir"] / "fm_broken.py"
+    front_matter_prompt = """---
+output: \"/tmp/fm_resolve_will_explode.py\"
+---
+Generate module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(fallback_output)},
+        "python",
+    )
+
+    # Force front-matter resolution to raise. We monkeypatch ``_expand_vars``
+    # to raise *only* for the front-matter value — the helper is also called
+    # earlier on the regular ``output_path`` argument, which must succeed so
+    # we actually reach the try/except Greg flagged in code_generator_main.py.
+    real_expand = cgm._expand_vars
+    fm_value = "/tmp/fm_resolve_will_explode.py"
+
+    def selective_boom(text, vars_map=None):
+        if text == fm_value:
+            raise PermissionError("simulated permission error during expansion")
+        return real_expand(text, vars_map)
+
+    monkeypatch.setattr(cgm, "_expand_vars", selective_boom)
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(fallback_output),  # .pddrc-supplied default
+        None,
+        False,
+        env_vars={"llm": "true"},
+        output_from_config=True,  # exercise the broadened sync path
+    )
+
+    # ``mock_rich_console_fixture`` is the autouse fixture that intercepts
+    # ``console.print`` calls in this module — capsys would not see them
+    # because rich's print is replaced with a MagicMock.
+    printed = [
+        " ".join(str(a) for a in call.args)
+        for call in mock_rich_console_fixture.call_args_list
+    ]
+    joined = " ".join(printed)
+    assert "Could not resolve front-matter output path" in joined, (
+        f"Expected fall-back warning in console output, got: {printed}"
+    )
+    assert "simulated permission error" in joined
+    # Fallback path was actually used.
+    assert fallback_output.exists(), "Should fall back to .pddrc / CLI path on resolution failure"
+
+
 
 def test_front_matter_variable_defaults_and_no_override(
     mock_ctx,

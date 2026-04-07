@@ -622,3 +622,60 @@ def test_poll_returns_no_checks_on_no_required_checks_with_partial_data(
     )
     assert checks == []
     assert mock_run.call_count == 1
+
+
+def test_poll_logs_unknown_stderr_before_classifying_as_failed(
+    tmp_path: Path,
+) -> None:
+    """When ``gh pr checks`` exits 1 with non-empty ``latest_checks`` AND
+    unrecognised stderr, the poller falls through to ``_classify_check_result``
+    which returns ``"failed"`` purely from the exit code. That can trigger the
+    LLM fix loop for non-existent failures.
+
+    Greg's review on PR #1116 asked us to at least surface the stderr in this
+    path so users can distinguish a real check failure from a gh transport
+    error. Verify the yellow warning is printed before classification.
+    """
+    failed_checks_stdout = (
+        '[{"name":"build","state":"FAILURE","bucket":"fail","link":""}]'
+    )
+    unknown_stderr = (
+        "GraphQL: Something nobody has ever seen before "
+        "(node.statusCheckRollup.nodes.0.commit.statusCheckRollup)"
+    )
+    failed_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=failed_checks_stdout,
+        stderr=unknown_stderr,
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._run_gh", return_value=failed_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]), \
+         patch("pdd.ci_validation.console") as mock_console:
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="sha123",
+            quiet=False,
+        )
+
+    # Behaviour preserved: still classifies as failed (real check failure
+    # signal must not be lost), and partial data is returned to the caller.
+    assert status == "failed", f"Expected 'failed' classification, got '{status}'"
+    assert len(checks) == 1
+    # New observability: the unknown stderr is logged so users can see it.
+    printed_args = [str(call) for call in mock_console.print.call_args_list]
+    joined = " ".join(printed_args)
+    assert "Something nobody has ever seen before" in joined, (
+        f"Expected unknown stderr to be logged before classifying as failed, "
+        f"got prints: {printed_args}"
+    )
+    assert "exit code 1" in joined, (
+        f"Log line should make it explicit this is from exit code 1 fall-through, "
+        f"got: {printed_args}"
+    )

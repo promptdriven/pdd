@@ -461,6 +461,28 @@ def code_generator_main(
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
     local vs. cloud execution, and output.
+
+    Args:
+        ctx: Click context carrying CLI flags (strength, temperature, verbose, force, etc.).
+        prompt_file: Path to the .prompt file to generate from.
+        output: Resolved output path. ``None`` means no caller-supplied path; the
+            front-matter ``output:`` (or .pddrc default) will be used instead.
+        original_prompt_file_path: Optional pinned reference for incremental diff.
+        force_incremental_flag: Force incremental generation when possible.
+        env_vars: Extra environment variables for template expansion.
+        unit_test_file: Optional unit test path used by the cloud generator.
+        exclude_tests: Whether to skip tests in the cloud payload.
+        language: Optional explicit target language override.
+        output_from_config: ``True`` when ``output`` was derived from
+            ``.pddrc`` (``generate_output_path``) rather than an explicit
+            ``--output`` CLI flag. When ``True``, a front-matter ``output:``
+            value (if present) takes precedence over the .pddrc default.
+            When ``False`` (CLI flag), the explicit path always wins. This
+            preserves the documented precedence: CLI > front-matter > .pddrc.
+            Defaults to ``False`` so existing callers stay backward compatible.
+
+    Returns:
+        Tuple of (generated_code, was_incremental, total_cost, model_name).
     """
     cli_params = ctx.obj or {}
     is_local_execution_preferred = cli_params.get('local', False)
@@ -704,8 +726,17 @@ def code_generator_main(
             meta_out = _expand_vars(fm_meta["output"], env_vars)
             if meta_out:
                 output_path = str(pathlib.Path(meta_out).resolve())
-        except Exception:
-            pass
+        except Exception as fm_output_err:
+            # Resolving the front-matter `output:` failed (bad path,
+            # permission error, broken expansion, etc.). Fall back to the
+            # caller-supplied path, but warn loudly so users notice — silent
+            # fallback writes code to the wrong location.
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: Could not resolve front-matter output path "
+                    f"'{fm_meta.get('output')}': {fm_output_err}. "
+                    f"Falling back to default output path.[/yellow]"
+                )
 
     # Honor front-matter language if provided (overrides detection for both local and cloud)
     if fm_meta and isinstance(fm_meta.get("language"), str) and fm_meta.get("language"):

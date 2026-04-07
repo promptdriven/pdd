@@ -294,6 +294,19 @@ def _poll_required_checks(
                         console.print(f"[yellow]CI polling warning: {stderr_msg}[/yellow]")
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
+            # returncode=1 + non-empty latest_checks + unrecognised stderr.
+            # This falls through to _classify_check_result, which will return
+            # "failed" purely from the exit code — potentially triggering the
+            # LLM fix loop for non-existent failures. Surface the stderr so
+            # users can tell whether it was a real check failure or a gh
+            # transport error masquerading as one.
+            if not quiet:
+                stderr_msg = result.stderr.strip()
+                if stderr_msg:
+                    console.print(
+                        f"[yellow]CI polling warning (classifying as failed "
+                        f"from exit code 1): {stderr_msg}[/yellow]"
+                    )
 
         status = _classify_check_result(result.returncode, latest_checks)
 

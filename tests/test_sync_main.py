@@ -1177,8 +1177,9 @@ class TestRecursivePromptSearch:
         assert "python" in result
         assert result["python"].parent == prompts_dir, "Root should be preferred over subdirectory"
 
-    def test_collision_warning_multiple_subdirs(self, tmp_path):
-        """Should warn when same basename found in multiple subdirectories."""
+    def test_collision_warning_multiple_subdirs(self, tmp_path, capsys):
+        """Should warn (via rich console, not warnings module) when same basename
+        is found in multiple subdirectories."""
         from pdd.sync_main import _detect_languages
 
         prompts_dir = tmp_path / "prompts"
@@ -1190,12 +1191,54 @@ class TestRecursivePromptSearch:
         dir2.mkdir(parents=True)
         (dir2 / "dup_module_python.prompt").write_text("workers version")
 
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = _detect_languages("dup_module", prompts_dir)
-            assert len(w) == 1, f"Expected 1 collision warning, got {len(w)}"
-            assert "multiple subdirectories" in str(w[0].message)
+        # Make sure stale Python warnings filters can't suppress this — we
+        # explicitly switched away from `warnings.warn` because the warnings
+        # module deduplicates and filter-suppresses messages by default. The
+        # collision notice must reach the user every time, via the rich
+        # console (captured here through capsys).
+        result = _detect_languages("dup_module", prompts_dir)
+        captured = capsys.readouterr()
+        combined = (captured.out or "") + (captured.err or "")
+        assert "multiple subdirectories" in combined, (
+            f"Expected collision warning in console output, got: {combined!r}"
+        )
+        assert "dup_module" in combined
+        # Should still return the matches so sync can proceed (warning, not error).
+        assert "python" in result
+
+    def test_dir_prefixed_basename_no_false_collision(self, tmp_path, capsys):
+        """A directory-prefixed basename like ``core/cloud`` must not false-match
+        unrelated ``cloud_*.prompt`` files in sibling subtrees.
+
+        Regression: the recursive glob originally used only ``name_part``, so
+        searching for ``core/cloud`` from ``prompts/`` would also pick up
+        ``other/cloud_*.prompt`` and emit a spurious collision warning.
+        """
+        from pdd.sync_main import _detect_languages
+
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        # The intended target: prompts/core/cloud_python.prompt
+        core_dir = prompts_dir / "core"
+        core_dir.mkdir()
+        (core_dir / "cloud_python.prompt").write_text("real cloud prompt")
+        # An unrelated module that happens to share the basename "cloud" in a
+        # sibling subtree. Without the dir_part fix, this would match too.
+        other_dir = prompts_dir / "other"
+        other_dir.mkdir()
+        (other_dir / "cloud_python.prompt").write_text("unrelated cloud prompt")
+
+        result = _detect_languages("core/cloud", prompts_dir)
+        captured = capsys.readouterr()
+        combined = (captured.out or "") + (captured.err or "")
+        assert "multiple subdirectories" not in combined, (
+            f"Should not warn about collisions when dir_part disambiguates; got: {combined!r}"
+        )
+        assert "python" in result
+        # Must resolve to the core/ copy, not other/.
+        assert result["python"].parent == core_dir, (
+            f"Expected {core_dir}, got {result['python'].parent}"
+        )
 
     def test_no_prompt_found_anywhere(self, tmp_path):
         """Should return empty when prompt not found at root or subdirectories."""
@@ -1206,6 +1249,95 @@ class TestRecursivePromptSearch:
 
         result = _detect_languages("nonexistent", prompts_dir)
         assert result == {}
+
+
+class TestOneSessionSyncOutputFromConfig:
+    """The one-session ``pdd sync`` path must pass ``output_from_config=True``
+    to ``code_generator_main`` so that front-matter ``output:`` overrides the
+    .pddrc-derived default — same precedence as the orchestrator path.
+
+    Regression: only the orchestrator call site was updated in the original
+    PR. The one-session path silently kept the old (CLI flag wins) precedence,
+    which gave inconsistent behaviour between sync modes."""
+
+    def test_one_session_passes_output_from_config_true(
+        self, mock_project_dir, mock_construct_paths
+    ):
+        from unittest.mock import MagicMock, patch
+
+        # Real prompt file so _detect_languages picks it up.
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% generate a tiny module"
+        )
+
+        # Fake decision = something other than "nothing" so the one-session
+        # branch actually runs the generate step.
+        fake_decision = MagicMock()
+        fake_decision.operation = "generate"
+
+        # pdd_files: code file does NOT exist yet, so the generate branch fires.
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+
+        # Successful one-session result so the surrounding loop doesn't error.
+        fake_one_session_result = {
+            "success": True,
+            "total_cost": 0.0,
+            "model_name": "mock",
+            "operations_completed": ["generate"],
+            "errors": [],
+        }
+
+        # ``code_generator_main`` and ``sync_determine_operation`` are
+        # imported lazily *inside* sync_main, so we patch them on their own
+        # modules — those are the symbols the late ``from .X import Y`` lines
+        # actually rebind. ``get_pdd_file_paths`` is at module top so we
+        # patch it directly on pdd.sync_main.
+        def fake_codegen(*_args, **_kwargs):
+            # Simulate generation by writing the code file so the surrounding
+            # flow continues past the ``if not pdd_files["code"].exists()``
+            # short-circuit on the *next* check.
+            fake_pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+            fake_pdd_files["code"].write_text("def tiny():\n    pass\n")
+            return ("def tiny():\n    pass\n", False, 0.0, "mock")
+
+        with patch(
+            "pdd.code_generator_main.code_generator_main",
+            side_effect=fake_codegen,
+        ) as mock_codegen, patch(
+            "pdd.sync_main.get_pdd_file_paths",
+            return_value=fake_pdd_files,
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ), patch(
+            "pdd.one_session_sync.run_one_session_sync",
+            return_value=fake_one_session_result,
+        ):
+
+            ctx = create_mock_context({})
+            sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,  # one_session forbids skip_*
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        assert mock_codegen.called, "code_generator_main was never called"
+        # Inspect the call kwargs — the new contract is that the one-session
+        # path mirrors the orchestrator path and passes output_from_config=True.
+        kwargs = mock_codegen.call_args.kwargs
+        assert kwargs.get("output_from_config") is True, (
+            f"Expected output_from_config=True from one-session sync path, "
+            f"got: {kwargs}"
+        )
 
 
 # --- Tests for sync skipping LLM-only basenames ---
