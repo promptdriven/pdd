@@ -249,6 +249,10 @@ When `skip_verify` or `skip_tests` is set:
 - Cascading: `skip_tests` also skips `verify` and `crash`
 - For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
 
+### Operation Dispatch
+
+- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). **Always pass `output_from_config=True`** because the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output` flag. This lets a front-matter `output:` value in the prompt override the .pddrc default and matches the precedence the standalone `pdd generate` command honors. The one-session sync path in `sync_main` follows the same convention.
+
 ### Post-Operation Validation
 
 - After **generate**: Delete stale run_report to force re-validation
