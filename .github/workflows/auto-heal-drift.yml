@@ -131,6 +131,7 @@ jobs:
           print(','.join(sorted(basenames)))
           ")
           echo "modules=$CHANGED_MODULES" >> "$GITHUB_OUTPUT"
+          echo "diff_base=$DIFF_BASE" >> "$GITHUB_OUTPUT"
           echo "Detected changed modules: $CHANGED_MODULES"
 
       - name: Run auto-heal
@@ -143,4 +144,5 @@ jobs:
             SKIP_CI_FLAG="--skip-ci"
           fi
           python -m pdd.ci_drift_heal --budget-cap "${{ env.PDD_BUDGET_CAP }}" \
-            --modules "${{ steps.changed.outputs.modules }}" $SKIP_CI_FLAG
+            --modules "${{ steps.changed.outputs.modules }}" \
+            --diff-base "${{ steps.changed.outputs.diff_base }}" $SKIP_CI_FLAG
