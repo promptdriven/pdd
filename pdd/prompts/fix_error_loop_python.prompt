@@ -8,7 +8,7 @@ The module supports both local and cloud execution modes:
 - **Cloud mode (hybrid)**: LLM calls go through the cloud fixCode endpoint, but test execution remains local
 
 ### Requirements:
-1.  **Iterative Fixing Logic:** The `fix_error_loop` must attempt to resolve code/test mismatches over multiple iterations (up to `max_attempts`). It must track failures, errors, and warnings at each step.
+1.  **Iterative Fixing Logic:** The `fix_error_loop` must attempt to resolve code/test mismatches over multiple iterations (up to `max_attempts`). It must track failures, errors, and warnings at each step. When `failure_aware_retries=True` (default), apply **failure-aware early exit** (see below); when `failure_aware_retries=False`, preserve the legacy behavior of running the loop up to `max_attempts` (still subject to `budget`), without those early exits.
 2.  **Statistics & Improvement Tracking:** Maintain a `stats` dictionary to track initial/final states, improvement percentages, and identify the `best_iteration`.
 3.  **Structured XML Logging:** Implement a dictionary-based log structure. This must be formatted into a string using XML tags (`<pytest_output>`, `<fix_attempt>`, `<verification_output>`) for each iteration and written to `error_log_file`.
 4.  **Best State Recovery:** If the final iteration is not the most successful (prioritizing lowest errors, then fails, then warnings), the module must restore the file contents from the best recorded iteration backups.
@@ -20,10 +20,19 @@ The module supports both local and cloud execution modes:
     Ensure the `error_log_file` is populated with the current state before the agent is called.
 7.  **Non-Python Support:** Detect non-Python files by extension. Use `default_verify_cmd_for` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
 8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
-9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local.
+9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local. When passing failure context to the cloud, **prepend** a `[PDD failure classification] ...` line (or equivalent prefix) to the `errors` string payload so the remote fix step sees the same classification as local `fix_errors_from_unit_tests`.
 10. **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
     *   *Note:* If tests pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and an empty string for `model_name`.
 11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
+
+12. **Failure classification & failure-aware retries:** Import from `pdd.failure_classification`: `FailureKind`, `classify_failure`, `extract_failure_signature`, `failure_classification_hint`, `format_signature_hint` (or equivalent names matching `failure_classification_python.prompt`). After each test/verification run that still fails:
+    - Classify the captured output with `classify_failure(...)`.
+    - **Timeouts before syntax:** classification must treat timeout/flaky patterns (e.g. `"timed out"`) as `timeout_flaky` before classifying as `syntax_import`, so log noise does not mis-route.
+    - **Syntax / import (`FailureKind.syntax_import`):** After **at least one** completed fix attempt, if `extract_failure_signature` matches the previous iteration’s signature (unchanged failure pattern), **stop early** and print a **yellow** console hint (via `format_signature_hint` / `failure_classification_hint`) that imports, environment, or missing files may need manual fixes—not more blind LLM iterations.
+    - **Timeout / flaky (`FailureKind.timeout_flaky`):** Track **consecutive** iterations without improvement; when **≥ 2**, **stop early** with the timeout/flaky message (isolate tests, increase timeout, manual investigation).
+    - **Assertion / logic (`FailureKind.assertion_logic`):** Do **not** apply the syntax-import or timeout early-exit rules; continue until `max_attempts` or `budget` as today.
+    - **Local fix call:** Ensure each `fix_errors_from_unit_tests` invocation receives sufficient failure classification context (same spirit as cloud: structured hint or prefixed error text).
+    - When `failure_aware_retries=False`, skip all of the above early-exit branches; only `max_attempts` / `budget` / existing loop guards apply.
 
 ### Public Interface:
 
@@ -68,7 +77,8 @@ def fix_error_loop(
     agentic_fallback: bool = True,
     protect_tests: bool = False,
     use_cloud: bool = False,
-    test_files: list[str] | None = None
+    test_files: list[str] | None = None,
+    failure_aware_retries: bool = True,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -78,6 +88,9 @@ def fix_error_loop(
                       only fix code, treating tests as read-only specifications. Default is False.
         use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
         test_files: Optional list of all test files to run together for test isolation detection.
+        failure_aware_retries: When True (default), use failure classification to stop early on
+            stuck syntax/import or timeout/flaky patterns. When False, use the legacy loop that
+            runs up to max_attempts (subject to budget) without those early exits.
     """
 ```
 
@@ -185,12 +198,14 @@ Notes:
     </python_env_detector>
 </internal_modules>
 
+<include optional>failure_classification_python.prompt</include>
+
 ### Instructions:
 1.  **Implement `run_pytest_on_file(test_file, extra_files=None)`**: Use `run_pytest_and_capture_output(test_file, extra_files=extra_files)`. Extract failures, errors, and warnings from the first result in the JSON. Combine `standard_output` and `standard_error` for the log.
 2.  **Implement `format_log_for_output(log_structure)`**: Convert the iteration list into a string. Include model name in `<fix_attempt>` tags. Ensure the first iteration includes the initial test output. Use XML tags with `iteration=n` attributes.
 3.  **Implement `cloud_fix_errors`**:
     *   Get JWT token using `CloudConfig.get_jwt_token(verbose=verbose)`. Raise `RuntimeError` if token is not available.
-    *   Build payload with: `unitTest`, `code`, `prompt`, `errors`, `language` (from code_file_ext), `strength`, `temperature`, `time`, `verbose`.
+    *   Build payload with: `unitTest`, `code`, `prompt`, `errors`, `language` (from code_file_ext), `strength`, `temperature`, `time`, `verbose`. When failure classification is available, **prepend** `[PDD failure classification] <kind>: ...` (or equivalent) to the `errors` string before POST, matching the local `fix_errors_from_unit_tests` behavior.
     *   Call `CloudConfig.get_endpoint_url("fixCode")` to get the cloud URL.
     *   Make a POST request with `requests.post` using `CLOUD_FIX_TIMEOUT` (400 seconds).
     *   Parse the JSON response and extract: `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, `modelName`.
@@ -201,7 +216,8 @@ Notes:
     *   **Initial Check**: Run pytest (or verification for non-Python). If initially passing, exit early per the output contract.
     *   **The Loop**:
         *   Create timestamped backups in `.pdd/backups/{code_basename}/{timestamp}/` with format: `test_{iter}_{errors}_{fails}_{warnings}.py` and `code_{iter}_{errors}_{fails}_{warnings}.py`
-        *   Call `fix_errors_from_unit_tests` using the `formatted_log` as context, passing through the `protect_tests` and `language` parameters. Infer `language` from the code file extension using `get_language(code_file_ext)` (e.g., ".ts" → "typescript", ".py" → "python").
+        *   After each failing pytest/verification result (before the LLM call), classify output with `classify_failure` / `extract_failure_signature`. If `failure_aware_retries` is True and the early-stop rules in requirement **12** fire, print the yellow hint and **break** out of the loop (still allowing agentic fallback per existing rules).
+        *   Call `fix_errors_from_unit_tests` (or `cloud_fix_errors` when `use_cloud=True`) using the `formatted_log` as context, passing through the `protect_tests` and `language` parameters, and including failure classification in the error payload as specified. Infer `language` from the code file extension using `get_language(code_file_ext)` (e.g., ".ts" → "typescript", ".py" → "python").
         *   Update files, run verification, and re-run pytest to update the state.
         *   When `protect_tests=True`, skip writing the fixed unit test (only write the fixed code).
     *   **Finalization**: Compare final state to the best iteration and restore if necessary. Print a `rich` summary of improvements including percentage reduction.
