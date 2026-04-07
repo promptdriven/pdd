@@ -6,7 +6,7 @@ from rich.markdown import Markdown
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
-from . import DEFAULT_STRENGTH # Removed unused EXTRACTION_STRENGTH
+from . import DEFAULT_STRENGTH
 
 console = Console()
 
@@ -35,7 +35,7 @@ def incremental_code_generator(
 ) -> Tuple[Optional[str], bool, float, str]:
     """
     Analyzes changes to a prompt and either incrementally patches existing code or suggests full regeneration.
-    
+
     Args:
         original_prompt (str): The original prompt used to generate the existing code.
         new_prompt (str): The updated prompt that needs to be processed.
@@ -47,7 +47,7 @@ def incremental_code_generator(
         force_incremental (bool): Forces incremental patching even if full regeneration is suggested. Defaults to False.
         verbose (bool): If True, prints detailed information about the process. Defaults to False.
         preprocess_prompt (bool): If True, preprocesses the prompt before invocation. Defaults to True.
-    
+
     Returns:
         Tuple[Optional[str], bool, float, str]: A tuple containing:
             - updated_code (Optional[str]): The updated code if incremental patching is applied, None if full regeneration is needed.
