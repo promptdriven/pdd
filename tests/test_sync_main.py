@@ -1145,6 +1145,7 @@ class TestDetectLanguagesWithContextExpanded:
         assert "kotlin" in languages, f"Expected 'kotlin' in detected languages, got: {list(languages.keys())}"
 
 
+@pytest.mark.timeout(15)
 class TestRecursivePromptSearch:
     """pdd sync should find prompts in subdirectories when not at root."""
 
@@ -1260,10 +1261,25 @@ class TestOneSessionSyncOutputFromConfig:
     PR. The one-session path silently kept the old (CLI flag wins) precedence,
     which gave inconsistent behaviour between sync modes."""
 
+    @pytest.mark.timeout(30)
     def test_one_session_passes_output_from_config_true(
-        self, mock_project_dir, mock_construct_paths
+        self, mock_project_dir, mock_construct_paths, monkeypatch
     ):
         from unittest.mock import MagicMock, patch
+
+        # ``_auto_submit_example`` (called after a successful one-session
+        # sync) makes a real ``get_jwt_token`` HTTP call when ``local`` is
+        # False AND ``PDD_FORCE_LOCAL`` is unset. On the cloud test runner
+        # the env var is unset, so the call hangs and times out the whole
+        # pytest chunk. Force-set it to keep this test hermetic — we're
+        # asserting on the call signature into ``code_generator_main``,
+        # not on cloud submission behaviour.
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        # Belt-and-braces: also patch ``_auto_submit_example`` to a no-op
+        # in case the env-var gate is bypassed by some other code path.
+        monkeypatch.setattr(
+            "pdd.sync_main._auto_submit_example", lambda *a, **k: None
+        )
 
         # Real prompt file so _detect_languages picks it up.
         (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
@@ -1317,7 +1333,10 @@ class TestOneSessionSyncOutputFromConfig:
             return_value=fake_one_session_result,
         ):
 
-            ctx = create_mock_context({})
+            # ``local=True`` belt-and-braces — even if the env var and
+            # patch above somehow miss, this short-circuits the auto-submit
+            # branch entirely.
+            ctx = create_mock_context({"local": True})
             sync_main(
                 ctx,
                 "tinymod",
