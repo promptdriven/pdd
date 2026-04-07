@@ -69,8 +69,7 @@ def checkup(
     \b
     GitHub mode (default): TARGET is an issue URL.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
-    architecture.json entries against module prompt <include> tags — same check
-    as ``pdd validate-arch-includes``.
+    architecture.json entries against module prompt <include> tags.
     """
     ctx.ensure_object(dict)
 

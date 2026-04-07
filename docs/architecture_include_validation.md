@@ -7,8 +7,8 @@ edges, so the check matches how dependency lists are usually maintained.
 
 ## Commands
 
-- **`pdd checkup --validate-arch-includes`** — recommended entry point (same behavior as
-  `pdd validate-arch-includes`).
+- **`pdd checkup --validate-arch-includes`** — validate architecture dependencies vs
+  module `<include>` edges.
 - **`pdd checkup --validate-arch-includes --strict`** — also validates bundled sample
   trees (`examples/`, `example_project/`, …). The PDD repo’s sample projects currently
   report many mismatches (declarative deps vs minimal teaching prompts); use this for
