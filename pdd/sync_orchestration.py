@@ -2000,7 +2000,7 @@ def sync_orchestration(
                                 # Ensure code directory exists before generating
                                 pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
                                 # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False)
+                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True)
                                 # Clear stale run_report so crash/verify is required for newly generated code
                                 clear_run_report(basename, language)
                                 # Issue #572: Validate Python imports after generation in agentic mode

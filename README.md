@@ -1520,7 +1520,8 @@ pdd generate --template frontend/nextjs_architecture_json \
 
 - Template front matter:
   - YAML metadata at the top of `.prompt` files to declare `name`, `description`, `tags`, `version`, `language`, default `output`, and `variables` (with `required`, `default`, `type` such as `string` or `json`).
-  - CLI precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
+  - Variable precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
+  - Output path precedence: `--output` (CLI) > `output:` (front matter) > `generate_output_path` (`.pddrc`). If front‑matter `output:` cannot be resolved, the CLI emits a yellow warning and falls back to the default path instead of failing silently.
   - Example:
     ```
     ---

@@ -400,7 +400,38 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
         pattern = f"{glob.escape(name_part)}_*.prompt"
     else:
         pattern = f"{glob.escape(basename)}_*.prompt"
-    for prompt_file in prompts_dir.glob(pattern):
+    # Search root first, then subdirectories if not found (supports prompts
+    # in context-specific subdirs like prompts/src/services/).
+    matches = list(prompts_dir.glob(pattern))
+    if not matches:
+        # When the basename is directory-prefixed (e.g. ``core/cloud``) we
+        # mirror the same dir-aware matching the root-level glob uses: if
+        # ``prompts_dir`` already ends with the prefix, search just for
+        # ``name_part`` recursively; otherwise require the full
+        # ``dir_part/name_part`` so we don't false-match unrelated files
+        # like ``other/cloud_*.prompt`` in sibling subtrees.
+        if dir_parts and prompts_dir.parts[-len(dir_parts):] != dir_parts:
+            recursive_pattern = (
+                f"**/{glob.escape(dir_part)}/{glob.escape(name_part)}_*.prompt"
+            )
+        else:
+            recursive_pattern = f"**/{glob.escape(name_part)}_*.prompt"
+        recursive_matches = list(prompts_dir.glob(recursive_pattern))
+        # Collision detection: warn if same basename found in multiple subdirs
+        if len(recursive_matches) > 1:
+            dirs = {str(m.parent) for m in recursive_matches}
+            if len(dirs) > 1:
+                # Use rich console output (consistent with other CLI warnings
+                # in this module). ``warnings.warn`` is wrong here because
+                # Python deduplicates / silences warnings by default and the
+                # stack-trace formatting is noisy in CLI context.
+                rprint(
+                    f"[yellow]Warning: Prompt '{name_part}' found in multiple "
+                    f"subdirectories: {sorted(dirs)}. Using first match: "
+                    f"{recursive_matches[0]}[/yellow]"
+                )
+        matches = recursive_matches
+    for prompt_file in matches:
         # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
         # Ensure the file starts with the exact name part followed by an underscore
@@ -852,6 +883,9 @@ def sync_main(
                             original_prompt_file_path=None,
                             force_incremental_flag=False,
                             language=resolved_language,
+                            # output is .pddrc-derived (get_pdd_file_paths uses
+                            # context config), so let front-matter override it.
+                            output_from_config=True,
                         )
                         # code_generator_main returns (content, was_incremental, cost, model)
                         pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0

@@ -43,7 +43,12 @@ Module providing CI polling, log retrieval, and fix-iteration loop infrastructur
 10. Function: `post_ci_failure_comment(repo_owner: str, repo_name: str, pr_number: int, failures: List[str], attempts: int, cwd: Path) -> bool` — posts a structured PR comment describing unresolved CI failures and what was attempted using `post_pr_comment`.
 11. Function: `detect_ci_system(cwd: Path) -> str` — detect CI setup from repo config files (`.github/workflows/`, `cloudbuild.yaml`, etc.) for informational logging.
 12. Handle race condition: if no checks appear after initial polling window, return `(True, "No CI checks detected", 0.0)` — don't fail when repo has no CI.
-13. Include `<include>context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
+13. Partial-check-data error handling: when `gh pr checks` exits with returncode=1, inspect stderr *before* classifying. Partial check JSON in stdout can accompany permission/config errors in stderr, so checking `latest_checks` first would mask the real error.
+    - If stderr contains the GitHub "no required checks" phrase → return `("no_checks", [])` immediately, even when partial check JSON was returned in stdout.
+    - If stderr contains "resource not accessible by integration" → log a yellow warning that the GitHub App may lack `checks:read` permission, then return `("no_checks", [])` immediately, even with partial check JSON in stdout.
+    - If `latest_checks` is empty → mark `saw_ambiguous_error=True`, log the stderr (yellow), and continue polling.
+    - If `latest_checks` is non-empty and none of the stderr patterns above matched but stderr is non-empty → log the stderr with an explicit prefix making it clear the result will be classified as failed from the exit code (e.g. `"CI polling warning (classifying as failed from exit code 1): {stderr}"`), then fall through to `_classify_check_result` so a real check failure isn't lost. Without this log, the LLM fix loop can be triggered silently when a transport error masquerades as a real failure.
+14. Include `<include>context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
 
 % Deliverables
 - Code: `pdd/ci_validation.py`
