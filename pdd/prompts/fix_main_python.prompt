@@ -1,6 +1,5 @@
 % You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
 
-<pdd-dependency>failure_classification_python.prompt</pdd-dependency>
 <pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
@@ -19,6 +18,7 @@
 - `strength`, `temperature` (`Optional[float]`)
 - `protect_tests` (`bool`, default `False`)
 - `test_files` (`list[str] | None`)
+- `failure_aware_retries` (`bool`, default `True`)
 
 % Output
 Return `Tuple[bool, str, str, int, float, str]`:
@@ -47,7 +47,7 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Also read `time`, `verbose`, and `local` behavior from `ctx.obj`.
 
 4. Execution strategy:
-   - Loop mode always calls `fix_error_loop` with the original file paths plus `prompt=input_strings["prompt_file"]`, `verification_program`, `strength`, `temperature`, `time`, `max_attempts`, `budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose`, `agentic_fallback`, `protect_tests`, `test_files`, `failure_aware_retries=True` (default), and the computed `use_cloud` flag. Set `failure_aware_retries=False` only when opting into the legacy “always run up to `max_attempts`” loop without failure-type early exits (e.g. internal compatibility or future CLI flag).
+   - Loop mode always calls `fix_error_loop` with the original file paths plus `prompt=input_strings["prompt_file"]`, `verification_program`, `strength`, `temperature`, `time`, `max_attempts`, `budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose`, `agentic_fallback`, `protect_tests`, `test_files`, `failure_aware_retries`, and the computed `use_cloud` flag.
    - Loop mode is hybrid by default: local test execution, but `use_cloud=True` for LLM calls unless local execution is explicitly forced. `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` still keep cloud LLM calls enabled in loop mode.
    - Single-pass mode is cloud-first unless local execution is forced or `CloudConfig.is_running_in_cloud()` says the process is already running inside the cloud worker environment.
    - Respect `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` so cloud failures do not silently fall back to local execution when fallback is disabled.

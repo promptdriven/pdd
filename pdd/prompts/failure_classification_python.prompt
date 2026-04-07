@@ -23,9 +23,7 @@ Pure helpers used by `fix_error_loop` (and optionally other callers). No I/O, no
 
 5. **`failure_classification_hint(kind: FailureKind) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next.
 
-6. **`format_signature_hint(...)`** — Format signature + hint for console (callers may apply Rich yellow styling); keep messages aligned with product copy:
-   - Syntax/import early stop: e.g. stopping after repeated identical signature — may need imports/env or missing files.
-   - Timeout/flaky early stop: e.g. after ≥2 iterations without improvement — suggest isolation, timeout tuning, manual investigation.
+6. **`format_signature_hint(...)`** — Keep this helper focused on formatting/truncating the extracted signature for console-safe display (callers may apply Rich yellow styling). User-facing early-stop guidance text should be produced by caller-side logic (e.g. `fix_error_loop`) rather than embedded here.
 
 % Deliverables
 - Code: `pdd/failure_classification.py`
