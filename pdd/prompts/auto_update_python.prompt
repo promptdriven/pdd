@@ -14,7 +14,7 @@ Core Logic:
     a. Inform the user about the new version and the current version.
     b. Ask for user confirmation before proceeding with the upgrade (e.g., "Would you like to upgrade? [y/N]:").
     c. If the user confirms:
-        i. Detect the installation method of the package (e.g., UV or pip).
+        i. Detect the installation method by checking `sys.executable` path for UV markers (e.g., "/uv/tools/" or ".local/share/uv/"). Normalize path separators (convert \ to /) to support both Unix and Windows paths before checking.
         ii. Construct the appropriate upgrade command based on the detected method (e.g., `uv tool install <package> --force` or `python -m pip install --upgrade <package>`).
         iii. Execute the upgrade command.
         iv. Provide feedback on the success or failure of the upgrade.
