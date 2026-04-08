@@ -16,6 +16,29 @@ from rich.table import Table
 console = Console()
 
 
+def _get_git_changed_files(diff_base: str) -> set:
+    """Return the set of file paths changed between diff_base and HEAD.
+
+    Args:
+        diff_base: Git diff base reference (e.g. "origin/main...HEAD" or "HEAD~1").
+
+    Returns:
+        Set of changed file paths (relative to repo root), or empty set on failure.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", diff_base],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        return set()
+    except Exception:
+        return set()
+
+
 @dataclass
 class DriftInfo:
     """Represents a detected drift for a single module."""
@@ -76,12 +99,17 @@ def _parse_cost_from_csv(csv_path: str) -> float:
     return total
 
 
-def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]:
+def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]:
     """Detect prompt and example drift across PDD modules.
 
     Args:
         modules: Optional list of basenames to limit detection scope.
                  If None, scans all modules discovered via discover_prompt_files().
+        diff_base: Optional git diff base (e.g. "origin/main...HEAD"). When provided,
+                   enables git-based reclassification: if sync_determine_operation returns
+                   a non-'update' operation but git shows the code file changed while the
+                   prompt didn't, the drift is reclassified as 'update' (prompt stale).
+                   This fixes detection in CI where fingerprints are absent.
 
     Returns:
         Tuple of (prompt_drifts, example_drifts) where each is a list of DriftInfo.
@@ -96,6 +124,11 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
     prompt_drifts: List[DriftInfo] = []
     example_drifts: List[DriftInfo] = []
     seen_basenames: set = set()
+
+    # Pre-fetch git changed files once (not per-module) for reclassification
+    git_changed: Optional[set] = None
+    if diff_base:
+        git_changed = _get_git_changed_files(diff_base)
 
     for prompt_path in prompt_files:
         try:
@@ -139,6 +172,52 @@ def detect_drift(modules: Optional[List[str]] = None) -> Tuple[List[DriftInfo], 
                     code_path = str(code_file)
             except Exception:
                 pass
+
+        # Git-based reclassification: In CI (clean checkout without fingerprints),
+        # sync_determine_operation always returns 'auto-deps' or 'generate' because
+        # there is no fingerprint to compare code hashes against.  When we have git
+        # history, we can detect the actual drift direction: if the code file changed
+        # but the prompt file did NOT, the code is ahead and the prompt needs updating.
+        if decision.operation != "update" and git_changed is not None:
+            try:
+                paths = get_pdd_file_paths(basename, language)
+                # get_pdd_file_paths returns absolute Path objects but git diff
+                # returns repo-relative paths.  Convert to relative for comparison.
+                repo_root = Path.cwd()
+                code_file_abs = paths.get("code")
+                prompt_file_abs = paths.get("prompt")
+
+                def _to_relative(p: Optional[Path]) -> str:
+                    if not p:
+                        return ""
+                    try:
+                        return str(p.relative_to(repo_root))
+                    except ValueError:
+                        return str(p)
+
+                code_file_path = _to_relative(code_file_abs)
+                prompt_file_path = _to_relative(prompt_file_abs)
+
+                code_changed = code_file_path in git_changed
+                prompt_changed = prompt_file_path in git_changed
+
+                if code_changed and not prompt_changed:
+                    console.print(
+                        f"[blue]↑ Reclassifying {basename}: code changed but prompt "
+                        f"unchanged → prompt (update) drift[/blue]"
+                    )
+                    code_path = str(code_file_abs) if code_file_abs else code_file_path
+                    decision = type(decision)(
+                        operation="update",
+                        reason="Code changed but prompt unchanged (git-based detection)",
+                        confidence=getattr(decision, "confidence", 0.85),
+                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
+                        details=getattr(decision, "details", {}),
+                    )
+            except Exception as e:
+                console.print(
+                    f"[yellow]⚠ Git reclassification failed for {basename}: {e}[/yellow]"
+                )
 
         if decision.operation == "update":
             prompt_drifts.append(
@@ -219,33 +298,9 @@ def _print_drift_table(
     console.print(table)
 
 
-def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
-    """Heal a single drifted module by running the appropriate pdd command.
-
-    Args:
-        drift: DriftInfo describing the drift to heal.
-        env: Environment variables dict for the subprocess.
-
-    Returns:
-        True if healing succeeded, False otherwise.
-    """
-    if drift.operation == "update":
-        if drift.code_path:
-            cmd = ["pdd", "update", drift.code_path]
-        else:
-            cmd = ["pdd", "update"]
-    elif drift.operation == "example":
-        cmd = ["pdd", "sync", drift.basename]
-    else:
-        console.print(
-            f"[red]✗ Unknown operation '{drift.operation}' for {drift.basename}[/red]"
-        )
-        return False
-
-    console.print(
-        f"[blue]⟳ Healing {drift.basename} ({drift.operation}): {' '.join(cmd)}[/blue]"
-    )
-
+def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
+    """Run a pdd subprocess command, returning True on success."""
+    console.print(f"[blue]⟳ {label}: {' '.join(cmd)}[/blue]")
     try:
         result = subprocess.run(
             cmd,
@@ -255,18 +310,16 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
             timeout=600,
         )
         if result.returncode == 0:
-            console.print(f"[green]✓ Healed {drift.basename} successfully[/green]")
+            console.print(f"[green]✓ {label} succeeded[/green]")
             return True
         else:
             stderr_snippet = (result.stderr or "").strip()[-500:]
-            console.print(
-                f"[red]✗ Failed to heal {drift.basename} (exit code {result.returncode})[/red]"
-            )
+            console.print(f"[red]✗ {label} failed (exit code {result.returncode})[/red]")
             if stderr_snippet:
                 console.print(f"[dim]{stderr_snippet}[/dim]")
             return False
     except subprocess.TimeoutExpired as e:
-        console.print(f"[red]✗ Timeout healing {drift.basename}[/red]")
+        console.print(f"[red]✗ {label} timed out[/red]")
         if e.stdout:
             console.print(f"[dim]stdout (last 1000 chars): {e.stdout[-1000:]}[/dim]")
         if e.stderr:
@@ -278,7 +331,54 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
         )
         return False
     except Exception as e:
-        console.print(f"[red]✗ Error healing {drift.basename}: {e}[/red]")
+        console.print(f"[red]✗ {label} error: {e}[/red]")
+        return False
+
+
+def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
+    """Heal a single drifted module by running the appropriate pdd command.
+
+    For 'update' drift (code changed, prompt stale), runs pdd update first
+    to sync the prompt from code, then pdd sync to regenerate the example
+    from the updated prompt — all in one pass.
+
+    Args:
+        drift: DriftInfo describing the drift to heal.
+        env: Environment variables dict for the subprocess.
+
+    Returns:
+        True if healing succeeded, False otherwise.
+    """
+    if drift.operation == "update":
+        # Step 1: Update the prompt from code
+        if drift.code_path:
+            update_cmd = ["pdd", "update", drift.code_path]
+        else:
+            update_cmd = ["pdd", "update"]
+
+        if not _run_pdd_command(update_cmd, env, f"Healing {drift.basename} (update)"):
+            return False
+
+        # Step 2: Sync example from the now-updated prompt so everything is
+        # consistent in a single CI pass (no second cycle needed).
+        sync_cmd = ["pdd", "sync", drift.basename]
+        if not _run_pdd_command(sync_cmd, env, f"Syncing {drift.basename} (example)"):
+            # Update succeeded but sync failed — still count as partial success
+            # so the prompt update gets committed.
+            console.print(
+                f"[yellow]⚠ Prompt updated but example sync failed for "
+                f"{drift.basename} — example may need a follow-up sync[/yellow]"
+            )
+        return True
+
+    elif drift.operation == "example":
+        return _run_pdd_command(
+            ["pdd", "sync", drift.basename], env, f"Healing {drift.basename} (sync)"
+        )
+    else:
+        console.print(
+            f"[red]✗ Unknown operation '{drift.operation}' for {drift.basename}[/red]"
+        )
         return False
 
 
@@ -365,6 +465,7 @@ def main(
     modules: Optional[List[str]] = None,
     budget_cap: Optional[float] = None,
     skip_ci: bool = False,
+    diff_base: Optional[str] = None,
 ) -> int:
     """Main entry point for drift detection and auto-healing.
 
@@ -372,6 +473,7 @@ def main(
         modules: Optional list of basenames to limit scope.
         budget_cap: Optional budget cap in dollars for LLM healing costs.
         skip_ci: If True, prepend [skip ci] to commit message.
+        diff_base: Optional git diff base for git-based drift reclassification.
 
     Returns:
         0 on success (including no drift), 1 on any failure.
@@ -386,7 +488,7 @@ def main(
     # --- Detection Phase ---
     console.print("\n[bold]Phase 1: Detecting drift...[/bold]")
     try:
-        prompt_drifts, example_drifts = detect_drift(modules)
+        prompt_drifts, example_drifts = detect_drift(modules, diff_base=diff_base)
     except Exception as e:
         console.print(f"[red]✗ Detection failed: {e}[/red]")
         return 1
@@ -516,6 +618,14 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=False,
         help="Prepend [skip ci] to the commit message.",
     )
+    parser.add_argument(
+        "--diff-base",
+        type=str,
+        default=None,
+        help="Git diff base reference (e.g. 'origin/main...HEAD') for detecting "
+        "drift direction. When set, code-changed-but-prompt-unchanged modules "
+        "are reclassified as prompt (update) drift instead of example (sync).",
+    )
     args = parser.parse_args(argv)
 
     # Expand comma-separated module values so that both
@@ -535,5 +645,6 @@ if __name__ == "__main__":
         modules=args.modules,
         budget_cap=args.budget_cap,
         skip_ci=args.skip_ci,
+        diff_base=args.diff_base,
     )
     sys.exit(exit_code)

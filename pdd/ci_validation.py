@@ -267,10 +267,10 @@ def _poll_required_checks(
 
         saw_checks = saw_checks or bool(latest_checks)
 
-        # gh pr checks --required exits 1 with empty output when no required
-        # checks are configured — intercept before the classifier since we
-        # need stderr to distinguish this from auth/network errors.
-        if result.returncode == 1 and not latest_checks:
+        # gh pr checks --required exits 1 — check stderr for known errors
+        # before inspecting latest_checks, because partial check data can
+        # accompany permission/config errors (issue #1114).
+        if result.returncode == 1:
             stderr_lower = (result.stderr or "").lower()
             if GH_NO_REQUIRED_CHECKS_PHRASE in stderr_lower:
                 return "no_checks", []
@@ -285,14 +285,28 @@ def _poll_required_checks(
                         "Skipping CI validation.[/yellow]"
                     )
                 return "no_checks", []
-            # Ambiguous error (e.g. HTTP 401); keep polling.
-            saw_ambiguous_error = True
+            if not latest_checks:
+                # Ambiguous error (e.g. HTTP 401); keep polling.
+                saw_ambiguous_error = True
+                if not quiet:
+                    stderr_msg = result.stderr.strip()
+                    if stderr_msg:
+                        console.print(f"[yellow]CI polling warning: {stderr_msg}[/yellow]")
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+            # returncode=1 + non-empty latest_checks + unrecognised stderr.
+            # This falls through to _classify_check_result, which will return
+            # "failed" purely from the exit code — potentially triggering the
+            # LLM fix loop for non-existent failures. Surface the stderr so
+            # users can tell whether it was a real check failure or a gh
+            # transport error masquerading as one.
             if not quiet:
                 stderr_msg = result.stderr.strip()
                 if stderr_msg:
-                    console.print(f"[yellow]CI polling warning: {stderr_msg}[/yellow]")
-            time.sleep(POLL_INTERVAL_SECONDS)
-            continue
+                    console.print(
+                        f"[yellow]CI polling warning (classifying as failed "
+                        f"from exit code 1): {stderr_msg}[/yellow]"
+                    )
 
         status = _classify_check_result(result.returncode, latest_checks)
 
