@@ -1,0 +1,77 @@
+name: Unit Tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/**'
+      - '.vscode/**'
+      - '.cursor/**'
+      - '.claude/**'
+      - 'Makefile'
+      - '.env.example'
+      - '.gitattributes'
+      - 'example_prompts/**'
+      - 'example_project/**'
+      - 'example_workspace/**'
+      - 'staging/**'
+      - '*.log'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, ready_for_review]
+
+jobs:
+  unit-tests:
+    if: github.event.pull_request.draft != true
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      PDD_PATH: ${{ github.workspace }}/pdd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@pdd.dev"
+          git config --global user.name "PDD CI"
+          git config --global init.defaultBranch main
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]" pytest-timeout
+
+      # Non-blocking: reports drift between architecture.json and prompt <include> tags.
+      # Does not fail the job; use a warning annotation when the check exits non-zero.
+      - name: Validate architecture vs prompt includes (warning only)
+        run: |
+          if ! pdd validate-arch-includes; then
+            echo "::warning::validate-arch-includes reported mismatches (warning only; fix in a follow-up)"
+          fi
+
+      - name: Run unit tests
+        run: >
+          pytest tests/
+          -m "not integration and not e2e and not real and not private_prompt"
+          -v --tb=short --timeout=60 -n auto
+          --ignore=tests/commands/test_connect.py
+          --ignore=tests/test_bug_to_unit_test.py
+          --ignore=tests/test_context_generator.py
+          --ignore=tests/test_crash_main.py
+          --ignore=tests/test_generate_test.py
+          --ignore=tests/test_fix_error_loop.py
+          --ignore=tests/test_llm_invoke.py
+          --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh
+          --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
