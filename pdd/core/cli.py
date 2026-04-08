@@ -156,12 +156,13 @@ class PDDCLI(click.Group):
             ctx.exit(int(e.code) if e.code is not None else 1)
             return
         except click.exceptions.Exit as e:
-            # Let successful Click exits pass through, but handle error exits
+            # Successful exit: propagate for Click to finish cleanly.
             if e.exit_code == 0:
                 raise
-            # Convert error exit to exception
-            error_msg = f"Command exited with code {e.exit_code}"
-            exception_to_handle = RuntimeError(error_msg)
+            # Intentional failure (e.g. checkup --validate-arch-includes, failed sync): do not
+            # route through handle_error — that misreports "unexpected error" after
+            # the command already printed diagnostics.
+            raise
         except Exception as e:
             # Handle all other exceptions
             exception_to_handle = e

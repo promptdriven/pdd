@@ -54,6 +54,29 @@ def test_no_mismatch_when_arch_matches_includes(tmp_path: Path) -> None:
     assert warnings == []
 
 
+def test_ignores_example_py_includes_for_arch_edges(tmp_path: Path) -> None:
+    """Example *.py includes do not count as module edges (no false extra-include warnings)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    prompts = root / "prompts"
+    prompts.mkdir()
+
+    _write_pair(
+        root,
+        "api_Python.prompt",
+        "%\n<include>context/models_example.py</include>\n",
+    )
+    _write_pair(root, "models_Python.prompt", "% Models\n")
+
+    arch = [
+        {"filename": "api_Python.prompt", "dependencies": []},
+        {"filename": "models_Python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, root)
+    assert warnings == []
+
+
 def test_warns_when_arch_dep_not_included(tmp_path: Path) -> None:
     """Architecture lists a dependency the prompt does not <include> as a module."""
     root = tmp_path / "proj"
@@ -213,7 +236,7 @@ def test_validate_arch_includes_cli_ok(mock_auto_update, tmp_path: Path) -> None
     runner = CliRunner()
     result = runner.invoke(
         cli.cli,
-        ["validate-arch-includes", "--project-root", str(tmp_path)],
+        ["checkup", "--validate-arch-includes", "--project-root", str(tmp_path)],
     )
     assert result.exit_code == 0
     assert "No architecture" in result.output or "mismatches" in result.output
@@ -234,7 +257,7 @@ def test_validate_arch_includes_cli_fails_on_mismatch(mock_auto_update, tmp_path
     runner = CliRunner()
     result = runner.invoke(
         cli.cli,
-        ["validate-arch-includes", "--project-root", str(tmp_path)],
+        ["checkup", "--validate-arch-includes", "--project-root", str(tmp_path)],
     )
     assert result.exit_code == 1
     assert "mismatch" in result.output.lower()

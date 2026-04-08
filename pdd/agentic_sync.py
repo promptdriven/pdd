@@ -33,6 +33,7 @@ from .construct_paths import (
     _find_pddrc_file,
     _load_pddrc_config,
 )
+from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -755,8 +756,7 @@ def _apply_architecture_corrections(
 
     if changes_made > 0:
         try:
-            with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(architecture, f, indent=2, ensure_ascii=False)
+            atomic_write_json(arch_path, architecture)
             if not quiet:
                 console.print(
                     f"[green]Wrote {changes_made} dependency correction(s) "

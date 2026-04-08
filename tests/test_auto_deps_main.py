@@ -1,7 +1,9 @@
 """Tests for the auto_deps_main function."""
+import json
 import os
 import tempfile
 import shutil
+from pathlib import Path
 from unittest.mock import patch, MagicMock, call
 import pytest
 import click
@@ -599,3 +601,59 @@ def test_auto_deps_uses_file_lock(
 
         mock_filelock_cls.assert_called_once_with(f"{csv_path}.lock")
         mock_lock.__enter__.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 17. Wiring: auto_deps_main → merge into architecture.json
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_main_updates_architecture_json_after_write(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+) -> None:
+    """End-to-end through auto_deps_main: written prompt triggers arch merge (real files)."""
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    child = prompts / "child_Python.prompt"
+    parent = prompts / "parent_Python.prompt"
+    child.write_text("%\n", encoding="utf-8")
+    parent.write_text("%\n", encoding="utf-8")
+    arch = [
+        {"filename": "child_Python.prompt", "dependencies": []},
+        {"filename": "parent_Python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    output_path = str(child.resolve())
+    csv_path = str(tmp_path / "project_dependencies.csv")
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path, prompt_content="%\n"
+    )
+    new_text = "%\n<include>parent_python.prompt</include>\n"
+    mock_insert_includes.return_value = _make_insert_includes_return(
+        modified_prompt=new_text,
+        csv_output="",
+        cost=0.01,
+        model="test-model",
+    )
+
+    modified_prompt, total_cost, model_name = auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(child),
+        directory_path=str(tmp_path),
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    assert modified_prompt == new_text
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+    row = next(e for e in data if e["filename"] == "child_Python.prompt")
+    assert row["dependencies"] == ["parent_Python.prompt"]
+    assert total_cost == 0.01
+    assert model_name == "test-model"
