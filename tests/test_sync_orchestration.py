@@ -1723,6 +1723,7 @@ def test_sync_orchestration_fix_captures_truncated_test_output_excerpt(tmp_path,
 
     from pdd.sync_determine_operation import SyncDecision
     from pdd.sync_orchestration import sync_orchestration
+    from pdd.get_test_command import TestCommand
 
     monkeypatch.chdir(tmp_path)
 
@@ -1770,7 +1771,7 @@ def test_sync_orchestration_fix_captures_truncated_test_output_excerpt(tmp_path,
          patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
          patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
          patch("pdd.sync_orchestration.extract_failing_files_from_output", return_value=[]), \
-         patch("pdd.get_test_command.get_test_command_for_file", return_value="echo run-tests"), \
+         patch("pdd.get_test_command.get_test_command_for_file", return_value=TestCommand("echo run-tests")), \
          patch("pdd.sync_orchestration._run_fix_operation_test_subprocess", return_value=failing_cp), \
          patch("pdd.sync_orchestration.fix_main", return_value=(False, None, None, 1, 0.01, "mock-model")), \
          patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
