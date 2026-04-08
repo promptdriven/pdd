@@ -1,5 +1,12 @@
 <include>context/python_preamble.prompt</include>
 
+<pdd.agentic_e2e_fix_orchestrator>
+<include>context/agentic_e2e_fix_orchestrator_example.py</include>
+</pdd.agentic_e2e_fix_orchestrator>
+<pdd.ci_validation>
+<include>context/ci_validation_example.py</include>
+</pdd.ci_validation>
+
 % Goal
 Design the `agentic_e2e_fix_orchestrator` for the 9‑step E2E‑fix workflow.
 
