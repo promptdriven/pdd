@@ -25,6 +25,7 @@ from .construct_paths import (
     get_extension
 )
 from .sync_determine_operation import get_pdd_file_paths
+from .architecture_include_validation import print_architecture_include_validation_warnings
 from .sync_orchestration import sync_orchestration
 from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
@@ -639,6 +640,8 @@ def sync_main(
         if not quiet:
             rprint(Panel(f"Displaying sync analysis for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Dry Run", expand=False))
 
+        print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
+
         for lang, prompt_file_path in lang_to_path.items():
             if not quiet:
                 rprint(f"\n--- Log for language: [bold green]{lang}[/bold green] ---")
@@ -688,6 +691,8 @@ def sync_main(
 
     if not quiet and display_budget < 1.0:
         console.log(f"[yellow]Warning:[/] Budget of ${display_budget:.2f} is low. Complex operations may exceed this limit.")
+
+    print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
 
     if not quiet:
         summary_panel = Panel(

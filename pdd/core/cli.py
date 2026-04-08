@@ -21,6 +21,7 @@ from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
 from .utils import _first_pending_command, _should_show_onboarding_reminder
 from .dump import _write_core_dump
+from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
 
 
 def _strip_ansi_codes(text: str) -> str:
@@ -459,6 +460,17 @@ def cli(
         _restore_captured_streams(ctx)
         ctx.exit(0)
 
+    # Block/warn on likely duplicate expensive runs before the subcommand body runs.
+    try:
+        check_duplicate_before_subcommand(ctx)
+    except click.UsageError:
+        _restore_captured_streams(ctx)
+        raise
+    except click.Abort:
+        _restore_captured_streams(ctx)
+        raise
+
+
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
@@ -566,6 +578,8 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         if num_results < num_commands and results is not None and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
+
+    record_after_guarded_command(ctx)
 
     # Collect terminal output if capture was enabled
     terminal_output = None

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import sys
 from pathlib import Path
 from typing import Optional, Tuple, Callable
@@ -108,6 +109,23 @@ def auto_deps_main(
             if output_path:
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(modified_prompt)
+                try:
+                    from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
+
+                    arch_report = merge_auto_deps_includes_from_cwd(
+                        Path(output_path).resolve(),
+                        prompt_content,
+                        modified_prompt,
+                    )
+                    if arch_report.get("messages") and not ctx.obj.get("quiet", False):
+                        for line in arch_report["messages"]:
+                            rprint(f"[dim]{line}[/dim]")
+                except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
+                    if not ctx.obj.get("quiet", False):
+                        rprint(
+                            f"[yellow]Warning: Could not update architecture.json after auto-deps: "
+                            f"{arch_exc}[/yellow]"
+                        )
 
             # Save the CSV output if content exists
             if csv_output:
