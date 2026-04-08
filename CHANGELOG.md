@@ -1,3 +1,19 @@
+## v0.0.201 (2026-04-07)
+
+### Feat
+
+- **cli**: warn/block duplicate sync/generate/fix runs
+- auto-deps arch deps + warn on arch vs include sync-order drift
+- cross-validate architecture deps vs prompt includes (sync, CLI, CI)
+
+### Fix
+
+- add missing include directives to orchestrator prompt
+- auto-heal CI now detects code-ahead-of-prompt drift via git
+- address review feedback on PR #1116
+- search subdirectories for prompt files + proper front-matter output precedence
+- CI validation times out when GitHub App token lacks checks:read permission
+
 ## v0.0.200 (2026-04-06)
 
 ### Feat
