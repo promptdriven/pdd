@@ -148,6 +148,14 @@ class PendingStateUpdate:
     fingerprint_path: Optional[Path] = None
 
 
+@dataclass
+class FileRollbackSnapshot:
+    """Snapshot of a single file before an operation mutates it."""
+    path: Path
+    existed: bool
+    content: Optional[bytes] = None
+
+
 class AtomicStateUpdate:
     """
     Context manager for atomic state updates.
@@ -229,6 +237,100 @@ class AtomicStateUpdate:
             except OSError:
                 pass  # Best effort cleanup
         self._temp_files.clear()
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write file bytes atomically using temp file + rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.stem}_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
+class OperationFileRollback:
+    """Restores selected files when an operation fails before commit."""
+
+    def __init__(self, paths: List[Path]):
+        self._snapshots: List[FileRollbackSnapshot] = []
+        seen = set()
+        for raw_path in paths:
+            path = Path(raw_path)
+            if path in seen:
+                continue
+            seen.add(path)
+            if path.exists():
+                self._snapshots.append(
+                    FileRollbackSnapshot(
+                        path=path,
+                        existed=True,
+                        content=path.read_bytes(),
+                    )
+                )
+            else:
+                self._snapshots.append(FileRollbackSnapshot(path=path, existed=False))
+        self._committed = False
+
+    def commit(self) -> None:
+        self._committed = True
+
+    def restore(self) -> None:
+        if self._committed:
+            return
+
+        for snapshot in reversed(self._snapshots):
+            try:
+                if snapshot.existed:
+                    _atomic_write_bytes(snapshot.path, snapshot.content or b"")
+                elif snapshot.path.exists():
+                    snapshot.path.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to restore %s after interrupted sync operation: %s",
+                    snapshot.path,
+                    exc,
+                )
+        self._committed = True
+
+
+def _find_auto_deps_architecture_path(prompt_path: Path) -> Optional[Path]:
+    """Locate architecture.json that auto-deps may patch for the prompt."""
+    try:
+        from .architecture_registry import find_project_root
+        from .auto_deps_architecture import _find_architecture_record_for_prompt_file
+
+        project_root = find_project_root()
+        record = _find_architecture_record_for_prompt_file(project_root, prompt_path.resolve())
+        if record is None:
+            return None
+        arch_path, _, _ = record
+        return arch_path
+    except Exception:
+        return None
+
+
+def _build_auto_deps_rollback(prompt_path: Path, temp_output: Path) -> OperationFileRollback:
+    """Capture the files auto-deps can mutate before the fingerprint commit."""
+    rollback_paths = [
+        prompt_path,
+        temp_output,
+        Path("project_dependencies.csv"),
+    ]
+    arch_path = _find_auto_deps_architecture_path(prompt_path)
+    if arch_path is not None:
+        rollback_paths.append(arch_path)
+    return OperationFileRollback(rollback_paths)
 
 
 # --- State Management Wrappers ---
@@ -1701,6 +1803,7 @@ def sync_orchestration(
         start_time = time.time()
         last_model_name: str = "unknown"
         operation_history: List[str] = []
+        operation_rollback: Optional[OperationFileRollback] = None
         MAX_CYCLE_REPEATS = 2
         try:
             log_event(
@@ -2058,6 +2161,7 @@ def sync_orchestration(
                     op_start_time = time.time()
                     include_deps_override = None  # Issue #522: Captured before auto-deps strips tags
                     test_output_excerpt: Optional[str] = None
+                    operation_rollback = None
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
@@ -2069,7 +2173,11 @@ def sync_orchestration(
                         # --- Execute Operation ---
                         try:
                             if operation == 'auto-deps':
-                                temp_output = str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt')
+                                temp_output = Path(str(pdd_files['prompt']).replace('.prompt', '_with_deps.prompt'))
+                                operation_rollback = _build_auto_deps_rollback(
+                                    pdd_files['prompt'],
+                                    temp_output,
+                                )
                                 original_content = pdd_files['prompt'].read_text(encoding='utf-8')
                                 # Issue #522: Capture include deps BEFORE auto-deps may strip tags
                                 from .sync_determine_operation import extract_include_deps
@@ -2079,17 +2187,17 @@ def sync_orchestration(
                                     prompt_file=str(pdd_files['prompt']),
                                     directory_path=examples_dir,
                                     auto_deps_csv_path="project_dependencies.csv",
-                                    output=temp_output,
+                                    output=str(temp_output),
                                     force_scan=False,
                                     progress_callback=progress_callback_ref[0]
                                 )
-                                if Path(temp_output).exists():
+                                if temp_output.exists():
                                     import shutil
-                                    new_content = Path(temp_output).read_text(encoding='utf-8')
+                                    new_content = temp_output.read_text(encoding='utf-8')
                                     if new_content != original_content:
-                                        shutil.move(temp_output, str(pdd_files['prompt']))
+                                        shutil.move(str(temp_output), str(pdd_files['prompt']))
                                     else:
-                                        Path(temp_output).unlink()
+                                        temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
                             elif operation == 'generate':
                                 # Ensure code directory exists before generating
@@ -2402,22 +2510,15 @@ def sync_orchestration(
 
                                             test_result = _run_fix_operation_test_subprocess(pytest_args, **subprocess_kwargs)
                                         else:
-                                            # Non-Python: shell command; honor TestCommand.cwd when set (monorepo configs).
-                                            fix_cwd = (
-                                                str(test_cmd.cwd)
-                                                if test_cmd.cwd is not None
-                                                else str(Path(pdd_files["test"]).parent)
-                                            )
+                                            fix_cwd = str(test_cmd.cwd) if test_cmd.cwd is not None else str(pdd_files['test'].parent)
+                                            # Use shell command for non-Python
                                             test_result = _run_fix_operation_test_subprocess(
                                                 test_cmd.command,
                                                 shell=True,
-                                                capture_output=True,
-                                                text=True,
-                                                timeout=300,
-                                                stdin=subprocess.DEVNULL,
-                                                env=clean_env,
+                                                capture_output=True, text=True, timeout=300,
+                                                stdin=subprocess.DEVNULL, env=clean_env,
                                                 cwd=fix_cwd,
-                                                start_new_session=True,
+                                                start_new_session=True
                                             )
                                         error_content = f"Test output:\n{test_result.stdout}\n{test_result.stderr}"
                                         if getattr(test_result, "returncode", 0) != 0:
@@ -2517,9 +2618,13 @@ def sync_orchestration(
                                 success = result is not None
 
                         except click.Abort:
+                            if operation_rollback is not None:
+                                operation_rollback.restore()
                             errors.append(f"Operation '{operation}' was cancelled (user declined or non-interactive environment)")
                             success = False
                         except Exception as e:
+                            if operation_rollback is not None:
+                                operation_rollback.restore()
                             error_msg = str(e) if str(e) else type(e).__name__
                             errors.append(f"Exception during '{operation}': {error_msg}")
                             success = False
@@ -2539,6 +2644,8 @@ def sync_orchestration(
                             last_model_name = str(model_name)
                             operations_completed.append(operation)
                             _save_fingerprint_atomic(basename, language, operation, pdd_files, actual_cost, str(model_name), atomic_state=atomic_state, include_deps_override=include_deps_override)
+                            if operation_rollback is not None:
+                                operation_rollback.commit()
 
                         update_log_entry(log_entry, success=success, cost=actual_cost, model=model_name, duration=duration, error=errors[-1] if errors and not success else None)
                         if not success:
@@ -2639,6 +2746,8 @@ def sync_orchestration(
                                 )
                     
                         if not success:
+                            if operation_rollback is not None:
+                                operation_rollback.restore()
                             if not errors:
                                 msg = f"Operation '{operation}' failed."
                                 errors.append(msg)
@@ -2658,6 +2767,8 @@ def sync_orchestration(
                             break
 
         except BaseException as e:
+            if operation_rollback is not None:
+                operation_rollback.restore()
             errors.append(f"An unexpected error occurred in the orchestrator: {type(e).__name__}: {e}")
             # Log the full traceback for debugging
             import traceback

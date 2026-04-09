@@ -117,9 +117,13 @@ def pytest_runtest_makereport(item: pytest.Item, call):
             report.longrepr = f"Skipped: Insufficient credits for cloud LLM call"
 
 
-# Ignore CSV-driven assets under tests/csv during collection
+# Ignore non-suite assets under tests/ during collection.
+# `tests/fixtures/` contains fixture source trees used by higher-level tests;
+# some of those fixtures intentionally include broken `test_*.py` files.
+# They must never be collected as part of the main pytest suite.
 collect_ignore_glob = [
     "csv/*",
+    "fixtures/*",
 ]
 
 
