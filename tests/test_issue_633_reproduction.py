@@ -318,12 +318,13 @@ class TestStep11ErrorMessageTracing:
 # --- Test: Verify Current Prompt Is Missing All Four ---
 
 
-class TestStep11PromptGuidanceDetails:
+class TestStep11CurrentPromptLacksGuidance:
     """
-    Verify structural properties of the prompt's API mocking guidance.
+    Meta-test verifying the current prompt state matches the bug report.
 
-    These tests check that the prompt contains page.route() mentions
-    and HTTP method instructions beyond the original brief reference.
+    These tests confirm the ABSENCE of the required guidance. They should
+    PASS on the current (buggy) code. If any fail, the prompt may have been
+    partially fixed already.
     """
 
     def test_only_existing_page_route_mention_is_line_84(
@@ -358,10 +359,7 @@ class TestStep11PromptGuidanceDetails:
         self, step11_prompt_content: str
     ) -> None:
         """
-        Confirm the prompt contains explicit HTTP method guidance in mocks.
-
-        After the issue #633 fix, the API Mocking Best Practices section includes
-        explicit HTTP method guidance (do NOT assume REST conventions).
+        Confirm the prompt now has explicit guidance about HTTP methods in mocks.
         """
         content_lower = step11_prompt_content.lower()
         has_http_method_guidance = any([

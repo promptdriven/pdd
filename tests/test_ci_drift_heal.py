@@ -11,6 +11,7 @@ import pytest
 from pdd.ci_drift_heal import (
     DriftInfo,
     HealResult,
+    _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
     heal_module,
@@ -743,6 +744,7 @@ class TestBuildCiEnv:
         assert env["CI"] == "1"
         assert env["NO_COLOR"] == "1"
         assert env["PDD_OUTPUT_COST_PATH"] == "/tmp/cost.csv"
+        assert env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] == "1"
 
     def test_inherits_current_env(self):
         """Inherits existing environment variables."""
@@ -751,6 +753,65 @@ class TestBuildCiEnv:
         with patch.dict(os.environ, {"MY_VAR": "hello"}):
             env = _build_ci_env("/tmp/cost.csv")
         assert env.get("MY_VAR") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# _run_pdd_command rollback tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunPddCommandRollback:
+    def _env(self):
+        env = {"PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE": "1"}
+        return env
+
+    def test_timeout_restores_protected_paths_when_clean(self):
+        """Timed-out sync restores tracked metadata/cache files if they started clean."""
+        clean_status = MagicMock(returncode=0, stdout="", stderr="")
+        restore_ok = MagicMock(returncode=0, stdout="", stderr="")
+
+        def mock_run(cmd, **kwargs):
+            if cmd[:3] == ["git", "status", "--porcelain"]:
+                return clean_status
+            if cmd[:3] == ["git", "restore", "--source=HEAD"]:
+                return restore_ok
+            if cmd == ["pdd", "sync", "auth"]:
+                raise subprocess.TimeoutExpired(cmd, 600)
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_run:
+            result = _run_pdd_command(["pdd", "sync", "auth"], self._env(), "Heal auth")
+
+        assert result is False
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["git", "status", "--porcelain", "--", ".pdd/meta", "project_dependencies.csv"] in calls
+        assert ["git", "restore", "--source=HEAD", "--", ".pdd/meta", "project_dependencies.csv"] in calls
+
+    def test_failure_does_not_restore_when_protected_paths_already_dirty(self):
+        """Pre-existing metadata/cache edits are left alone on heal failure."""
+        dirty_status = MagicMock(
+            returncode=0,
+            stdout=" D .pdd/meta/auth_python.json\n",
+            stderr="",
+        )
+        failed = MagicMock(returncode=1, stdout="", stderr="boom")
+
+        def mock_run(cmd, **kwargs):
+            if cmd[:3] == ["git", "status", "--porcelain"]:
+                return dirty_status
+            if cmd == ["pdd", "sync", "auth"]:
+                return failed
+            if cmd[:2] == ["git", "restore"]:
+                raise AssertionError("restore should not run for already-dirty protected paths")
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_run:
+            result = _run_pdd_command(["pdd", "sync", "auth"], self._env(), "Heal auth")
+
+        assert result is False
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["git", "status", "--porcelain", "--", ".pdd/meta", "project_dependencies.csv"] in calls
+        assert not any(cmd[:2] == ["git", "restore"] for cmd in calls)
 
 
 # ---------------------------------------------------------------------------
