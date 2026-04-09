@@ -358,9 +358,9 @@ class TestStep11PromptGuidanceDetails:
         self, step11_prompt_content: str
     ) -> None:
         """
-        Confirm the prompt contains guidance about HTTP methods in mocks.
+        Confirm the prompt contains explicit HTTP method guidance in mocks.
 
-        Updated after fix: the API Mocking Best Practices section now provides
+        After the issue #633 fix, the API Mocking Best Practices section includes
         explicit HTTP method guidance (do NOT assume REST conventions).
         """
         content_lower = step11_prompt_content.lower()
@@ -370,5 +370,5 @@ class TestStep11PromptGuidanceDetails:
             "don't assume rest" in content_lower,
         ])
         assert has_http_method_guidance, (
-            "Prompt should contain HTTP method guidance after the fix."
+            "Prompt should contain HTTP method guidance after the issue #633 fix."
         )
