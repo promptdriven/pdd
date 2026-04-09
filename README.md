@@ -839,6 +839,7 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
 
@@ -882,6 +883,23 @@ The sync command automatically detects what files exist and executes the appropr
 6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests). Auth modules get auth-specific test patterns (mock OAuth servers, JWT fixtures, token lifecycle testing)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
+
+**One-Session Mode** (`--one-session`):
+
+By default, sync runs each step (example, crash-fix, verify, test, fix) as a separate LLM session. One-session mode runs all these steps in a single agentic session. This results in faster and cheaper sync runs.
+
+One-session mode is enabled by default for agentic sync (GitHub issue URLs) and disabled by default for single-module sync. Use `--one-session` or `--no-one-session` to override.
+
+```bash
+# Single-module sync with one-session mode
+pdd sync --one-session factorial_calculator
+
+# Agentic sync (one-session is the default)
+pdd sync https://github.com/myorg/myrepo/issues/100
+
+# Disable one-session for agentic sync
+pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
+```
 
 **Advanced Decision Making**:
 - **Fingerprint-based Change Detection**: Uses content hashes and timestamps to precisely detect what changed
