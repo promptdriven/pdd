@@ -26,7 +26,7 @@ on:
 
 jobs:
   unit-tests:
-    if: github.event.pull_request.draft != true
+    if: github.event_name == 'push' || github.event.pull_request.draft != true
     name: Run Unit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
