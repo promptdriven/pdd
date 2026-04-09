@@ -1,0 +1,62 @@
+## Module: config_manager
+
+A hierarchical configuration management system with layered sources,
+lazy validation, type coercion, and snapshot/restore support.
+
+## Requirements
+
+1. **Layered Configuration Sources**
+   `ConfigManager` resolves values from four layers in priority order:
+   override > environment > file > default. The highest-priority layer
+   that contains a key wins.
+
+2. **Lazy Validation**
+   Values are validated ONLY when accessed via `get()`, when `save()` is
+   called, or via an explicit `validate()` call. `set()` never validates
+   and never raises — it stores whatever value is given. Invalid values
+   surface as `ValidationError` on read or save, not on write.
+
+3. **Schema Definition**
+   `define_schema(key, type, default, required, validator, description)`
+   registers expected keys. `type` is a Python type (int, str, float,
+   bool, list, dict). `validator` is an optional callable returning bool.
+   `required` means the key must have a non-None value at save time.
+
+4. **Type Coercion**
+   String values from environment variables or files are automatically
+   coerced to the declared schema type when accessed via `get()`.
+   Examples: "42" -> 42, "true" -> True, "1.5" -> 1.5.
+
+5. **Change Tracking**
+   `get_changes()` returns a dict of `{key: ChangeRecord}` for all keys
+   modified since the last `save()` or `reset()`. Each record holds the
+   old value, new value, layer, and timestamp.
+
+6. **Atomic Save**
+   `save(path)` writes configuration to a file atomically using a
+   temporary file and rename. Before writing, it validates all required
+   keys and runs all schema validators. Raises on validation failure.
+
+7. **Import/Export**
+   `export_json()` returns a JSON string of the current resolved config.
+   `import_json(data)` parses JSON and loads values into the override
+   layer. A simplified YAML-like format is also supported via
+   `export_yaml()` and `import_yaml(data)` (no external dependencies).
+
+8. **Namespace Support**
+   Keys use dot-separated namespaces (e.g., "database.host").
+   `get_namespace(prefix)` returns a dict of all keys under that prefix
+   with the prefix stripped from the keys.
+
+9. **Snapshot and Restore**
+   `snapshot()` captures the full current state and returns a snapshot ID.
+   `restore(snapshot_id)` reverts all layers to the saved state.
+   Invalid snapshot IDs raise `KeyError`.
+
+10. **Environment Variable Loading**
+    `load_env(prefix)` scans environment variables starting with the given
+    prefix, strips the prefix, lowercases the remainder, converts
+    underscores to dots, and stores in the environment layer.
+
+## Dependencies
+- Python standard library only (json, os, tempfile, copy, time, uuid)
