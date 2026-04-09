@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 console = Console()
+_ROLLBACK_PATHS = (".pdd/meta", "project_dependencies.csv")
 
 
 def _get_git_changed_files(diff_base: str) -> set:
@@ -72,7 +73,77 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     # Set a fake required API key so pdd's model selection skips them
     # (empty api_key = "no auth needed" = always selected as cheapest).
     env["PDD_SKIP_LOCAL_MODELS"] = "1"
+    # If a heal subprocess times out or fails in CI, restore tracked metadata/cache
+    # files so the repo doesn't stay stuck in a half-mutated state.
+    env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] = "1"
     return env
+
+
+def _capture_rollback_state(cmd: List[str], env: Dict[str, str]) -> Optional[bool]:
+    """Return True when protected paths started clean and should be restorable.
+
+    We only attempt rollback for `pdd update` / `pdd sync` subprocesses launched by
+    the CI auto-heal wrapper, and only when `.pdd/meta` plus `project_dependencies.csv`
+    were pristine before the command started.
+    """
+    if env.get("PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE") != "1":
+        return None
+    if len(cmd) < 2 or cmd[0] != "pdd" or cmd[1] not in {"sync", "update"}:
+        return None
+
+    try:
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain", "--", *_ROLLBACK_PATHS],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception:
+        return None
+
+    if status_result.returncode != 0:
+        return None
+
+    return not bool((status_result.stdout or "").strip())
+
+
+def _restore_protected_paths(rollback_state: Optional[bool], label: str) -> None:
+    """Restore tracked metadata/cache files when the heal started from a clean state."""
+    if rollback_state is not True:
+        return
+
+    try:
+        restore_result = subprocess.run(
+            ["git", "restore", "--source=HEAD", "--", *_ROLLBACK_PATHS],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if restore_result.returncode != 0:
+            # Fallback for older Git versions or unusual restore failures.
+            restore_result = subprocess.run(
+                ["git", "checkout", "--", *_ROLLBACK_PATHS],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        if restore_result.returncode == 0:
+            console.print(
+                "[yellow]↩ Restored tracked .pdd/meta and "
+                f"project_dependencies.csv after {label} failed[/yellow]"
+            )
+            return
+        stderr_snippet = (restore_result.stderr or "").strip()[-500:]
+        if stderr_snippet:
+            console.print(
+                "[yellow]⚠ Failed to restore protected files after "
+                f"{label}: {stderr_snippet}[/yellow]"
+            )
+    except Exception as exc:
+        console.print(
+            "[yellow]⚠ Failed to restore protected files after "
+            f"{label}: {exc}[/yellow]"
+        )
 
 
 def _parse_cost_from_csv(csv_path: str) -> float:
@@ -301,6 +372,7 @@ def _print_drift_table(
 def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     """Run a pdd subprocess command, returning True on success."""
     console.print(f"[blue]⟳ {label}: {' '.join(cmd)}[/blue]")
+    rollback_state = _capture_rollback_state(cmd, env)
     try:
         result = subprocess.run(
             cmd,
@@ -317,6 +389,7 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
             console.print(f"[red]✗ {label} failed (exit code {result.returncode})[/red]")
             if stderr_snippet:
                 console.print(f"[dim]{stderr_snippet}[/dim]")
+            _restore_protected_paths(rollback_state, label)
             return False
     except subprocess.TimeoutExpired as e:
         console.print(f"[red]✗ {label} timed out[/red]")
@@ -324,6 +397,7 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
             console.print(f"[dim]stdout (last 1000 chars): {e.stdout[-1000:]}[/dim]")
         if e.stderr:
             console.print(f"[dim]stderr (last 1000 chars): {e.stderr[-1000:]}[/dim]")
+        _restore_protected_paths(rollback_state, label)
         return False
     except FileNotFoundError:
         console.print(
@@ -332,6 +406,7 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
         return False
     except Exception as e:
         console.print(f"[red]✗ {label} error: {e}[/red]")
+        _restore_protected_paths(rollback_state, label)
         return False
 
 

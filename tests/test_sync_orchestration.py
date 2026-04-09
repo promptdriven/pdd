@@ -2485,6 +2485,107 @@ class TestNonPythonFixLoopBug:
             )
 
 
+def test_auto_deps_rolls_back_shared_files_when_checkpoint_is_interrupted(orchestration_fixture):
+    """Auto-deps must restore prompt/cache/architecture files if sync dies before fingerprint save."""
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+    mock_save_fp = mocks['_save_fingerprint_atomic']
+    prompt_path = mocks['get_pdd_file_paths'].return_value['prompt']
+    tmp_path = prompt_path.parent.parent
+    csv_path = tmp_path / 'project_dependencies.csv'
+    arch_path = tmp_path / 'architecture.json'
+    temp_output = prompt_path.with_name('calculator_python_with_deps.prompt')
+
+    original_prompt = 'Original calculator prompt.\n'
+    original_csv = 'full_path,file_summary,content_hash\nold.py,Old,oldhash\n'
+    original_arch = [
+        {'filename': prompt_path.name, 'dependencies': []},
+    ]
+
+    prompt_path.write_text(original_prompt, encoding='utf-8')
+    csv_path.write_text(original_csv, encoding='utf-8')
+    arch_path.write_text(json.dumps(original_arch), encoding='utf-8')
+
+    def fake_auto_deps(*args, **kwargs):
+        Path(kwargs['output']).write_text(
+            'Original calculator prompt.\n<include>dep_python.prompt</include>\n',
+            encoding='utf-8',
+        )
+        csv_path.write_text(
+            'full_path,file_summary,content_hash\ndep.py,Dep,newhash\n',
+            encoding='utf-8',
+        )
+        arch_path.write_text(
+            json.dumps([{'filename': prompt_path.name, 'dependencies': ['dep_python.prompt']}]),
+            encoding='utf-8',
+        )
+        return ('updated prompt', 0.01, 'mock-model')
+
+    mock_auto_deps.side_effect = fake_auto_deps
+    mock_save_fp.side_effect = KeyboardInterrupt('simulated fingerprint interruption')
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+    ]
+
+    result = sync_orchestration(basename='calculator', language='python', budget=1.0)
+
+    assert result['success'] is False
+    assert 'KeyboardInterrupt' in ' '.join(result.get('errors', []))
+    assert prompt_path.read_text(encoding='utf-8') == original_prompt
+    assert csv_path.read_text(encoding='utf-8') == original_csv
+    assert json.loads(arch_path.read_text(encoding='utf-8')) == original_arch
+    assert not temp_output.exists()
+
+
+def test_auto_deps_keeps_shared_file_updates_after_successful_commit(orchestration_fixture):
+    """Rollback guard must not undo auto-deps changes after the fingerprint save succeeds."""
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+    prompt_path = mocks['get_pdd_file_paths'].return_value['prompt']
+    tmp_path = prompt_path.parent.parent
+    csv_path = tmp_path / 'project_dependencies.csv'
+    arch_path = tmp_path / 'architecture.json'
+    temp_output = prompt_path.with_name('calculator_python_with_deps.prompt')
+
+    prompt_path.write_text('Original calculator prompt.\n', encoding='utf-8')
+    csv_path.write_text('full_path,file_summary,content_hash\nold.py,Old,oldhash\n', encoding='utf-8')
+    arch_path.write_text(
+        json.dumps([{'filename': prompt_path.name, 'dependencies': []}]),
+        encoding='utf-8',
+    )
+
+    def fake_auto_deps(*args, **kwargs):
+        Path(kwargs['output']).write_text(
+            'Original calculator prompt.\n<include>dep_python.prompt</include>\n',
+            encoding='utf-8',
+        )
+        csv_path.write_text(
+            'full_path,file_summary,content_hash\ndep.py,Dep,newhash\n',
+            encoding='utf-8',
+        )
+        arch_path.write_text(
+            json.dumps([{'filename': prompt_path.name, 'dependencies': ['dep_python.prompt']}]),
+            encoding='utf-8',
+        )
+        return ('updated prompt', 0.01, 'mock-model')
+
+    mock_auto_deps.side_effect = fake_auto_deps
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename='calculator', language='python', budget=1.0)
+
+    assert result['success'] is True
+    assert '<include>dep_python.prompt</include>' in prompt_path.read_text(encoding='utf-8')
+    assert 'dep.py,Dep,newhash' in csv_path.read_text(encoding='utf-8')
+    assert json.loads(arch_path.read_text(encoding='utf-8'))[0]['dependencies'] == ['dep_python.prompt']
+    assert not temp_output.exists()
+
+
 class TestLanguageTestCommandResolution:
     """Tests for language-specific test command resolution."""
 
