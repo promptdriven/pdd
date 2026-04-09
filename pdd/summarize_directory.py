@@ -144,6 +144,10 @@ def summarize_directory(
     
     # Parse existing CSV if provided to validate format and get cached entries
     existing_data: Dict[str, Dict[str, str]] = {}
+    # Secondary index: content_hash → entry.  When the same physical file is
+    # scanned from a different directory_path its relative path changes (e.g.
+    # "cli.py" vs "pdd/cli.py").  The hash index lets us cache-hit anyway.
+    existing_by_hash: Dict[str, Dict[str, str]] = {}
     if csv_file:
         try:
             f = io.StringIO(csv_file)
@@ -160,6 +164,10 @@ def summarize_directory(
                         row['_backfilled'] = True
                     # Use normalized path for cache key consistency
                     existing_data[os.path.normpath(row['full_path'])] = row
+                    # Index by content hash for cross-directory cache hits
+                    h = row['content_hash']
+                    if h and h != 'error':
+                        existing_by_hash[h] = row
         except Exception:
             raise ValueError("Invalid CSV file format.")
 
@@ -232,6 +240,7 @@ def summarize_directory(
             file_path,
             rel_path,
             existing_data,
+            existing_by_hash,
             prompt_template,
             strength,
             temperature,
@@ -253,6 +262,7 @@ def summarize_directory(
                 file_path,
                 rel_path,
                 existing_data,
+                existing_by_hash,
                 prompt_template,
                 strength,
                 temperature,
@@ -347,6 +357,7 @@ def _process_single_file_logic(
     file_path: str,
     rel_path: str,
     existing_data: Dict[str, Dict[str, str]],
+    existing_by_hash: Dict[str, Dict[str, str]],
     prompt_template: str,
     strength: float,
     temperature: float,
@@ -360,28 +371,34 @@ def _process_single_file_logic(
     """
     cost = 0.0
     model_name = "cached"
-    
+
     try:
         # Step 6a: Read file
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-        
+
         # Step 6b: Compute hash
         current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-        
+
         summary = ""
         key_exports = "[]"
         dependencies = "[]"
-        
+
         # Step 6c: Check cache (using normalized relative path)
         normalized_path = os.path.normpath(rel_path)
         cache_hit = False
-        
+
         # Also check absolute path for backward compatibility with older caches
         abs_normalized_path = os.path.normpath(file_path)
-        
+
         cached_entry = existing_data.get(normalized_path) or existing_data.get(abs_normalized_path)
-        
+
+        # Fallback: match by content hash when the same file appears under a
+        # different relative path (e.g. CSV has "cli.py" from scanning pdd/,
+        # but current scan from project root produces "pdd/cli.py").
+        if not cached_entry:
+            cached_entry = existing_by_hash.get(current_hash)
+
         if cached_entry:
             # Step 6d: Check hash match and that entry was produced by the new format
             # (old-format entries lack key_exports/dependencies columns entirely;
