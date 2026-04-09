@@ -21,6 +21,51 @@ except ImportError:
 from .errors import console, get_core_dump_errors
 
 
+def _extract_sync_steps_from_file_contents(file_contents: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Build per-operation sync step records from any attached *_sync.log files.
+
+    The sync log is JSONL. We only convert "operation" entries (not "event" entries)
+    into a simplified list suitable for core dump inspection.
+    """
+    steps: List[Dict[str, Any]] = []
+    for path_key, content in (file_contents or {}).items():
+        if not isinstance(path_key, str) or not path_key.endswith("_sync.log"):
+            continue
+        if not isinstance(content, str) or content.startswith("<"):
+            continue
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            # Skip events; keep operation rows
+            if entry.get("type") == "event":
+                continue
+            op = entry.get("operation")
+            if not op:
+                continue
+            details = entry.get("details") or {}
+            steps.append(
+                {
+                    "operation": op,
+                    "success": bool(entry.get("success")),
+                    "cost": entry.get("actual_cost"),
+                    "model": entry.get("model") or "unknown",
+                    "duration": entry.get("duration"),
+                    "reason": entry.get("reason"),
+                    "error": entry.get("error"),
+                    "failure_summary": entry.get("error") or (details.get("failure_reason") if isinstance(details, dict) else None),
+                    "test_output_excerpt": details.get("test_output_excerpt") if isinstance(details, dict) else None,
+                    "source_log": path_key,
+                }
+            )
+    return steps
+
+
 def garbage_collect_core_dumps(keep: int = 10) -> int:
     """Delete old core dumps, keeping only the most recent `keep` files.
 
@@ -77,13 +122,13 @@ def _write_core_dump(
         dump_path = core_dump_dir / f"pdd-core-{timestamp}.json"
 
         steps: List[Dict[str, Any]] = []
-        for i, result_tuple in enumerate(normalized_results):
-            command_name = (
-                invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
-            )
+        step_count = max(len(invoked_subcommands), len(normalized_results))
+        for i in range(step_count):
+            command_name = invoked_subcommands[i] if i < len(invoked_subcommands) else f"Unknown Command {i+1}"
+            result_tuple = normalized_results[i] if i < len(normalized_results) else None
 
-            cost = None
-            model_name = None
+            cost: Optional[float] = None
+            model_name: Optional[str] = None
             if isinstance(result_tuple, tuple) and len(result_tuple) == 3:
                 _result_data, cost, model_name = result_tuple
 
@@ -92,7 +137,7 @@ def _write_core_dump(
                     "step": i + 1,
                     "command": command_name,
                     "cost": cost,
-                    "model": model_name,
+                    "model": (model_name or "unknown"),
                 }
             )
 
@@ -128,6 +173,12 @@ def _write_core_dump(
                         meta_file.stem.endswith(f"_{c}") for c in ["generate", "test", "run", "fix", "update"]
                     ):
                         core_dump_files.add(str(meta_file.resolve()))
+                # Include operation logs and run reports (critical for sync debugging)
+                # These are line-delimited JSON logs and are safe to attach (size-gated below).
+                for log_file in meta_dir.glob("*_sync.log"):
+                    core_dump_files.add(str(log_file.resolve()))
+                for run_file in meta_dir.glob("*_run.json"):
+                    core_dump_files.add(str(run_file.resolve()))
 
         # Auto-include PDD config files if they exist
         config_files = [
@@ -174,7 +225,7 @@ def _write_core_dump(
                     console.print(f"[warning]Debug snapshot: Error reading {file_path}: {e}[/warning]")
 
         payload: Dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "pdd_version": __version__,
             "timestamp_utc": timestamp,
             "argv": sys.argv[1:],  # without the 'pdd' binary name
@@ -205,6 +256,9 @@ def _write_core_dump(
             "file_contents": file_contents,
             "terminal_output": terminal_output,
         }
+        sync_steps = _extract_sync_steps_from_file_contents(file_contents)
+        if sync_steps:
+            payload["sync_steps"] = sync_steps
         if exit_reason is not None:
             payload["exit_reason"] = exit_reason
 

@@ -3,7 +3,7 @@ Error handling logic for PDD CLI.
 """
 import os
 import traceback
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import click
 from rich.console import Console
 from rich.markup import MarkupError, escape
@@ -39,6 +39,32 @@ def get_core_dump_errors() -> List[Dict[str, Any]]:
 def clear_core_dump_errors() -> None:
     """Clear the list of collected errors."""
     _core_dump_errors.clear()
+
+
+def record_core_dump_error(
+    *,
+    command: str,
+    type: str,
+    message: str,
+    details: Optional[Dict[str, Any]] = None,
+    traceback_text: Optional[str] = None,
+) -> None:
+    """Record a structured error entry for core dumps.
+
+    Use this for non-exception "logical failures" (budget exhaustion, retry limits,
+    cycle detection, etc.) so core dumps contain actionable context even when the
+    CLI run terminates without raising an exception.
+    """
+    error_record: Dict[str, Any] = {
+        "command": command,
+        "type": type,
+        "message": message,
+    }
+    if details:
+        error_record["details"] = details
+    if traceback_text:
+        error_record["traceback"] = traceback_text
+    _core_dump_errors.append(error_record)
 
 
 def _format_interrupt_reason(ctx: Dict[str, Any]) -> str:
