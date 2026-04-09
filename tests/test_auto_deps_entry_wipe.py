@@ -470,6 +470,90 @@ class TestUnnecessaryResummarization:
 
 
 # ---------------------------------------------------------------------------
+# Bug 3: Alternating directory scans wipe each other's entries
+# (exact real-world pattern from issue #603 comment)
+# ---------------------------------------------------------------------------
+
+class TestAlternatingDirectoryScans:
+    """Reproduces the exact production pattern: sync scans context/ (example
+    files), then a separate run scans pdd/ (source files). Both write to the
+    same project_dependencies.csv.  Each scan should ADD entries, not replace
+    the CSV wholesale."""
+
+    def test_alternating_scans_accumulate_entries(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Scan context/ then pdd/ — CSV should contain entries from both.
+
+        This mirrors the real history:
+        - commit 0ff8ecfb7: CSV has 748 lines (context/ entries)
+        - commit cb52e3070: CSV drops to 263 (pdd/ scan wiped context/ entries)
+        - commit 920ba06df: CSV is 269 (context/ scan wiped pdd/ entries)
+        """
+        # Set up two directories like the real project
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+
+        # Create example files in context/
+        for name in ["example_a.py", "example_b.py", "example_c.py"]:
+            (context_dir / name).write_text(f"# {name}")
+
+        # Create source files in pdd/
+        for name in ["cli.py", "sync.py"]:
+            (pdd_dir / name).write_text(f"# {name}")
+
+        # Step 1: First scan covers context/
+        csv_after_context, cost1, _ = summarize_directory(
+            directory_path=str(context_dir),
+            strength=0.5,
+            temperature=0.0,
+        )
+        context_rows = _parse_csv(csv_after_context)
+        assert len(context_rows) == 3, f"Expected 3 context entries, got {len(context_rows)}"
+
+        # Step 2: Second scan covers pdd/, passing the context/ CSV as cache
+        csv_after_pdd, cost2, _ = summarize_directory(
+            directory_path=str(pdd_dir),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv_after_context,
+        )
+        pdd_rows = _parse_csv(csv_after_pdd)
+
+        # CSV should now have BOTH context/ and pdd/ entries
+        pdd_paths = {row['full_path'] for row in pdd_rows}
+        assert len(pdd_rows) >= 5, (
+            f"After scanning pdd/, CSV should have 5 entries (3 context + 2 pdd), "
+            f"got {len(pdd_rows)}. Context entries were wiped. Paths: {pdd_paths}"
+        )
+
+        # Step 3: Third scan covers context/ again — should not re-summarize
+        # the 3 context files (cache hit) AND should preserve pdd/ entries
+        mock_llm_invoke.reset_mock()
+        csv_after_context2, cost3, _ = summarize_directory(
+            directory_path=str(context_dir),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv_after_pdd,
+        )
+        final_rows = _parse_csv(csv_after_context2)
+        final_paths = {row['full_path'] for row in final_rows}
+
+        # Context files should be cache hits (no LLM cost)
+        assert cost3 == 0, (
+            f"Context files were re-summarized on second scan (cost={cost3}). "
+            "Should be cache hits."
+        )
+        # All 5 entries should still be present
+        assert len(final_rows) >= 5, (
+            f"After re-scanning context/, CSV should still have 5 entries, "
+            f"got {len(final_rows)}. Pdd entries were wiped. Paths: {final_paths}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Combined scenario: the full pain sequence described in the conversation
 # ---------------------------------------------------------------------------
 
