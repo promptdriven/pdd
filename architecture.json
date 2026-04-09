@@ -1,341 +1,8 @@
 [
   {
-    "reason": "Core Pydantic data models and enums shared by all recruiting modules \u2014 defines the canonical schema for candidates, conversations, pipeline stages, and scoring",
-    "description": "Pydantic v2 models for all Firestore document types: CandidateDocument (30+ fields covering identity, academic, screening, pipeline, call tracking, homework, trial data), ConversationDocument (messages array, screening signals, session metadata), HandshakeSyncState (polling watermark), RecruitingConfig (parsed YAML runtime config). Enums for PipelineStage (ingested, registered, screening, scored, call_queued, called, homework, trial, hired, rejected), CallOutcome, HomeworkStatus, TrialStatus. Includes Firestore serialization helpers (to_dict/from_dict) and validation rules. All models use strict mode with field validators for email, phone, URL formats.",
-    "dependencies": [],
-    "priority": 1,
-    "filename": "candidate_models_Python.prompt",
-    "filepath": "extensions/recruiting/models.py",
-    "tags": [
-      "backend",
-      "data",
-      "pydantic"
-    ],
-    "context_urls": [
-      {
-        "url": "https://docs.pydantic.dev/latest/concepts/models/",
-        "purpose": "Pydantic v2 model definition patterns and validation"
-      },
-      {
-        "url": "https://docs.pydantic.dev/latest/concepts/validators/",
-        "purpose": "Field validators for email, phone, URL format enforcement"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/add-data",
-        "purpose": "Firestore document structure and data types"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "CandidateDocument",
-            "signature": "class CandidateDocument(BaseModel)",
-            "returns": "CandidateDocument instance"
-          },
-          {
-            "name": "ConversationDocument",
-            "signature": "class ConversationDocument(BaseModel)",
-            "returns": "ConversationDocument instance"
-          },
-          {
-            "name": "HandshakeSyncState",
-            "signature": "class HandshakeSyncState(BaseModel)",
-            "returns": "HandshakeSyncState instance"
-          },
-          {
-            "name": "RecruitingConfig",
-            "signature": "class RecruitingConfig(BaseModel)",
-            "returns": "RecruitingConfig instance"
-          },
-          {
-            "name": "PipelineStage",
-            "signature": "class PipelineStage(str, Enum)",
-            "returns": "PipelineStage enum value"
-          },
-          {
-            "name": "CallOutcome",
-            "signature": "class CallOutcome(str, Enum)",
-            "returns": "CallOutcome enum value"
-          },
-          {
-            "name": "ChatMessage",
-            "signature": "class ChatMessage(BaseModel)",
-            "returns": "ChatMessage instance"
-          },
-          {
-            "name": "ScreeningSignals",
-            "signature": "class ScreeningSignals(BaseModel)",
-            "returns": "ScreeningSignals instance"
-          },
-          {
-            "name": "HomeworkStatus",
-            "signature": "class HomeworkStatus(str, Enum)",
-            "returns": "HomeworkStatus enum value"
-          },
-          {
-            "name": "TrialStatus",
-            "signature": "class TrialStatus(str, Enum)",
-            "returns": "TrialStatus enum value"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "YAML configuration loader for chatbot system prompt, screening criteria, scoring weights, filter rules, and Brevo template IDs \u2014 single source of truth for all tunable recruiting parameters",
-    "description": "Loads and validates extensions/recruiting/config.yaml into a RecruitingConfig Pydantic model. Provides a cached singleton accessor get_config() that reads YAML once and returns validated config. Handles missing file with sensible defaults, validates scoring weight totals sum to 1.0, and exposes typed accessors for chatbot_prompt, screening_criteria, scoring_weights, filter_rules, brevo_template_ids, and scheduling config. Supports config reload for testing.",
-    "dependencies": [
-      "candidate_models_Python.prompt"
-    ],
-    "priority": 2,
-    "filename": "config_loader_Python.prompt",
-    "filepath": "extensions/recruiting/config_loader.py",
-    "tags": [
-      "backend",
-      "config"
-    ],
-    "context_urls": [
-      {
-        "url": "https://docs.python.org/3/library/functools.html#functools.lru_cache",
-        "purpose": "Cached singleton pattern for config loading"
-      },
-      {
-        "url": "https://pyyaml.org/wiki/PyYAMLDocumentation",
-        "purpose": "YAML parsing with safe_load"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "get_config",
-            "signature": "def get_config(config_path: str | None = None) -> RecruitingConfig",
-            "returns": "RecruitingConfig",
-            "errors": [
-              "FileNotFoundError",
-              "ValidationError"
-            ]
-          },
-          {
-            "name": "reload_config",
-            "signature": "def reload_config() -> RecruitingConfig",
-            "returns": "RecruitingConfig",
-            "sideEffects": [
-              "Clears config cache"
-            ]
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Shared authentication utilities for three distinct auth patterns used across recruiting endpoints \u2014 GitHub OAuth token exchange, Firebase ID token verification, and RS256 signed JWT for email deep-links",
-    "description": "Three auth patterns: (1) verify_firebase_token(token) validates Firebase ID tokens via firebase_admin.auth.verify_id_token(), returns uid and claims, handles expired/invalid/revoked tokens. (2) verify_github_oauth(code) exchanges GitHub OAuth code for access token, fetches user profile (login, email, avatar_url, name), returns GitHubProfile. (3) create_signed_jwt(payload, expiry) and verify_signed_jwt(token) use RS256 JWT signing/verification via PyJWT for call outcome deep-links with configurable secret from environment. All functions raise typed AuthError exceptions with error codes. Includes helper for extracting Bearer tokens from Authorization headers.",
-    "dependencies": [
-      "candidate_models_Python.prompt"
-    ],
-    "priority": 3,
-    "filename": "auth_utils_Python.prompt",
-    "filepath": "extensions/recruiting/auth_utils.py",
-    "tags": [
-      "backend",
-      "auth"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/auth/admin/verify-id-tokens",
-        "purpose": "Firebase Admin SDK token verification with verify_id_token()"
-      },
-      {
-        "url": "https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps",
-        "purpose": "GitHub OAuth code-to-token exchange flow"
-      },
-      {
-        "url": "https://pyjwt.readthedocs.io/en/stable/usage.html",
-        "purpose": "PyJWT RS256 signing and verification patterns"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "preprocess",
-            "signature": "(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_file_path",
-            "signature": "(file_name: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_backtick_includes",
-            "signature": "(text: str, recursive: bool) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_xml_tags",
-            "signature": "(text: str, recursive: bool) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_include_tags",
-            "signature": "(text: str, recursive: bool) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_pdd_tags",
-            "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_shell_tags",
-            "signature": "(text: str, recursive: bool) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_web_tags",
-            "signature": "(text: str, recursive: bool) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_include_many_tags",
-            "signature": "(text: str, recursive: bool) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "double_curly",
-            "signature": "(text: str, exclude_keys: Optional[List[str]] = None) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_include",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_include",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_shell",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_shell_with_spans",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_web",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_web_with_spans",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_many",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_many_with_spans",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "process_code_block",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "replace_include_with_spans",
-            "signature": "(match)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          }
-        ]
-      }
-    },
-    "position": {
-      "x": 10480,
-      "y": 620
-    }
-  },
-  {
     "reason": "Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.",
     "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, and GitHub state persistence.",
-    "dependencies": [
-      "llm_invoke_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
     "filepath": "pdd/agentic_common.py",
@@ -399,9 +66,7 @@
   {
     "reason": "Detects programming language from prompt or filename.",
     "description": "Identifies the target language for code generation. Uses filename patterns and prompt content analysis.",
-    "dependencies": [
-      "path_resolution_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 6,
     "filename": "get_language_python.prompt",
     "filepath": "pdd/get_language.py",
@@ -495,10 +160,7 @@
   {
     "reason": "Extracts clean code from raw LLM responses.",
     "description": "Parses LLM output to extract code blocks, removes markdown fencing, validates syntax, and handles multi-block outputs. Uses LLM for complex extraction when needed.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 8,
     "filename": "postprocess_python.prompt",
     "filepath": "pdd/postprocess.py",
@@ -538,10 +200,7 @@
   {
     "reason": "Detects whether LLM output is complete or needs continuation.",
     "description": "Analyzes LLM responses to determine if code is complete. Checks for truncation markers, unclosed blocks, and incomplete functions.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 9,
     "filename": "unfinished_prompt_python.prompt",
     "filepath": "pdd/unfinished_prompt.py",
@@ -613,10 +272,7 @@
   {
     "reason": "Continues incomplete LLM outputs that were truncated.",
     "description": "Detects when LLM output is incomplete and continues generation from where it stopped. Handles token limit issues gracefully.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "unfinished_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 11,
     "filename": "continue_generation_python.prompt",
     "filepath": "pdd/continue_generation.py",
@@ -717,800 +373,9 @@
     }
   },
   {
-    "reason": "Handshake API polling function triggered hourly by Cloud Scheduler \u2014 ingests new applicants, de-duplicates against existing candidates, applies auto-filter rules, and creates candidate documents",
-    "description": "Cloud Function entry point recruiting_handshake_poll triggered by Cloud Scheduler (hourly). Fetches applicants from Handshake EDU API using updated_since watermark from recruiting/handshake_sync_state document. For each applicant: extracts identity and academic fields, checks for duplicates by email in recruiting/candidates collection, applies configurable auto-filter rules (GPA threshold, graduation year, major whitelist from config.yaml), creates CandidateDocument with stage=ingested for passing applicants. Updates sync watermark on success. Handles API rate limits with exponential backoff, logs filtered-out candidates with rejection reasons, implements idempotency via Handshake application ID. Uses structured Cloud Logging.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 4,
-    "filename": "handshake_ingestion_Python.prompt",
-    "filepath": "extensions/recruiting/handshake_poll.py",
-    "tags": [
-      "backend",
-      "api",
-      "ingestion"
-    ],
-    "context_urls": [
-      {
-        "url": "https://app.joinhandshake.com/api/docs",
-        "purpose": "Handshake EDU API endpoints and authentication"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
-        "purpose": "Cloud Functions HTTP function pattern for scheduler triggers"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/transactions",
-        "purpose": "Firestore transactions for atomic watermark updates"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_handshake_poll",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ ingested: int, filtered: int, duplicates: int }"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Candidate registration endpoint handling GitHub OAuth flow \u2014 creates Firebase Auth user, candidate document, and waitlist entry in a single atomic operation",
-    "description": "Cloud Function entry point recruiting_register triggered by HTTP POST. Accepts GitHub OAuth authorization code, exchanges for access token via auth_utils, creates or links Firebase Auth account with GitHub provider, creates CandidateDocument with stage=registered populated from GitHub profile (login, email, avatar_url, name). Creates user_waitlist entry with source='recruiting' and recruiting_uid reference. Returns Firebase custom token for client-side auth. Handles duplicate registration (same GitHub user) by returning existing candidate. Uses Firestore batch write for atomicity across candidates, waitlist, and users collections. Validates request payload with Pydantic.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "auth_utils_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 5,
-    "filename": "candidate_registration_Python.prompt",
-    "filepath": "extensions/recruiting/registration.py",
-    "tags": [
-      "backend",
-      "api",
-      "auth"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/auth/admin/create-custom-tokens",
-        "purpose": "Creating Firebase custom tokens for client auth"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/transactions",
-        "purpose": "Batch writes for atomic multi-document creation"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/users/users#get-the-authenticated-user",
-        "purpose": "GitHub user profile API for candidate data"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_register",
-            "auth": "github-oauth",
-            "requestSchema": "{ code: str, redirect_uri: str }",
-            "responseSchema": "{ uid: str, token: str, candidate: CandidateDocument }"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "AI chatbot endpoint for conversational screening \u2014 manages multi-turn conversations with Claude via LiteLLM, extracts screening signals, and persists chat history",
-    "description": "Cloud Function entry point recruiting_chat triggered by HTTP POST with Firebase token auth. Manages multi-turn conversation flow: loads conversation history from recruiting/conversations/{uid}, appends user message, constructs system prompt from config.yaml with candidate context, calls Claude via LiteLLM (model from config, temperature=0.7), extracts screening signals from assistant response (technical depth, communication quality, motivation indicators), persists updated conversation and signals to Firestore. Handles conversation lifecycle: creates new conversation on first message, enforces max turns from config, marks conversation status=complete when screening criteria met or max turns reached. On completion, updates candidate stage to screening complete and triggers score_candidate via Firestore write. Returns assistant message and conversation metadata. Implements request-level idempotency via message_id.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "auth_utils_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 6,
-    "filename": "chatbot_screen_Python.prompt",
-    "filepath": "extensions/recruiting/chatbot.py",
-    "tags": [
-      "backend",
-      "api",
-      "ai"
-    ],
-    "context_urls": [
-      {
-        "url": "https://docs.litellm.ai/docs/",
-        "purpose": "LiteLLM unified API for Claude model calls"
-      },
-      {
-        "url": "https://docs.anthropic.com/en/docs/build-with-claude/message-batches",
-        "purpose": "Claude message format and multi-turn conversation patterns"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/add-data#update-data",
-        "purpose": "Firestore document updates for conversation persistence"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_chat",
-            "auth": "firebase-token",
-            "requestSchema": "{ message: str, message_id: str }",
-            "responseSchema": "{ reply: str, conversation_status: str, turn_number: int }"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Candidate scoring triggered by conversation completion \u2014 computes weighted composite score from screening signals and generates candidate dossier for reviewer",
-    "description": "Cloud Function entry point recruiting_score_candidate triggered by Firestore document update on recruiting/conversations/{uid} when status changes to complete. Reads screening signals from conversation document, loads scoring weights from config.yaml (technical_depth, communication, motivation, experience, culture_fit), computes weighted composite score (0-100). Generates text dossier summarizing candidate strengths, concerns, and recommended next steps using LiteLLM. Updates CandidateDocument with composite_score, individual dimension scores, dossier text, and advances stage to scored. Handles at-least-once delivery via idempotency check on candidate stage. Logs scoring breakdown for audit trail.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 7,
-    "filename": "scoring_Python.prompt",
-    "filepath": "extensions/recruiting/scoring.py",
-    "tags": [
-      "backend",
-      "ai",
-      "firestore-trigger"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/functions/firestore-events",
-        "purpose": "Firestore trigger patterns for Cloud Functions 2nd gen"
-      },
-      {
-        "url": "https://docs.litellm.ai/docs/completion/input",
-        "purpose": "LiteLLM completion API for dossier generation"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "recruiting_score_candidate",
-            "signature": "def recruiting_score_candidate(event: CloudEvent) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Updates candidate document with score and dossier",
-              "Advances pipeline stage to scored"
-            ]
-          },
-          {
-            "name": "compute_composite_score",
-            "signature": "def compute_composite_score(signals: ScreeningSignals, weights: dict) -> tuple[float, dict]",
-            "returns": "tuple of (composite_score, dimension_scores)"
-          },
-          {
-            "name": "generate_dossier",
-            "signature": "async def generate_dossier(candidate: CandidateDocument, signals: ScreeningSignals, scores: dict) -> str",
-            "returns": "str (dossier text)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Shared email outreach module using Brevo transactional API \u2014 sends templated emails for post-screen notifications, homework instructions, and other candidate communications",
-    "description": "Brevo transactional email integration module. Provides send_email(to, template_id, params) using Brevo Python SDK v4.0. Template IDs loaded from config.yaml for each email type: post_screen_notification, homework_instructions, call_invitation, rejection_notice. Handles Brevo API errors with retry logic (3 attempts, exponential backoff). Validates email addresses before sending. Logs all email sends with template_id and recipient for audit. Provides bulk_send for daily digest. All functions are async for non-blocking operation within Cloud Functions.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 8,
-    "filename": "email_outreach_Python.prompt",
-    "filepath": "extensions/recruiting/email_outreach.py",
-    "tags": [
-      "backend",
-      "email"
-    ],
-    "context_urls": [
-      {
-        "url": "https://developers.brevo.com/reference/sendtransacemail",
-        "purpose": "Brevo transactional email API reference"
-      },
-      {
-        "url": "https://github.com/getbrevo/brevo-python",
-        "purpose": "Brevo Python SDK usage and configuration"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "send_email",
-            "signature": "async def send_email(to_email: str, template_id: int, params: dict) -> bool",
-            "returns": "bool (success)",
-            "errors": [
-              "EmailSendError"
-            ]
-          },
-          {
-            "name": "send_post_screen_notification",
-            "signature": "async def send_post_screen_notification(candidate: CandidateDocument) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "send_homework_instructions",
-            "signature": "async def send_homework_instructions(candidate: CandidateDocument, credits: int) -> bool",
-            "returns": "bool"
-          },
-          {
-            "name": "send_bulk_digest",
-            "signature": "async def send_bulk_digest(to_email: str, subject: str, html_body: str) -> bool",
-            "returns": "bool"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Daily digest Cloud Scheduler function \u2014 generates ranked call queue with dossiers, phone numbers, and email templates for the hiring manager",
-    "description": "Cloud Function entry point recruiting_daily_digest triggered by Cloud Scheduler at 4 PM PT daily. Queries Firestore for all candidates with stage=scored or stage=call_queued, ranks by composite_score descending, generates HTML email with: ranked table (name, score, phone, key strengths), individual dossier summaries, pre-filled email template links for each candidate, and signed JWT deep-links for call outcome tracking. Sends digest via email_outreach.send_bulk_digest to configured admin email. Updates candidates to stage=call_queued if not already. Handles empty queue gracefully (sends no-candidates summary). Uses config.yaml for admin_email, digest schedule, and email template.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "auth_utils_Python.prompt",
-      "email_outreach_Python.prompt"
-    ],
-    "priority": 9,
-    "filename": "daily_digest_Python.prompt",
-    "filepath": "extensions/recruiting/daily_digest.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler job configuration for daily triggers"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore compound queries for candidate filtering and ordering"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_daily_digest",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ candidates_queued: int, digest_sent: bool }"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Call outcome tracking endpoint \u2014 records hiring manager call results via email deep-link with signed JWT authentication, triggers downstream pipeline transitions",
-    "description": "Cloud Function entry point recruiting_call_outcome triggered by HTTP POST. Accepts signed JWT (from daily digest deep-link) or admin Firebase token auth. Validates JWT payload contains candidate_uid, extracts call outcome (interested, not_interested, no_answer, callback_requested, hired, rejected) and optional notes. Updates CandidateDocument with call outcome, call timestamp, and notes. Advances pipeline stage based on outcome: interested to homework, hired to hired, rejected to rejected, no_answer remains call_queued, callback_requested remains call_queued with callback_date. Triggers downstream effects: homework stage triggers send_homework via Firestore write. Returns updated candidate status. Implements idempotency via call_outcome_id in JWT payload.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "auth_utils_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 10,
-    "filename": "call_tracking_Python.prompt",
-    "filepath": "extensions/recruiting/call_outcome.py",
-    "tags": [
-      "backend",
-      "api",
-      "auth"
-    ],
-    "context_urls": [
-      {
-        "url": "https://pyjwt.readthedocs.io/en/stable/usage.html#encoding-decoding-tokens-with-rs256-rsa",
-        "purpose": "RS256 JWT verification for deep-link authentication"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/add-data#update-data",
-        "purpose": "Firestore atomic field updates for call outcome recording"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_call_outcome",
-            "auth": "signed-jwt|firebase-admin",
-            "requestSchema": "{ token: str, outcome: str, notes: str? }",
-            "responseSchema": "{ uid: str, stage: str, outcome: str }"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Homework assignment pipeline triggered by candidate stage transition \u2014 auto-approves waitlist, grants credits, and sends homework instructions",
-    "description": "Cloud Function entry point recruiting_send_homework triggered by Firestore document update on recruiting/candidates/{uid} when stage changes to homework. Performs three atomic operations: (1) updates user_waitlist entry to approved=true for the candidate waitlist doc, (2) grants homework_credits to users/{uid} document (credit amount from config.yaml), (3) sends homework instruction email via email_outreach with assignment details, deadline, and submission instructions. Updates CandidateDocument with homework_assigned_at timestamp, homework_deadline, and homework_status=assigned. Handles at-least-once delivery via idempotency check on homework_status. Uses Firestore batch write for atomicity across three collections.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "email_outreach_Python.prompt"
-    ],
-    "priority": 11,
-    "filename": "homework_pipeline_Python.prompt",
-    "filepath": "extensions/recruiting/homework.py",
-    "tags": [
-      "backend",
-      "firestore-trigger",
-      "email"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/functions/firestore-events",
-        "purpose": "Firestore trigger for stage transition detection"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/transactions",
-        "purpose": "Batch writes for atomic cross-collection updates"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "recruiting_send_homework",
-            "signature": "def recruiting_send_homework(event: CloudEvent) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Approves waitlist entry",
-              "Grants homework credits",
-              "Sends instruction email",
-              "Updates candidate homework fields"
-            ]
-          },
-          {
-            "name": "grant_homework_credits",
-            "signature": "def grant_homework_credits(uid: str, credits: int) -> None",
-            "returns": "None"
-          },
-          {
-            "name": "approve_waitlist_entry",
-            "signature": "def approve_waitlist_entry(uid: str) -> None",
-            "returns": "None"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Trial tracking module for monitoring candidate GitHub contributions during trial period \u2014 tracks status transitions and contribution metrics",
-    "description": "Provides functions for trial lifecycle management. start_trial(uid) sets trial_start_date, trial_end_date (from config duration), and trial_status=active on CandidateDocument. check_trial_contributions(uid) queries GitHub REST API for candidate recent contributions (commits, PRs, issues) in the organization repositories, computes contribution metrics (commit_count, pr_count, lines_added, lines_removed, review_comments). update_trial_status(uid) evaluates contributions against config thresholds and updates trial_status (active to completed, extended, or failed). Can be called by a scheduled function or admin endpoint. Handles GitHub API rate limits, caches API responses, and logs contribution details. Uses candidate GitHub login from CandidateDocument for API queries.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 12,
-    "filename": "trial_tracking_Python.prompt",
-    "filepath": "extensions/recruiting/trial_tracking.py",
-    "tags": [
-      "backend",
-      "github"
-    ],
-    "context_urls": [
-      {
-        "url": "https://docs.github.com/en/rest/commits/commits#list-commits",
-        "purpose": "GitHub REST API for listing commits by author"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub REST API for listing PRs by author"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api",
-        "purpose": "GitHub API rate limit handling"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "start_trial",
-            "signature": "def start_trial(uid: str) -> CandidateDocument",
-            "returns": "Updated CandidateDocument",
-            "sideEffects": [
-              "Sets trial dates and status on candidate document"
-            ]
-          },
-          {
-            "name": "check_trial_contributions",
-            "signature": "async def check_trial_contributions(uid: str) -> dict",
-            "returns": "dict with contribution metrics"
-          },
-          {
-            "name": "update_trial_status",
-            "signature": "def update_trial_status(uid: str) -> str",
-            "returns": "str (new trial_status)",
-            "sideEffects": [
-              "Updates candidate document trial_status and stage"
-            ]
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Shared Pydantic models for CRM nurture pipeline \u2014 defines CrmFunnelStage, ContributionSummary, MergedPR, ResurfaceReason enums and 7 module-local types used across nurture, hackathon, and resurface modules",
-    "description": "Pydantic v2 models extending the core candidate_models for nurture pipeline concerns. Shared types: CrmFunnelStage enum (nurture, hackathon_invited, contributing, resurfaced, churned), ContributionSummary (merged_pr_count, hackathon_participations, platform_usage_days, marketplace_examples, total_lines_added), MergedPR (repo, pr_number, title, merged_at, lines_added, lines_removed), ResurfaceReason enum (merged_prs, hackathon_score, power_user, marketplace_contributor). Module-local types: NurtureEmailAction enum (recruiting-welcome, recruiting-contribute-invite, recruiting-hackathon-invite), WebhookPayload/PRWebhookData for GitHub webhook parsing, HackathonInviteContext for invite template params, ResurfaceResult for daily scan output, DigestCandidate for weekly digest rendering, HackathonRegistrationFix for user_id normalization. All models include Firestore serialization helpers consistent with candidate_models.",
-    "dependencies": [
-      "candidate_models_Python.prompt"
-    ],
-    "priority": 13,
-    "filename": "nurture_models_Python.prompt",
-    "filepath": "extensions/recruiting/nurture_models.py",
-    "tags": [
-      "backend",
-      "data",
-      "pydantic",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://docs.pydantic.dev/latest/concepts/models/",
-        "purpose": "Pydantic v2 model definition and BaseModel patterns"
-      },
-      {
-        "url": "https://docs.pydantic.dev/latest/concepts/config/",
-        "purpose": "Pydantic model configuration and strict mode"
-      },
-      {
-        "url": "https://docs.pydantic.dev/latest/api/standard_library_types/",
-        "purpose": "Enum and standard type handling in Pydantic v2"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "CrmFunnelStage",
-            "signature": "class CrmFunnelStage(str, Enum)",
-            "returns": "CrmFunnelStage enum value"
-          },
-          {
-            "name": "ContributionSummary",
-            "signature": "class ContributionSummary(BaseModel)",
-            "returns": "ContributionSummary instance"
-          },
-          {
-            "name": "MergedPR",
-            "signature": "class MergedPR(BaseModel)",
-            "returns": "MergedPR instance"
-          },
-          {
-            "name": "ResurfaceReason",
-            "signature": "class ResurfaceReason(str, Enum)",
-            "returns": "ResurfaceReason enum value"
-          },
-          {
-            "name": "NurtureEmailAction",
-            "signature": "class NurtureEmailAction(str, Enum)",
-            "returns": "NurtureEmailAction enum value"
-          },
-          {
-            "name": "WebhookPayload",
-            "signature": "class WebhookPayload(BaseModel)",
-            "returns": "WebhookPayload instance"
-          },
-          {
-            "name": "PRWebhookData",
-            "signature": "class PRWebhookData(BaseModel)",
-            "returns": "PRWebhookData instance"
-          },
-          {
-            "name": "HackathonInviteContext",
-            "signature": "class HackathonInviteContext(BaseModel)",
-            "returns": "HackathonInviteContext instance"
-          },
-          {
-            "name": "ResurfaceResult",
-            "signature": "class ResurfaceResult(BaseModel)",
-            "returns": "ResurfaceResult instance"
-          },
-          {
-            "name": "DigestCandidate",
-            "signature": "class DigestCandidate(BaseModel)",
-            "returns": "DigestCandidate instance"
-          },
-          {
-            "name": "HackathonRegistrationFix",
-            "signature": "class HackathonRegistrationFix(BaseModel)",
-            "returns": "HackathonRegistrationFix instance"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "CRM contact creation and nurture email pipeline \u2014 Firestore trigger that auto-approves waitlist, grants starter credits, creates GitHub Issue CRM contact, and sends nurture welcome email",
-    "description": "Cloud Function entry point recruiting_route_to_nurture triggered by Firestore document update on recruiting/candidates/{uid} when call_outcome is set to 'nurture' (routed from call_tracking). Performs four operations atomically: (1) creates GitHub Issue as CRM contact with recruiting-nurture and recruiting-candidate labels via GitHub Issues API, stores crmIssueNumber on candidate doc, (2) updates user_waitlist/{uid} to approved=true for auto-approval, (3) grants 10 PDDC starter credits to users/{uid} via Firestore increment, (4) sends recruiting-welcome nurture email via email_outreach with Brevo template. Updates CrmFunnelStage to 'nurture' and records nurture_emails_sent=['recruiting-welcome']. Subsequent nurture emails (recruiting-contribute-invite, recruiting-hackathon-invite) are sent by separate scheduled checks or downstream triggers. Implements idempotency via crmIssueNumber existence check to prevent duplicate CRM contacts. Uses Firestore batch write for atomicity across candidates, waitlist, and users collections.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "nurture_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "auth_utils_Python.prompt",
-      "email_outreach_Python.prompt"
-    ],
-    "priority": 14,
-    "filename": "nurture_pipeline_Python.prompt",
-    "filepath": "extensions/recruiting/nurture_pipeline.py",
-    "tags": [
-      "backend",
-      "firestore-trigger",
-      "crm",
-      "email",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/functions/firestore-events",
-        "purpose": "Firestore trigger patterns for route-to-nurture function"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/issues/issues#create-an-issue",
-        "purpose": "GitHub Issues API for CRM contact creation"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/issues/labels",
-        "purpose": "GitHub Issues label management for recruiting labels"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/transactions",
-        "purpose": "Firestore batch writes for atomic waitlist approval and credit granting"
-      },
-      {
-        "url": "https://developers.brevo.com/docs/send-a-transactional-email",
-        "purpose": "Brevo transactional email for nurture welcome sequence"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "recruiting_route_to_nurture",
-            "signature": "def recruiting_route_to_nurture(event: CloudEvent) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Creates GitHub Issue CRM contact",
-              "Auto-approves waitlist entry",
-              "Grants 10 PDDC starter credits",
-              "Sends nurture welcome email",
-              "Updates candidate CrmFunnelStage"
-            ]
-          },
-          {
-            "name": "create_crm_contact",
-            "signature": "def create_crm_contact(candidate: CandidateDocument, github_token: str) -> int",
-            "returns": "int (GitHub issue number)",
-            "errors": [
-              "GitHubAPIError"
-            ]
-          },
-          {
-            "name": "grant_starter_credits",
-            "signature": "def grant_starter_credits(uid: str, credits: int) -> None",
-            "returns": "None"
-          },
-          {
-            "name": "send_nurture_email",
-            "signature": "async def send_nurture_email(candidate: CandidateDocument, action: NurtureEmailAction) -> bool",
-            "returns": "bool (success)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "GitHub PR webhook handler for tracking candidate contributions \u2014 updates ContributionSummary on merge events for nurtured candidates",
-    "description": "Cloud Function entry point recruiting_contribution_webhook triggered by HTTP POST from GitHub webhook (pull_request event). Validates webhook signature using HMAC SHA-256 with configured webhook secret. Parses PRWebhookData from payload, filters for action='closed' and merged=true events only. Looks up candidate by GitHub login in recruiting/candidates collection. If candidate found and in nurture funnel: creates MergedPR record, increments ContributionSummary.merged_pr_count, appends PR to ContributionSummary.merged_prs array, updates last_activity_at timestamp. Also handles platform_usage and marketplace_examples tracking via separate webhook events or periodic polling. Sends recruiting-contribute-invite nurture email after first contribution if not already sent. Returns 200 for valid webhooks, 401 for signature failures, 204 for non-matching events. Implements idempotency via PR number + repo deduplication.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "nurture_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "email_outreach_Python.prompt"
-    ],
-    "priority": 15,
-    "filename": "contribution_tracking_Python.prompt",
-    "filepath": "extensions/recruiting/contribution_tracking.py",
-    "tags": [
-      "backend",
-      "api",
-      "github",
-      "webhook",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request",
-        "purpose": "GitHub webhook pull_request event payload format"
-      },
-      {
-        "url": "https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries",
-        "purpose": "Webhook HMAC SHA-256 signature verification"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub REST API for listing PRs by author"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/add-data#update-data",
-        "purpose": "Firestore document updates for contribution aggregation"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_contribution_webhook",
-            "auth": "github-webhook-signature",
-            "requestSchema": "GitHub pull_request webhook payload",
-            "responseSchema": "{ processed: bool, candidate_uid: str? }",
-            "errors": [
-              "401 Invalid signature",
-              "204 Non-matching event"
-            ]
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Hackathon invite trigger \u2014 Firestore onUpdate trigger that sends hackathon invitations to nurtured candidates when hackathon events open for registration",
-    "description": "Cloud Function entry point recruiting_hackathon_invite_trigger triggered by Firestore document update on hackathon_events/{event_id} when status changes to 'open'. Queries recruiting/candidates for all candidates with crmFunnelStage in ('nurture', 'contributing') who have not yet received a hackathon invite (hackathon_invite_sent != true). For each eligible candidate: sends recruiting-hackathon-invite nurture email via Brevo with HackathonInviteContext (event name, dates, registration URL), updates hackathon_invite_sent=true and appends 'recruiting-hackathon-invite' to nurture_emails_sent array. Uses Firestore batch writes to update candidates in batches of 500 (Firestore limit). Implements re-trigger loop prevention by checking that the event status actually changed from non-open to open (compares before/after snapshots). Logs invite count and any email delivery failures.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "nurture_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "email_outreach_Python.prompt"
-    ],
-    "priority": 16,
-    "filename": "hackathon_invite_Python.prompt",
-    "filepath": "extensions/recruiting/hackathon_invite.py",
-    "tags": [
-      "backend",
-      "firestore-trigger",
-      "hackathon",
-      "email",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/functions/firestore-events",
-        "purpose": "Firestore onUpdate trigger for hackathon_events collection"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/calling/cloud-firestore",
-        "purpose": "Cloud Functions Firestore trigger configuration"
-      },
-      {
-        "url": "https://developers.brevo.com/docs/send-a-transactional-email",
-        "purpose": "Brevo email for hackathon invite delivery"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore queries for candidate nurture stage filtering"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "recruiting_hackathon_invite_trigger",
-            "signature": "def recruiting_hackathon_invite_trigger(event: CloudEvent) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Sends hackathon invite emails to eligible candidates",
-              "Updates hackathon_invite_sent on candidate documents",
-              "Appends to nurture_emails_sent array"
-            ]
-          },
-          {
-            "name": "get_eligible_candidates",
-            "signature": "def get_eligible_candidates() -> list[CandidateDocument]",
-            "returns": "list of eligible CandidateDocument instances"
-          },
-          {
-            "name": "send_hackathon_invites",
-            "signature": "async def send_hackathon_invites(candidates: list[CandidateDocument], context: HackathonInviteContext) -> int",
-            "returns": "int (number of invites sent)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Hackathon score sync \u2014 Firestore onUpdate trigger that syncs hackathon submission scores back to recruiting candidate documents and applies user_id field naming normalization bug fix",
-    "description": "Cloud Function entry point recruiting_hackathon_sync triggered by Firestore document update on hackathon_submissions/{submission_id} when compliance_score or final_score fields are updated. Looks up the submitting user via user_id field (applying userId -> user_id normalization fix), cross-references with recruiting/candidates by uid. Updates candidate document with hackathon_score (max of compliance + final scores across submissions), increments ContributionSummary.hackathon_participations, and updates last_activity_at. Also handles hackathon_registrations user_id normalization: on first run, scans for documents with 'userId' field and rewrites to 'user_id' for consistency. Implements idempotency via score comparison (only updates if new score > existing). Uses Firestore transactions for atomic read-modify-write on candidate document to prevent lost updates from concurrent submissions.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "nurture_models_Python.prompt",
-      "config_loader_Python.prompt"
-    ],
-    "priority": 17,
-    "filename": "hackathon_sync_Python.prompt",
-    "filepath": "extensions/recruiting/hackathon_sync.py",
-    "tags": [
-      "backend",
-      "firestore-trigger",
-      "hackathon",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://firebase.google.com/docs/functions/firestore-events",
-        "purpose": "Firestore onUpdate trigger for hackathon_submissions"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/add-data#update-data",
-        "purpose": "Firestore field updates for score sync and user_id normalization"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/manage-data/transactions",
-        "purpose": "Batch writes for atomic score sync across collections"
-      }
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "recruiting_hackathon_sync",
-            "signature": "def recruiting_hackathon_sync(event: CloudEvent) -> None",
-            "returns": "None",
-            "sideEffects": [
-              "Updates candidate hackathon_score",
-              "Increments hackathon_participations",
-              "Normalizes user_id field naming in registrations"
-            ]
-          },
-          {
-            "name": "sync_submission_score",
-            "signature": "def sync_submission_score(submission_id: str, candidate_uid: str, scores: dict) -> bool",
-            "returns": "bool (whether score was updated)"
-          },
-          {
-            "name": "normalize_user_id_field",
-            "signature": "def normalize_user_id_field(collection: str) -> int",
-            "returns": "int (number of documents normalized)"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
     "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "nurture_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "contribution_tracking_Python.prompt"
-    ],
+    "dependencies": [],
     "priority": 18,
     "filename": "resurface_check_Python.prompt",
     "filepath": "extensions/recruiting/resurface_check.py",
@@ -1547,57 +412,6 @@
             "path": "/recruiting_resurface_check",
             "auth": "cloud-scheduler",
             "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Weekly Rising Stars digest email \u2014 Cloud Scheduler function aggregating resurfaced candidates into an HTML summary email sent to the hiring manager every Monday",
-    "description": "Cloud Function entry point recruiting_rising_stars_digest triggered by Cloud Scheduler (weekly, Monday 8 AM PT). Queries recruiting/candidates where resurfaced=true and crmFunnelStage='resurfaced', ordered by resurface timestamp descending. For each candidate, creates DigestCandidate with name, GitHub login, resurface reason, contribution summary metrics, hackathon scores, and CRM issue link. Generates HTML digest email using Python string.Template with sections: new Rising Stars since last digest, contribution highlights, hackathon performance, and recommended next steps. Sends digest via email_outreach.send_bulk_digest to configured admin_email (Greg). Marks digested candidates with last_digest_sent_at timestamp to avoid duplicate reporting. Handles empty list gracefully (skips sending). Includes links to individual CRM GitHub Issues for quick review.",
-    "dependencies": [
-      "candidate_models_Python.prompt",
-      "nurture_models_Python.prompt",
-      "config_loader_Python.prompt",
-      "email_outreach_Python.prompt"
-    ],
-    "priority": 19,
-    "filename": "rising_stars_digest_Python.prompt",
-    "filepath": "extensions/recruiting/rising_stars_digest.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling",
-      "email",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler weekly job configuration (Monday 8 AM PT)"
-      },
-      {
-        "url": "https://developers.brevo.com/docs/send-a-transactional-email",
-        "purpose": "Brevo API for HTML digest email delivery"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore queries for resurfaced candidate aggregation"
-      },
-      {
-        "url": "https://docs.python.org/3/library/string.html#template-strings",
-        "purpose": "Python string templates for HTML digest generation"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_rising_stars_digest",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ candidates_included: int, digest_sent: bool }"
           }
         ]
       }
@@ -1838,11 +652,7 @@
   {
     "reason": "Fixes issues found during functional verification.",
     "description": "Corrects code that fails verification checks. Addresses logic errors and specification mismatches.",
-    "dependencies": [
-      "edit_file_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 20,
     "filename": "fix_verification_errors_python.prompt",
     "filepath": "pdd/fix_verification_errors.py",
@@ -1874,11 +684,7 @@
   {
     "reason": "Updates prompts to reflect code modifications.",
     "description": "Back-propagates code changes into the source prompt. Keeps prompts synchronized with manually edited code.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 21,
     "filename": "update_prompt_python.prompt",
     "filepath": "pdd/update_prompt.py",
@@ -1909,12 +715,7 @@
   {
     "reason": "Fixes code based on failing unit test output.",
     "description": "Analyzes test failures and generates code or test corrections. Determines whether to fix the code or the test based on error patterns.",
-    "dependencies": [
-      "edit_file_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 22,
     "filename": "fix_errors_from_unit_tests_python.prompt",
     "filepath": "pdd/fix_errors_from_unit_tests.py",
@@ -1963,14 +764,7 @@
   {
     "reason": "Generates example code demonstrating module usage.",
     "description": "Creates minimal runnable examples that show how to use generated modules. Examples serve as interface documentation and grounding context.",
-    "dependencies": [
-      "continue_generation_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "postprocess_python.prompt",
-      "preprocess_python.prompt",
-      "unfinished_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 23,
     "filename": "context_generator_python.prompt",
     "filepath": "pdd/context_generator.py",
@@ -2002,14 +796,7 @@
   {
     "reason": "Identifies which prompts need updates based on changes.",
     "description": "Analyzes change descriptions to determine affected prompts. Supports batch change detection.",
-    "dependencies": [
-      "continue_generation_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "postprocess_python.prompt",
-      "preprocess_python.prompt",
-      "unfinished_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 24,
     "filename": "detect_change_python.prompt",
     "filepath": "pdd/detect_change.py",
@@ -2338,9 +1125,7 @@
   {
     "reason": "Processes batch changes from CSV files.",
     "description": "Reads change specifications from CSV and applies them to multiple prompts. Supports bulk updates.",
-    "dependencies": [
-      "get_extension_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 34,
     "filename": "process_csv_change_python.prompt",
     "filepath": "pdd/process_csv_change.py",
@@ -2395,10 +1180,7 @@
   {
     "reason": "CLI entry point for auto-deps with doc discovery, dedup, and parallelization support.",
     "description": "Command-line interface for auto deps. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "insert_includes_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 35,
     "filename": "auto_deps_main_python.prompt",
     "filepath": "pdd/auto_deps_main.py",
@@ -2426,10 +1208,7 @@
   {
     "reason": "CLI entry point for the conflicts command.",
     "description": "Command-line interface for conflicts. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "conflicts_in_prompts_python.prompt",
-      "construct_paths_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 36,
     "filename": "conflicts_main_python.prompt",
     "filepath": "pdd/conflicts_main.py",
@@ -2456,10 +1235,7 @@
   {
     "reason": "CLI entry point for the context generator command.",
     "description": "Command-line interface for context generator. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "context_generator_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 37,
     "filename": "context_generator_main_python.prompt",
     "filepath": "pdd/context_generator_main.py",
@@ -2487,10 +1263,7 @@
   {
     "reason": "Returns test execution command for a language.",
     "description": "Provides the command to run tests in a given language. Defaults to pytest for Python.",
-    "dependencies": [
-      "agentic_langtest_python.prompt",
-      "get_language_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 38,
     "filename": "get_test_command_python.prompt",
     "filepath": "pdd/get_test_command.py",
@@ -2522,10 +1295,7 @@
   {
     "reason": "Recursively discovers and summarizes files in a directory using LLM with caching.",
     "description": "Generates overview of files in a directory. Used for context in LLM prompts.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 39,
     "filename": "summarize_directory_python.prompt",
     "filepath": "pdd/summarize_directory.py",
@@ -2556,10 +1326,7 @@
   {
     "reason": "CLI entry point for the trace command.",
     "description": "Command-line interface for trace. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "trace_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 40,
     "filename": "trace_main_python.prompt",
     "filepath": "pdd/trace_main.py",
@@ -2586,10 +1353,7 @@
   {
     "reason": "Adds XML structure tags to prompt content.",
     "description": "Wraps content sections in XML tags for better LLM parsing. Improves prompt structure clarity.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 41,
     "filename": "xml_tagger_python.prompt",
     "filepath": "pdd/xml_tagger.py",
@@ -2628,10 +1392,7 @@
   {
     "reason": "Orchestrates the 11-step agentic bug workflow with E2E gate and state persistence.",
     "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 42,
     "filename": "agentic_bug_orchestrator_python.prompt",
     "filepath": "pdd/agentic_bug_orchestrator.py",
@@ -2663,11 +1424,7 @@
   {
     "reason": "Autonomously updates prompts based on code changes.",
     "description": "Analyzes code modifications and generates corresponding prompt updates. Ensures prompt-code synchronization.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "agentic_update_LLM.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 43,
     "filename": "agentic_update_python.prompt",
     "filepath": "pdd/agentic_update.py",
@@ -2699,11 +1456,7 @@
   {
     "reason": "Autonomously verifies code against specifications.",
     "description": "Runs generated code, checks output against expectations, and identifies discrepancies. Supports exploration for context.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "agentic_verify_explore_LLM.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 44,
     "filename": "agentic_verify_python.prompt",
     "filepath": "pdd/agentic_verify.py",
@@ -2735,12 +1488,7 @@
   {
     "reason": "Automatically selects relevant code and doc includes for prompts using two-stage retrieval.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "summarize_directory_python.prompt",
-      "embed_retrieve_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 45,
     "filename": "auto_include_python.prompt",
     "filepath": "pdd/auto_include.py",
@@ -2771,11 +1519,7 @@
   {
     "reason": "Modifies prompts based on change instructions.",
     "description": "Applies specified modifications to prompt content. Preserves structure while incorporating requested changes.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 46,
     "filename": "change_python.prompt",
     "filepath": "pdd/change.py",
@@ -2814,11 +1558,7 @@
   {
     "reason": "CLI entry point for the crash command.",
     "description": "Command-line interface for crash. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "fix_code_loop_python.prompt",
-      "fix_code_module_errors_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 47,
     "filename": "crash_main_python.prompt",
     "filepath": "pdd/crash_main.py",
@@ -2845,11 +1585,7 @@
   {
     "reason": "CLI entry point for the fix verification command.",
     "description": "Command-line interface for fix verification. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "fix_verification_errors_loop_python.prompt",
-      "fix_verification_errors_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 48,
     "filename": "fix_verification_main_python.prompt",
     "filepath": "pdd/fix_verification_main.py",
@@ -2881,11 +1617,7 @@
   {
     "reason": "Integrates with git for change tracking.",
     "description": "Detects git changes, stages files, and supports commit operations. Tracks prompt modifications.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "agentic_update_python.prompt",
-      "update_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 49,
     "filename": "git_update_python.prompt",
     "filepath": "pdd/git_update.py",
@@ -2916,11 +1648,7 @@
   {
     "reason": "Expands test coverage for existing test suites.",
     "description": "Analyzes existing tests and generates additional test cases to improve coverage. Focuses on edge cases and error conditions.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "postprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 50,
     "filename": "increase_tests_python.prompt",
     "filepath": "pdd/increase_tests.py",
@@ -2952,11 +1680,7 @@
   {
     "reason": "CLI entry point for the preprocess command.",
     "description": "Command-line interface for preprocess. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "preprocess_python.prompt",
-      "xml_tagger_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 51,
     "filename": "preprocess_main_python.prompt",
     "filepath": "pdd/preprocess_main.py",
@@ -2984,11 +1708,7 @@
   {
     "reason": "Splits functionality from one prompt into a new sub-prompt.",
     "description": "Extracts a subset of functionality into a separate prompt file. Creates proper dependency relationships.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 52,
     "filename": "split_python.prompt",
     "filepath": "pdd/split.py",
@@ -3019,11 +1739,7 @@
   {
     "reason": "Maps generated code lines back to source prompt lines.",
     "description": "Traces code locations to their originating prompt sections. Useful for debugging and understanding generation.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 53,
     "filename": "trace_python.prompt",
     "filepath": "pdd/trace.py",
@@ -3054,12 +1770,7 @@
   {
     "reason": "Autonomously investigates and fixes runtime crashes.",
     "description": "Multi-step workflow that explores code, identifies crash causes, and generates fixes. Uses LLM for root cause analysis.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "agentic_crash_explore_LLM.prompt",
-      "get_run_command_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 54,
     "filename": "agentic_crash_python.prompt",
     "filepath": "pdd/agentic_crash.py",
@@ -3091,12 +1802,7 @@
   {
     "reason": "CLI entry point for the bug command.",
     "description": "Command-line interface for bug. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "agentic_bug_python.prompt",
-      "bug_to_unit_test_python.prompt",
-      "construct_paths_python.prompt",
-      "get_jwt_token_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 55,
     "filename": "bug_main_python.prompt",
     "filepath": "pdd/bug_main.py",
@@ -3123,12 +1829,7 @@
   {
     "reason": "CLI entry point for the cmd test command.",
     "description": "Command-line interface for cmd test. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "generate_test_python.prompt",
-      "get_jwt_token_python.prompt",
-      "increase_tests_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 56,
     "filename": "cmd_test_main_python.prompt",
     "filepath": "pdd/cmd_test_main.py",
@@ -3156,12 +1857,7 @@
   {
     "reason": "CLI entry point for the code generator command.",
     "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "get_jwt_token_python.prompt",
-      "preprocess_python.prompt",
-      "python_env_detector_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 57,
     "filename": "code_generator_main_python.prompt",
     "filepath": "pdd/code_generator_main.py",
@@ -3205,12 +1901,7 @@
   {
     "reason": "Iteratively fixes code crashes until execution succeeds.",
     "description": "Runs crash-fix cycles with retry limits. Executes example code to verify fixes.",
-    "dependencies": [
-      "agentic_crash_python.prompt",
-      "agentic_langtest_python.prompt",
-      "fix_code_module_errors_python.prompt",
-      "get_language_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 58,
     "filename": "fix_code_loop_python.prompt",
     "filepath": "pdd/fix_code_loop.py",
@@ -3322,12 +2013,7 @@
   {
     "reason": "Iteratively fixes verification failures.",
     "description": "Runs verification-fix cycles until code meets specifications or retry limit reached.",
-    "dependencies": [
-      "agentic_langtest_python.prompt",
-      "agentic_verify_python.prompt",
-      "fix_verification_errors_python.prompt",
-      "get_language_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 59,
     "filename": "fix_verification_errors_loop_python.prompt",
     "filepath": "pdd/fix_verification_errors_loop.py",
@@ -3367,12 +2053,7 @@
   {
     "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [
-      "auto_include_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -3439,12 +2120,7 @@
   {
     "reason": "CLI entry point for the update command.",
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "construct_paths_python.prompt",
-      "git_update_python.prompt",
-      "update_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 62,
     "filename": "update_main_python.prompt",
     "filepath": "pdd/update_main.py",
@@ -3483,13 +2159,7 @@
   {
     "reason": "Converts bug reports into failing unit tests.",
     "description": "Transforms GitHub issues or bug descriptions into reproducible test cases. Ensures bugs are captured before fixing.",
-    "dependencies": [
-      "continue_generation_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "postprocess_python.prompt",
-      "unfinished_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 63,
     "filename": "bug_to_unit_test_python.prompt",
     "filepath": "pdd/bug_to_unit_test.py",
@@ -3529,13 +2199,7 @@
   {
     "reason": "Core module that transforms prompts into executable code.",
     "description": "Compiles natural language prompts into code. Orchestrates preprocessing, LLM invocation, continuation for incomplete outputs, and postprocessing. Returns generated code, cost, and model used.",
-    "dependencies": [
-      "continue_generation_python.prompt",
-      "llm_invoke_python.prompt",
-      "postprocess_python.prompt",
-      "preprocess_python.prompt",
-      "unfinished_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 64,
     "filename": "code_generator_python.prompt",
     "filepath": "pdd/code_generator.py",
@@ -3567,13 +2231,7 @@
   {
     "reason": "Iteratively fixes errors until tests pass.",
     "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
-    "dependencies": [
-      "agentic_fix_python.prompt",
-      "agentic_langtest_python.prompt",
-      "fix_errors_from_unit_tests_python.prompt",
-      "get_language_python.prompt",
-      "python_env_detector_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
     "filepath": "pdd/fix_error_loop.py",
@@ -3637,13 +2295,7 @@
   {
     "reason": "CLI entry point for the fix command.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "fix_error_loop_python.prompt",
-      "fix_errors_from_unit_tests_python.prompt",
-      "get_jwt_token_python.prompt",
-      "get_language_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -3671,13 +2323,7 @@
   {
     "reason": "Intelligently determines which sync operations to run.",
     "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "get_language_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "sync_analysis_LLM.prompt"
-    ],
+    "dependencies": [],
     "priority": 67,
     "filename": "sync_determine_operation_python.prompt",
     "filepath": "pdd/sync_determine_operation.py",
@@ -3861,14 +2507,7 @@
   {
     "reason": "Generates unit tests for PDD-generated code modules.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
-    "dependencies": [
-      "continue_generation_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt",
-      "postprocess_python.prompt",
-      "preprocess_python.prompt",
-      "unfinished_prompt_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 68,
     "filename": "generate_test_python.prompt",
     "filepath": "pdd/generate_test.py",
@@ -3901,15 +2540,7 @@
   {
     "reason": "Autonomously fixes failing tests with exploration.",
     "description": "Investigates test failures, explores codebase for context, and generates targeted fixes. Supports harvest-only mode.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "agentic_fix_explore_LLM.prompt",
-      "agentic_langtest_python.prompt",
-      "get_language_python.prompt",
-      "get_run_command_python.prompt",
-      "llm_invoke_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 69,
     "filename": "agentic_fix_python.prompt",
     "filepath": "pdd/agentic_fix.py",
@@ -3958,18 +2589,7 @@
   {
     "reason": "Coordinates sync workflow steps and state management.",
     "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
-    "dependencies": [
-      "auto_deps_main_python.prompt",
-      "cmd_test_main_python.prompt",
-      "code_generator_main_python.prompt",
-      "context_generator_main_python.prompt",
-      "crash_main_python.prompt",
-      "fix_main_python.prompt",
-      "fix_verification_main_python.prompt",
-      "get_test_command_python.prompt",
-      "sync_determine_operation_python.prompt",
-      "update_main_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
     "filepath": "pdd/sync_orchestration.py",
@@ -5633,9 +4253,7 @@
   {
     "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
     "description": "Handles initial setup, configuration, and environment variable management.",
-    "dependencies": [
-      "cli_detector_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
     "filepath": "pdd/setup_tool.py",
@@ -6215,9 +4833,7 @@
   {
     "reason": "Returns comment syntax for a programming language.",
     "description": "Provides language-specific comment delimiters. Supports single-line and multi-line comments.",
-    "dependencies": [
-      "path_resolution_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 141,
     "filename": "get_comment_python.prompt",
     "filepath": "pdd/get_comment.py",
@@ -6271,9 +4887,7 @@
   {
     "reason": "Module that test the prompt for a given prompt file.",
     "description": "Implements functionality to test the prompt for a given prompt file. Integrates with PDD workflow.",
-    "dependencies": [
-      "llm_invoke_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
     "filepath": "pdd/prompt_tester.py",
@@ -6293,9 +4907,7 @@
   {
     "reason": "Provides real-time progress visualization for sync.",
     "description": "Displays animated progress indicators, step status, and cost tracking during sync operations.",
-    "dependencies": [
-      "logo_animation_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 144,
     "filename": "sync_animation_python.prompt",
     "filepath": "pdd/sync_animation.py",
@@ -6392,10 +5004,7 @@
   {
     "reason": "CLI entry point for the detect change command.",
     "description": "Command-line interface for detect change. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "detect_change_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 146,
     "filename": "detect_change_main_python.prompt",
     "filepath": "pdd/detect_change_main.py",
@@ -6422,10 +5031,7 @@
   {
     "reason": "CLI entry point for the split command.",
     "description": "Command-line interface for split. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "split_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 147,
     "filename": "split_main_python.prompt",
     "filepath": "pdd/split_main.py",
@@ -6452,10 +5058,7 @@
   {
     "reason": "CLI entry point for the unified sync workflow.",
     "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users.",
-    "dependencies": [
-      "construct_paths_python.prompt",
-      "sync_orchestration_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 148,
     "filename": "sync_main_python.prompt",
     "filepath": "pdd/sync_main.py",
@@ -6483,11 +5086,7 @@
   {
     "reason": "Applies targeted patches to existing code based on prompt changes.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [
-      "llm_invoke_python.prompt",
-      "postprocess_python.prompt",
-      "preprocess_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -6519,12 +5118,7 @@
   {
     "reason": "CLI entry point for the change command.",
     "description": "Command-line interface for change. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [
-      "change_python.prompt",
-      "construct_paths_python.prompt",
-      "get_extension_python.prompt",
-      "process_csv_change_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 150,
     "filename": "change_main_python.prompt",
     "filepath": "pdd/change_main.py",
@@ -6610,9 +5204,7 @@
   {
     "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Follows the same pattern as agentic_change.py and agentic_bug.py.",
-    "dependencies": [
-      "agentic_architecture_orchestrator_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 153,
     "filename": "agentic_architecture_python.prompt",
     "filepath": "pdd/agentic_architecture.py",
@@ -6791,10 +5383,7 @@
   {
     "reason": "Orchestrates the 13-step agentic change workflow for implementing feature requests.",
     "description": "Coordinates duplicate checking, docs review, research, clarification, docs changes, dev units, architecture, analysis, implementation, architecture update, issue identification, issue fixing, and PR creation.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
     "filepath": "pdd/agentic_change_orchestrator.py",
@@ -6826,10 +5415,7 @@
   {
     "reason": "Autonomously implements GitHub feature request issues via 13-step workflow.",
     "description": "Entry point for the agentic change command. Parses issue URL, extracts issue metadata from GitHub, and delegates to the change orchestrator.",
-    "dependencies": [
-      "agentic_change_orchestrator_python.prompt",
-      "agentic_common_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 169,
     "filename": "agentic_change_python.prompt",
     "filepath": "pdd/agentic_change.py",
@@ -7177,11 +5763,7 @@
   {
     "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt",
-      "ci_validation_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
     "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
@@ -7210,9 +5792,7 @@
   {
     "reason": "CLI entry point for the 10-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
     "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
-    "dependencies": [
-      "agentic_e2e_fix_orchestrator_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 184,
     "filename": "agentic_e2e_fix_python.prompt",
     "filepath": "pdd/agentic_e2e_fix.py",
@@ -7492,10 +6072,7 @@
   {
     "reason": "Generates tests using agentic single-pass execution with file change detection.",
     "description": "Runs an agentic CLI to generate test files. Records file mtimes before/after agent execution, detects changed files, reads generated test content. Supports JSON metadata extraction from agent output.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 195,
     "filename": "agentic_test_generate_python.prompt",
     "filepath": "pdd/agentic_test_generate.py",
@@ -7559,10 +6136,7 @@
   {
     "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
     "filepath": "pdd/agentic_test_orchestrator.py",
@@ -7591,10 +6165,7 @@
   {
     "reason": "Autonomously generates UI tests from GitHub issue descriptions.",
     "description": "Entry point for the agentic test command. Parses issue URL, extracts issue metadata, and delegates to the test orchestrator. Supports both Playwright and Cypress test frameworks.",
-    "dependencies": [
-      "agentic_test_orchestrator_python.prompt",
-      "agentic_common_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 197,
     "filename": "agentic_test_python.prompt",
     "filepath": "pdd/agentic_test.py",
@@ -7916,9 +6487,7 @@
   {
     "reason": "Manages JWT authentication tokens, refresh tokens, and auth state for PDD Cloud.",
     "description": "Provides auth status checking, JWT caching, token refresh, and logout functionality. Interfaces with Firebase auth for PDD Cloud authentication.",
-    "dependencies": [
-      "get_jwt_token_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 208,
     "filename": "auth_service_python.prompt",
     "filepath": "pdd/auth_service.py",
@@ -8100,9 +6669,7 @@
   {
     "reason": "Manages remote PDD Cloud sessions with heartbeat, command polling, and execution.",
     "description": "Provides RemoteSessionManager class for cloud session lifecycle: registration, heartbeat, command polling/execution, and deregistration. Supports token refresh and async operations via httpx.",
-    "dependencies": [
-      "get_jwt_token_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 213,
     "filename": "remote_session_python.prompt",
     "filepath": "pdd/remote_session.py",
@@ -8150,9 +6717,7 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes include directives across prompt files to build a dependency graph, performs topological sort, and generates ordered sync scripts. Identifies affected modules when a prompt changes.",
-    "dependencies": [
-      "auto_include_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
@@ -8224,12 +6789,7 @@
   {
     "reason": "LLM-driven module identification and parallel sync orchestration from GitHub issues.",
     "description": "Entry point for agentic sync. Parses a GitHub issue URL, uses an LLM to identify which modules need syncing and validate architecture.json dependencies, then dispatches to AsyncSyncRunner for parallel execution.",
-    "dependencies": [
-      "agentic_change_python.prompt",
-      "agentic_common_python.prompt",
-      "agentic_sync_runner_python.prompt",
-      "sync_order_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
     "filepath": "pdd/agentic_sync.py",
@@ -8277,10 +6837,7 @@
   {
     "reason": "Parallel sync engine with dependency-aware scheduling and live GitHub progress updates.",
     "description": "Manages concurrent pdd sync subprocesses using ThreadPoolExecutor, respects dependency ordering from architecture.json, posts live progress to GitHub issue comments, and pauses on failure.",
-    "dependencies": [
-      "agentic_change_python.prompt",
-      "sync_order_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
     "filepath": "pdd/agentic_sync_runner.py",
@@ -8326,14 +6883,9 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
+    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator that explores the project, identifies problems, and optionally fixes them.",
-    "dependencies": [
-      "agentic_change_python.prompt",
-      "agentic_common_python.prompt",
-      "agentic_checkup_orchestrator_python.prompt",
-      "agentic_sync_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 217,
     "filename": "agentic_checkup_python.prompt",
     "filepath": "pdd/agentic_checkup.py",
@@ -8387,12 +6939,9 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
-    "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 218,
     "filename": "agentic_checkup_orchestrator_python.prompt",
     "filepath": "pdd/agentic_checkup_orchestrator.py",
@@ -8447,7 +6996,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -8471,11 +7020,7 @@
   {
     "reason": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
     "description": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
-    "dependencies": [
-      "agentic_e2e_fix_python.prompt",
-      "fix_main_python.prompt",
-      "track_cost_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 220,
     "filename": "commands/fix_python.prompt",
     "filepath": "pdd/commands/fix.py",
@@ -8498,9 +7043,7 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [
-      "agentic_common_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -8622,9 +7165,7 @@
   {
     "reason": "Registers maintenance CLI commands: sync, auto-deps, and setup with all options.",
     "description": "Contains maintenance and setup commands for the PDD CLI.",
-    "dependencies": [
-      "auto_deps_main_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
     "filepath": "pdd/commands/maintenance.py",
@@ -8693,12 +7234,7 @@
   {
     "reason": "Standalone CI script for detecting and auto-healing prompt/example drift with budget-capped execution.",
     "description": "CI script that detects prompt/example drift across PDD modules using sync_determine_operation, heals drifted modules via pdd update/sync subprocesses, tracks LLM costs against a budget cap, and commits/pushes changes automatically.",
-    "dependencies": [
-      "sync_determine_operation_python.prompt",
-      "operation_log_python.prompt",
-      "agentic_sync_runner_python.prompt",
-      "user_story_tests_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 80,
     "filename": "ci_drift_heal_python.prompt",
     "filepath": "pdd/ci_drift_heal.py",
