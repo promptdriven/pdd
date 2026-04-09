@@ -111,6 +111,7 @@ def test_core_dump_includes_file_contents(tmp_path, monkeypatch):
 
     # Read and verify content
     core_dump_data = json.loads(core_dumps[0].read_text())
+    assert core_dump_data.get("schema_version") == 2
 
     # Check that file contents are included
     assert 'file_contents' in core_dump_data
@@ -181,11 +182,96 @@ def test_core_dump_auto_includes_meta_files(tmp_path, monkeypatch):
 
     # Read and verify content
     core_dump_data = json.loads(core_dumps[0].read_text())
+    assert core_dump_data.get("schema_version") == 2
 
     # Meta file should be auto-included
     file_contents = core_dump_data.get('file_contents', {})
     assert any('test_generate.json' in key for key in file_contents.keys()), \
         f"Meta file not auto-included: {list(file_contents.keys())}"
+
+
+def test_core_dump_auto_includes_operation_log_and_run_report(tmp_path, monkeypatch):
+    """Core dump should include .pdd/meta/*_sync.log and *_run.json when present."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "demo_python_sync.log").write_text(
+        '{"operation":"fix","reason":"x","success":false,"duration":1.23,"actual_cost":0.02,"model":"m","error":"boom","details":{"test_output_excerpt":"out"}}\n'
+    )
+    (meta_dir / "demo_python_run.json").write_text('{"exit_code": 1, "tests_failed": 1}\n')
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(tmp_path)
+    _write_core_dump(mock_ctx, [("ok", 0.0, "")], ["sync"], 0.0)
+
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text())
+    file_contents = core_dump_data.get("file_contents", {})
+
+    assert any(k.endswith("_sync.log") for k in file_contents.keys()), f"Missing *_sync.log: {list(file_contents.keys())}"
+    assert any(k.endswith("_run.json") for k in file_contents.keys()), f"Missing *_run.json: {list(file_contents.keys())}"
+
+    # Expanded per-operation steps should be present.
+    sync_steps = core_dump_data.get("sync_steps") or []
+    assert len(sync_steps) >= 1
+    assert sync_steps[0]["operation"] == "fix"
+    assert sync_steps[0]["success"] is False
+    assert sync_steps[0]["model"] == "m"
+    assert "boom" in str(sync_steps[0].get("failure_summary"))
+    assert sync_steps[0].get("test_output_excerpt") == "out"
+    # LLM trace should also be carried through when present.
+    assert sync_steps[0].get("source_log")
+
+
+def test_core_dump_steps_model_default_unknown(tmp_path, monkeypatch):
+    """If results omit model or results are missing, core dump should store model='unknown'."""
+    import json
+    from pdd.core.dump import _write_core_dump
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {
+        "core_dump": True,
+        "core_dump_files": set(),
+        "force": False,
+        "strength": 0.75,
+        "temperature": 0.0,
+        "time": 0.25,
+        "verbose": False,
+        "quiet": True,
+        "local": False,
+        "context": None,
+        "output_cost": None,
+        "review_examples": False,
+    }
+
+    monkeypatch.chdir(tmp_path)
+    # Two invoked subcommands but only one result, and it has an empty model.
+    _write_core_dump(mock_ctx, [("r1", 0.1, "")], ["sync", "generate"], 0.1)
+
+    core_dumps = list((tmp_path / ".pdd" / "core_dumps").glob("pdd-core-*.json"))
+    core_dump_data = json.loads(core_dumps[0].read_text())
+    steps = core_dump_data.get("steps", [])
+
+    assert len(steps) == 2
+    assert steps[0]["model"] == "unknown"
+    assert steps[1]["model"] == "unknown"
 
 
 def test_core_dump_handles_large_files(tmp_path, monkeypatch):
@@ -342,7 +428,7 @@ def test_terminal_output_included_in_gist(tmp_path):
 
     # Create a payload with terminal output
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "pdd_version": "1.0.0",
         "timestamp_utc": "20231201T120000Z",
         "terminal_output": "Test terminal output\nLine 2\nLine 3",
@@ -385,7 +471,7 @@ def test_terminal_output_in_issue_markdown(tmp_path):
     from pdd.core.dump import _build_issue_markdown
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "pdd_version": "1.0.0",
         "timestamp_utc": "20231201T120000Z",
         "argv": ["generate", "test.prompt"],

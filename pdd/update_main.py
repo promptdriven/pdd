@@ -2,6 +2,7 @@ import fnmatch
 import re
 import subprocess
 import sys
+from collections import Counter, defaultdict
 from typing import Tuple, Optional, List, Dict, Any, Set
 import click
 from rich import print as rprint
@@ -25,7 +26,7 @@ from .update_prompt import update_prompt
 from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
-from .sync_determine_operation import calculate_sha256, read_fingerprint
+from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
 from . import DEFAULT_TIME
 
 # Config/data files that should not get prompts in repo-scan mode.
@@ -770,6 +771,115 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
             "error": str(e),
         }
 
+def _read_text_byte_len(path: str) -> int:
+    """Best-effort size of file text for dry-run cost sizing (chars)."""
+    try:
+        return len(Path(path).read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, IOError):
+        return 0
+
+
+def _repo_relative_md_dep(dep_str: str, repo_root_p: Path) -> Optional[str]:
+    """Return repo-relative path for a resolved include target, or None if outside repo / not doc."""
+    dep_p = Path(dep_str)
+    if not dep_p.is_absolute():
+        dep_p = (Path.cwd() / dep_p).resolve()
+    else:
+        dep_p = dep_p.resolve()
+    if dep_p.suffix.lower() not in (".md", ".mdx"):
+        return None
+    try:
+        rel = dep_p.relative_to(repo_root_p)
+    except ValueError:
+        return None
+    return str(rel).replace("\\", "/")
+
+
+def _md_doc_prompt_reference_counts(
+    repo_root: str, prompt_paths: List[str]
+) -> Dict[str, Set[str]]:
+    """Map repo-relative .md/.mdx → set of prompt paths that <include> it (scan-wide)."""
+    repo_root_p = Path(repo_root).resolve()
+    doc_to_prompts: Dict[str, Set[str]] = defaultdict(set)
+    for prompt_path_str in prompt_paths:
+        deps = extract_include_deps(Path(prompt_path_str))
+        for dep_str in deps:
+            rel = _repo_relative_md_dep(dep_str, repo_root_p)
+            if rel:
+                doc_to_prompts[rel].add(prompt_path_str)
+    return doc_to_prompts
+
+
+def _included_docs_for_drift_report(
+    repo_root: str,
+    all_prompt_paths: List[str],
+    drifted_prompt_paths: List[str],
+) -> List[Tuple[str, int]]:
+    """Docs referenced by at least one drifted prompt; count = prompts in full scan that include each doc."""
+    drifted_set = set(drifted_prompt_paths)
+    doc_to_prompts = _md_doc_prompt_reference_counts(repo_root, all_prompt_paths)
+    rows: List[Tuple[str, int]] = []
+    for doc_rel, prompters in doc_to_prompts.items():
+        if not prompters & drifted_set:
+            continue
+        rows.append((doc_rel, len(prompters)))
+    return sorted(rows, key=lambda x: (-x[1], x[0]))
+
+
+def _estimate_dry_run_cost_range(
+    ctx: click.Context,
+    repo_obj: git.Repo,
+    simple: bool,
+    changed_items: List[Tuple[str, str, str]],
+) -> Tuple[float, float]:
+    """Flat heuristic total $ range for dry-run (not billed).
+
+    Historically, each per-file update tends to cost around $0.50–$1.00. For dry-run,
+    report a simple flat estimate based on the number of drifted pairs.
+    """
+    n = len(changed_items)
+    return (n * 0.5, n * 1.0)
+
+
+def _print_repository_drift_report(
+    repo_root: str,
+    n_changed: int,
+    n_pairs: int,
+    changed_items: List[Tuple[str, str, str]],
+    included_docs: List[Tuple[str, int]],
+    cost_low: float,
+    cost_high: float,
+) -> None:
+    """Print the repository drift summary for `pdd update --dry-run` (no LLM)."""
+    console.print()
+    console.print("[bold]Repository drift report:[/bold]")
+    console.print(f"  Changed files: [cyan]{n_changed}[/cyan] of [cyan]{n_pairs}[/cyan] pairs")
+    console.print(
+        f"  Estimated cost: [yellow]${cost_low:.2f}–${cost_high:.2f}[/yellow] "
+        "(flat $0.50–$1.00 per drifted pair; not billed in dry run)"
+    )
+    console.print()
+    console.print("  [bold]Drifted modules:[/bold]")
+    rows = sorted(changed_items, key=lambda x: x[1])
+    code_width = 0
+    for _p, code_path, _r in rows:
+        code_width = max(code_width, len(os.path.relpath(code_path, repo_root)))
+    code_width = min(max(code_width, 12), 52)
+    for i, (prompt_path, code_path, _reason) in enumerate(rows, start=1):
+        cr = os.path.relpath(code_path, repo_root)
+        pr = os.path.relpath(prompt_path, repo_root)
+        pad = max(code_width - len(cr), 0)
+        console.print(f"    {i}. {cr}{' ' * pad}  →  {pr}")
+    console.print()
+    console.print("  [bold]Included docs that may need updating:[/bold]")
+    if not included_docs:
+        console.print("    [dim](none detected among drifted prompts)[/dim]")
+    else:
+        for doc_rel, cnt in included_docs:
+            console.print(f"    - {doc_rel} (included by {cnt} prompt{'s' if cnt != 1 else ''})")
+    console.print()
+
+
 def _find_prd_file(project_root: Path) -> Optional[Path]:
     """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
     for pattern in ["PRD.md", "prd.md", "*_prd.md", "*_PRD.md"]:
@@ -793,6 +903,8 @@ def update_main(
     temperature: Optional[float] = None,
     simple: bool = False,
     base_branch: str = "main",
+    budget: Optional[float] = None,
+    dry_run: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -810,6 +922,8 @@ def update_main(
     :param strength: Optional strength parameter (overrides ctx.obj if provided).
     :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
     :param base_branch: Git branch to compare against for change detection in repo mode.
+    :param budget: Optional repository-wide cap; stop processing once cumulative update cost reaches this amount.
+    :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -842,7 +956,7 @@ def update_main(
                 scan_dir = repo_root
         pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
 
-        if pairs:
+        if pairs and not dry_run:
             from .pddrc_initializer import ensure_pddrc_for_scan
             code_files_for_pddrc = [code_path for _, code_path in pairs]
             ensure_pddrc_for_scan(scan_dir, repo_root, code_files_for_pddrc, quiet=quiet)
@@ -854,30 +968,60 @@ def update_main(
         # Change-detection: filter to changed code files OR empty prompts
         git_changed_files = get_git_changed_files(repo_root, base_branch)
 
-        changed_pairs = []
+        changed_items = []
         for prompt_path, code_path in pairs:
             # Empty prompts always need generation, regardless of code changes
             prompt_p = Path(prompt_path)
             if prompt_p.exists() and prompt_p.stat().st_size == 0:
-                changed_pairs.append((prompt_path, code_path))
+                changed_items.append((prompt_path, code_path, "empty prompt file"))
                 continue
             changed, reason = is_code_changed(code_path, repo_root, git_changed_files, prompt_file_path=prompt_path)
             if changed:
-                changed_pairs.append((prompt_path, code_path))
+                changed_items.append((prompt_path, code_path, reason))
 
-        if not changed_pairs:
+        if not changed_items:
             if not quiet:
                 rprint("[info]No changed code files detected. Everything is in sync.[/info]")
             return None
 
+        if dry_run:
+            if not quiet:
+                drift_prompts = [p for p, _c, _r in changed_items]
+                all_prompt_paths = [p for p, _c in pairs]
+                included_docs = _included_docs_for_drift_report(
+                    repo_root, all_prompt_paths, drift_prompts
+                )
+                cost_low, cost_high = _estimate_dry_run_cost_range(
+                    ctx, repo_obj, simple, changed_items
+                )
+                _print_repository_drift_report(
+                    repo_root,
+                    len(changed_items),
+                    len(pairs),
+                    changed_items,
+                    included_docs,
+                    cost_low,
+                    cost_high,
+                )
+                rprint(
+                    "[dim]No LLM calls, no prompt writes, no architecture or PRD sync.[/dim]"
+                )
+            n = len(changed_items)
+            return (
+                f"Dry run: {n} prompt(s) would be updated (no changes made).",
+                0.0,
+                "N/A",
+            )
+
         if not quiet:
             rprint(
-                f"[info]Found {len(changed_pairs)} changed file(s) "
+                f"[info]Found {len(changed_items)} changed file(s) "
                 f"out of {len(pairs)} total pairs.[/info]"
             )
 
         results = []
         total_repo_cost = 0.0
+        budget_reached = False
 
         progress = Progress(
             SpinnerColumn(),
@@ -895,11 +1039,19 @@ def update_main(
         with progress:
             task = progress.add_task(
                 "Updating prompts...",
-                total=len(changed_pairs),
+                total=len(changed_items),
                 total_cost=0.0
             )
 
-            for prompt_path, code_path in changed_pairs:
+            for prompt_path, code_path, _reason in changed_items:
+                if budget is not None and total_repo_cost >= budget:
+                    budget_reached = True
+                    if not quiet:
+                        rprint(
+                            f"[info]Budget cap reached (${budget:.2f}); "
+                            f"stopping with {len(results)} file(s) processed.[/info]"
+                        )
+                    break
                 relative_path = os.path.relpath(code_path, repo_root)
                 progress.update(task, description=f"Processing [path]{relative_path}[/path]")
 
@@ -1032,6 +1184,8 @@ def update_main(
 
         console.print("\n[bold]Repository Update Summary[/bold]")
         console.print(table)
+        if budget_reached:
+            console.print(f"[info]Budget cap reached: ${budget:.2f}[/info]")
         if arch_entries_updated > 0 or prd_status != "skipped (no arch changes)":
             console.print(f"\n[info]Architecture entries updated: {arch_entries_updated}[/info]")
             console.print(f"[info]PRD status: {prd_status}[/info]")

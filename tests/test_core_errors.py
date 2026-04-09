@@ -158,3 +158,22 @@ def test_keyboard_interrupt_reports_correct_command_name(
     assert "'unknown'" not in output, (
         f"Command name should not be 'unknown': {output}"
     )
+
+
+def test_record_core_dump_error_adds_structured_entry():
+    from pdd.core.errors import clear_core_dump_errors, get_core_dump_errors, record_core_dump_error
+
+    clear_core_dump_errors()
+    record_core_dump_error(
+        command="sync",
+        type="LogicalFailure",
+        message="Budget exhausted",
+        details={"remaining_budget": 0.0},
+    )
+
+    errs = get_core_dump_errors()
+    assert len(errs) == 1
+    assert errs[0]["command"] == "sync"
+    assert errs[0]["type"] == "LogicalFailure"
+    assert errs[0]["message"] == "Budget exhausted"
+    assert errs[0]["details"]["remaining_budget"] == 0.0
