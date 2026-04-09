@@ -555,3 +555,44 @@ class TestAtomicCacheWrites:
         meta_files = list(cache_dir.glob("*.meta.json"))
         assert len(md_files) == 0, f"Orphan .md files found: {md_files}"
         assert len(meta_files) == 0, f"Orphan .meta.json files found: {meta_files}"
+
+
+# ---------------------------------------------------------------------------
+# Path handling bug tests (issue #603)
+# ---------------------------------------------------------------------------
+
+class TestCacheKeyPathInconsistency:
+    """compute_cache_key uses os.path.normpath which does NOT resolve to
+    absolute paths. This means the same file accessed via different relative
+    paths produces different cache keys, causing cache misses."""
+
+    def test_relative_vs_absolute_path_same_file(self):
+        """Same file referenced as 'src/file.py' vs '/abs/path/src/file.py'
+        should ideally produce the same cache key, but doesn't."""
+        abs_path = os.path.abspath("src/file.py")
+        key_rel = compute_cache_key("src/file.py", "summarize this")
+        key_abs = compute_cache_key(abs_path, "summarize this")
+        assert key_rel != key_abs, (
+            "If this fails, the bug has been fixed! "
+            "Currently normpath does NOT resolve to absolute, so these differ."
+        )
+
+    def test_different_relative_paths_same_file(self):
+        """'./subdir/../src/file.py' and 'src/file.py' refer to the same
+        file but normpath resolves them identically, so this works."""
+        key1 = compute_cache_key("./subdir/../src/file.py", "query")
+        key2 = compute_cache_key("src/file.py", "query")
+        assert key1 == key2, (
+            "normpath should collapse '../' — if this fails, normpath behavior changed"
+        )
+
+    def test_cwd_relative_vs_project_relative_different_keys(self):
+        """If CWD is 'project/tests/' and we reference '../src/file.py',
+        normpath produces '../src/file.py'. But from 'project/' it would
+        be 'src/file.py'. These are different cache keys for the same file."""
+        key1 = compute_cache_key("../src/file.py", "query")
+        key2 = compute_cache_key("src/file.py", "query")
+        assert key1 != key2, (
+            "If this fails, the bug has been fixed! "
+            "Same file from different CWDs produces different cache keys."
+        )

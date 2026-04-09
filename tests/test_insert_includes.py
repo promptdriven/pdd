@@ -820,3 +820,67 @@ def test_include_docs_and_max_workers_passed_to_auto_include():
         assert kw.get("max_workers") == 8, (
             f"max_workers not passed to auto_include. Got kwargs: {list(kw.keys())}"
         )
+
+
+# ============================================================================
+# Path handling bug tests (issue #603)
+#
+# _remove_redundant_content uses Path(file_path).is_file() which resolves
+# relative to CWD. If auto_include returned paths relative to a different
+# base directory, the dedup silently skips (file not found = no dedup).
+# ============================================================================
+
+from pathlib import Path
+
+
+class TestRemoveRedundantContentPathResolution:
+    """_remove_redundant_content assumes include paths are resolvable from CWD."""
+
+    def test_dedup_works_when_paths_relative_to_cwd(self, tmp_path):
+        """When the included file path is resolvable from CWD, dedup works."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        # Create a file with known content
+        test_file = tmp_path / "helper.py"
+        content = "def helper():\n    return 42\n"
+        test_file.write_text(content)
+
+        # Prompt has the same content inline
+        prompt = f"Some preamble\n{content}Some postamble\n"
+
+        # Use absolute path — always resolvable
+        result = _remove_redundant_content(prompt, [str(test_file)])
+        assert content.strip() not in result, (
+            "Dedup should have removed inline content that matches the included file"
+        )
+
+    def test_dedup_silently_fails_with_unreachable_relative_path(self, tmp_path):
+        """When the path is relative to a different directory (e.g.
+        'context/helper.py' but CWD is not the project root), dedup
+        silently skips because Path('context/helper.py').is_file() is False.
+
+        This documents the silent failure — dedup just doesn't happen.
+        """
+        from pdd.insert_includes import _remove_redundant_content
+
+        # Create a file in a subdirectory
+        subdir = tmp_path / "context"
+        subdir.mkdir()
+        test_file = subdir / "helper.py"
+        content = "def helper():\n    return 42\n"
+        test_file.write_text(content)
+
+        # Prompt has the same content inline
+        prompt = f"Some preamble\n{content}Some postamble\n"
+
+        # Use a path that's NOT resolvable from CWD
+        # (unless we happen to be in tmp_path)
+        result = _remove_redundant_content(prompt, ["context/helper.py"])
+
+        # The content should have been deduped, but it won't be because
+        # the file can't be found from CWD
+        assert content.strip() in result, (
+            "This assertion documents the bug: dedup silently fails when the "
+            "include path is not resolvable from CWD. If this assertion fails, "
+            "the bug has been fixed (dedup now works with non-CWD paths)."
+        )

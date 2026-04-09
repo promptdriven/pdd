@@ -1081,3 +1081,107 @@ def test_build_new_block_simple():
     assert "context/helper.py" in result
     assert "<utils>" in result
     assert "</utils>" in result
+
+# ============================================================================
+# 10. Path handling bug tests (issue #603)
+#
+# When project_dependencies.csv preserves entries from multiple directory scans
+# (the fix for CSV wipeout), downstream code must handle mixed-origin paths
+# correctly. These tests surface bugs where it doesn't.
+# ============================================================================
+
+import os
+
+
+class TestFormatCsvRowsCrossDirectoryPaths:
+    """_format_csv_rows_for_llm blindly prepends directory_path to ALL
+    relative paths. When the CSV has entries from a different scan scope,
+    this produces nonexistent paths."""
+
+    def test_cross_directory_entries_not_misqualified(self, tmp_path):
+        """CSV has 'cli.py' (from pdd/ scan) and 'example_a.py' (from
+        context/ scan). Formatting with directory_path=context/ should NOT
+        turn 'cli.py' into 'context/cli.py'.
+        """
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        csv_data = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            "example_a.py,An example file,\"[]\",\"[]\",abc123\n"
+            "cli.py,CLI entry point,\"[]\",\"[]\",def456\n"
+        )
+        result = _format_csv_rows_for_llm(csv_data, directory_path=str(context_dir))
+        lines = result.split("\n")
+        file_lines = [l for l in lines if l.startswith("File:")]
+        misqualified = [l for l in file_lines if "context" in l and "cli.py" in l]
+        assert not misqualified, (
+            f"cli.py was misqualified with context/ prefix. It came from a "
+            f"different scan (pdd/) and should not be requalified. "
+            f"File lines: {file_lines}"
+        )
+
+    def test_already_qualified_paths_not_double_qualified(self, tmp_path):
+        """CSV has 'context/example_a.py' (already qualified from a root
+        scan). Formatting with directory_path='context/' should NOT produce
+        'context/context/example_a.py'.
+        """
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        csv_data = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            "context/example_a.py,An example,\"[]\",\"[]\",abc123\n"
+        )
+        result = _format_csv_rows_for_llm(csv_data, directory_path=str(context_dir))
+        assert "context/context" not in result and "context\\context" not in result, (
+            f"Path was double-qualified. Result:\n{result}"
+        )
+
+
+class TestQualifyPathBugs:
+    """_qualify_path unconditionally prepends directory prefix to any
+    relative path that doesn't already start with it. This is wrong for
+    cross-directory entries."""
+
+    def test_qualify_path_does_not_double_qualify(self):
+        result = _qualify_path("context/helper.py", "context/")
+        assert result == "context/helper.py", (
+            f"Expected 'context/helper.py' unchanged, got '{result}'"
+        )
+
+    def test_qualify_path_misqualifies_cross_directory_entry(self, tmp_path):
+        """'cli.py' from pdd/ scan gets wrongly qualified as 'context/cli.py'.
+        This test documents the bug - _qualify_path has no way to know which
+        directory the entry originally came from.
+        """
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        result = _qualify_path("cli.py", str(context_dir))
+        wrong_path = os.path.normpath(os.path.join(str(context_dir), "cli.py"))
+        # This SHOULD not qualify cli.py with context/ prefix, but it does.
+        # Asserting the bug exists:
+        assert result == wrong_path, (
+            f"Expected bug to produce '{wrong_path}', got '{result}'. "
+            f"If this fails, the bug may have been fixed."
+        )
+
+
+class TestQualifyResultPathsDoubleQualification:
+    """_qualify_result_paths runs after LLM returns paths that were
+    already qualified by _format_csv_rows_for_llm. The startswith guard
+    should prevent double-qualification."""
+
+    def test_new_include_already_qualified_not_doubled(self, tmp_path):
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        from pdd.auto_include import _qualify_result_paths
+        result = AutoIncludeResult(
+            reasoning="test",
+            new_includes=[NewInclude(file="context/helper.py", module="utils")],
+            existing_include_annotations=[],
+        )
+        _qualify_result_paths(result, str(context_dir))
+        assert result.new_includes[0].file == "context/helper.py", (
+            f"Path was double-qualified: {result.new_includes[0].file}"
+        )
