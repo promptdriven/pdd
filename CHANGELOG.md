@@ -1,3 +1,24 @@
+## v0.0.202 (2026-04-08)
+
+### Feat
+
+- cross-validate architecture deps vs prompt includes (sync, CLI, CI)
+
+### Fix
+
+- **sync**: rollback auto-deps and heal mutations on failure
+- **test**: use TestCommand mock for cherry-pick compat with gltanaka/pdd
+- **prompts**: restore orchestrator prompt
+- **sync**: delegate fix-phase test subprocess for reliable test patching
+- **prompt**: Step 11 API mock example uses 'GET'/'POST' for test matchers
+- **ci**: run unit tests on push events (not just non-draft PRs)
+- remove 18 orphaned entries and sync stale dependencies in architecture.json
+- **auto-deps**: repair architecture update exception block
+
+### Refactor
+
+- **cli**: remove standalone validate-arch-includes command
+
 ## v0.0.201 (2026-04-07)
 
 ### Feat

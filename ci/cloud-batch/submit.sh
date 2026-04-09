@@ -26,20 +26,47 @@ _with_timeout() {
     return "$rc"
 }
 
-# ── Check for uncommitted changes ─────────────────────────────────────────
+# ── Prepare source path allowlist ─────────────────────────────────────────
 cd "${REPO_ROOT}"
+SOURCE_PATHS=(
+    pdd
+    tests
+    data
+    prompts
+    context
+    docs
+    Makefile
+    pyproject.toml
+    requirements.txt
+    pdd-local.sh
+    ci
+    scripts
+)
+
+if [ -d ".pdd" ]; then
+    SOURCE_PATHS+=(".pdd")
+fi
+
+if [ -f ".pddrc" ]; then
+    SOURCE_PATHS+=(".pddrc")
+fi
+
 if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet HEAD 2>/dev/null; then
-    echo "WARNING: You have uncommitted changes. git archive HEAD only includes committed files."
-    echo "         Uncommitted changes will NOT be tested. Commit first or use 'git stash'."
-    echo ""
+    echo "=== Including local working tree changes in source upload ==="
 fi
 
 # ── Upload source tarball ─────────────────────────────────────────────────
 echo "=== Uploading source tarball ==="
 SOURCE_GCS="gs://${BUCKET}/${JOB_RUN_ID}/source/pdd-source.tar.gz"
 # Only include directories needed for tests (skip demos/, experiments/, examples/ etc.)
+# Use the current working tree so local fixes can be validated without an
+# intermediate commit, but derive the file list from git so ignored files
+# (for example caches or node_modules) are not uploaded.
 # Create plain tar first; gzip once at the end to avoid decompress/recompress cycle
-git archive HEAD -- pdd/ tests/ data prompts context/ docs/ Makefile pyproject.toml requirements.txt .pdd/ .pddrc pdd-local.sh ci/ scripts/ > /tmp/pdd-source.tar
+SOURCE_LIST_FILE=$(mktemp)
+git -c core.quotePath=false ls-files --cached --others --exclude-standard -- "${SOURCE_PATHS[@]}" > "${SOURCE_LIST_FILE}"
+COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -cf /tmp/pdd-source.tar -T "${SOURCE_LIST_FILE}"
+rm -f "${SOURCE_LIST_FILE}"
 
 # Include pdd_cloud .pddrc if available (for TestActualPddrcConfiguration tests)
 PARENT_PDDRC="${REPO_ROOT}/../.pddrc"
@@ -49,7 +76,7 @@ if [ -f "${PARENT_PDDRC}" ]; then
     rm /tmp/.pddrc_pddcloud
 fi
 
-gzip /tmp/pdd-source.tar
+gzip -f /tmp/pdd-source.tar
 
 gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
 rm /tmp/pdd-source.tar.gz
