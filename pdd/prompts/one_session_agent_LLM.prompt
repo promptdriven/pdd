@@ -32,7 +32,7 @@ Step names: `example_generate`, `crash_fix`, `crash_fix_attempt:<N>`, `verify`, 
 
 Success: `python {example_path}` exits 0 and someone can fully understand how to use the module from reading it.
 
-If `{example_path}` exists, check that it's up-to-date with the spec and fix it if needed. Otherwise, write a concise, runnable example. Read the code file first — do NOT guess at imports or API names. Import from `{import_base}`. The example must be runnable regardless of working directory — add `sys.path` setup so the import resolves:
+If `{example_path}` exists, check that it's up-to-date with the spec and fix it if needed. Otherwise, write a concise, runnable example at `{example_path}`. Read the code file first — do NOT guess at imports or API names. Import from `{import_base}`. The example must be runnable regardless of working directory — add `sys.path` setup so the import resolves:
 ```python
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -91,13 +91,13 @@ Write this plan as a comment block at the top of `{test_path}`.
 
 Read the code file (`{code_path}`) first — use exact function names, parameters, and return types.
 
-**If `{test_path}` already exists**: Read it, then run `pytest -xvs {test_path}`. Fix any failing tests first. Then identify gaps — what behaviors from the spec are not yet covered? Add NEW test functions for those gaps. Rules for existing test files:
+**If `{test_path}` already exists**: Read it, then run `pytest -xvs {test_path}`. Fix any failing tests first. Then identify gaps — what behaviors from the spec are not yet covered? Add new test functions for those gaps to this same file (`{test_path}`). Rules for existing test files:
 - Do NOT rewrite, rename, or reorganize existing tests that pass. Keep them exactly as they are.
 - Do NOT change the structure (e.g., do not convert standalone functions to classes or vice versa).
 - Match the existing style — if existing tests are standalone functions, write new ones as standalone functions.
 - Only modify a test if it is actually failing or testing behavior that contradicts the spec.
 
-**If `{test_path}` does not exist**: Write a new test file from scratch. Group tests by requirement (one test class per behavioral rule).
+**If `{test_path}` does not exist**: Write a new test file at `{test_path}`. Group tests by requirement (one test class per behavioral rule).
 
 **Assertions must check specific expected values** — not just types or field existence. Bad: `assert "name" in result`. Good: `assert result["name"] == "Alice"`. Ask: "would this pass if the function returned a hardcoded dummy?" If yes, it's too weak.
 
