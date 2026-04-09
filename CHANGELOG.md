@@ -2,17 +2,29 @@
 
 ### Feat
 
-- **cli**: warn/block duplicate sync/generate/fix runs
-- auto-deps arch deps + warn on arch vs include sync-order drift
-- cross-validate architecture deps vs prompt includes (sync, CLI, CI)
+- **duplicate run guard**: `pdd sync`, `generate`, and `fix` now warn/block when the same command is re-run within a configurable time window with identical argv, project root, and git state (HEAD + working tree fingerprint). Controlled via `PDD_DUPLICATE_WINDOW_MIN` (default 15 min) and `PDD_DISABLE_DUPLICATE_GUARD` env vars
+- **architecture ↔ include cross-validation**: new `pdd validate-arch-includes` CLI command and in-sync warnings (behind `--verbose`) that surface mismatches between `architecture.json` dependency lists and actual `<include>` tags in prompt files
+- **auto-deps updates architecture.json**: after `pdd auto-deps` inserts new `<include>` tags referencing other modules, the corresponding `dependencies` entries in `architecture.json` are automatically appended
+- **sync-order consistency check**: agentic sync now compares the dependency graph derived from `architecture.json` against the `<include>`-based graph and warns (in verbose mode) when the two would produce different sync orderings
+- **CI unit-test workflow**: new `.github/workflows/unit-tests.yml` runs `pytest` on push to main and on PRs with a 30-minute timeout on `ubuntu-latest`
 
 ### Fix
 
-- add missing include directives to orchestrator prompt
-- auto-heal CI now detects code-ahead-of-prompt drift via git
-- address review feedback on PR #1116
-- search subdirectories for prompt files + proper front-matter output precedence
-- CI validation times out when GitHub App token lacks checks:read permission
+- **CI validation partial-check masking**: when `gh pr checks` exits 1 with both stderr errors and partial check JSON in stdout, stderr is now inspected *before* classifying — prevents permission/transport errors from silently triggering the LLM fix loop
+- **front-matter output precedence**: `code_generator_main` now correctly follows CLI `--output` > front-matter `output:` > `.pddrc generate_output_path`; sync paths pass `output_from_config=True` so front-matter can override the `.pddrc` default. Failed front-matter output resolution now emits a yellow warning instead of silently falling back
+- **subdirectory prompt discovery**: `_detect_languages` now searches subdirectories recursively when the root `prompts/` glob finds no matches, with collision detection warning when the same basename appears in multiple subdirectories
+- **auto-heal CI git-based drift detection**: `detect_drift` accepts an optional `diff_base` to reclassify modules as "prompt stale" when git shows code changed but the prompt did not — fixes false negatives in CI where fingerprints are absent
+- **orchestrator prompt includes**: added missing `<include>` directives to `agentic_e2e_fix_orchestrator_python.prompt`
+
+### Refactor
+
+- **orchestrator prompt simplified**: removed ~120 lines of duplicated specification from `agentic_e2e_fix_orchestrator_python.prompt` (detailed step tables, helper function contracts, full context variable lists) — retained only loop-control tokens, environment safety, skipped-steps memory, and convergence requirements
+- **`find_project_root` and `load_combined_architecture_data` extracted** to `architecture_registry.py` from `agentic_sync.py`, eliminating duplicate project-root-finding logic
+- **`architecture_include_validation`**, **`auto_deps_architecture`**, **`sync_graph_order_consistency`**, and **`duplicate_cli_guard`** extracted as standalone modules
+
+### Build
+
+- **auto-heal CI workflow**: added architecture-file check to `.github/workflows/auto-heal-drift.yml`
 
 ## v0.0.200 (2026-04-06)
 
