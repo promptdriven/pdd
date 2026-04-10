@@ -356,7 +356,7 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     if best_match is not None:
         return best_match
 
-    # 3. Fall back to project root
+    # 2. Fall back to project root
     return project_root
 
 
