@@ -1,23 +1,61 @@
+## v0.0.203 (2026-04-09)
+
+### Feat
+
+- add budget/dry-run flags, core dump v2, and arch validation, while refactoring CLI commands and CI workflows
+
+### Fix
+
+- resolve issue 225 prompt validation and sync paths
+
 ## v0.0.202 (2026-04-08)
 
 ### Feat
 
-- cross-validate architecture deps vs prompt includes (sync, CLI, CI)
+- **update**: `--dry-run` flag lists drifted modules, included docs, and estimated cost without calling the LLM or writing outputs
+- **update**: `--budget` flag caps repository-wide update cost; processing stops once the cumulative spend reaches the cap
+- **update**: `--all` flag for explicit repo-wide mode (equivalent to passing no file arguments)
+- **checkup**: `--validate-arch-includes` subcommand for local architecture ↔ prompt include cross-validation (replaces the removed standalone command)
+- **core dump v2**: richer debug snapshots — structured `sync_steps` extracted from sync logs, per-operation LLM trace (last prompt/response pair), ANSI-stripped terminal output, and `record_core_dump_error()` for non-exception logical failures such as budget exhaustion, loop breakers, and decision/merge failures
+- **LLM trace**: new `pdd/core/llm_trace.py` module records the last (prompt, response) pair per operation scope; automatically attached to core dumps on failure
+- **json_atomic**: new `pdd/json_atomic.py` utility for crash-safe JSON writes via temp file + `os.replace`; used by architecture.json updates
+- **one-session sync prompt**: rewritten as a shorter, spec-first prompt aimed at better sync quality, speed, and cost, with explicit file-role hierarchy and deliverable rules
+- **one-session eval suite**: 3 new large-module scenarios (s7–s9), bringing the suite to 9 scenarios and covering large-code bug fix, minimal-test generation, and wrong-test correction
+- **arch/include validation**: cross-validate architecture deps vs prompt includes across sync, CLI, and CI
+- **core dump requirements prompt**: new `core_dump_requirements_LLM.prompt` defining the authoritative spec for debug snapshot contents
 
 ### Fix
 
-- **sync**: rollback auto-deps and heal mutations on failure
-- **test**: use TestCommand mock for cherry-pick compat with gltanaka/pdd
-- **prompts**: restore orchestrator prompt
-- **sync**: delegate fix-phase test subprocess for reliable test patching
-- **prompt**: Step 11 API mock example uses 'GET'/'POST' for test matchers
-- **ci**: run unit tests on push events (not just non-draft PRs)
-- remove 18 orphaned entries and sync stale dependencies in architecture.json
+- **sync**: rollback auto-deps and heal mutations on failure — `OperationFileRollback` snapshots prompt, code, deps, and architecture files before each operation and restores them atomically if the operation fails
+- **ci drift heal**: restore `.pdd/meta` and `project_dependencies.csv` via `git restore` when a heal subprocess fails or times out, preventing half-mutated repo state in CI
+- **sync**: record structured core dump errors for consecutive-fix, consecutive-test, and consecutive-crash loop breakers
+- **sync**: budget-exhaustion in multi-language sync now records a core dump error with remaining budget details
+- **cli**: non-zero `click.Exit` codes (e.g. from `--validate-arch-includes`) now propagate directly instead of being misreported as "unexpected error" through `handle_error`
+- **cli**: ANSI stripping regex expanded to cover CSI sequences and OSC terminal escapes
 - **auto-deps**: repair architecture update exception block
+- **prompts**: restore orchestrator prompt; simplify from 12-step to 10-step workflow and remove `timeout_adder`/`use_github_state` parameters
+- **prompt**: Step 11 API mock example uses 'GET'/'POST' for test matchers
+- **sync**: delegate fix-phase test subprocess to a separate symbol (`_run_fix_operation_test_subprocess`) for reliable test patching
+- **test**: use TestCommand mock for cherry-pick compat with gltanaka/pdd
+- remove 18 orphaned entries and sync stale dependencies in architecture.json
+- **arch validation**: `_module_prompt_include_target` now filters non-`.prompt` includes (e.g. context/example files) so validation matches architecture.json semantics
 
 ### Refactor
 
-- **cli**: remove standalone validate-arch-includes command
+- **cli**: remove standalone `validate-arch-includes` command (moved to `pdd checkup --validate-arch-includes`)
+- **cli**: remove `maintenance.validate_arch_includes` function (36 lines); logic consolidated into `architecture_include_validation.run_validate_arch_includes_cli`
+
+### Build
+
+- **ci**: run unit tests on push events, not just non-draft PRs
+- **ci**: validate-arch-includes CI step now runs via `pdd checkup --validate-arch-includes` with a fixture smoke test and repo-wide check (replaces warning-only wrapper)
+- **cloud batch**: `submit.sh` uploads the working tree (not just `git archive HEAD`), so uncommitted fixes can be validated without an intermediate commit; file list is derived from `git ls-files` with an explicit source-path allowlist
+- **test infrastructure**: ignore fixture `test_*.py` files and macOS `._*` artifacts during pytest/Vitest collection
+
+### Contributors
+
+- Vishal Ramvelu (`@vishalramvelu`) for public merged [PR #712](https://github.com/promptdriven/pdd/pull/712), which contributed the core-dump/debugging improvements plus the validation/update follow-ups in this release
+- Niti Goyal (`@niti-go`) for public merged [PR #713](https://github.com/promptdriven/pdd/pull/713), which contributed the one-session sync prompt rewrite and expanded evaluation suite
 
 ## v0.0.201 (2026-04-07)
 

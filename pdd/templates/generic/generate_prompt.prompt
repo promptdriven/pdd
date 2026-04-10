@@ -151,14 +151,18 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 - The prompt body should contain ONLY implementation logic, dependency signatures, and behavior that is NOT in the context YAMLs.
 
 % Dependencies format and conventions:
-- The example files directory is: ${EXAMPLE_OUTPUT_PATH}
-- Represent each dependency using an XML tag with the dependency name, and put the file path inside an &lt;include&gt; tag. Use ${EXAMPLE_OUTPUT_PATH} as the base directory, e.g.:
-  &lt;orders_service&gt;
-    &lt;include&gt;${EXAMPLE_OUTPUT_PATH}/orders_service_example.${DEP_EXAMPLE_EXT}&lt;/include&gt;
-  &lt;/orders_service&gt;
-- Prefer real example files available in the provided context (use &lt;include-many&gt; when listing multiple). If examples are not provided, use the pattern ${EXAMPLE_OUTPUT_PATH}/[dependency_name]_example.${DEP_EXAMPLE_EXT}.
-- Include all necessary dependencies for the module/component (based on the provided context and references).
-- The ARCHITECTURE_FILE lists `dependencies` referencing other prompt filenames. Convert each dependency prompt filename into a sensible dependency name (strip language suffix and `_prompt`), and map to context files with the `${DEP_EXAMPLE_EXT}` extension if present; otherwise, list the prompt filename explicitly in a "Prompt Dependencies" subsection.
+- CRITICAL: Do NOT fabricate file paths or assume files exist. The context/ directory does NOT contain example files unless they are explicitly shown in the context sections above.
+- You may ONLY use <include> tags when ALL of these conditions are met:
+  1. The file content was explicitly provided in one of the context sections above (<prd>, <architecture>, <existing_backend_prompts>, etc.)
+  2. You can see the actual file path in that context section
+  3. The file is NOT just referenced by name in ARCHITECTURE_FILE dependencies
+- For dependencies listed in ARCHITECTURE_FILE: These are OTHER PROMPTS that will generate code, NOT example files. Do NOT create <include> tags for them. Instead, list them in a "Prompt Dependencies" subsection with a description of the expected interface.
+- When no example file is available (which is the common case), use this format:
+  <dependency_name>
+    <!-- Expected interface: describe the functions/classes/types this dependency should provide -->
+  </dependency_name>
+- WRONG (do not do this): <include>context/some_module_example.py</include> when no such file was provided in the context
+- RIGHT: Describe the interface inline or list in Prompt Dependencies section
 - If the matched architecture entry has a `context_urls` array, emit a &lt;web&gt; tag for each URL in the Dependencies section. Derive the XML tag name from the `purpose` field (lowercased, non-alphanumeric characters replaced with underscores). Example:
   ```
   &lt;fastapi_routing_patterns&gt;

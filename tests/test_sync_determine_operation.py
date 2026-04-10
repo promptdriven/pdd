@@ -3272,6 +3272,127 @@ def test_prompt_change_detected_even_after_crash_workflow(pdd_test_environment):
         f"Reason should mention prompt change: {decision.reason}"
 
 
+def test_prompt_change_progresses_generate_verify_test_then_complete(pdd_test_environment):
+    """
+    Regression guard for prompt-only changes: sync should regenerate first, then
+    require verify, then require test before considering the workflow complete.
+    """
+    tmp_path = pdd_test_environment
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+
+    prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+    old_prompt_hash = create_file(prompt_path, "ORIGINAL PROMPT CONTENT")
+
+    paths = get_pdd_file_paths(BASENAME, LANGUAGE, prompts_dir=str(prompts_dir))
+    code_hash = create_file(paths['code'], "def add(a, b):\n    return a + b\n")
+    example_hash = create_file(paths['example'], "print(add(1, 2))\n")
+    test_hash = create_file(paths['test'], "def test_add():\n    assert add(1, 2) == 3\n")
+
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+
+    # Start from a fully completed workflow for the old prompt version.
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-01-01T00:00:00Z",
+        "command": "test",
+        "prompt_hash": old_prompt_hash,
+        "code_hash": code_hash,
+        "example_hash": example_hash,
+        "test_hash": test_hash
+    })
+    create_run_report_file(rr_path, {
+        "timestamp": "2025-01-01T00:01:00Z",
+        "exit_code": 0,
+        "tests_passed": 5,
+        "tests_failed": 0,
+        "coverage": 95.0,
+        "test_hash": test_hash
+    })
+
+    # User edits only the prompt. Sync should restart with generation.
+    new_prompt_hash = create_file(prompt_path, "UPDATED PROMPT CONTENT")
+    decision = sync_determine_operation(
+        BASENAME, LANGUAGE, TARGET_COVERAGE,
+        prompts_dir=str(prompts_dir)
+    )
+    assert decision.operation == 'generate', (
+        f"Expected prompt-only change to restart at 'generate', got '{decision.operation}'"
+    )
+
+    # Simulate successful generate: hashes now match the new prompt, but verify has
+    # not run for this generation yet.
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-01-01T00:02:00Z",
+        "command": "generate",
+        "prompt_hash": new_prompt_hash,
+        "code_hash": code_hash,
+        "example_hash": example_hash,
+        "test_hash": test_hash
+    })
+    decision = sync_determine_operation(
+        BASENAME, LANGUAGE, TARGET_COVERAGE,
+        prompts_dir=str(prompts_dir)
+    )
+    assert decision.operation == 'verify', (
+        f"Expected post-generate sync to require 'verify', got '{decision.operation}'"
+    )
+
+    # Simulate successful verify: sync should still require tests before completion.
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-01-01T00:03:00Z",
+        "command": "verify",
+        "prompt_hash": new_prompt_hash,
+        "code_hash": code_hash,
+        "example_hash": example_hash,
+        "test_hash": test_hash
+    })
+    create_run_report_file(rr_path, {
+        "timestamp": "2025-01-01T00:03:30Z",
+        "exit_code": 0,
+        "tests_passed": 5,
+        "tests_failed": 0,
+        "coverage": 95.0,
+        "test_hash": test_hash
+    })
+    decision = sync_determine_operation(
+        BASENAME, LANGUAGE, TARGET_COVERAGE,
+        prompts_dir=str(prompts_dir)
+    )
+    assert decision.operation == 'test', (
+        f"Expected post-verify sync to require 'test', got '{decision.operation}'"
+    )
+
+    # After tests complete successfully for the new prompt version, sync is done.
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0.0",
+        "timestamp": "2025-01-01T00:04:00Z",
+        "command": "test",
+        "prompt_hash": new_prompt_hash,
+        "code_hash": code_hash,
+        "example_hash": example_hash,
+        "test_hash": test_hash
+    })
+    create_run_report_file(rr_path, {
+        "timestamp": "2025-01-01T00:04:30Z",
+        "exit_code": 0,
+        "tests_passed": 5,
+        "tests_failed": 0,
+        "coverage": 95.0,
+        "test_hash": test_hash
+    })
+    decision = sync_determine_operation(
+        BASENAME, LANGUAGE, TARGET_COVERAGE,
+        prompts_dir=str(prompts_dir)
+    )
+    assert decision.operation == 'nothing', (
+        f"Expected workflow to be complete after test succeeds, got '{decision.operation}'"
+    )
+
+
 # --- GitHub Issue #349: Infinite Loop Bug Tests ---
 
 class TestInfiniteLoopBugIssue349:
