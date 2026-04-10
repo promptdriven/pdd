@@ -29,6 +29,7 @@ from .architecture_sync import (
     has_pdd_tags,
     generate_tags_from_architecture,
 )
+from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
 
@@ -1086,7 +1087,6 @@ def code_generator_main(
                             if cleaned.endswith("```"):
                                 cleaned = cleaned[:-3]
                             generated_code_content = cleaned.strip()
-
                         if not generated_code_content:
                             if cloud_only:
                                 console.print("[red]Cloud execution returned no code.[/red]")
@@ -1392,8 +1392,26 @@ def code_generator_main(
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
 
-                # Inject architecture metadata tags for .prompt files (reverse sync)
                 final_content = generated_code_content
+
+                # Validate <include> tags in generated prompt files (Issue #225 PR #286)
+                if p_output.suffix == '.prompt' or language == 'prompt':
+                    validated_content, invalid_includes = validate_prompt_includes(
+                        final_content,
+                        base_dir=str(p_output.parent),
+                        remove_invalid=False,
+                    )
+                    final_content = validated_content
+                    if invalid_includes:
+                        if verbose or not quiet:
+                            console.print(
+                                f"[yellow]Warning: Found {len(invalid_includes)} invalid <include> tag(s) "
+                                f"referencing non-existent files. Replaced with comments.[/yellow]"
+                            )
+                            for inv_path in invalid_includes:
+                                console.print(f"  [dim]- {inv_path}[/dim]")
+
+                # Inject architecture metadata tags for .prompt files (reverse sync)
                 if p_output.suffix == '.prompt':
                     try:
                         # Check if this prompt has an architecture entry
@@ -1402,11 +1420,11 @@ def code_generator_main(
                         # Only inject tags if:
                         # 1. Architecture entry exists
                         # 2. Content doesn't already have PDD tags (preserve manual edits)
-                        if arch_entry and not has_pdd_tags(generated_code_content):
+                        if arch_entry and not has_pdd_tags(final_content):
                             tags = generate_tags_from_architecture(arch_entry)
                             if tags:
                                 # Prepend tags to the generated content
-                                final_content = tags + '\n\n' + generated_code_content
+                                final_content = tags + '\n\n' + final_content
                                 if verbose:
                                     console.print("[info]Injected architecture metadata tags from architecture.json[/info]")
                     except Exception as e:
