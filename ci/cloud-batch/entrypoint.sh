@@ -27,6 +27,11 @@ RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
 PYTEST_START=0
 PYTEST_END=31
 PYTEST_CHUNKS=32
+# Keep each Cloud Batch pytest shard single-process. We tested xdist (`-n 2`)
+# and saw mixed results: plain scheduling caused real failures in
+# tests/test_sync_orchestration.py, while `--dist loadfile` avoided those
+# failures but created worse long-tail chunks. If runtime needs more work,
+# prefer carving the heaviest test modules into dedicated batch shards.
 
 REGRESSION_START=32
 REGRESSION_END=53
