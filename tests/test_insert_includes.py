@@ -854,33 +854,145 @@ class TestRemoveRedundantContentPathResolution:
             "Dedup should have removed inline content that matches the included file"
         )
 
-    def test_dedup_silently_fails_with_unreachable_relative_path(self, tmp_path):
-        """When the path is relative to a different directory (e.g.
-        'context/helper.py' but CWD is not the project root), dedup
-        silently skips because Path('context/helper.py').is_file() is False.
+    def test_dedup_works_when_cwd_is_not_project_root(self, tmp_path, monkeypatch):
+        """When CWD is a subdirectory (e.g. tests/) but include paths are
+        relative to the project root (e.g. 'context/helper.py'), dedup
+        should still find the file and remove duplicate inline content.
 
-        This documents the silent failure — dedup just doesn't happen.
+        Currently fails because _remove_redundant_content resolves paths
+        relative to CWD via Path(file_path).is_file(), and 'context/helper.py'
+        doesn't exist relative to tests/.
         """
         from pdd.insert_includes import _remove_redundant_content
 
-        # Create a file in a subdirectory
-        subdir = tmp_path / "context"
+        # Set up project structure: project_root/context/helper.py
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        subdir = project_root / "context"
         subdir.mkdir()
         test_file = subdir / "helper.py"
         content = "def helper():\n    return 42\n"
         test_file.write_text(content)
 
+        # CWD is project_root/tests/ — a sibling, NOT the project root
+        tests_dir = project_root / "tests"
+        tests_dir.mkdir()
+        monkeypatch.chdir(tests_dir)
+
         # Prompt has the same content inline
         prompt = f"Some preamble\n{content}Some postamble\n"
 
-        # Use a path that's NOT resolvable from CWD
-        # (unless we happen to be in tmp_path)
+        # Path is relative to project root, not to CWD
         result = _remove_redundant_content(prompt, ["context/helper.py"])
 
-        # The content should have been deduped, but it won't be because
-        # the file can't be found from CWD
-        assert content.strip() in result, (
-            "This assertion documents the bug: dedup silently fails when the "
-            "include path is not resolvable from CWD. If this assertion fails, "
-            "the bug has been fixed (dedup now works with non-CWD paths)."
+        assert content.strip() not in result, (
+            "Dedup should remove inline content that matches the included "
+            "file even when CWD is not the project root. The path "
+            "'context/helper.py' is project-relative and should be resolved "
+            "against the project root, not CWD."
+        )
+
+
+# ============================================================================
+# Update-block basename fallback with mixed-origin CSV paths (issue #603)
+#
+# insert_includes applies <update> blocks by matching the file path in the
+# update against existing <include> tags. When the full path doesn't match,
+# it falls back to basename matching (line 214). With mixed-origin CSVs,
+# multiple files can share the same basename (e.g. pdd/utils.py and
+# context/utils.py), making the basename fallback ambiguous.
+# ============================================================================
+
+
+class TestUpdateBlockBasenameFallbackMixedOrigin:
+    """When the CSV has entries from multiple directories, update blocks may
+    carry qualified paths that don't match bare include tags. The basename
+    fallback kicks in but can be ambiguous with shared basenames."""
+
+    @patch('pdd.insert_includes.load_prompt_template')
+    @patch('pdd.insert_includes.llm_invoke')
+    @patch('pdd.insert_includes.auto_include')
+    def test_ambiguous_basename_skips_update(
+        self, mock_auto_include, mock_llm, mock_template
+    ):
+        """When two includes share a basename, the update block should NOT
+        be applied (ambiguous match). Verify the prompt is unchanged."""
+        mock_template.return_value = "template"
+
+        # Prompt has two includes with the same basename but different dirs
+        input_prompt = (
+            "% prompt\n"
+            "<include>pdd/utils.py</include>\n"
+            "<include>context/utils.py</include>\n"
+        )
+
+        # auto_include returns an update for 'context/utils.py' but the
+        # path might not match exactly if it was re-qualified
+        update_directive = (
+            "<update>"
+            '<include select="def:helper">context/utils.py</include>'
+            "</update>"
+        )
+        mock_auto_include.return_value = (
+            update_directive,
+            "csv_output",
+            0.01,
+            "model",
+        )
+
+        result, _, _, _ = insert_includes(
+            input_prompt=input_prompt,
+            directory_path=".",
+            csv_filename="deps.csv",
+        )
+
+        # The update should match 'context/utils.py' exactly (full path match)
+        assert '<include select="def:helper">context/utils.py</include>' in result, (
+            "Full path match should have applied the update"
+        )
+        # 'pdd/utils.py' should remain untouched
+        assert "<include>pdd/utils.py</include>" in result, (
+            "pdd/utils.py should not be affected by the update to context/utils.py"
+        )
+
+    @patch('pdd.insert_includes.load_prompt_template')
+    @patch('pdd.insert_includes.llm_invoke')
+    @patch('pdd.insert_includes.auto_include')
+    def test_basename_fallback_with_unique_basename(
+        self, mock_auto_include, mock_llm, mock_template
+    ):
+        """When a basename is unique in the prompt, basename fallback should
+        work even with a qualified path from a mixed-origin CSV."""
+        mock_template.return_value = "template"
+
+        input_prompt = (
+            "% prompt\n"
+            "<include>cli.py</include>\n"
+            "<include>context/example.py</include>\n"
+        )
+
+        # Update uses a qualified path 'pdd/cli.py' that doesn't match
+        # the bare 'cli.py' in the prompt. Basename fallback should work
+        # because 'cli.py' is unique.
+        update_directive = (
+            "<update>"
+            '<include select="def:main">pdd/cli.py</include>'
+            "</update>"
+        )
+        mock_auto_include.return_value = (
+            update_directive,
+            "csv_output",
+            0.01,
+            "model",
+        )
+
+        result, _, _, _ = insert_includes(
+            input_prompt=input_prompt,
+            directory_path=".",
+            csv_filename="deps.csv",
+        )
+
+        # Basename fallback should have replaced the bare 'cli.py' include
+        assert '<include select="def:main">pdd/cli.py</include>' in result, (
+            f"Basename fallback should have applied the update. Result:\n{result}"
         )

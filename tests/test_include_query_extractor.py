@@ -561,38 +561,41 @@ class TestAtomicCacheWrites:
 # Path handling bug tests (issue #603)
 # ---------------------------------------------------------------------------
 
-class TestCacheKeyPathInconsistency:
-    """compute_cache_key uses os.path.normpath which does NOT resolve to
-    absolute paths. This means the same file accessed via different relative
-    paths produces different cache keys, causing cache misses."""
+class TestCacheKeyPathConsistency:
+    """compute_cache_key should produce the same key for the same physical
+    file regardless of how the path is expressed (relative, absolute,
+    different CWD). Currently it uses os.path.normpath which does NOT
+    resolve to absolute paths, so these tests fail."""
 
-    def test_relative_vs_absolute_path_same_file(self):
-        """Same file referenced as 'src/file.py' vs '/abs/path/src/file.py'
-        should ideally produce the same cache key, but doesn't."""
+    def test_relative_vs_absolute_path_same_key(self):
+        """Same file referenced as 'src/file.py' vs its absolute path
+        should produce the same cache key."""
         abs_path = os.path.abspath("src/file.py")
         key_rel = compute_cache_key("src/file.py", "summarize this")
         key_abs = compute_cache_key(abs_path, "summarize this")
-        assert key_rel != key_abs, (
-            "If this fails, the bug has been fixed! "
-            "Currently normpath does NOT resolve to absolute, so these differ."
+        assert key_rel == key_abs, (
+            f"Same file produces different cache keys when referenced by "
+            f"relative vs absolute path. Relative key: {key_rel[:16]}..., "
+            f"Absolute key: {key_abs[:16]}..."
         )
 
     def test_different_relative_paths_same_file(self):
         """'./subdir/../src/file.py' and 'src/file.py' refer to the same
-        file but normpath resolves them identically, so this works."""
+        file — normpath resolves them identically, so this already works."""
         key1 = compute_cache_key("./subdir/../src/file.py", "query")
         key2 = compute_cache_key("src/file.py", "query")
         assert key1 == key2, (
             "normpath should collapse '../' — if this fails, normpath behavior changed"
         )
 
-    def test_cwd_relative_vs_project_relative_different_keys(self):
-        """If CWD is 'project/tests/' and we reference '../src/file.py',
-        normpath produces '../src/file.py'. But from 'project/' it would
-        be 'src/file.py'. These are different cache keys for the same file."""
+    def test_cwd_relative_vs_project_relative_same_key(self):
+        """The same file referenced as '../src/file.py' (from a subdirectory)
+        and 'src/file.py' (from project root) should produce the same cache
+        key."""
         key1 = compute_cache_key("../src/file.py", "query")
         key2 = compute_cache_key("src/file.py", "query")
-        assert key1 != key2, (
-            "If this fails, the bug has been fixed! "
-            "Same file from different CWDs produces different cache keys."
+        assert key1 == key2, (
+            f"Same file from different CWDs produces different cache keys. "
+            f"'../src/file.py' key: {key1[:16]}..., "
+            f"'src/file.py' key: {key2[:16]}..."
         )

@@ -75,7 +75,6 @@ Z3 Formal Verification:
    - Cost aggregation: verify total_cost = summary_cost + llm_cost
 """
 
-import os
 import types
 import sys
 from unittest.mock import patch, MagicMock, PropertyMock
@@ -97,7 +96,6 @@ from pdd.auto_include import (
     _build_new_block,
     _build_update_block,
     _build_include_directives,
-    _qualify_path,
     _directory_prefix,
     _strip_selectors_from_small_files,
     AutoIncludeResult,
@@ -618,7 +616,6 @@ Z3 Formal Verification:
    - Cost aggregation: verify total_cost = summary_cost + llm_cost
 """
 
-import os
 import types
 import sys
 from unittest.mock import patch, MagicMock, PropertyMock
@@ -640,7 +637,6 @@ from pdd.auto_include import (
     _build_new_block,
     _build_update_block,
     _build_include_directives,
-    _qualify_path,
     _directory_prefix,
     _strip_selectors_from_small_files,
     AutoIncludeResult,
@@ -1090,8 +1086,6 @@ def test_build_new_block_simple():
 # correctly. These tests surface bugs where it doesn't.
 # ============================================================================
 
-import os
-
 
 class TestFormatCsvRowsCrossDirectoryPaths:
     """_format_csv_rows_for_llm blindly prepends directory_path to ALL
@@ -1139,49 +1133,127 @@ class TestFormatCsvRowsCrossDirectoryPaths:
         )
 
 
-class TestQualifyPathBugs:
-    """_qualify_path unconditionally prepends directory prefix to any
-    relative path that doesn't already start with it. This is wrong for
-    cross-directory entries."""
+class TestAutoIncludeCrossDirectoryPaths:
+    """When the CSV has entries from multiple directory scans, auto_include
+    must not corrupt paths by blindly prepending directory_path. These tests
+    exercise the full auto_include() public API with a mixed-origin CSV."""
 
-    def test_qualify_path_does_not_double_qualify(self):
-        result = _qualify_path("context/helper.py", "context/")
-        assert result == "context/helper.py", (
-            f"Expected 'context/helper.py' unchanged, got '{result}'"
-        )
-
-    def test_qualify_path_misqualifies_cross_directory_entry(self, tmp_path):
-        """'cli.py' from pdd/ scan gets wrongly qualified as 'context/cli.py'.
-        This test documents the bug - _qualify_path has no way to know which
-        directory the entry originally came from.
+    @patch("pdd.auto_include.llm_invoke")
+    @patch("pdd.auto_include.summarize_directory")
+    def test_cross_directory_entry_not_misqualified(
+        self, mock_summarize, mock_llm, tmp_path, monkeypatch
+    ):
+        """CSV has 'cli.py' (from pdd/ scan) and 'example_a.py' (from
+        context/ scan). auto_include with directory_path=context/ should NOT
+        turn 'cli.py' into 'context/cli.py' in the LLM's input or output.
         """
+        monkeypatch.chdir(tmp_path)
         context_dir = tmp_path / "context"
         context_dir.mkdir()
-        result = _qualify_path("cli.py", str(context_dir))
-        wrong_path = os.path.normpath(os.path.join(str(context_dir), "cli.py"))
-        # This SHOULD not qualify cli.py with context/ prefix, but it does.
-        # Asserting the bug exists:
-        assert result == wrong_path, (
-            f"Expected bug to produce '{wrong_path}', got '{result}'. "
-            f"If this fails, the bug may have been fixed."
+        (context_dir / "example_a.py").write_text("# example\n" * 200)
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "cli.py").write_text("# cli\n" * 200)
+
+        # Mixed-origin CSV: entries from both context/ and pdd/ scans
+        mixed_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            "example_a.py,An example,\"[]\",\"[]\",abc123\n"
+            "cli.py,CLI entry point,\"[]\",\"[]\",def456\n"
         )
+        mock_summarize.return_value = (mixed_csv, 0.001, "mock")
 
-
-class TestQualifyResultPathsDoubleQualification:
-    """_qualify_result_paths runs after LLM returns paths that were
-    already qualified by _format_csv_rows_for_llm. The startswith guard
-    should prevent double-qualification."""
-
-    def test_new_include_already_qualified_not_doubled(self, tmp_path):
-        context_dir = tmp_path / "context"
-        context_dir.mkdir()
-        from pdd.auto_include import _qualify_result_paths
-        result = AutoIncludeResult(
-            reasoning="test",
-            new_includes=[NewInclude(file="context/helper.py", module="utils")],
+        # LLM returns a new include for cli.py (which came from pdd/ scan)
+        mock_result = AutoIncludeResult(
+            reasoning="Need CLI",
+            new_includes=[NewInclude(file="cli.py", module="cli")],
             existing_include_annotations=[],
         )
-        _qualify_result_paths(result, str(context_dir))
-        assert result.new_includes[0].file == "context/helper.py", (
-            f"Path was double-qualified: {result.new_includes[0].file}"
+        mock_llm.return_value = {"result": mock_result, "cost": 0.01, "model_name": "mock"}
+
+        directives, _, _, _ = auto_include(
+            input_prompt="Generate a tool",
+            directory_path=str(context_dir),
+            strength=0.7,
+            temperature=0.0,
+        )
+
+        # cli.py should NOT be qualified as context/cli.py — it's from pdd/
+        assert "context/cli.py" not in directives and "context\\cli.py" not in directives, (
+            f"cli.py was misqualified with context/ prefix. Directives:\n{directives}"
+        )
+
+    @patch("pdd.auto_include.llm_invoke")
+    @patch("pdd.auto_include.summarize_directory")
+    def test_already_qualified_path_not_double_qualified(
+        self, mock_summarize, mock_llm, tmp_path, monkeypatch
+    ):
+        """CSV has 'context/example_a.py' (from a root scan). auto_include
+        with directory_path='context/' should NOT produce
+        'context/context/example_a.py'.
+        """
+        monkeypatch.chdir(tmp_path)
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        (context_dir / "example_a.py").write_text("# example\n" * 200)
+
+        csv_data = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            "context/example_a.py,An example,\"[]\",\"[]\",abc123\n"
+        )
+        mock_summarize.return_value = (csv_data, 0.001, "mock")
+
+        mock_result = AutoIncludeResult(
+            reasoning="Need example",
+            new_includes=[NewInclude(file="context/example_a.py", module="example")],
+            existing_include_annotations=[],
+        )
+        mock_llm.return_value = {"result": mock_result, "cost": 0.01, "model_name": "mock"}
+
+        directives, _, _, _ = auto_include(
+            input_prompt="Generate a tool",
+            directory_path=str(context_dir),
+            strength=0.7,
+            temperature=0.0,
+        )
+
+        assert "context/context" not in directives and "context\\context" not in directives, (
+            f"Path was double-qualified in directives:\n{directives}"
+        )
+
+    @patch("pdd.auto_include.llm_invoke")
+    @patch("pdd.auto_include.summarize_directory")
+    def test_dot_directory_does_not_corrupt_paths(
+        self, mock_summarize, mock_llm, tmp_path, monkeypatch
+    ):
+        """Scanning from '.' (project root) should not prepend './' to paths
+        in the LLM input or corrupt paths in the output."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "cli.py").write_text("# cli\n" * 200)
+
+        csv_data = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            "pdd/cli.py,CLI entry,\"[]\",\"[]\",abc\n"
+        )
+        mock_summarize.return_value = (csv_data, 0.001, "mock")
+
+        mock_result = AutoIncludeResult(
+            reasoning="Need CLI",
+            new_includes=[NewInclude(file="pdd/cli.py", module="cli")],
+            existing_include_annotations=[],
+        )
+        mock_llm.return_value = {"result": mock_result, "cost": 0.01, "model_name": "mock"}
+
+        directives, _, _, _ = auto_include(
+            input_prompt="Generate a tool",
+            directory_path=".",
+            strength=0.7,
+            temperature=0.0,
+        )
+
+        # Path should remain 'pdd/cli.py', not './pdd/cli.py'
+        assert "./pdd/" not in directives, (
+            f"Path was unnecessarily prefixed with './': {directives}"
         )

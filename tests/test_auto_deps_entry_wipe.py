@@ -623,3 +623,100 @@ class TestFullWipeoutScenario:
             f"got {len(output_rows)}. Entries for other_dir/ were wiped. "
             f"Output paths: {output_paths}"
         )
+
+
+# ============================================================================
+# Bug 3 — Hash-based fallback can cross-pollinate between distinct files
+# ============================================================================
+
+
+class TestHashFallbackCollision:
+    """When two different files have identical content, the hash-based cache
+    fallback in _process_single_file_logic may match the wrong entry. This
+    is acceptable for the *summary* (same content → same summary), but the
+    test documents the behavior and verifies the output CSV stores the
+    correct path for each file regardless of which cached entry was matched."""
+
+    def test_identical_content_different_dirs_both_preserved(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Two files with identical content in different directories should
+        both appear in the CSV with distinct paths. They are different files
+        and must not be collapsed into one row.
+
+        Currently fails because both scans produce rel_path='shared.py'
+        (relative to their own base_dir), so the second overwrites the first.
+        Fixing this requires repo-root-relative paths in the CSV.
+        """
+        shared_content = "SHARED = True\n"
+
+        # First scan: dir_a/shared.py
+        dir_a = tmp_path / "dir_a"
+        dir_a.mkdir()
+        (dir_a / "shared.py").write_text(shared_content)
+
+        csv1, _, _ = summarize_directory(
+            directory_path=str(dir_a),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        # Second scan: dir_b/shared.py (same content, different path)
+        dir_b = tmp_path / "dir_b"
+        dir_b.mkdir()
+        (dir_b / "shared.py").write_text(shared_content)
+
+        csv2, cost, _ = summarize_directory(
+            directory_path=str(dir_b),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+
+        rows = _parse_csv(csv2)
+        paths = [r['full_path'] for r in rows]
+
+        # Both files should survive as separate entries
+        assert len(rows) >= 2, (
+            f"Expected 2 rows (one per directory), got {len(rows)}. "
+            f"Files with identical content but different locations were "
+            f"collapsed into one entry. Paths: {paths}"
+        )
+
+        # Hash fallback should still avoid an LLM call for the second scan
+        assert cost == 0.0, (
+            f"Expected no LLM cost on second scan (hash fallback should "
+            f"cache-hit), got {cost}"
+        )
+
+    def test_hash_fallback_does_not_skip_when_content_differs(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Hash fallback should NOT match when content actually differs,
+        even if the files have similar names."""
+        dir_a = tmp_path / "dir_a"
+        dir_a.mkdir()
+        (dir_a / "module.py").write_text("VERSION = 1\n")
+
+        csv1, _, _ = summarize_directory(
+            directory_path=str(dir_a),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        dir_b = tmp_path / "dir_b"
+        dir_b.mkdir()
+        (dir_b / "module.py").write_text("VERSION = 2\n")  # Different content
+
+        csv2, cost, _ = summarize_directory(
+            directory_path=str(dir_b),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+
+        # Different content means LLM must be called again
+        assert cost > 0.0, (
+            "Expected LLM cost for dir_b/module.py since content differs "
+            "from dir_a/module.py"
+        )
