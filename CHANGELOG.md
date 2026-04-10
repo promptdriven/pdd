@@ -1,3 +1,13 @@
+## v0.0.203 (2026-04-09)
+
+### Feat
+
+- add budget/dry-run flags, core dump v2, and arch validation, while refactoring CLI commands and CI workflows
+
+### Fix
+
+- resolve issue 225 prompt validation and sync paths
+
 ## v0.0.202 (2026-04-08)
 
 ### Feat
