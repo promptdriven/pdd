@@ -568,6 +568,110 @@ class TestResolveModuleCwd:
         result = _resolve_module_cwd("components/button", tmp_path)
         assert result == sub
 
+    # --- Issue #1128: nested .pddrc shadowed by root .pddrc ---
+
+    def test_nested_pddrc_takes_precedence_over_root(self, tmp_path):
+        """When both root and nested .pddrc exist, nested wins for matching modules.
+
+        This is the core bug from issue #1128: root .pddrc shadows nested .pddrc
+        because _resolve_module_cwd short-circuits at line 336 when root .pddrc exists.
+        """
+        # Root .pddrc with a catch-all-ish context for extensions
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "extensions-github_pdd_app": {
+                "paths": ["extensions/github_pdd_app/**"],
+                "defaults": {"prompts_dir": "extensions/github_pdd_app/prompts"},
+            },
+        })
+        # Nested .pddrc with specific service contexts
+        nested_dir = tmp_path / "extensions" / "github_pdd_app"
+        nested_dir.mkdir(parents=True)
+        self._write_pddrc(nested_dir / ".pddrc", {
+            "services": {
+                "paths": ["src/services/**", "prompts/src/services/**"],
+                "defaults": {"prompts_dir": "prompts/src/services"},
+            },
+            "pdd_executor_pkg": {
+                "paths": ["src/workers/pdd_executor/**"],
+                "defaults": {"prompts_dir": "prompts/src/workers/pdd_executor"},
+            },
+        })
+        # Module that matches nested config's "services" context
+        result = _resolve_module_cwd("src/services/solving_orchestrator", tmp_path)
+        assert result == nested_dir, (
+            f"Expected nested dir {nested_dir}, got {result}. "
+            "Root .pddrc should not shadow nested .pddrc for modules matching nested contexts."
+        )
+
+    def test_module_matching_only_root_context_returns_project_root(self, tmp_path):
+        """Module matching only root .pddrc context still returns project root (backward compat)."""
+        # Root .pddrc with extension context
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "extensions-github_pdd_app": {
+                "paths": ["extensions/github_pdd_app/**"],
+                "defaults": {"prompts_dir": "extensions/github_pdd_app/prompts"},
+            },
+        })
+        # Nested .pddrc
+        nested_dir = tmp_path / "extensions" / "github_pdd_app"
+        nested_dir.mkdir(parents=True)
+        self._write_pddrc(nested_dir / ".pddrc", {
+            "services": {
+                "paths": ["src/services/**"],
+                "defaults": {"prompts_dir": "prompts/src/services"},
+            },
+        })
+        # Module that matches root context but not nested
+        result = _resolve_module_cwd("extensions/github_pdd_app/some_top_level_mod", tmp_path)
+        assert result == tmp_path
+
+    def test_module_matching_neither_root_nor_nested_falls_back(self, tmp_path):
+        """Module matching no context in either config falls back to project root."""
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "extensions-github_pdd_app": {
+                "paths": ["extensions/github_pdd_app/**"],
+                "defaults": {"prompts_dir": "extensions/github_pdd_app/prompts"},
+            },
+        })
+        nested_dir = tmp_path / "extensions" / "github_pdd_app"
+        nested_dir.mkdir(parents=True)
+        self._write_pddrc(nested_dir / ".pddrc", {
+            "services": {
+                "paths": ["src/services/**"],
+                "defaults": {"prompts_dir": "prompts/src/services"},
+            },
+        })
+        result = _resolve_module_cwd("completely/unrelated_module", tmp_path)
+        assert result == tmp_path
+
+    def test_root_catchall_does_not_shadow_nested_specific_match(self, tmp_path):
+        """Root .pddrc with catch-all pattern must NOT shadow nested .pddrc with specific match.
+
+        This tests the exact scenario from the issue where root catch-all shadows nested
+        specific configs.
+        """
+        # Root .pddrc with catch-all default context
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "default": {
+                "paths": ["**"],
+                "defaults": {"prompts_dir": "prompts"},
+            },
+        })
+        # Nested .pddrc with specific worker context
+        nested_dir = tmp_path / "extensions" / "app"
+        nested_dir.mkdir(parents=True)
+        self._write_pddrc(nested_dir / ".pddrc", {
+            "workers": {
+                "paths": ["src/workers/pdd_executor/**"],
+                "defaults": {"prompts_dir": "prompts/src/workers/pdd_executor"},
+            },
+        })
+        result = _resolve_module_cwd("src/workers/pdd_executor/runner", tmp_path)
+        assert result == nested_dir, (
+            f"Expected nested dir {nested_dir}, got {result}. "
+            "Root catch-all must not shadow nested specific match."
+        )
+
 
 # ---------------------------------------------------------------------------
 # _is_catchall_match
@@ -857,6 +961,121 @@ class TestFilterAlreadySynced:
             quiet=True,
         )
         assert result == []
+
+    # --- Issue #1128: nested .pddrc config propagation ---
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_nested_cwd_uses_nested_pddrc_for_prompts_dir(
+        self, mock_detect_lang, mock_determine, tmp_path
+    ):
+        """_resolve_module_cwd + _filter_already_synced integration: nested .pddrc must
+        provide the correct prompts_dir and context_name to sync_determine_operation.
+
+        Bug #1128: _resolve_module_cwd short-circuits at line 336 when root .pddrc exists,
+        returning project_root. _filter_already_synced then calls _find_pddrc_file(project_root)
+        which finds the root .pddrc, context detection returns None, and the wrong prompts_dir
+        is used. After the fix, _resolve_module_cwd returns nested_dir, so _find_pddrc_file
+        finds the nested .pddrc with the correct context.
+        """
+        import yaml
+        # Root .pddrc — does NOT have a "services" context
+        (tmp_path / ".pddrc").write_text(yaml.dump({"contexts": {
+            "extensions-github_pdd_app": {
+                "paths": ["extensions/github_pdd_app/**"],
+                "defaults": {"prompts_dir": "extensions/github_pdd_app/prompts"},
+            },
+        }}))
+        # Nested .pddrc — has the "services" context
+        nested_dir = tmp_path / "extensions" / "github_pdd_app"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / ".pddrc").write_text(yaml.dump({"contexts": {
+            "services": {
+                "paths": ["src/services/**"],
+                "defaults": {"prompts_dir": "prompts/src/services"},
+            },
+        }}))
+
+        mock_detect_lang.return_value = {"python": Path("prompts/src/services/solving_orchestrator_python.prompt")}
+        decision = MagicMock()
+        decision.operation = "nothing"
+        mock_determine.return_value = decision
+
+        basename = "src/services/solving_orchestrator"
+        # Use _resolve_module_cwd to get the cwd (exercises the buggy path)
+        resolved_cwd = _resolve_module_cwd(basename, tmp_path)
+        result = _filter_already_synced(
+            [basename],
+            {basename: resolved_cwd},
+            quiet=True,
+        )
+
+        # Verify sync_determine_operation was called with the nested prompts_dir
+        mock_determine.assert_called()
+        call_kwargs = mock_determine.call_args.kwargs
+        expected_prompts_dir = str(nested_dir / "prompts/src/services")
+        assert call_kwargs["prompts_dir"] == expected_prompts_dir, (
+            f"Expected prompts_dir={expected_prompts_dir}, got {call_kwargs['prompts_dir']}. "
+            "Nested .pddrc prompts_dir must propagate to sync_determine_operation."
+        )
+        assert call_kwargs["context_override"] == "services", (
+            f"Expected context_override='services', got {call_kwargs['context_override']}. "
+            "Nested context name must propagate to sync_determine_operation."
+        )
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_nested_config_filters_correctly_via_full_pipeline(
+        self, mock_detect_lang, mock_determine, tmp_path
+    ):
+        """End-to-end: _resolve_module_cwd → _filter_already_synced with nested config.
+
+        Before fix: _resolve_module_cwd returns project_root → _find_pddrc_file finds root
+        .pddrc → context detection returns None → prompts_dir defaults to root prompts/ →
+        wrong prompts_dir passed to sync_determine_operation.
+        After fix: _resolve_module_cwd returns nested_dir → _find_pddrc_file finds nested
+        .pddrc → context detected → correct prompts_dir → correct fingerprint check.
+        """
+        import yaml
+        # Root .pddrc — catch-all default context
+        (tmp_path / ".pddrc").write_text(yaml.dump({"contexts": {
+            "default": {
+                "paths": ["**"],
+                "defaults": {"prompts_dir": "prompts"},
+            },
+        }}))
+        # Nested .pddrc with specific worker context
+        nested_dir = tmp_path / "extensions" / "github_pdd_app"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / ".pddrc").write_text(yaml.dump({"contexts": {
+            "pdd_executor_pkg": {
+                "paths": ["src/workers/pdd_executor/**"],
+                "defaults": {"prompts_dir": "prompts/src/workers/pdd_executor"},
+            },
+        }}))
+
+        mock_detect_lang.return_value = {"python": Path("prompts/src/workers/pdd_executor/runner_python.prompt")}
+        decision = MagicMock()
+        decision.operation = "nothing"
+        mock_determine.return_value = decision
+
+        basename = "src/workers/pdd_executor/runner"
+        # Use _resolve_module_cwd to get the cwd (exercises the buggy path)
+        resolved_cwd = _resolve_module_cwd(basename, tmp_path)
+        result = _filter_already_synced(
+            [basename],
+            {basename: resolved_cwd},
+            quiet=True,
+        )
+
+        # Verify the correct nested prompts_dir was used
+        mock_determine.assert_called()
+        call_kwargs = mock_determine.call_args.kwargs
+        expected_prompts_dir = str(nested_dir / "prompts/src/workers/pdd_executor")
+        assert call_kwargs["prompts_dir"] == expected_prompts_dir, (
+            f"Expected prompts_dir={expected_prompts_dir}, got {call_kwargs['prompts_dir']}. "
+            "Nested config must provide correct prompts_dir through the full pipeline."
+        )
 
 
 # ---------------------------------------------------------------------------
