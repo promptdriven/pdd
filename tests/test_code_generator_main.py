@@ -3269,6 +3269,68 @@ class TestIssue687ExampleOutputPath:
         )
 
 
+# === Issue #225 follow-up: include validation must survive architecture tag injection ===
+
+def test_invalid_prompt_includes_are_not_reintroduced_by_architecture_tag_injection(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    monkeypatch,
+):
+    """Invalid includes should stay replaced when architecture tags are prepended."""
+    mock_ctx.obj["local"] = True
+    monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "generate_prompt.prompt"
+    create_file(prompt_file_path, "Generate a prompt")
+    output_file_path = temp_dir_setup["prompts_dir"] / "user_service_Python.prompt"
+
+    generated_prompt = (
+        "<prompt>\n"
+        "<context_data_dictionary>\n"
+        "<include>prompts/_context/data_dictionary.yaml</include>\n"
+        "</context_data_dictionary>\n"
+        "</prompt>\n"
+    )
+    mock_local_generator_fixture.return_value = (
+        generated_prompt,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate a prompt"},
+        {"output": str(output_file_path)},
+        "prompt",
+    )
+
+    monkeypatch.setattr(
+        "pdd.code_generator_main.get_architecture_entry_for_prompt",
+        lambda _prompt_name: {"reason": "Test reason"},
+    )
+    monkeypatch.setattr(
+        "pdd.code_generator_main.generate_tags_from_architecture",
+        lambda _entry: "<pdd-reason>Test reason</pdd-reason>",
+    )
+    monkeypatch.setattr("pdd.code_generator_main.has_pdd_tags", lambda _content: False)
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+    )
+
+    final_content = output_file_path.read_text(encoding="utf-8")
+    assert "<pdd-reason>Test reason</pdd-reason>" in final_content
+    assert "<context_data_dictionary>" not in final_content
+    assert "<include>prompts/_context/data_dictionary.yaml</include>" not in final_content
+
+
 # === Tests for Issue #1043: Incremental patch identical code fallback ===
 # The root-cause fix lives in incremental_code_generator (returns
 # is_incremental=False when patched code == existing code). A defense-in-depth

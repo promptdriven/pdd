@@ -1,7 +1,7 @@
 % You are an expert Python engineer. Your goal is to write a Python function, 'code_generator_main', that will be the CLI wrapper for generating code from prompts. This function will read a prompt file, support parameterized prompts via a variables map, generate code using the code_generator or incremental_code_generator function, handle post-process Python hooks, support LLM toggle functionality, and handle the output location.
 
-<include>./context/python_preamble.prompt</include>
-<include>./context/ctx_obj_params.prompt</include>
+<include>context/python_preamble.prompt</include>
+<include>context/ctx_obj_params.prompt</include>
 
 % Here are the inputs and outputs of the function:
    Inputs:
@@ -58,7 +58,7 @@
       print(f"Cost: ${cost:.6f}, Model: {model_name}")
       ```
       </code_generator_example>
-      
+
       - Here is an example of how to use the `incremental_code_generator` function:
       <incremental_code_generator_example>
       ```python
@@ -94,14 +94,6 @@
       ```
       </incremental_code_generator_example>
 
-      - Here is an example of how to use the `get_jwt_token` function to get the JWT_TOKEN:
-      <get_jwt_token_example>
-      <include>context/get_jwt_token_example.py</include>
-      </get_jwt_token_example>
-      % The `get_jwt_token` function is an async function and must be run with `asyncio.run`.
-      % The implementation expects environment variables `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID` to be set
-      % and passes them to `get_jwt_token(firebase_api_key=..., github_client_id=..., app_name="PDD Code Generator")`.
-
       - Here is an example of how to use the `preprocess` function:
       <preprocess_example>
       <include>context/preprocess_example.py</include>
@@ -111,6 +103,11 @@
       <python_env_detector_example>
       <include>context/python_env_detector_example.py</include>
       </python_env_detector_example>
+
+      - Here is an example of how to use the `validate_prompt_includes` function:
+      <validate_prompt_includes_example>
+      <include>context/validate_prompt_includes_example.py</include>
+      </validate_prompt_includes_example>
 
    </internal_example_modules>
 
@@ -127,6 +124,15 @@
    <cli_command_readme>
       <include>./README.md</include>
    </cli_command_readme>
+
+% Unit Test Inclusion Logic
+   The function must support automatic inclusion of unit tests as generation context:
+   1. If `unit_test_file` is explicitly provided, include only that file
+   2. If `exclude_tests` is False (default) and no explicit test file:
+      - Look for test files in the configured `tests_dir` from `resolved_config`
+      - Find files matching pattern `test_{code_stem}*{code_suffix}` (e.g., `test_hello.py`, `test_hello_1.py`)
+   3. Append test content to the prompt wrapped in `<unit_test_content>` tags with file labels
+   4. If verbose, log which test files were found
 
 % LLM Toggle and Post-Process Functionality
    The function must support LLM toggle functionality to enable/disable LLM generation while still allowing post-processing:
@@ -145,8 +151,8 @@
    2. Otherwise, attempt cloud execution first:
       - Preprocess the prompt content to expand includes only: call `preprocess(prompt_text, recursive=True, double_curly_brackets=False)`.
       - Apply variable substitution using `env_vars` to replace only `$KEY` and `${KEY}` where keys exist in `env_vars`. Leave unknown `$...` placeholders unchanged.
-      - After substitution, apply curly‑brace doubling if needed by downstream generators.
-      - Obtain a JWT via `get_jwt_token` using `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.
+      - After substitution, apply curly-brace doubling if needed by downstream generators.
+      - Obtain a JWT via `CloudConfig.get_jwt_token(verbose=verbose)`.
       - Use a request timeout of 400 seconds.
       - Send JSON payload with fields: `{ "promptContent": <processed prompt>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "verbose": <verbose> }`.
         % Note: A time/effort field (e.g., `timeBudget`) is not currently sent; include only if/when the API supports it.
@@ -172,14 +178,14 @@
        - The incremental_code_generator returns is_incremental=False indicating a full regeneration is needed
     4. Force incremental generation if the --incremental flag is set, but warn if no output file exists and do full generation
     5. Parameterized prompts and incremental generation:
-       - Apply the same include expansion and variable substitution (using `env_vars`) to both the current prompt content and the original prompt content before diffing or passing to the incremental generator. This ensures like‑for‑like comparison and patching.
+       - Apply the same include expansion and variable substitution (using `env_vars`) to both the current prompt content and the original prompt content before diffing or passing to the incremental generator. This ensures like-for-like comparison and patching.
 
 % The function's implementation should include these key steps:
-    1. Retrieve `strength`, `temperature`, and `time` from `ctx.obj` using defaults (e.g., `time = ctx.obj.get('time', DEFAULT_TIME)`).
+    1. Retrieve `strength`, `temperature`, `time`, `verbose`, `force`, and `quiet` from `ctx.obj` using defaults.
     2. Process the prompt_file:
        - Read content; expand includes with `preprocess(prompt, recursive=True, double_curly_brackets=False)`.
        - Apply variable substitution using `env_vars` (`$KEY` and `${KEY}` only when provided). Unknown placeholders remain unchanged.
-       - After substitution, apply curly‑brace doubling if appropriate.
+       - After substitution, apply curly-brace doubling if appropriate.
     3. Determine the language with clear precedence and context support:
        - If YAML front matter specifies `language`, use it.
        - Otherwise, determine the language using `construct_paths` (may infer from file extension, special cases, or filename suffix).
@@ -218,17 +224,22 @@
        - Handle temporary file creation for argv mode when LLM is enabled.
        - Use `detect_host_python_executable()` to find the appropriate Python interpreter.
        - Handle subprocess execution with proper error handling and timeout (300 seconds).
-    9. Safety net for architecture HTML generation:
+    9. Validate generated prompt files:
+       - When generating `.prompt` files (output ends with `.prompt` or language is "prompt"), validate `<include>` tags
+       - Use `validate_prompt_includes()` to check that referenced files exist
+       - Replace invalid includes with comments rather than removing them
+       - Log warnings about invalid includes if verbose or not quiet
+    10. Safety net for architecture HTML generation:
        - After writing architecture.json files, automatically run `render_mermaid.py` if HTML doesn't exist.
        - Use appropriate Python executable and pass correct arguments.
        - Only run if the HTML file doesn't already exist to avoid overwriting.
-    10. Return the generated code, incremental flag, cost, and model name
+    11. Return the generated code, incremental flag, cost, and model name
 
 % Helper function expectations:
     - Implement a small helper, e.g., `expand_vars(text: str, vars: Dict[str, str]) -> str`, that performs a single-pass substitution for `$KEY` and `${KEY}` only when `KEY in vars`. Unmatched placeholders remain unchanged; do not read from OS environment in this function.
 
-% Template front‑matter & preprocessing requirements (Phase 2)
-    - Parse YAML front matter at the very beginning of the prompt file when present (leading `---\n` … `\n---`).
+% Template front-matter & preprocessing requirements (Phase 2)
+    - Parse YAML front matter at the very beginning of the prompt file when present (leading `---\n` ... `\n---`).
       * Return a dict (or empty) and the remaining prompt body with the front matter stripped.
       * Do NOT send the YAML to the LLM; treat it as human/CLI metadata.
     - Merge variable defaults from front matter into `env_vars` (without overwriting explicit `-e` values). Validate required variables; if missing, raise a friendly `click.UsageError` listing the missing keys.
@@ -238,12 +249,12 @@
     - Support `llm` field in front matter to enable/disable LLM generation (boolean, defaults to true).
     - Support `post_process_python` field in front matter to specify a Python script to run after generation.
     - Support `post_process_args` field in front matter to specify arguments for the post-process script (list of strings with placeholder support).
-    - Two‑pass preprocess to support variable‑driven includes:
+    - Two-pass preprocess to support variable-driven includes:
         1) First pass: `preprocess(prompt, recursive=True, double_curly_brackets=False)` to resolve static includes while deferring unresolved ones. Strip any `<pdd>...</pdd>` blocks.
         2) Perform variable substitution with `expand_vars` on the intermediate result.
-        3) Second pass: `preprocess(prompt, recursive=False, double_curly_brackets=True)` to resolve variable‑driven includes and apply brace doubling.
+        3) Second pass: `preprocess(prompt, recursive=False, double_curly_brackets=True)` to resolve variable-driven includes and apply brace doubling.
       Unknown `$VAR` placeholders remain unchanged in both content and output paths.
-    - Support `<include-many>${VAR}</include-many>` where VAR is a comma- or newline‑separated list of file paths.
+    - Support `<include-many>${VAR}</include-many>` where VAR is a comma- or newline-separated list of file paths.
     - Maintain existing local/cloud execution and incremental generation behavior; only the prompt assembly changes as described.
 
     - Discover execution (optional):
@@ -255,3 +266,10 @@
         * If front matter defines `output_schema` and the generated artifact is JSON (by `language` or output extension), validate the generated output against the schema.
         * On validation failure, raise a friendly `click.UsageError` summarizing the errors (and avoid writing an invalid file unless `--force` semantics dictate otherwise).
         * Note: Schema validation only runs when LLM is enabled (`if llm_enabled:`).
+
+% Architecture template interface type repair:
+    - For architecture JSON templates (detected via front matter `name == "architecture/architecture_json"`), apply repair logic before schema validation
+    - Normalize `interface.type` values to lowercase if they match allowed types
+    - If `interface.type` is invalid (e.g., "object"), infer from which sub-key is present (page, component, module, api, etc.)
+    - Default to "module" if type cannot be inferred
+    - Update `generated_code_content` with repaired JSON if changes were made
