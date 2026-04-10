@@ -100,9 +100,9 @@ _render_template "${SCRIPT_DIR}/job-template.json" /tmp/pdd-batch-job-spot.json
 _render_template "${SCRIPT_DIR}/job-template-standard.json" /tmp/pdd-batch-job-std.json
 
 # ── Submit jobs ───────────────────────────────────────────────────────────
-# Main SPOT job (74 tasks — everything except the slow sync_regression case_1)
+# Main SPOT job (76 tasks — everything except the slow sync_regression case_1)
 JOB_NAME_SPOT="${JOB_NAME}"
-echo "=== Submitting SPOT job: ${JOB_NAME_SPOT} (74 tasks) ==="
+echo "=== Submitting SPOT job: ${JOB_NAME_SPOT} (76 tasks) ==="
 gcloud batch jobs submit "${JOB_NAME_SPOT}" \
     --project="${PROJECT_ID}" \
     --location="${REGION}" \
@@ -124,7 +124,7 @@ ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
 trap 'rm -rf "${STREAMING_DIR}"' EXIT
 
-TOTAL=75  # 74 (spot) + 1 (standard)
+TOTAL=77  # 76 (spot) + 1 (standard)
 STREAM_FAILURES=0
 
 _job_status() {

@@ -383,6 +383,25 @@ For the function 'add' defined based on 'simple_math_python.prompt', the impleme
 Therefore, the test file should include the line: 'from simple_math import add'
 EOF
 
+# Seed prerequisite files for individual case runs (Cloud Batch parallel mode).
+# This avoids paying for extra cloud generate/example calls in cases whose
+# actual target is a different command.
+if [ "$TARGET_TEST" != "all" ]; then
+    if [ ! -f "$MATH_SCRIPT" ] && [ -f "$FIXTURES_PATH/simple_math.py" ]; then
+        log "Seeding prerequisite: $MATH_SCRIPT from fixture"
+        cp "$FIXTURES_PATH/simple_math.py" "$MATH_SCRIPT"
+        cp "$MATH_SCRIPT" "$ORIGINAL_MATH_SCRIPT"
+    fi
+    if [ ! -f "$MATH_TEST_SCRIPT" ] && [ -f "$FIXTURES_PATH/test_simple_math.py" ]; then
+        log "Seeding prerequisite: $MATH_TEST_SCRIPT from fixture"
+        cp "$FIXTURES_PATH/test_simple_math.py" "$MATH_TEST_SCRIPT"
+    fi
+    if [ ! -f "$MATH_VERIFICATION_PROGRAM" ] && [ -f "$FIXTURES_PATH/simple_math_example.py" ]; then
+        log "Seeding prerequisite: $MATH_VERIFICATION_PROGRAM from fixture"
+        cp "$FIXTURES_PATH/simple_math_example.py" "$MATH_VERIFICATION_PROGRAM"
+    fi
+fi
+
 # --- Cloud Regression Tests ---
 
 log_timestamped "======== Starting Cloud Regression Tests ========"

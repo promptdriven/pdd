@@ -23,10 +23,24 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
+def _should_include_test_file(path: Path) -> bool:
+    """Exclude fixture-only test trees that are not part of the runnable suite."""
+    parts = path.parts
+    if "fixtures" in parts:
+        fixtures_idx = parts.index("fixtures")
+        fixture_subtree = parts[fixtures_idx + 1 :]
+        if fixture_subtree[:1] == ("one_session_eval",):
+            return False
+    return True
+
+
 def discover_test_files(test_dir: str) -> list[str]:
     """Find all test_*.py files, sorted (same order as entrypoint.sh)."""
     test_path = Path(test_dir)
-    files = sorted(str(p) for p in test_path.rglob("test_*.py"))
+    files = sorted(
+        str(p) for p in test_path.rglob("test_*.py")
+        if _should_include_test_file(p)
+    )
     return files
 
 

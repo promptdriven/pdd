@@ -31,14 +31,19 @@ PYTEST_CHUNKS=32
 REGRESSION_START=32
 REGRESSION_END=53
 
+# Cloud Batch uses a finer-grained split for sync regression than the direct
+# shell harness. Case 3 is expanded into dedicated shard IDs 13/14/15 so the
+# budget, max-attempts, and target-coverage checks can run in parallel without
+# changing the behavior of `tests/sync_regression.sh all`.
+SYNC_CASE_IDS=(1 2 13 14 15 4 5 6 7 8 9 10 11 12)
 SYNC_REGRESSION_START=54
-SYNC_REGRESSION_END=65
+SYNC_REGRESSION_END=67
 
-CLOUD_REGRESSION_START=66
-CLOUD_REGRESSION_END=73
+CLOUD_REGRESSION_START=68
+CLOUD_REGRESSION_END=75
 
-VITEST_START=74
-VITEST_END=74
+VITEST_START=76
+VITEST_END=76
 
 # ── Helper: write result JSON ──────────────────────────────────────────────
 write_result() {
@@ -171,7 +176,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
             mapfile -t CHUNK_TESTS < "${ASSIGN_OUTPUT}"
         else
             echo "=== balance-chunks.py failed, falling back to alphabetical split ==="
-            mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' | sort)
+            mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/one_session_eval/*' | sort)
             TOTAL=${#ALL_TESTS[@]}
             CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
             START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
@@ -181,7 +186,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     else
         # Fallback: alphabetical split
         echo "=== No durations file, using alphabetical split ==="
-        mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' | sort)
+        mapfile -t ALL_TESTS < <(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/one_session_eval/*' | sort)
         TOTAL=${#ALL_TESTS[@]}
         CHUNK_SIZE=$(( (TOTAL + PYTEST_CHUNKS - 1) / PYTEST_CHUNKS ))
         START_IDX=$(( CHUNK_INDEX * CHUNK_SIZE ))
@@ -195,7 +200,7 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
         exit 0
     fi
 
-    TOTAL_FILES=$(find tests/ -name 'test_*.py' | wc -l)
+    TOTAL_FILES=$(find tests/ -name 'test_*.py' ! -path 'tests/fixtures/one_session_eval/*' | wc -l)
     echo "=== Pytest chunk ${CHUNK_INDEX}: ${#CHUNK_TESTS[@]} files (of ${TOTAL_FILES} total) ==="
     printf '  %s\n' "${CHUNK_TESTS[@]}"
 
@@ -212,7 +217,8 @@ elif [ "${TASK_INDEX}" -ge "${REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${R
 
 elif [ "${TASK_INDEX}" -ge "${SYNC_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${SYNC_REGRESSION_END}" ]; then
     # ── Sync regression test ──────────────────────────────────────────
-    CASE_NUM=$((TASK_INDEX - SYNC_REGRESSION_START + 1))
+    SYNC_OFFSET=$((TASK_INDEX - SYNC_REGRESSION_START))
+    CASE_NUM="${SYNC_CASE_IDS[$SYNC_OFFSET]}"
     export PDD_CMD_TIMEOUT=1800
     run_test "sync_regression" "case_${CASE_NUM}" \
         bash tests/sync_regression.sh "${CASE_NUM}"

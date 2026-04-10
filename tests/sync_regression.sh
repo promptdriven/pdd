@@ -281,6 +281,46 @@ run_pdd_expect_fail() {
     fi
 }
 
+run_sync_case_3_budget_limit() {
+    log "3a. Testing 'sync --budget 2.0'"
+    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
+    if run_pdd_command_noexit sync --skip-tests --skip-verify --budget 2.0 --context regression_pdd "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --budget 2.0"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --budget 2.0"
+    fi
+    if check_sync_files "$SIMPLE_BASENAME" "python" false; then
+        log "Validation success: files exist after initial sync"
+    else
+        log_timestamped "[ERROR] Validation failed: files missing after initial sync"
+    fi
+}
+
+run_sync_case_3_max_attempts() {
+    log "3b. Testing 'sync --max-attempts 1'"
+    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
+    if run_pdd_command sync --skip-tests --skip-verify --max-attempts 1 --budget 2.0 "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --max-attempts 1"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --max-attempts 1"
+    fi
+    check_sync_files "$SIMPLE_BASENAME" "python"
+}
+
+run_sync_case_3_target_coverage() {
+    log "3c. Testing 'sync --target-coverage 10.0'"
+    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
+    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
+    if run_pdd_command sync --target-coverage 10.0 --budget 5.0 --max-attempts 1 "$SIMPLE_BASENAME"; then
+        log "Validation success: sync --target-coverage 10.0"
+    else
+        log_timestamped "[ERROR] Validation failed: sync --target-coverage 10.0"
+    fi
+    check_sync_files "$SIMPLE_BASENAME" "python"
+}
+
 # --- Portable Timeout Helper ---
 # Prefer GNU timeout if available (macOS installs it as gtimeout via coreutils)
 # Falls back to pure-bash implementation if neither is available
@@ -760,44 +800,26 @@ fi
 # 3. Sync with Budget and Attempt Limits
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "3" ]; then
     log "3. Testing 'sync' with budget and attempt limits"
-    
-    # Test with budget limit
-    log "3a. Testing 'sync --budget 2.0'"
-    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
-    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    if run_pdd_command_noexit sync --skip-tests --skip-verify --budget 2.0 --context regression_pdd "$SIMPLE_BASENAME"; then
-        log "Validation success: sync --budget 2.0"
-    else
-        log_timestamped "[ERROR] Validation failed: sync --budget 2.0"
-    fi
-    # Should still create basic files even with low budget
-    if check_sync_files "$SIMPLE_BASENAME" "python" false; then
-        log "Validation success: files exist after initial sync"
-    else
-        log_timestamped "[ERROR] Validation failed: files missing after initial sync"
-    fi
-    
-    # Test with max attempts
-    log "3b. Testing 'sync --max-attempts 1'"
-    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
-    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    if run_pdd_command sync --skip-tests --skip-verify --max-attempts 1 --budget 2.0 "$SIMPLE_BASENAME"; then
-        log "Validation success: sync --max-attempts 1"
-    else
-        log_timestamped "[ERROR] Validation failed: sync --max-attempts 1"
-    fi
-    check_sync_files "$SIMPLE_BASENAME" "python"
-    
-    # Test with target coverage
-    log "3c. Testing 'sync --target-coverage 10.0'"
-    rm -f "src/${SIMPLE_BASENAME}.py" "examples/${SIMPLE_BASENAME}_example.py" "tests/test_${SIMPLE_BASENAME}.py"
-    rm -f "$SYNC_META_DIR/${SIMPLE_BASENAME}_python.json" "$SYNC_META_DIR/${SIMPLE_BASENAME}_python_run.json"
-    if run_pdd_command sync --target-coverage 10.0 --budget 5.0 --max-attempts 1 "$SIMPLE_BASENAME"; then
-        log "Validation success: sync --target-coverage 10.0"
-    else
-        log_timestamped "[ERROR] Validation failed: sync --target-coverage 10.0"
-    fi
-    check_sync_files "$SIMPLE_BASENAME" "python"
+    run_sync_case_3_budget_limit
+    run_sync_case_3_max_attempts
+    run_sync_case_3_target_coverage
+fi
+
+# Cloud Batch-only shards for sync regression case 3.
+# Keep `TARGET_TEST=3` as the original combined behavior for direct runs.
+if [ "$TARGET_TEST" = "13" ]; then
+    log "13. Testing 'sync' budget limit shard"
+    run_sync_case_3_budget_limit
+fi
+
+if [ "$TARGET_TEST" = "14" ]; then
+    log "14. Testing 'sync' max-attempts shard"
+    run_sync_case_3_max_attempts
+fi
+
+if [ "$TARGET_TEST" = "15" ]; then
+    log "15. Testing 'sync' target-coverage shard"
+    run_sync_case_3_target_coverage
 fi
 
 # 4. Multi-language Sync Test
