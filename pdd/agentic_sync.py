@@ -323,20 +323,14 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
     Logic:
-    1. If a root .pddrc exists, treat it as authoritative — return project_root.
-       The root .pddrc is the centralized config and should be the default cwd.
-    2. If no root .pddrc exists, scan subdirectories (recursive, max depth 2)
-       for .pddrc files. Deepest match wins.
+    1. Scan subdirectories (recursive, max depth 2) for nested .pddrc files
+       whose context patterns match the basename. Deepest match wins
+       (nearest-config-wins resolution).
        Skip catch-all matches (e.g. paths: ['**']) from subdirectories —
        they match everything and should not claim ownership of unrelated modules.
-    3. Fall back to project_root.
+    2. Fall back to project_root (which may have its own root .pddrc).
     """
-    # 1. If root .pddrc exists, it's authoritative — always use project_root
-    root_pddrc = project_root / ".pddrc"
-    if root_pddrc.exists():
-        return project_root
-
-    # 2. Scan subdirectories for .pddrc files (max depth 2)
+    # 1. Scan subdirectories for .pddrc files (max depth 2)
     best_match: Optional[Path] = None
     best_depth = -1
 
