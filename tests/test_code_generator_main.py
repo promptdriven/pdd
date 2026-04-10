@@ -3129,22 +3129,18 @@ class TestIssue687ExampleOutputPath:
         assert "custom/override" in cloud_prompt
         assert "context/examples" not in cloud_prompt
 
-    def test_real_template_references_example_output_path_variable(self):
-        """The actual generate_prompt.prompt template must reference
-        ${EXAMPLE_OUTPUT_PATH} so the injected variable is consumed.
-
-        This is the critical test — without this, injecting the variable
-        into env_vars does nothing because the template never uses it."""
+    def test_real_template_forbids_fabricated_example_paths(self):
+        """The real generate_prompt template should forbid fabricated example includes."""
         template_path = (
             pathlib.Path(__file__).parent.parent
             / "pdd" / "templates" / "generic" / "generate_prompt.prompt"
         )
         template_content = template_path.read_text(encoding="utf-8")
-        assert "${EXAMPLE_OUTPUT_PATH}" in template_content, (
-            "Bug #687: generate_prompt.prompt does not reference "
-            "${EXAMPLE_OUTPUT_PATH}. The template tells the LLM to parse "
-            ".pddrc YAML for example_output_path, which fails when .pddrc "
-            "is missing. The template must use ${EXAMPLE_OUTPUT_PATH} directly."
+        assert "Do NOT fabricate file paths or assume files exist." in template_content, (
+            "generate_prompt.prompt must explicitly forbid fabricated dependency example paths."
+        )
+        assert "${EXAMPLE_OUTPUT_PATH}/[dependency_name]_example.${DEP_EXAMPLE_EXT}." not in template_content, (
+            "generate_prompt.prompt should not instruct the model to synthesize dependency example paths."
         )
 
     def test_real_template_has_example_output_path_default(self):
