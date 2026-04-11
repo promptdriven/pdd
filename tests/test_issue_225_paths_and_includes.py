@@ -1,5 +1,6 @@
-from pathlib import Path
+import os
 import textwrap
+from pathlib import Path
 
 from pdd.sync_determine_operation import get_pdd_file_paths
 from pdd.validate_prompt_includes import validate_prompt_includes
@@ -32,6 +33,32 @@ def test_validate_prompt_includes_resolves_project_root_relative_paths(tmp_path,
 
     assert invalid == []
     assert validated == content
+
+
+def test_validate_prompt_includes_resolves_relative_includes_when_cwd_differs_from_base_dir(
+    tmp_path,
+):
+    """Regression (Issue #225): resolution must use base_dir, not only process cwd."""
+    project = tmp_path / "project"
+    (project / "context").mkdir(parents=True)
+    (project / "context" / "python_preamble.prompt").write_text("preamble", encoding="utf-8")
+    (project / "prompts" / "backend").mkdir(parents=True)
+    other_cwd = tmp_path / "other_cwd"
+    other_cwd.mkdir()
+
+    old = os.getcwd()
+    try:
+        os.chdir(other_cwd)
+        validated, invalid = validate_prompt_includes(
+            "<include>context/python_preamble.prompt</include>",
+            base_dir=project / "prompts" / "backend",
+            remove_invalid=False,
+        )
+    finally:
+        os.chdir(old)
+
+    assert invalid == []
+    assert validated == "<include>context/python_preamble.prompt</include>"
 
 
 def test_validate_prompt_includes_removes_optional_shared_context_blocks_when_files_are_absent(
