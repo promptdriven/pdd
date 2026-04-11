@@ -30,7 +30,7 @@ Entry point for the agentic sync workflow. Accepts a GitHub issue URL, fetches i
 
 % Dry-Run Validation
 Before dispatching to the runner, validate each module can actually sync:
-1. `_resolve_module_cwd(basename, project_root)`: determine correct cwd by scanning .pddrc files — if root .pddrc exists, it's authoritative (return project_root). Otherwise scan subdirectories (max depth 2, deepest match wins). Skip catch-all pattern matches (`**`, `*`) from subdirectories via `_is_catchall_match`. Uses `_detect_context_from_basename` and `_load_pddrc_config` from `construct_paths`.
+1. `_resolve_module_cwd(basename, project_root)`: determine correct cwd by scanning .pddrc files using nearest-config-wins resolution. First scan subdirectories (max depth 2, deepest match wins) for nested .pddrc files whose context patterns match the basename. Skip catch-all pattern matches (`**`, `*`) from subdirectories via `_is_catchall_match`. If a nested .pddrc matches, return its directory as cwd. Only fall back to root .pddrc / project_root when no nested .pddrc claims the module. Uses `_detect_context_from_basename` and `_load_pddrc_config` from `construct_paths`.
 2. `_run_single_dry_run(basename, cwd)`: run `pdd --force sync <basename> --dry-run --agentic --no-steer` as subprocess with 60s timeout and env `PDD_FORCE=1, CI=1`. Return (success, stderr).
 3. On dry-run failure, invoke `_llm_fix_dry_run_failure` as fallback: load `agentic_sync_fix_dry_run_LLM` prompt template with project tree (2 levels), .pddrc locations, and the error. Run the LLM-suggested command via shell, extract effective cwd using a pwd marker appended to the command. Validate resolved cwd is within project root.
 4. `_run_dry_run_validation(modules, project_root)`: orchestrates the above per module, returns (all_valid, module_to_cwd_map, errors, total_llm_cost).
@@ -38,7 +38,7 @@ Before dispatching to the runner, validate each module can actually sync:
 % Fingerprint Filtering
 After dry-run validation, check which modules are already fully synced:
 1. `_filter_already_synced(modules, module_cwds, quiet)`: for each module, use `sync_determine_operation` in log_mode (read-only) to check if operation is 'nothing' (all hashes match). Modules returning 'nothing' for ALL languages are filtered out.
-2. Detect context and prompts_dir via `_find_pddrc_file`, `_load_pddrc_config`, and `_detect_context_from_basename`
+2. Detect context and prompts_dir using nearest-config-wins .pddrc resolution: for each module, attempt to find the nearest .pddrc by searching from the module's resolved cwd (which may be a nested directory) via `_find_pddrc_file`, then use `_load_pddrc_config` and `_detect_context_from_basename`. When a module's cwd points to a subdirectory with its own .pddrc, that nested config takes precedence over the root .pddrc.
 3. Discover languages via `_detect_languages_with_context(basename, prompts_dir, context_name)`
 4. For each language, call `sync_determine_operation(basename, language, target_coverage=90.0, log_mode=True, prompts_dir, context_override)`. If ANY language has operation != "nothing", keep the module.
 5. Return only modules that need syncing. If list is empty, workflow returns early with success message.
@@ -52,7 +52,7 @@ After dry-run validation, check which modules are already fully synced:
 - `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules (deduplicated), deps validity, corrections
 - `_apply_architecture_corrections(arch_path, architecture, corrections, quiet) -> List[Dict]`: patch and write architecture.json
 - `_is_catchall_match(basename: str, config: Dict) -> bool`: check if match is only from wildcard patterns (specificity 0)
-- `_resolve_module_cwd(basename: str, project_root: Path) -> Path`: determine correct working directory for a module
+- `_resolve_module_cwd(basename: str, project_root: Path) -> Path`: determine correct working directory for a module using nearest-config-wins .pddrc resolution (nested .pddrc takes precedence over root)
 - `_run_single_dry_run(basename: str, cwd: Path, quiet: bool) -> Tuple[bool, str]`: run pdd sync dry-run
 - `_llm_fix_dry_run_failure(basename, project_root, dry_run_error, ...) -> Tuple[bool, Optional[Path], float, str]`: LLM fallback for failed dry-runs
 - `_run_dry_run_validation(modules, project_root, ...) -> Tuple[bool, Dict[str, Path], List[str], float]`: orchestrate dry-run validation
