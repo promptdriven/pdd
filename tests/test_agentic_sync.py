@@ -573,8 +573,9 @@ class TestResolveModuleCwd:
     def test_nested_pddrc_takes_precedence_over_root(self, tmp_path):
         """When both root and nested .pddrc exist, nested wins for matching modules.
 
-        This is the core bug from issue #1128: root .pddrc shadows nested .pddrc
-        because _resolve_module_cwd short-circuits at line 336 when root .pddrc exists.
+        This is the core bug from issue #1128: the root .pddrc previously shadowed
+        nested .pddrc because _resolve_module_cwd short-circuited on root .pddrc
+        existence and returned project_root, ignoring any nested configs.
         """
         # Root .pddrc with a catch-all-ish context for extensions
         self._write_pddrc(tmp_path / ".pddrc", {
@@ -972,11 +973,12 @@ class TestFilterAlreadySynced:
         """_resolve_module_cwd + _filter_already_synced integration: nested .pddrc must
         provide the correct prompts_dir and context_name to sync_determine_operation.
 
-        Bug #1128: _resolve_module_cwd short-circuits at line 336 when root .pddrc exists,
-        returning project_root. _filter_already_synced then calls _find_pddrc_file(project_root)
-        which finds the root .pddrc, context detection returns None, and the wrong prompts_dir
-        is used. After the fix, _resolve_module_cwd returns nested_dir, so _find_pddrc_file
-        finds the nested .pddrc with the correct context.
+        Bug #1128: _resolve_module_cwd previously short-circuited when root .pddrc
+        existed and returned project_root. _filter_already_synced then called
+        _find_pddrc_file(project_root) which found the root .pddrc, context detection
+        returned None, and the wrong prompts_dir was used. After the fix,
+        _resolve_module_cwd returns nested_dir, so _find_pddrc_file finds the nested
+        .pddrc with the correct context.
         """
         import yaml
         # Root .pddrc — does NOT have a "services" context
