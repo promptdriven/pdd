@@ -998,3 +998,144 @@ class TestUpdateBlockBasenameFallbackMixedOrigin:
         assert '<include select="def:main">pdd/cli.py</include>' in result, (
             f"Basename fallback should have applied the update. Result:\n{result}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Dedup CWD independence (Bug #5 from PR #763)
+# ---------------------------------------------------------------------------
+
+class TestDedupCwdIndependence:
+    """_remove_redundant_content should resolve file paths against project_root
+    (from get_config), not CWD. Bug #5: dedup silently skipped when CWD != project root."""
+
+    def test_dedup_works_regardless_of_cwd(self, tmp_path, monkeypatch):
+        """Run insert_includes with dedup from CWD=root and CWD=subdir.
+        Both should successfully remove inline duplicate content."""
+        import os
+        import subprocess
+        import textwrap
+        from pathlib import Path
+        from unittest.mock import patch as mock_patch
+        from pdd.summarize_directory import FileSummary
+        from pdd.auto_include import AutoIncludeResult, NewInclude
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        utils_content = textwrap.dedent('''\
+            """Utility functions for the application."""
+
+            import hashlib
+            from typing import Any
+
+
+            def hash_string(value: str) -> str:
+                """Return SHA-256 hex digest of a string."""
+                return hashlib.sha256(value.encode()).hexdigest()
+
+
+            def sanitize_input(value: str) -> str:
+                """Strip and lowercase user input."""
+                return value.strip().lower()
+
+
+            def format_error(code: int, message: str) -> dict:
+                """Format a standard error response."""
+                return {"error": {"code": code, "message": message}}
+        ''')
+        (pdd_dir / "utils.py").write_text(utils_content)
+
+        # Init git repo
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--allow-empty"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
+        )
+
+        import pdd
+        monkeypatch.setenv("PDD_PATH", str(Path(pdd.__file__).parent))
+        monkeypatch.setattr("pdd.summarize_directory.load_prompt_template", lambda _: "template")
+        monkeypatch.setattr("pdd.insert_includes.load_prompt_template", lambda _: "template")
+        monkeypatch.setattr("pdd.insert_includes.preprocess", lambda p, **kw: p)
+        monkeypatch.setattr("pdd.auto_include.load_prompt_template", lambda _: "template")
+
+        def summarize_dispatch(**kwargs):
+            return {
+                "result": FileSummary(file_summary="Utils", key_exports=["hash_string"], dependencies=["hashlib"]),
+                "cost": 0.001, "model_name": "mock",
+            }
+        monkeypatch.setattr("pdd.summarize_directory.llm_invoke", summarize_dispatch)
+
+        def auto_include_dispatch(**kwargs):
+            return {
+                "result": AutoIncludeResult(
+                    reasoning="needs utils",
+                    new_includes=[NewInclude(file="pdd/utils.py", module="utils")],
+                    existing_include_annotations=[],
+                ),
+                "cost": 0.005, "model_name": "mock",
+            }
+        monkeypatch.setattr("pdd.auto_include.llm_invoke", auto_include_dispatch)
+
+        def insert_dispatch(**kwargs):
+            prompt = kwargs.get("input_json", {}).get("actual_prompt_to_update", "")
+            return {
+                "result": InsertIncludesOutput(
+                    output_prompt="<include>pdd/utils.py</include>\n" + prompt.rstrip()
+                ),
+                "cost": 0.003, "model_name": "mock",
+            }
+        monkeypatch.setattr("pdd.insert_includes.llm_invoke", insert_dispatch)
+
+        # Prompt with inline utils content surrounded by unique spec text
+        input_prompt = textwrap.dedent(f"""\
+            % Goal
+            Generate a Python REST API endpoint that processes user registrations.
+            The endpoint should accept POST requests with JSON bodies.
+
+            % Requirements
+            1. Accept name, email, and password fields
+            2. Validate all inputs before processing
+            3. Hash the password before storing
+            4. Return 201 on success with the user ID
+            5. Return 400 on validation failure with error details
+            6. Return 500 on unexpected errors
+
+            % Reference implementation (inline)
+            {utils_content}
+
+            % Additional constraints
+            - All responses must be JSON formatted
+            - Use proper HTTP status codes
+            - Log all registration attempts
+            - Rate limit to 10 requests per minute per IP
+            - Sanitize all string inputs before processing
+        """)
+
+        csv_path = tmp_path / "deps.csv"
+        mock_config = {"project_root": str(tmp_path)}
+
+        for test_cwd in [tmp_path, tmp_path / "pdd"]:
+            monkeypatch.chdir(test_cwd)
+            csv_path.write_text("full_path,file_summary,key_exports,dependencies,content_hash\n")
+
+            with mock_patch("pdd.insert_includes.get_config", return_value=mock_config):
+                output, _, _, _ = insert_includes(
+                    input_prompt=input_prompt,
+                    directory_path="pdd/" if test_cwd == tmp_path else str(tmp_path / "pdd"),
+                    csv_filename=str(csv_path),
+                    prompt_filename="prompts/test_python.prompt",
+                    strength=0.5, temperature=0.0, verbose=False, dedup=True,
+                )
+
+            assert "<include" in output, (
+                f"Include tag missing from output when CWD={test_cwd.name}. "
+                f"Got ({len(output)} chars): {output[:200]}"
+            )
+            assert len(output) < len(input_prompt) + 50, (
+                f"Dedup failed when CWD={test_cwd.name}. "
+                f"Input: {len(input_prompt)} chars, Output: {len(output)} chars. "
+                "Bug #5: dedup resolves file paths against CWD instead of project_root."
+            )

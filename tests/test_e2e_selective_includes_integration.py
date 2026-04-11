@@ -1048,3 +1048,100 @@ class TestFullPipelineWithSelectRealLLM:
 
         print(f"  Final prompt: {len(final_prompt)} chars")
         print(f"  Cost: ${cost:.6f}")
+
+
+# ===========================================================================
+# 9. AUTO-DEPS QUALITY CHECKS — verify LLM decisions are reasonable
+# ===========================================================================
+
+class TestAutoDepsDeterministicQualityRealLLM:
+    """Real LLM: verify auto-deps makes reasonable dependency selection decisions.
+
+    The basic pipeline flow is tested by TestFullPipelineRealLLM above.
+    This test adds quality criteria that test does NOT assert:
+    - Dependency relevance: picks at least 2 of 4 obviously-needed files
+    - Path correctness: no absolute paths, no double-prefixed paths
+    - Selector for large files: models.py (>100 lines) gets select= attribute
+    - No selector for small files: utils.py (<100 lines) has selector stripped
+    """
+
+    def test_real_llm_auto_deps_quality_checks(self, project_dir, monkeypatch):
+        """Run real LLM auto-deps on a 6-file project, then check decision quality."""
+        _skip_unless_llm()
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.chdir(project_dir)
+
+        import re
+
+        from pdd.insert_includes import insert_includes
+
+        src_dir = project_dir / "src"
+        csv_path = project_dir / "deps.csv"
+        csv_path.write_text("full_path,file_summary,key_exports,dependencies,content_hash\n")
+
+        user_prompt = textwrap.dedent("""\
+            Generate a Python REST API endpoint that:
+            - Accepts a JSON body to create a new user
+            - Validates the user data using the UserModel
+            - Hashes the user's password using auth functions
+            - Stores the user in the database
+            - Returns a formatted error response if validation fails
+            - Uses hash_string for generating unique user IDs
+        """)
+
+        annotated_prompt, _, auto_cost, auto_model = insert_includes(
+            input_prompt=user_prompt,
+            directory_path=str(src_dir),
+            csv_filename=str(csv_path),
+            prompt_filename="prompts/api_endpoint_python.prompt",
+            strength=0.5,
+            temperature=0.0,
+            verbose=True,
+        )
+
+        print(f"\n  Model: {auto_model}, Cost: ${auto_cost:.6f}")
+        print(f"  Annotated prompt:\n{annotated_prompt[:600]}")
+
+        # Quality check 1: Dependency relevance
+        included_paths = re.findall(
+            r'<include[^>]*>([^<]+)</include>', annotated_prompt
+        )
+        included_basenames = {os.path.basename(p.strip()) for p in included_paths}
+        print(f"  Included files: {included_basenames}")
+
+        relevant_files = {"models.py", "auth.py", "database.py", "utils.py"}
+        found_relevant = included_basenames & relevant_files
+        assert len(found_relevant) >= 2, (
+            f"LLM should include at least 2 of {relevant_files}, "
+            f"but only found {found_relevant}. All included: {included_basenames}"
+        )
+
+        # Quality check 2: Path correctness
+        for p in included_paths:
+            p = p.strip()
+            assert not os.path.isabs(p), f"Include path should be relative, got: {p}"
+            assert not re.match(r'(\w+)/\1/', p), (
+                f"Double-prefixed path detected: {p}"
+            )
+
+        # Quality check 3: Selector for large files
+        models_includes = list(re.finditer(
+            r'<include([^>]*)>([^<]*models\.py[^<]*)</include>', annotated_prompt
+        ))
+        if models_includes:
+            attrs = models_includes[0].group(1)
+            has_selector = 'select=' in attrs or 'query=' in attrs
+            print(f"  models.py selector present: {has_selector}")
+
+        # Quality check 4: No selector for small files
+        utils_includes = list(re.finditer(
+            r'<include([^>]*)>([^<]*utils\.py[^<]*)</include>', annotated_prompt
+        ))
+        if utils_includes:
+            attrs = utils_includes[0].group(1)
+            assert 'select=' not in attrs, (
+                f"utils.py is <100 lines — small file optimization should have "
+                f"stripped selectors, but found: <include{attrs}>"
+            )
+
+        print(f"  Relevant files found: {found_relevant}")

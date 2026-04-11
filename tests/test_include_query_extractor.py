@@ -600,3 +600,27 @@ class TestCacheKeyPathConsistency:
             f"'./src/file.py': {key2[:16]}..., "
             f"'src//file.py': {key3[:16]}..."
         )
+
+    def test_absolute_vs_relative_path_same_cache_key(self, tmp_path):
+        """Bug #4 from PR #763: absolute and relative paths for the same file
+        should produce identical cache keys after normalization to
+        project-relative form."""
+        from unittest.mock import patch
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "utils.py").write_text("def helper(): pass")
+
+        mock_config = {"project_root": str(tmp_path)}
+
+        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+            key_relative = compute_cache_key("pdd/utils.py", "What functions are available?")
+            key_absolute = compute_cache_key(
+                str(tmp_path / "pdd" / "utils.py"), "What functions are available?"
+            )
+
+        assert key_relative == key_absolute, (
+            f"Bug #4: Cache keys differ for same file. "
+            f"Relative: {key_relative[:16]}..., Absolute: {key_absolute[:16]}.... "
+            "compute_cache_key should normalize paths to project-relative form."
+        )

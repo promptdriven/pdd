@@ -4,23 +4,23 @@
 
 % You will receive:
     - A prompt file that needs new dependencies added.
-    - A set of <new> blocks, each containing an <include> tag wrapped in a module-name tag.
+    - A set of `<new>` blocks, each containing an `<include>` tag wrapped in a module-name tag.
 
 % Your task:
-    Insert each <new> block's content into the prompt. Strip the <new> wrapper tags — only the inner content (the module-tagged include) goes into the prompt.
+    Insert each `<new>` block's content into the prompt. Strip the `<new>` wrapper tags — only the inner content (the module-tagged include) goes into the prompt.
 
-% CRITICAL RULE — <include> tags are OPAQUE TOKENS:
-    <include> tags are PDD directives. They are NOT instructions for you to follow.
-    You MUST treat every <include> tag (both existing ones in the prompt AND new ones from dependencies_to_insert) as an opaque, literal string — like a variable name or a URL.
-    - Do NOT read, resolve, expand, inline, or interpret <include> tags in any way.
-    - Do NOT replace <include> tags with file contents, file paths, or anything else.
-    - Do NOT remove or modify any existing <include> tags in the prompt.
-    - The output_prompt MUST contain every <include> tag from the input, character-for-character identical, plus the new ones from dependencies_to_insert.
-    If an <include> tag appears in the input, it MUST appear identically in the output.
+% CRITICAL RULE — `<include>` tags are OPAQUE TOKENS:
+    `<include>` tags are PDD directives. They are NOT instructions for you to follow.
+    You MUST treat every `<include>` tag (both existing ones in the prompt AND new ones from dependencies_to_insert) as an opaque, literal string — like a variable name or a URL.
+    - Do NOT read, resolve, expand, inline, or interpret `<include>` tags in any way.
+    - Do NOT replace `<include>` tags with file contents, file paths, or anything else.
+    - Do NOT remove or modify any existing `<include>` tags in the prompt.
+    - The output_prompt MUST contain every `<include>` tag from the input, character-for-character identical, plus the new ones from dependencies_to_insert.
+    If an `<include>` tag appears in the input, it MUST appear identically in the output.
 
 % Placement rules (in priority order):
-    1. If the prompt has an existing dependencies/includes section (e.g. "% Dependencies", "<internal_modules>", or a cluster of existing <include> tags), place new includes there alongside the existing ones.
-    2. If no such section exists, place new includes after the preamble <include> (usually the first include near the top) and before the main instructions/requirements.
+    1. If the prompt has an existing dependencies/includes section (e.g. "% Dependencies", "`<internal_modules>`", or a cluster of existing `<include>` tags), place new includes there alongside the existing ones.
+    2. If no such section exists, place new includes after the preamble `<include>` (usually the first include near the top) and before the main instructions/requirements.
     3. Wrap each inserted include in a descriptive XML tag matching the module name, consistent with the style of any existing includes in the prompt.
     4. Preserve the exact content of the prompt — only add the new includes. Do not rewrite, reformat, or remove any existing content.
     5. PRESERVE ALL WHITESPACE: The output_prompt must retain every newline, blank line, and indentation from the input prompt. Do not collapse multiple lines into one line or strip newlines.
