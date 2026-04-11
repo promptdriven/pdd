@@ -240,3 +240,42 @@ def test_record_after_skips_non_guarded(enable_guard, monkeypatch):
     ctx.obj = {"invoked_subcommands": ["setup"]}
     dg.record_after_guarded_command(ctx)
     dg.save_last_run.assert_not_called()
+
+
+@pytest.mark.parametrize("sub", ["bug", "crash", "change", "update", "split"])
+def test_new_guarded_subcommand_blocks_duplicate(enable_guard, monkeypatch, sub):
+    """Each newly guarded subcommand blocks duplicate runs (non-interactive)."""
+    monkeypatch.setattr(dg.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(dg.sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(dg, "find_project_root", lambda: FAKE_ROOT)
+    prev = _prev_base(argv=[sub, "arg1"], subcommand=sub)
+    ctx = _ctx(sub=sub)
+    with (
+        mock.patch.object(dg, "load_last_run", return_value=prev),
+        mock.patch.object(dg, "normalized_argv", return_value=[sub, "arg1"]),
+        mock.patch.object(dg, "_run_fingerprint", return_value="samefp"),
+        mock.patch.object(dg.time, "time", return_value=1_700_000_030.0),
+    ):
+        with pytest.raises(click.UsageError, match="Duplicate expensive CLI run blocked"):
+            dg.check_duplicate_before_subcommand(ctx)
+
+
+@pytest.mark.parametrize("sub", ["bug", "crash", "change", "update", "split"])
+def test_new_guarded_subcommand_records_after_run(enable_guard, monkeypatch, sub):
+    """Each newly guarded subcommand records its run for future duplicate detection."""
+    calls = []
+
+    def capture_save(project_root, argv_tail, subcommand):
+        calls.append((project_root, argv_tail, subcommand))
+
+    monkeypatch.setattr(dg, "find_project_root", lambda: Path("/w"))
+    monkeypatch.setattr(dg, "save_last_run", capture_save)
+    monkeypatch.setattr(dg, "normalized_argv", lambda _argv=None: [sub, "a"])
+
+    ctx = mock.MagicMock()
+    ctx.obj = {"invoked_subcommands": [sub]}
+    ctx.invoked_subcommands = []
+
+    dg.record_after_guarded_command(ctx)
+
+    assert calls == [(Path("/w"), [sub, "a"], sub)]

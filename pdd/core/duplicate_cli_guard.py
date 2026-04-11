@@ -1,5 +1,5 @@
 """
-Detect consecutive duplicate expensive CLI invocations (sync / generate / fix).
+Detect consecutive duplicate expensive CLI invocations.
 
 Warns or blocks when the same command is re-run within a time window with the
 same argv, project root, and input fingerprint (git HEAD plus ``git status
@@ -22,7 +22,10 @@ import click
 from ..architecture_registry import find_project_root
 
 # Subcommands that typically incur many LLM calls.
-GUARDED_SUBCOMMANDS = frozenset({"sync", "generate", "fix"})
+GUARDED_SUBCOMMANDS = frozenset({
+    "sync", "generate", "fix",
+    "bug", "crash", "change", "update", "split",
+})
 
 _LAST_RUN_FILENAME = "last_run.json"
 _ENV_DISABLE = "PDD_DISABLE_DUPLICATE_GUARD"
