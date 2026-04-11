@@ -5381,9 +5381,11 @@
     }
   },
   {
-    "reason": "Orchestrates the 13-step agentic change workflow for implementing feature requests.",
+    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
     "description": "Coordinates duplicate checking, docs review, research, clarification, docs changes, dev units, architecture, analysis, implementation, architecture update, issue identification, issue fixing, and PR creation.",
-    "dependencies": [],
+    "dependencies": [
+      "architecture_sync_python.prompt"
+    ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
     "filepath": "pdd/agentic_change_orchestrator.py",
@@ -5398,7 +5400,7 @@
         "functions": [
           {
             "name": "run_agentic_change_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
               "None"

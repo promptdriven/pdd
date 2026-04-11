@@ -1,3 +1,18 @@
+<pdd-reason>Orchestrates the 13-step agentic change workflow for implementing GitHub issues.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
 % Role & Scope
@@ -245,6 +260,8 @@ After Step 10 completes, sanitize architecture.json in the worktree:
 
 3. **`_sanitize_architecture_interfaces(worktree_path, previous_architecture)`**: Compare current architecture.json against `previous_architecture`. For each entry that exists in both, call `_merge_interface_signatures(old_interface, new_interface)` to preserve existing interface parameters that Step 10's LLM may have dropped. Append any merge warnings to step output under `ORCHESTRATOR_POSTCHECK_WARNINGS:`.
 
+4. **Auto-register untracked prompts (safety net)**: After all sanitizers run, call `register_untracked_prompts(prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", dry_run=False)` from `pdd.architecture_sync`. This catches modified prompts that have correct PDD tags but no pre-existing arch.json entry — the case where Step 10's LLM rule 5(b) falls through. If `reg_result["registered"]` is non-empty, append `\n\nORCHESTRATOR_AUTO_REGISTERED: {comma-separated list}` to step_output and print `[blue]Auto-registered untracked prompts in arch.json: {list}[/blue]` (unless quiet).
+
 % Git Worktree Isolation
 
 Before Step 9, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
@@ -342,7 +359,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`
 Import from `pdd.preprocess`: `preprocess`
-Import from `pdd.architecture_sync`: `_merge_interface_signatures`
+Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
