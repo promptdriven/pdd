@@ -1,3 +1,16 @@
+## v0.0.204 (2026-04-10)
+
+### Feat
+
+- implement prompt include validation, architecture-aware path resolution, and update cloud CI test configuration
+- cross-validate architecture deps vs prompt includes (sync, CLI, CI)
+
+### Fix
+
+- **#225**: resolve prompt includes from base_dir; drop duplicate validate-arch-includes CLI
+- **test**: restore DepGraphFromArchitectureResult import for issue 745 E2E
+- extend duplicate guard to bug, crash, change, update, split subcommands
+
 ## v0.0.203 (2026-04-09)
 
 ### Feat
