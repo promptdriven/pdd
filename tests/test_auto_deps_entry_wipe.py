@@ -644,16 +644,25 @@ class TestHashFallbackCollision:
         both appear in the CSV with distinct paths. They are different files
         and must not be collapsed into one row.
 
-        Currently fails because both scans produce rel_path='shared.py'
-        (relative to their own base_dir), so the second overwrites the first.
-        Fixing this requires repo-root-relative paths in the CSV.
+        Requires a git repo so that paths are repo-root-relative
+        (dir_a/shared.py vs dir_b/shared.py) instead of base_dir-relative
+        (both becoming just shared.py).
         """
+        import subprocess
+        subprocess.run(['git', 'init'], capture_output=True, cwd=str(tmp_path))
+        subprocess.run(['git', 'config', 'user.email', 'test@test.com'], capture_output=True, cwd=str(tmp_path))
+        subprocess.run(['git', 'config', 'user.name', 'test'], capture_output=True, cwd=str(tmp_path))
+
         shared_content = "SHARED = True\n"
 
         # First scan: dir_a/shared.py
         dir_a = tmp_path / "dir_a"
         dir_a.mkdir()
         (dir_a / "shared.py").write_text(shared_content)
+
+        # git add so git ls-files can find them
+        subprocess.run(['git', 'add', '.'], capture_output=True, cwd=str(tmp_path))
+        subprocess.run(['git', 'commit', '-m', 'init'], capture_output=True, cwd=str(tmp_path))
 
         csv1, _, _ = summarize_directory(
             directory_path=str(dir_a),
@@ -665,6 +674,8 @@ class TestHashFallbackCollision:
         dir_b = tmp_path / "dir_b"
         dir_b.mkdir()
         (dir_b / "shared.py").write_text(shared_content)
+        subprocess.run(['git', 'add', '.'], capture_output=True, cwd=str(tmp_path))
+        subprocess.run(['git', 'commit', '-m', 'add dir_b'], capture_output=True, cwd=str(tmp_path))
 
         csv2, cost, _ = summarize_directory(
             directory_path=str(dir_b),
@@ -719,4 +730,45 @@ class TestHashFallbackCollision:
         assert cost > 0.0, (
             "Expected LLM cost for dir_b/module.py since content differs "
             "from dir_a/module.py"
+        )
+
+    def test_hash_fallback_does_not_cross_pollinate_different_files(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Two different files with identical content but different basenames
+        should NOT share a cached summary via the hash fallback.
+
+        Example: pdd/__init__.py and context/__init__.py are both empty,
+        but they're semantically different files. However, same-basename
+        files (like module.py scanned from different base_dirs) SHOULD
+        share the cache.
+
+        This test catches cross-file pollution — the hash fallback must
+        require the basename to match.
+        """
+        # CSV has an entry for 'utils.py' with specific content
+        content = "# shared boilerplate\n"
+        existing_csv = _make_csv([{
+            'full_path': 'utils.py',
+            'file_summary': 'Utility helpers',
+            'key_exports': '["helper"]',
+            'dependencies': '[]',
+            'content_hash': _content_hash(content),
+        }])
+
+        # Create a DIFFERENT file with the same content but different name
+        (tmp_path / "config.py").write_text(content)
+
+        csv_output, cost, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=existing_csv,
+        )
+
+        # config.py should NOT reuse utils.py's summary — different file
+        assert cost > 0.0, (
+            "config.py reused utils.py's summary via hash fallback even "
+            "though they are different files. The hash fallback should "
+            "require the basename to match."
         )

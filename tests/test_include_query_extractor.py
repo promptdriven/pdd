@@ -588,14 +588,15 @@ class TestCacheKeyPathConsistency:
             "normpath should collapse '../' — if this fails, normpath behavior changed"
         )
 
-    def test_cwd_relative_vs_project_relative_same_key(self):
-        """The same file referenced as '../src/file.py' (from a subdirectory)
-        and 'src/file.py' (from project root) should produce the same cache
-        key."""
-        key1 = compute_cache_key("../src/file.py", "query")
-        key2 = compute_cache_key("src/file.py", "query")
-        assert key1 == key2, (
-            f"Same file from different CWDs produces different cache keys. "
-            f"'../src/file.py' key: {key1[:16]}..., "
-            f"'src/file.py' key: {key2[:16]}..."
+    def test_repo_root_relative_paths_are_stable(self):
+        """Repo-root-relative paths (the format used after the CSV path fix)
+        produce consistent cache keys regardless of trivial variations."""
+        key1 = compute_cache_key("src/file.py", "query")
+        key2 = compute_cache_key("./src/file.py", "query")
+        key3 = compute_cache_key("src//file.py", "query")
+        assert key1 == key2 == key3, (
+            f"Trivial path variations should produce the same cache key. "
+            f"'src/file.py': {key1[:16]}..., "
+            f"'./src/file.py': {key2[:16]}..., "
+            f"'src//file.py': {key3[:16]}..."
         )

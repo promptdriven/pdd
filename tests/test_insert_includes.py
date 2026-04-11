@@ -858,10 +858,6 @@ class TestRemoveRedundantContentPathResolution:
         """When CWD is a subdirectory (e.g. tests/) but include paths are
         relative to the project root (e.g. 'context/helper.py'), dedup
         should still find the file and remove duplicate inline content.
-
-        Currently fails because _remove_redundant_content resolves paths
-        relative to CWD via Path(file_path).is_file(), and 'context/helper.py'
-        doesn't exist relative to tests/.
         """
         from pdd.insert_includes import _remove_redundant_content
 
@@ -878,6 +874,12 @@ class TestRemoveRedundantContentPathResolution:
         tests_dir = project_root / "tests"
         tests_dir.mkdir()
         monkeypatch.chdir(tests_dir)
+
+        # Mock get_config to return the correct project root
+        monkeypatch.setattr(
+            "pdd.insert_includes.get_config",
+            lambda: {"project_root": str(project_root)},
+        )
 
         # Prompt has the same content inline
         prompt = f"Some preamble\n{content}Some postamble\n"

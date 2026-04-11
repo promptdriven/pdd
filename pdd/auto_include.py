@@ -80,11 +80,7 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
         entries = []
         for _, row in dataframe.iterrows():
             full_path = row.get('full_path', '')
-            # Qualify relative paths so the LLM emits CWD-relative paths.
-            if directory_path and full_path and not os.path.isabs(full_path):
-                prefix = _directory_prefix(directory_path)
-                if prefix and not full_path.startswith(prefix):
-                    full_path = os.path.normpath(os.path.join(prefix, full_path))
+            # CSV paths are repo-root-relative, no qualification needed.
             file_summary = row.get('file_summary', '')
             key_exports = row.get('key_exports', '[]')
             dependencies = row.get('dependencies', '[]')
@@ -138,21 +134,13 @@ def _directory_prefix(directory_path: str) -> str:
 
 
 def _qualify_path(file_path: str, directory_path: str) -> str:
-    """Prepend directory_path to a relative file path if needed.
+    """Return the file path unchanged.
 
-    Returns the path unchanged when it is absolute or already starts with
-    the directory prefix.
+    CSV paths are now stored relative to the git repo root, so no
+    directory_path prepending is needed.  This function is retained for
+    backward compatibility with callers.
     """
-    if not directory_path or not file_path:
-        return file_path
-    if os.path.isabs(file_path):
-        return file_path
-    prefix = _directory_prefix(directory_path)
-    if not prefix:
-        return file_path
-    if file_path.startswith(prefix):
-        return file_path
-    return os.path.normpath(os.path.join(prefix, file_path))
+    return file_path
 
 
 def _qualify_result_paths(result: AutoIncludeResult, directory_path: str) -> None:

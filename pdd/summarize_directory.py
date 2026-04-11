@@ -30,6 +30,24 @@ BINARY_EXTENSIONS = {
 }
 
 
+def _get_git_root(directory_path: str) -> Optional[str]:
+    """Return the absolute path of the git repository root, or None."""
+    try:
+        abs_path = os.path.abspath(directory_path)
+        cwd = abs_path if os.path.isdir(abs_path) else os.path.dirname(abs_path)
+        if not os.path.isdir(cwd):
+            cwd = os.path.dirname(cwd)
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, check=True,
+            cwd=cwd, timeout=10
+        )
+        return os.path.realpath(result.stdout.strip())
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            FileNotFoundError, OSError):
+        return None
+
+
 def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
     """Get tracked files using git ls-files (respects .gitignore)."""
     try:
@@ -216,15 +234,20 @@ def summarize_directory(
             writer.writerow({k: entry.get(k, '') for k in fieldnames})
         return output_io.getvalue(), 0.0, "None"
 
-    # Determine base directory for relative paths
-    if os.path.isdir(directory_path):
-        base_dir = os.path.abspath(directory_path)
+    # Determine base directory for relative paths.
+    # Prefer git repo root so that CSV paths are stable across different
+    # directory_path values (scanning pdd/ vs context/ vs .).
+    git_root = _get_git_root(directory_path)
+    if git_root:
+        base_dir = git_root
+    elif os.path.isdir(directory_path):
+        base_dir = os.path.realpath(directory_path)
     else:
         prefix = directory_path.split('*')[0]
         if os.path.isdir(prefix):
-            base_dir = os.path.abspath(prefix)
+            base_dir = os.path.realpath(prefix)
         else:
-            base_dir = os.path.abspath(os.path.dirname(prefix))
+            base_dir = os.path.realpath(os.path.dirname(prefix))
 
     results_data: List[Dict[str, str]] = []
     total_cost = 0.0
@@ -235,7 +258,7 @@ def summarize_directory(
 
     def _process_file(i: int, file_path: str) -> Tuple[float, str]:
         """Process a single file and accumulate results."""
-        rel_path = os.path.relpath(file_path, base_dir)
+        rel_path = os.path.relpath(os.path.realpath(file_path), base_dir)
         return _process_single_file_logic(
             file_path,
             rel_path,
@@ -256,7 +279,7 @@ def summarize_directory(
 
         def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str]:
             """Thread-safe wrapper that returns index for ordering."""
-            rel_path = os.path.relpath(file_path, base_dir)
+            rel_path = os.path.relpath(os.path.realpath(file_path), base_dir)
             local_results: List[Dict[str, str]] = []
             cost, model = _process_single_file_logic(
                 file_path,
@@ -394,10 +417,16 @@ def _process_single_file_logic(
         cached_entry = existing_data.get(normalized_path) or existing_data.get(abs_normalized_path)
 
         # Fallback: match by content hash when the same file appears under a
-        # different relative path (e.g. CSV has "cli.py" from scanning pdd/,
-        # but current scan from project root produces "pdd/cli.py").
+        # different relative path (e.g. old CSV has "cli.py" from a pre-fix
+        # scan, but current scan produces "pdd/cli.py").  Require the basename
+        # to match to avoid cross-file pollution (e.g. two different empty
+        # __init__.py files sharing a summary).
         if not cached_entry:
-            cached_entry = existing_by_hash.get(current_hash)
+            hash_candidate = existing_by_hash.get(current_hash)
+            if hash_candidate and os.path.basename(
+                hash_candidate.get('full_path', '')
+            ) == os.path.basename(rel_path):
+                cached_entry = hash_candidate
 
         if cached_entry:
             # Step 6d: Check hash match and that entry was produced by the new format

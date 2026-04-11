@@ -12,6 +12,11 @@ from .load_prompt_template import load_prompt_template
 from .auto_include import auto_include
 from .preprocess import preprocess
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
+try:
+    from .config import get_config
+except ImportError:
+    def get_config():
+        return {"project_root": "."}
 
 from rich.console import Console
 
@@ -41,11 +46,21 @@ def _remove_redundant_content(prompt: str, inserted_includes: List[str]) -> str:
     if not inserted_includes:
         return prompt
 
-    # Collect content of each included file
+    # Collect content of each included file.
+    # Paths may be repo-root-relative, so resolve against project root
+    # rather than relying on CWD.
+    try:
+        _cfg = get_config()
+        _project_root = Path(_cfg.get("project_root", ".")).resolve()
+    except Exception:
+        _project_root = Path(".").resolve()
+
     included_contents: List[str] = []
     for file_path in inserted_includes:
         try:
             path = Path(file_path)
+            if not path.is_absolute():
+                path = _project_root / path
             if path.is_file():
                 included_contents.append(path.read_text(encoding="utf-8", errors="replace"))
         except Exception:
