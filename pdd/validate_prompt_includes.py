@@ -16,8 +16,6 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from .path_resolution import get_default_resolver
-
 
 _INCLUDE_TAG_RE = re.compile(
     r"<include>(.*?)</include>",
@@ -35,6 +33,34 @@ _OPTIONAL_SHARED_CONTEXT_BLOCKS = {
     "prompts/_context/api_contracts.yaml": "context_api_contracts",
     "prompts/_context/integration_points.yaml": "context_integration_points",
 }
+
+
+def _resolve_include_against_base_dir(rel_or_abs: str, base_dir: Path) -> Path:
+    """
+    Resolve a path from an ``<include>`` tag for existence checks.
+
+    Absolute paths are normalized with :meth:`Path.resolve`. Relative paths are
+    resolved by walking upward from ``base_dir`` (inclusive), joining the
+    relative path at each ancestor, and returning the first candidate that exists.
+    If none exist, returns ``(base_dir / rel).resolve()`` as the canonical
+    missing path (Issue #225: must not depend on process ``cwd`` alone).
+    """
+    raw = (rel_or_abs or "").strip()
+    p = Path(raw)
+    if p.is_absolute():
+        return p.resolve()
+    rel = p
+    base = base_dir.resolve()
+    cur: Path = base
+    for _ in range(128):
+        candidate = (cur / rel).resolve()
+        if candidate.exists():
+            return candidate
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return (base / rel).resolve()
 
 
 def validate_include_tag(file_path: str, base_dir: str) -> bool:
@@ -56,7 +82,8 @@ def validate_include_tag(file_path: str, base_dir: str) -> bool:
     Notes
     -----
     - Absolute paths are checked as-is.
-    - Relative paths are resolved using the same resolver as preprocess.
+    - Relative paths are resolved against ``base_dir`` (walking up to ancestors)
+      until a matching file is found; see :func:`_resolve_include_against_base_dir`.
     """
     raw_path = file_path.strip()
 
@@ -67,10 +94,7 @@ def validate_include_tag(file_path: str, base_dir: str) -> bool:
     if raw_path.startswith(error_prefix):
         raw_path = raw_path[len(error_prefix) :].strip()
 
-    p = Path(raw_path)
-    if not p.is_absolute():
-        p = get_default_resolver().resolve_include(raw_path)
-
+    p = _resolve_include_against_base_dir(raw_path, Path(base_dir))
     return p.exists()
 
 
@@ -217,8 +241,8 @@ def validate_prompt_includes(
     Behavior
     --------
     - Uses a regex to find all <include>...</include> patterns.
-    - For each include, resolves the file path using the same resolver as preprocess and checks
-      if it exists.
+    - For each include, resolves the file path against ``base_dir`` (not process ``cwd``
+      alone) and checks if it exists.
     - Tracks invalid paths and either:
         * removes the containing XML block (when `remove_invalid=True`), or
         * replaces the <include> tag itself with an XML comment describing
@@ -229,6 +253,7 @@ def validate_prompt_includes(
         * Paths with spaces or special characters (non-greedy matching)
     """
     elements = _build_element_spans(content)
+    base_path = Path(base_dir).resolve()
 
     invalid_includes: List[str] = []
     exists_cache: Dict[Path, bool] = {}
@@ -246,9 +271,7 @@ def validate_prompt_includes(
         if path_for_fs.startswith(error_prefix):
             path_for_fs = path_for_fs[len(error_prefix) :].strip()
 
-        p = Path(path_for_fs)
-        if not p.is_absolute():
-            p = get_default_resolver().resolve_include(path_for_fs)
+        p = _resolve_include_against_base_dir(path_for_fs, base_path)
 
         if p in exists_cache:
             exists = exists_cache[p]
