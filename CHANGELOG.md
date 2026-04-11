@@ -2,11 +2,43 @@
 
 ### Feat
 
-- add budget/dry-run flags, core dump v2, and arch validation, while refactoring CLI commands and CI workflows
+- **validate_prompt_includes**: new `pdd/validate_prompt_includes.py` module validates `<include>` tags in generated prompt files, replacing references to non-existent files with comments before the prompt is saved (Issue #225)
+- **generate**: prompt generation now validates `<include>` tags in `.prompt` output files and warns about invalid references instead of silently writing broken includes
+- **sync**: `get_pdd_file_paths` now checks `architecture.json` for an explicit `filepath` field before falling back to `.pddrc` configuration, enabling architecture-driven nested output paths (Issue #225)
+- **sync**: new helpers `_find_architecture_json`, `_resolve_prompt_path_from_architecture`, and `_get_filepath_from_architecture` for architecture-aware path resolution
+- **generate_prompt template**: rewritten dependency guidance — prompts now forbid fabricated `<include>` paths and require inline interface descriptions when no real example file is available
 
 ### Fix
 
-- resolve issue 225 prompt validation and sync paths
+- **generate**: `<include>` paths in `code_generator_main_python.prompt` changed from `./context/...` to `context/...` to match runtime resolution (Issue #225)
+- **generate**: removed stale `get_jwt_token` example include block; JWT is now obtained via `CloudConfig.get_jwt_token(verbose=verbose)`
+- **generate**: added unit test inclusion logic documentation and `validate_prompt_includes` example to prompt spec
+- **generate**: architecture template interface type repair logic added to prompt spec
+- **sync**: architecture metadata tag injection (`has_pdd_tags`, `generate_tags_from_architecture`) now operates on the post-validated `final_content` instead of raw `generated_code_content`
+
+### Docs
+
+- **README**: document architecture-driven prompt naming convention (`<path/to/output_stem>_<Language>.prompt`) and architecture-aware output path resolution in sync
+- **cloud batch**: document xdist findings — `--dist loadfile` avoids test failures but creates worse long-tail chunks; recommend dedicated batch shards instead
+
+### Test
+
+- new `tests/test_issue_225_paths_and_includes.py` (132 lines) covering architecture.json path resolution and include validation
+- new `tests/test_sync_determine_operation.py` (121 lines) covering `_find_architecture_json`, `_get_filepath_from_architecture`, and `_resolve_prompt_path_from_architecture`
+- new `tests/fixtures/test_simple_math.py` fixture for prompt generation test scenarios
+- updated `tests/test_code_generator_main.py` expectations to align with Issue #225 include validation
+
+### Build
+
+- **cloud batch**: expanded sync regression shard range (54–67, up from 54–65); case 3 split into dedicated shard IDs 13/14/15 for parallel budget, max-attempts, and target-coverage checks
+- **cloud batch**: `balance-chunks.py` now excludes `tests/fixtures/one_session_eval/` from test discovery
+- **cloud batch**: `entrypoint.sh` fallback `find` excludes `tests/fixtures/one_session_eval/*` to match `balance-chunks.py`
+- **cloud batch**: cloud and vitest shard ranges shifted to accommodate new sync regression shards
+- new `tests/cloud_regression.sh` script (19 lines) for cloud regression test orchestration
+
+### Contributors
+
+- Enfoirer (`Enfoirer:fix/issue-225-example-import-template`) for the Issue #225 investigation and fix — prompt validation, include path repair, and architecture-aware sync paths
 
 ## v0.0.202 (2026-04-08)
 
