@@ -551,6 +551,84 @@ class TestFullWipeoutScenario:
 
 
 # ---------------------------------------------------------------------------
+# Symlinked directories: cache should hit even if the directory is
+# accessed through a symlink (e.g. macOS /var -> /private/var).
+# ---------------------------------------------------------------------------
+
+class TestSymlinkCacheConsistency:
+    """Files accessed through a symlink should still get cache hits."""
+
+    def test_symlinked_directory_gets_cache_hit(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Scanning via a symlink to the directory should reuse cached entries
+        from a scan of the real directory."""
+        real_dir = tmp_path / "real_project"
+        real_dir.mkdir()
+        (real_dir / ".pddrc").touch()
+        (real_dir / "app.py").write_text("print('hello')")
+
+        # First scan via the real path
+        csv1, cost1, _ = summarize_directory(
+            directory_path=str(real_dir),
+            strength=0.5,
+            temperature=0.0,
+        )
+        assert cost1 > 0
+        mock_llm_invoke.reset_mock()
+
+        # Create a symlink to the project
+        link_dir = tmp_path / "link_project"
+        link_dir.symlink_to(real_dir)
+
+        # Rescan via the symlink — should be a cache hit
+        csv2, cost2, _ = summarize_directory(
+            directory_path=str(link_dir),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+        assert cost2 == 0, (
+            f"Scanning via symlink caused re-summarization (cost={cost2}). "
+            "Cache lookup should match via realpath normalization."
+        )
+
+    def test_symlinked_file_not_duplicated_in_csv(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """When a file is reachable via both a real path and a symlink path,
+        it should appear only once in the CSV output, not as two entries."""
+        real_dir = tmp_path / "real_project"
+        real_dir.mkdir()
+        (real_dir / ".pddrc").touch()
+        (real_dir / "utils.py").write_text("x = 1")
+
+        # First scan via real path
+        csv1, _, _ = summarize_directory(
+            directory_path=str(real_dir),
+            strength=0.5,
+            temperature=0.0,
+        )
+
+        # Create symlink and scan via it, passing first CSV as cache
+        link_dir = tmp_path / "link_project"
+        link_dir.symlink_to(real_dir)
+
+        csv2, _, _ = summarize_directory(
+            directory_path=str(link_dir),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+
+        rows = _parse_csv(csv2)
+        assert len(rows) == 1, (
+            f"File should appear once in CSV, got {len(rows)} entries: "
+            f"{[r['full_path'] for r in rows]}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Projects without any root marker
 # ---------------------------------------------------------------------------
 
@@ -667,6 +745,54 @@ class TestNoProjectMarkerFallback:
             f"got {len(rows3)} rows: {[r['full_path'] for r in rows3]}"
         )
 
+    def test_existing_csv_with_both_abs_and_rel_deduplicates(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """If the existing CSV somehow contains both an absolute-path entry
+        and a relative-path entry for the same file, the output should have
+        only one entry (the relative version)."""
+        (tmp_path / ".pddrc").touch()
+        content = "x = 1"
+        py_file = tmp_path / "mod.py"
+        py_file.write_text(content)
+
+        existing_csv = _make_csv([
+            {
+                'full_path': str(py_file.resolve()),  # absolute
+                'file_summary': 'Abs summary',
+                'key_exports': '["x"]',
+                'dependencies': '[]',
+                'content_hash': _content_hash(content),
+            },
+            {
+                'full_path': 'mod.py',  # relative
+                'file_summary': 'Rel summary',
+                'key_exports': '["x"]',
+                'dependencies': '[]',
+                'content_hash': _content_hash(content),
+            },
+        ])
+
+        csv_output, cost, _ = summarize_directory(
+            directory_path=str(tmp_path),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=existing_csv,
+        )
+
+        rows = _parse_csv(csv_output)
+        mod_entries = [r for r in rows if 'mod' in r['full_path']]
+        assert len(mod_entries) == 1, (
+            f"Same file with both abs and rel paths should produce one entry, "
+            f"got {len(mod_entries)}: {[r['full_path'] for r in mod_entries]}"
+        )
+        # Should be relative
+        assert not os.path.isabs(mod_entries[0]['full_path']), (
+            f"Output path should be relative, got: {mod_entries[0]['full_path']}"
+        )
+        # Should be a cache hit (no LLM cost)
+        assert cost == 0, f"Should be a cache hit, got cost={cost}"
+
     def test_no_markers_to_git_init_seamless_transition(
         self, tmp_path, mock_load_prompt_template, mock_llm_invoke
     ):
@@ -724,6 +850,15 @@ class TestNoProjectMarkerFallback:
         assert not os.path.isabs(new_entry['full_path']), (
             f"After git init, paths should be project-relative, "
             f"got: {new_entry['full_path']}"
+        )
+
+        # The old absolute-path entry should NOT survive alongside the new
+        # relative-path entry — no duplicates.
+        app_entries = [r for r in rows2 if 'app' in r['full_path']]
+        assert len(app_entries) == 1, (
+            f"After git init transition, app.py should appear exactly once "
+            f"in the CSV (old absolute entry replaced by new relative entry), "
+            f"got {len(app_entries)}: {[r['full_path'] for r in app_entries]}"
         )
 
 

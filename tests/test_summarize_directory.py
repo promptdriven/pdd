@@ -36,6 +36,7 @@ def mock_dependencies():
 
 
 def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    (tmp_path / ".pddrc").touch()
     # Create some temporary files
     file1 = tmp_path / "file1.py"
     file1.write_text("print('Hello World')")
@@ -73,6 +74,7 @@ def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_
 def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test that cache is used when content hash matches."""
     import hashlib
+    (tmp_path / ".pddrc").touch()
 
     # Create temporary files
     file1 = tmp_path / "file1.py"
@@ -84,9 +86,9 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     # Compute content hash for file1
     file1_hash = hashlib.sha256(file1_content.encode()).hexdigest()
 
-    # Create existing CSV with file1 (using absolute path since glob returns absolute)
+    # Create existing CSV with file1 using project-relative path
     existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
-{str(file1)},Existing summary.,"[""print""]","[""builtins""]",{file1_hash}'''
+file1.py,Existing summary.,"[""print""]","[""builtins""]",{file1_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -108,11 +110,13 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     assert len(rows) == 2
 
     # Check that file1 reused summary (based on content hash match)
-    for row in rows:
-        if row['full_path'] == file1.name:
-            assert row['file_summary'] == "Existing summary."
-        elif row['full_path'] == file2.name:
-            assert row['file_summary'] == "This is a summary."
+    summaries = {row['full_path']: row['file_summary'] for row in rows}
+    assert summaries.get('file1.py') == "Existing summary.", (
+        f"file1.py should have used cached summary. Got paths: {list(summaries.keys())}"
+    )
+    assert summaries.get('file2.py') == "This is a summary.", (
+        f"file2.py should have been freshly summarized. Got paths: {list(summaries.keys())}"
+    )
 
     assert total_cost == 0.01  # Only file2 was summarized
     assert model_name == "TestModel"

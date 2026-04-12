@@ -226,6 +226,9 @@ def project_dir(tmp_path):
     (src / "config.json").write_text(json.dumps(config_data, indent=2))
     (src / "docs.md").write_text(docs_md)
 
+    # Add project root marker so paths are project-relative, not absolute
+    (tmp_path / ".pddrc").touch()
+
     return tmp_path
 
 
@@ -509,22 +512,17 @@ class TestPreprocessQueryRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(project_dir)
 
-        # Point the config to our project_dir
-        mock_config = {"project_root": str(project_dir)}
-
         from pdd.include_query_extractor import IncludeQueryExtractor
-        from unittest.mock import patch
 
         src_file = project_dir / "src" / "models.py"
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            extractor = IncludeQueryExtractor()
+        extractor = IncludeQueryExtractor()
 
-            # First call — should invoke LLM
-            result1 = extractor.extract(
-                file_path=str(src_file),
-                query="What validation rules does UserModel enforce?",
-            )
+        # First call — should invoke LLM
+        result1 = extractor.extract(
+            file_path=str(src_file),
+            query="What validation rules does UserModel enforce?",
+        )
 
         print(f"\n  Extracted content (first 500 chars):\n{result1[:500]}")
 
@@ -551,11 +549,10 @@ class TestPreprocessQueryRealLLM:
 
         # Second call — should use cache (we can't directly verify no LLM call
         # without mocking, but we verify the result matches)
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result2 = extractor.extract(
-                file_path=str(src_file),
-                query="What validation rules does UserModel enforce?",
-            )
+        result2 = extractor.extract(
+            file_path=str(src_file),
+            query="What validation rules does UserModel enforce?",
+        )
 
         assert result1 == result2, "Second call should return identical cached result"
         print("  Cache hit verified (second call returned same result)")
@@ -571,16 +568,13 @@ class TestPreprocessQueryRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(project_dir)
 
-        mock_config = {"project_root": str(project_dir)}
         src_file = project_dir / "src" / "docs.md"
 
         prompt = f'<include query="What are the installation instructions?">{src_file}</include>'
 
         from pdd.preprocess import preprocess
-        from unittest.mock import patch
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         print(f"\n  Preprocessed result (first 500 chars):\n{result[:500]}")
 
@@ -706,7 +700,6 @@ class TestExtractsPruneAfterRealExtraction:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(project_dir)
 
-        mock_config = {"project_root": str(project_dir)}
         src_file = project_dir / "src" / "models.py"
 
         # Step 1: Create a prompt file with a query include
@@ -719,14 +712,12 @@ class TestExtractsPruneAfterRealExtraction:
 
         # Step 2: Run extraction (real LLM call)
         from pdd.include_query_extractor import IncludeQueryExtractor
-        from unittest.mock import patch
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            extractor = IncludeQueryExtractor()
-            result = extractor.extract(
-                file_path=str(src_file),
-                query="List all class names",
-            )
+        extractor = IncludeQueryExtractor()
+        result = extractor.extract(
+            file_path=str(src_file),
+            query="List all class names",
+        )
 
         print(f"\n  Extraction result: {result[:200]}")
 
@@ -741,11 +732,9 @@ class TestExtractsPruneAfterRealExtraction:
 
         # Step 4: Run prune
         from click.testing import CliRunner
-
-        with patch("pdd.extracts_prune.get_config", return_value=mock_config):
-            from pdd.extracts_prune import extracts
-            runner = CliRunner()
-            prune_result = runner.invoke(extracts, ["prune", "--force"])
+        from pdd.extracts_prune import extracts
+        runner = CliRunner()
+        prune_result = runner.invoke(extracts, ["prune", "--force"])
 
         print(f"  Prune output: {prune_result.output}")
         assert prune_result.exit_code == 0
@@ -858,6 +847,10 @@ class TestQueryContentReductionRealLLM:
         ''')
 
         (tmp_path / "party_planning.txt").write_text(party_planning)
+
+        # Add project root marker so paths are project-relative
+        (tmp_path / ".pddrc").touch()
+
         return tmp_path
 
     def test_query_reduces_content_not_full_file(self, party_dir, monkeypatch):
@@ -872,20 +865,17 @@ class TestQueryContentReductionRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(party_dir)
 
-        mock_config = {"project_root": str(party_dir)}
         party_file = party_dir / "party_planning.txt"
         full_content = party_file.read_text()
         full_line_count = len(full_content.splitlines())
 
         from pdd.include_query_extractor import IncludeQueryExtractor
-        from unittest.mock import patch
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            extractor = IncludeQueryExtractor()
-            result = extractor.extract(
-                file_path=str(party_file),
-                query="What songs should play at the success party?",
-            )
+        extractor = IncludeQueryExtractor()
+        result = extractor.extract(
+            file_path=str(party_file),
+            query="What songs should play at the success party?",
+        )
 
         print(f"\n  Full file: {full_line_count} lines, {len(full_content)} chars")
         print(f"  Extracted: {len(result.splitlines())} lines, {len(result)} chars")
@@ -924,17 +914,14 @@ class TestQueryContentReductionRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(party_dir)
 
-        mock_config = {"project_root": str(party_dir)}
         party_file = party_dir / "party_planning.txt"
 
         prompt = f'<include query="What songs should play at the success party?">{party_file}</include>'
 
         from pdd.preprocess import preprocess
-        from unittest.mock import patch
 
         # Step 1: First preprocess — should call LLM and cache
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result1 = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result1 = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         print(f"\n  Step 1 - First result ({len(result1)} chars):\n{result1[:300]}")
         assert len(result1) > 10
@@ -947,8 +934,7 @@ class TestQueryContentReductionRealLLM:
         assert len(md_files_1) >= 1
 
         # Step 2: Second preprocess — should use cache, identical result
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result2 = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result2 = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         assert result1 == result2, "Cache hit should produce identical result"
         print("  Step 2 - Cache hit verified")
@@ -958,8 +944,7 @@ class TestQueryContentReductionRealLLM:
         print("  Step 3 - Source file modified")
 
         # Step 4: Third preprocess — cache should be invalidated
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result3 = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result3 = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         assert len(result3) > 10
         assert "<include" not in result3

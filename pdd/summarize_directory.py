@@ -345,6 +345,9 @@ def summarize_directory(
         if base_dir:
             abs_candidate = os.path.normpath(os.path.join(base_dir, row['full_path']))
             scanned_paths.add(abs_candidate)
+            # Also track the realpath form for symlink consistency
+            scanned_paths.add(os.path.normpath(os.path.realpath(
+                os.path.join(base_dir, row['full_path']))))
     fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
     for norm_path, entry in existing_data.items():
         if norm_path not in scanned_paths:
@@ -395,10 +398,17 @@ def _process_single_file_logic(
         normalized_path = os.path.normpath(rel_path)
         cache_hit = False
 
-        # Also check absolute path for backward compatibility with older caches
+        # Also check absolute path for backward compatibility with older caches.
+        # Check both normpath and realpath forms to handle platforms where
+        # symlinks cause path divergence (e.g. macOS /var -> /private/var).
         abs_normalized_path = os.path.normpath(file_path)
+        abs_realpath = os.path.normpath(os.path.realpath(file_path))
 
-        cached_entry = existing_data.get(normalized_path) or existing_data.get(abs_normalized_path)
+        cached_entry = (
+            existing_data.get(normalized_path)
+            or existing_data.get(abs_normalized_path)
+            or existing_data.get(abs_realpath)
+        )
 
         if cached_entry:
             # Step 6d: Check hash match and that entry was produced by the new format
