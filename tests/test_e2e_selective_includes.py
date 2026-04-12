@@ -522,7 +522,7 @@ class TestIncludeQueryExtractorCaching:
 
         # Point config to tmp_path as project root
         mock_config = {"project_root": str(tmp_path)}
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", return_value={"result": "Extracted auth logic", "cost": 0.0, "model_name": "mock"}):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="template"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="processed"):
@@ -559,7 +559,7 @@ class TestIncludeQueryExtractorCaching:
             call_count["llm"] += 1
             return {"result": "LLM result", "cost": 0.0, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=counting_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -587,7 +587,7 @@ class TestIncludeQueryExtractorCaching:
             call_count["llm"] += 1
             return {"result": f"LLM result v{call_count['llm']}", "cost": 0.0, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=counting_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -612,7 +612,7 @@ class TestIncludeQueryExtractorCaching:
 
         mock_config = {"project_root": str(tmp_path)}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=[
                     {"result": "result_a", "cost": 0.0, "model_name": "mock"},
                     {"result": "result_b", "cost": 0.0, "model_name": "mock"},
@@ -688,9 +688,7 @@ class TestExtractsPruneE2E:
             f'<include query="referenced query">src.py</include>'
         )
 
-        mock_config = {"project_root": str(tmp_path)}
-
-        with patch("pdd.extracts_prune.get_config", return_value=mock_config):
+        with patch("pdd.extracts_prune.find_project_root_from_path", return_value=str(tmp_path)):
             # Need to also patch compute_cache_key to match our key computation
             from pdd.extracts_prune import extracts, prune
             runner = CliRunner()
@@ -711,8 +709,7 @@ class TestExtractsPruneE2E:
         cache_dir = tmp_path / ".pdd" / "extracts"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        mock_config = {"project_root": str(tmp_path)}
-        with patch("pdd.extracts_prune.get_config", return_value=mock_config):
+        with patch("pdd.extracts_prune.find_project_root_from_path", return_value=str(tmp_path)):
             from pdd.extracts_prune import extracts
             runner = CliRunner()
             result = runner.invoke(extracts, ["prune", "--force"], catch_exceptions=False)
@@ -1956,7 +1953,7 @@ class TestAutoDepsThenPreprocessPipeline:
         def mock_llm_invoke(**kwargs):
             return {"result": music_section, "cost": 0.001, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=mock_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -1994,7 +1991,7 @@ class TestAutoDepsThenPreprocessPipeline:
             call_count["n"] += 1
             return original_mock(**kwargs)
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=counting_mock):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -2022,7 +2019,7 @@ class TestAutoDepsThenPreprocessPipeline:
             call_count["n"] += 1
             return {"result": f"Music v{call_count['n']}", "cost": 0.001, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=mock_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -2070,7 +2067,7 @@ class TestAutoDepsThenPreprocessPipeline:
         def mock_llm_invoke(**kwargs):
             return {"result": "Music: We Are The Champions", "cost": 0.001, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=mock_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):

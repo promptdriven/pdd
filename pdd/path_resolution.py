@@ -119,10 +119,30 @@ def get_default_resolver() -> PathResolver:
 def _has_project_marker(path: Path) -> bool:
     return (
         (path / ".git").exists()
+        or (path / ".pddrc").exists()
         or (path / "pyproject.toml").exists()
         or (path / "data").is_dir()
         or (path / ".env").exists()
     )
+
+
+def find_project_root_from_path(start: str, max_levels: int = 10) -> Optional[str]:
+    """Walk up from *start* to find the project root.
+
+    Returns the absolute path of the first ancestor directory that contains
+    a project marker (.git, .pddrc, pyproject.toml, data/, .env), or None
+    if no marker is found within *max_levels* parents.
+    """
+    abs_path = Path(start).resolve()
+    current = abs_path if abs_path.is_dir() else abs_path.parent
+    for _ in range(max_levels):
+        if _has_project_marker(current):
+            return str(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return None
 
 
 def _is_within(path: Path, parent: Path) -> bool:

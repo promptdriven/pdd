@@ -33,10 +33,10 @@ from pdd.include_query_extractor import (
 @pytest.fixture
 def temp_project(tmp_path, monkeypatch):
     """Sets up a temporary project with mocked config, LLM, and cache enabled."""
-    def mock_get_config():
-        return {"project_root": str(tmp_path)}
-
-    monkeypatch.setattr("pdd.include_query_extractor.get_config", mock_get_config)
+    monkeypatch.setattr(
+        "pdd.path_resolution.find_project_root_from_path",
+        lambda *args, **kwargs: str(tmp_path),
+    )
     monkeypatch.setenv(_ENV_CACHE_ENABLE, "true")
 
     source_file = tmp_path / "test_doc.txt"
@@ -611,9 +611,10 @@ class TestCacheKeyPathConsistency:
         pdd_dir.mkdir()
         (pdd_dir / "utils.py").write_text("def helper(): pass")
 
-        mock_config = {"project_root": str(tmp_path)}
-
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch(
+            "pdd.path_resolution.find_project_root_from_path",
+            return_value=str(tmp_path),
+        ):
             key_relative = compute_cache_key("pdd/utils.py", "What functions are available?")
             key_absolute = compute_cache_key(
                 str(tmp_path / "pdd" / "utils.py"), "What functions are available?"

@@ -13,11 +13,6 @@ from pathlib import Path
 # Import helpers – fall back to stubs when the real package isn't available
 # (e.g. during isolated test runs).
 # ---------------------------------------------------------------------------
-try:
-    from pdd.config import get_config
-except ImportError:
-    def get_config():  # type: ignore[misc]
-        return {"project_root": "."}
 
 # ---------------------------------------------------------------------------
 # Lazy imports for llm_invoke, preprocess, load_prompt_template.
@@ -98,8 +93,9 @@ def _cache_enabled() -> bool:
 
 def _cache_dir() -> Path:
     """Return the extracts cache directory, creating it if necessary."""
-    cfg = get_config()
-    root = Path(cfg.get("project_root", ".")).resolve()
+    from .path_resolution import find_project_root_from_path
+    found = find_project_root_from_path(".")
+    root = Path(found).resolve() if found else Path(".").resolve()
     d = root / ".pdd" / "extracts"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -111,8 +107,12 @@ def _project_relative_path(resolved: Path) -> str:
     Falls back to the absolute path if the file is not under the
     project root.
     """
-    cfg = get_config()
-    project_root = Path(cfg.get("project_root", ".")).resolve()
+    from .path_resolution import find_project_root_from_path
+    root = find_project_root_from_path(str(resolved))
+    if root:
+        project_root = Path(root)
+    else:
+        project_root = Path(".").resolve()
     try:
         return str(resolved.relative_to(project_root))
     except ValueError:

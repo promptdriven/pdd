@@ -30,22 +30,14 @@ BINARY_EXTENSIONS = {
 }
 
 
-def _get_git_root(directory_path: str) -> Optional[str]:
-    """Return the absolute path of the git repository root, or None."""
-    try:
-        abs_path = os.path.abspath(directory_path)
-        cwd = abs_path if os.path.isdir(abs_path) else os.path.dirname(abs_path)
-        if not os.path.isdir(cwd):
-            cwd = os.path.dirname(cwd)
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, check=True,
-            cwd=cwd, timeout=10
-        )
-        return os.path.realpath(result.stdout.strip())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-            FileNotFoundError, OSError):
-        return None
+def _get_project_root(directory_path: str) -> Optional[str]:
+    """Return the project root for *directory_path*, or None.
+
+    Uses the shared marker-walking logic from path_resolution, which
+    recognises .git, .pddrc, pyproject.toml, data/, and .env.
+    """
+    from .path_resolution import find_project_root_from_path
+    return find_project_root_from_path(directory_path)
 
 
 def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
@@ -227,11 +219,11 @@ def summarize_directory(
         return output_io.getvalue(), 0.0, "None"
 
     # Determine base directory for relative paths.
-    # Prefer git repo root so that CSV paths are stable across different
+    # Prefer project root so that CSV paths are stable across different
     # directory_path values (scanning pdd/ vs context/ vs .).
-    git_root = _get_git_root(directory_path)
-    if git_root:
-        base_dir = git_root
+    project_root = _get_project_root(directory_path)
+    if project_root:
+        base_dir = project_root
     elif os.path.isdir(directory_path):
         base_dir = os.path.realpath(directory_path)
     else:

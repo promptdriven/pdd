@@ -875,10 +875,10 @@ class TestRemoveRedundantContentPathResolution:
         tests_dir.mkdir()
         monkeypatch.chdir(tests_dir)
 
-        # Mock get_config to return the correct project root
+        # Mock find_project_root_from_path to return the correct project root
         monkeypatch.setattr(
-            "pdd.insert_includes.get_config",
-            lambda: {"project_root": str(project_root)},
+            "pdd.path_resolution.find_project_root_from_path",
+            lambda *args, **kwargs: str(project_root),
         )
 
         # Prompt has the same content inline
@@ -1115,13 +1115,14 @@ class TestDedupCwdIndependence:
         """)
 
         csv_path = tmp_path / "deps.csv"
-        mock_config = {"project_root": str(tmp_path)}
-
         for test_cwd in [tmp_path, tmp_path / "pdd"]:
             monkeypatch.chdir(test_cwd)
             csv_path.write_text("full_path,file_summary,key_exports,dependencies,content_hash\n")
 
-            with mock_patch("pdd.insert_includes.get_config", return_value=mock_config):
+            with mock_patch(
+                "pdd.path_resolution.find_project_root_from_path",
+                return_value=str(tmp_path),
+            ):
                 output, _, _, _ = insert_includes(
                     input_prompt=input_prompt,
                     directory_path="pdd/" if test_cwd == tmp_path else str(tmp_path / "pdd"),
