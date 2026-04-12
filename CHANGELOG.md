@@ -1,3 +1,14 @@
+## v0.0.205 (2026-04-11)
+
+### Feat
+
+- fix silent drop of modified prompts without arch.json entries (#1143)
+
+### Fix
+
+- narrow Fix B safety net to workflow scope (address #1144 review)
+- bug: root .pddrc shadows nested .pddrc — sync can't find prompts in subdirectories
+
 ## v0.0.204 (2026-04-10)
 
 ### Feat
