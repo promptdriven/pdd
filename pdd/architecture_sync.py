@@ -273,7 +273,8 @@ def _infer_module_tags(filename: str) -> List[str]:
 def register_untracked_prompts(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
-    dry_run: bool = False
+    dry_run: bool = False,
+    only_files: Optional[set] = None,
 ) -> Dict[str, Any]:
     """
     Discover prompt files that have PDD tags but no architecture.json entry,
@@ -286,11 +287,23 @@ def register_untracked_prompts(
         prompts_dir: Directory containing prompt files
         architecture_path: Path to architecture.json
         dry_run: If True, return results without writing to file
+        only_files: Optional set of filenames (relative to prompts_dir, as
+            POSIX paths — e.g., {"commands/modify_python.prompt"}) to
+            restrict which prompts are considered for registration. When
+            provided, prompts outside this set are left untouched — even
+            if they have valid PDD tags and no arch.json entry. When
+            ``None`` (the default), all prompts under ``prompts_dir`` are
+            eligible (full-scan behavior, suitable for standalone cleanup
+            runs). In-workflow callers (e.g., ``agentic_change_orchestrator``
+            Step 10) should pass a narrow set containing only the prompts
+            touched by the current workflow, so a single ``pdd change`` run
+            cannot silently sweep unrelated repo-wide drift into the PR.
 
     Returns:
         Dict with keys:
         - registered: List[str] (filenames added to architecture.json)
-        - skipped: List[str] (filenames without PDD tags)
+        - skipped: List[str] (filenames without PDD tags, or filtered out
+          by ``only_files`` scope)
         - errors: List[str] (error messages)
     """
     if not architecture_path.exists():
@@ -310,6 +323,13 @@ def register_untracked_prompts(
         except ValueError:
             continue
         if filename in existing_filenames:
+            continue
+
+        # Scope gate: if only_files is provided, skip prompts outside the
+        # workflow's scope so an in-workflow call cannot silently register
+        # unrelated drift.
+        if only_files is not None and filename not in only_files:
+            skipped.append(filename)
             continue
 
         content = prompt_file.read_text(encoding='utf-8')

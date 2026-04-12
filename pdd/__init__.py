@@ -59,3 +59,4 @@ from .agentic_bug_orchestrator import run_agentic_bug_orchestrator
 from .agentic_update import run_agentic_update
 from .update_main import resolve_prompt_code_pair, find_and_resolve_all_pairs, get_git_changed_files, derive_basename_and_language, is_code_changed, update_file_pair, update_main
 from .ci_drift_heal import DriftInfo, HealResult, detect_drift, heal_module, commit_and_push, main
+from .agentic_change_orchestrator import run_agentic_change_orchestrator

@@ -63,7 +63,9 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
 
 5. **Update architecture.json (if it exists):**
    a. For new prompts: Add new entry with reason, interface, dependencies
-   b. For modified prompts: Sync entry from prompt tags
+   b. For modified prompts:
+      - If an existing arch.json entry is found: sync the entry from prompt tags
+      - If no existing arch.json entry is found: create a new entry using the same structure as (a), populating reason, interface, and dependencies from the prompt's PDD tags. This applies to prompts that exist in the repo but were never registered in arch.json (e.g., nested `commands/*` prompts, legacy modules).
    c. Preserve existing entries not being modified
 
 % Output
