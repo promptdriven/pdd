@@ -1,15 +1,43 @@
+## v0.0.205 (2026-04-11)
+
+### Feat
+
+- fix silent drop of modified prompts without arch.json entries (#1143)
+
+### Fix
+
+- narrow Fix B safety net to workflow scope (address #1144 review)
+- bug: root .pddrc shadows nested .pddrc — sync can't find prompts in subdirectories
+
 ## v0.0.204 (2026-04-10)
 
 ### Feat
 
-- implement prompt include validation, architecture-aware path resolution, and update cloud CI test configuration
-- cross-validate architecture deps vs prompt includes (sync, CLI, CI)
+- **arch/include cross-validation**: new `architecture_include_validation` module compares architecture.json dependency declarations against `<include>` targets in prompt files; surfaces drift as warnings during sync and as a failing CLI check (`pdd checkup --validate-arch-includes`) suitable for CI (Issue #733)
+- **prompt include validation**: architecture-aware path resolution for `<include>` tags in generated prompt files, integrated with cloud CI test configuration
 
 ### Fix
 
-- **#225**: resolve prompt includes from base_dir; drop duplicate validate-arch-includes CLI
-- **test**: restore DepGraphFromArchitectureResult import for issue 745 E2E
-- extend duplicate guard to bug, crash, change, update, split subcommands
+- **#225**: `validate_prompt_includes` now resolves `<include>` paths against `base_dir` (walking ancestor directories) instead of relying on `get_default_resolver()` / process `cwd`; new `_resolve_include_against_base_dir()` replaces the old resolver dependency
+- **#225**: removed short-lived `validate-arch-includes` CLI command added earlier in this cycle (redundant with `pdd checkup --validate-arch-includes`)
+- **#745**: restore `DepGraphFromArchitectureResult` import in issue 745 E2E cost-tracking test
+- **CI**: align dep graph test mock and restore orchestrator prompt specs
+- **duplicate guard**: extend duplicate CLI invocation detection to `bug`, `crash`, `change`, `update`, `split` subcommands (previously only `sync`, `generate`, `fix`; Issue #768)
+- **prompt**: add missing trailing newline in `agentic_bug_orchestrator_python.prompt`
+
+### Build
+
+- refresh `ci/cloud-batch/test-durations.json` with current timing data
+- update cloud image hash
+
+### Test
+
+- new regression test: include resolution succeeds when process `cwd` differs from `base_dir` (Issue #225)
+- new parametrized tests for each newly guarded subcommand (block + record-after-run)
+
+### Contributors
+
+- Vishal Ramvelu ([`vishalramvelu`](https://github.com/vishalramvelu)) — PR [#754](https://github.com/promptdriven/pdd/pull/754): architecture ↔ prompt include cross-validation, `base_dir` include resolution fix, CI alignment, and issue #745 E2E test repair
 
 ## v0.0.203 (2026-04-09)
 

@@ -40,7 +40,7 @@ from pdd.sync_order import (
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
 from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
-from pdd.architecture_sync import _merge_interface_signatures
+from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 
 # Initialize console for rich output
 console = Console()
@@ -653,20 +653,30 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
 _CLARIFICATION_STEPS = {4, 7}
 
 
-def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
-    """Fetch the current updated_at timestamp for a GitHub issue."""
+def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
+    """Re-fetch issue updated_at from GitHub API.
+
+    Used after a clarification stop to capture the timestamp AFTER
+    the bot's own comment, so stale detection doesn't false-trigger.
+    """
     try:
         result = subprocess.run(
             ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
              "--jq", ".updated_at"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=15,
+            capture_output=True, text=True, check=False, timeout=15,
         )
-        return result.stdout.strip() or None
-    except Exception:
-        return None
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        console.print(
+            f"[yellow]Warning: Failed to re-fetch issue updated_at "
+            f"(rc={result.returncode}): {result.stderr.strip()}[/yellow]"
+        )
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: Timed out re-fetching issue updated_at[/yellow]")
+    except OSError as e:
+        console.print(f"[yellow]Warning: OSError re-fetching issue updated_at: {e}[/yellow]")
+    return ""
+
 
 def _get_state_dir(cwd: Path) -> Path:
     """Get the state directory relative to git root."""
@@ -792,35 +802,6 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
         if not quiet:
             console.print(f"[yellow]Warning: Could not build dependency context: {e}[/yellow]")
         return ""
-
-
-def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
-    """Re-fetch issue updated_at from GitHub API.
-
-    Used after a clarification stop to capture the timestamp AFTER
-    the bot's own comment, so stale detection doesn't false-trigger.
-    """
-    console = Console(stderr=True)
-    try:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
-             "--jq", ".updated_at"],
-            capture_output=True, text=True, check=False, timeout=15,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        console.print(
-            f"[yellow]Warning: Failed to re-fetch issue updated_at "
-            f"(rc={result.returncode}): {result.stderr.strip()}[/yellow]"
-        )
-    except subprocess.TimeoutExpired:
-        console.print("[yellow]Warning: Timed out re-fetching issue updated_at[/yellow]")
-    except OSError as e:
-        console.print(f"[yellow]Warning: OSError re-fetching issue updated_at: {e}[/yellow]")
-    return ""
-
-
-_CLARIFICATION_STEPS = {4, 7}
 
 
 def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
@@ -1132,11 +1113,17 @@ def run_agentic_change_orchestrator(
                     if refreshed:
                         state["issue_updated_at"] = refreshed
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-                return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
+                return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
         stop_reason = _check_hard_stop(step_num, step_output)
         if stop_reason:
+            post_step_comment(
+                repo_owner=repo_owner, repo_name=repo_name,
+                issue_number=issue_number, step_num=step_num,
+                total_steps=13, description=description,
+                output=step_output, cwd=cwd,
+            )
             if not quiet:
                 console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             # Clarification steps save step_num - 1 so the step re-runs on resume
@@ -1148,7 +1135,7 @@ def run_agentic_change_orchestrator(
                 if refreshed:
                     state["issue_updated_at"] = refreshed
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-            return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, []
+            return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
         # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
         if step_num == 6:
@@ -1207,6 +1194,41 @@ def run_agentic_change_orchestrator(
                         + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
                         + "\n".join(f"- {warning}" for warning in all_warnings)
                     )
+
+                # Auto-register untracked prompts (safety net for Step 10 LLM rule 5(b)
+                # fallthrough). Scope is narrowed to prompts TOUCHED BY THIS WORKFLOW:
+                # any .prompt file in changed_files (Step 9 FILES_CREATED/MODIFIED plus
+                # Step 10's own arch_files). We must NOT auto-register prompts outside
+                # the workflow's scope — that would silently sweep repo-wide arch.json
+                # drift into this PR and could write incorrect metadata for prompts
+                # with non-standard paths (e.g. frontend/components/*.prompt, where
+                # _infer_filepath would produce a wrong Python-style filepath).
+                only_files: set = set()
+                for fp in changed_files:
+                    normalized = fp.replace("\\", "/")
+                    prompts_idx = normalized.rfind("prompts/")
+                    if prompts_idx == -1:
+                        continue
+                    rel = normalized[prompts_idx + len("prompts/"):]
+                    if rel.endswith(".prompt"):
+                        only_files.add(rel)
+
+                if only_files:
+                    try:
+                        reg_result = register_untracked_prompts(
+                            prompts_dir=worktree_path / "prompts",
+                            architecture_path=worktree_path / "architecture.json",
+                            dry_run=False,
+                            only_files=only_files,
+                        )
+                        registered = reg_result.get("registered", [])
+                        if registered:
+                            reg_list = ", ".join(registered)
+                            step_output += f"\n\nORCHESTRATOR_AUTO_REGISTERED: {reg_list}"
+                            if not quiet:
+                                console.print(f"[blue]Auto-registered untracked prompts in arch.json: {reg_list}[/blue]")
+                    except Exception:
+                        pass
 
         context[f"step{step_num}_output"] = step_output
         if step_success:
@@ -1388,4 +1410,3 @@ def run_agentic_change_orchestrator(
         clear_agentic_progress()
         return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
     return True, "Workflow already completed", total_cost, model_used, changed_files
-""
