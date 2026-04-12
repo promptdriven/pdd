@@ -1257,3 +1257,56 @@ class TestAutoIncludeCrossDirectoryPaths:
         assert "./pdd/" not in directives, (
             f"Path was unnecessarily prefixed with './': {directives}"
         )
+
+
+# ============================================================================
+# _strip_selectors_from_small_files — CWD independence
+#
+# When CWD is not the project root, repo-root-relative paths like
+# "context/helper.py" won't resolve from CWD. The function should still
+# correctly determine file sizes so it only strips selectors from small files.
+# ============================================================================
+
+
+class TestStripSelectorsCwdIndependence:
+    """_strip_selectors_from_small_files must resolve file paths even when CWD
+    is not the project root."""
+
+    def test_selectors_retained_for_large_file_when_cwd_is_subdir(self, tmp_path, monkeypatch):
+        """A large file (>100 lines) should keep its selectors even when CWD
+        is a subdirectory that can't directly resolve the repo-root-relative path."""
+        # Project root marker so find_project_root_from_path finds tmp_path
+        (tmp_path / ".pddrc").touch()
+
+        # Project structure
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        large_file = context_dir / "big_module.py"
+        large_file.write_text("# line\n" * 200)
+
+        small_file = context_dir / "tiny.py"
+        small_file.write_text("x = 1\n")
+
+        # CWD is a subdirectory — repo-root-relative paths won't resolve from CWD
+        subdir = tmp_path / "tests"
+        subdir.mkdir()
+        monkeypatch.chdir(subdir)
+
+        directives = (
+            '<new>\n<dep><include select="class:Foo">context/big_module.py</include></dep>\n</new>\n'
+            '<new>\n<dep><include select="def:bar">context/tiny.py</include></dep>\n</new>'
+        )
+
+        result = _strip_selectors_from_small_files(
+            directives, threshold=100, directory_path=str(context_dir)
+        )
+
+        # Large file should retain its selector
+        assert 'select="class:Foo"' in result, (
+            "Selector was incorrectly stripped from a large file (>100 lines). "
+            "Likely caused by CWD-relative path resolution failing silently."
+        )
+        # Small file should have its selector stripped
+        assert 'select="def:bar"' not in result, (
+            "Selector was NOT stripped from a small file (<100 lines)."
+        )

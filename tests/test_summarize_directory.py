@@ -296,6 +296,7 @@ def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
 
 def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test partial cache hit: file1 cached, file2 content changed, file3 new."""
+    (tmp_path / ".pddrc").touch()
     import hashlib
 
     # Create multiple temporary files
@@ -835,6 +836,7 @@ def test_file_filtering(mock_dependencies, tmp_path):
 
 def test_summarization_no_cache(mock_dependencies, tmp_path):
     """Test full summarization flow without existing cache."""
+    (tmp_path / ".pddrc").touch()
     mock_load, mock_invoke = mock_dependencies
     
     file_path = tmp_path / "test.py"
@@ -1012,6 +1014,7 @@ class TestRelativePaths:
 
     def test_output_paths_are_relative_not_absolute(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """full_path column should contain relative paths, not absolute."""
+        (tmp_path / ".pddrc").touch()
         file1 = tmp_path / "file1.py"
         file1.write_text("print('hello')")
 
@@ -1032,6 +1035,7 @@ class TestRelativePaths:
 
     def test_relative_paths_with_subdirectories(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """Relative paths should preserve directory structure."""
+        (tmp_path / ".pddrc").touch()
         subdir = tmp_path / "src"
         subdir.mkdir()
         (subdir / "main.py").write_text("print('main')")
@@ -1056,6 +1060,7 @@ class TestRelativePaths:
 
     def test_relative_paths_in_cache_lookup(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """Cache lookup should work correctly with relative paths in existing CSV."""
+        (tmp_path / ".pddrc").touch()
         import hashlib
 
         file1 = tmp_path / "cached.py"
@@ -1605,6 +1610,7 @@ class TestCacheInvalidationEdgeCases:
 
     def test_cache_hit_when_key_exports_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """New-format CSV with key_exports='[]' should still cache (file may have no exports)."""
+        (tmp_path / ".pddrc").touch()
         import hashlib
         content = "x"
         (tmp_path / "test.py").write_text(content)
@@ -1622,6 +1628,7 @@ class TestCacheInvalidationEdgeCases:
 
     def test_cache_hit_when_dependencies_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """New-format CSV with dependencies='[]' should still cache (file may have no imports)."""
+        (tmp_path / ".pddrc").touch()
         import hashlib
         content = "x"
         (tmp_path / "test.py").write_text(content)
@@ -1733,6 +1740,7 @@ class TestReturnValueShape:
         assert isinstance(model, str)
 
     def test_model_name_cached_when_all_from_cache(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / ".pddrc").touch()
         import hashlib
         content = "x"
         (tmp_path / "f.py").write_text(content)

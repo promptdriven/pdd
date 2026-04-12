@@ -221,17 +221,15 @@ def summarize_directory(
     # Determine base directory for relative paths.
     # Prefer project root so that CSV paths are stable across different
     # directory_path values (scanning pdd/ vs context/ vs .).
+    # When no project root marker exists, base_dir is None and we store
+    # absolute paths — they're unambiguous regardless of which directory
+    # is scanned, and convert seamlessly to project-relative paths once
+    # a marker (e.g. git init) is added.
     project_root = _get_project_root(directory_path)
     if project_root:
         base_dir = project_root
-    elif os.path.isdir(directory_path):
-        base_dir = os.path.realpath(directory_path)
     else:
-        prefix = directory_path.split('*')[0]
-        if os.path.isdir(prefix):
-            base_dir = os.path.realpath(prefix)
-        else:
-            base_dir = os.path.realpath(os.path.dirname(prefix))
+        base_dir = None
 
     results_data: List[Dict[str, str]] = []
     total_cost = 0.0
@@ -240,9 +238,13 @@ def summarize_directory(
     # Step 6: Iterate through files with progress reporting
     total_files = len(files)
 
+    def _compute_rel_path(file_path: str) -> str:
+        real = os.path.realpath(file_path)
+        return os.path.relpath(real, base_dir) if base_dir else real
+
     def _process_file(i: int, file_path: str) -> Tuple[float, str]:
         """Process a single file and accumulate results."""
-        rel_path = os.path.relpath(os.path.realpath(file_path), base_dir)
+        rel_path = _compute_rel_path(file_path)
         return _process_single_file_logic(
             file_path,
             rel_path,
@@ -262,7 +264,7 @@ def summarize_directory(
 
         def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str]:
             """Thread-safe wrapper that returns index for ordering."""
-            rel_path = os.path.relpath(os.path.realpath(file_path), base_dir)
+            rel_path = _compute_rel_path(file_path)
             local_results: List[Dict[str, str]] = []
             cost, model = _process_single_file_logic(
                 file_path,
@@ -340,8 +342,9 @@ def summarize_directory(
         scanned_paths.add(os.path.normpath(row['full_path']))
         # Also track the absolute version so entries keyed by absolute path
         # are recognized as already present when the scan wrote a relative path.
-        abs_candidate = os.path.normpath(os.path.join(base_dir, row['full_path']))
-        scanned_paths.add(abs_candidate)
+        if base_dir:
+            abs_candidate = os.path.normpath(os.path.join(base_dir, row['full_path']))
+            scanned_paths.add(abs_candidate)
     fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
     for norm_path, entry in existing_data.items():
         if norm_path not in scanned_paths:

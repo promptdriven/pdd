@@ -69,9 +69,9 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
         Key Exports: {key_exports}
         Dependencies: {dependencies}
 
-    When ``directory_path`` is provided, it is prepended to relative
-    ``full_path`` values so the LLM sees (and later emits) paths that are
-    resolvable from the current working directory.
+    ``directory_path`` is accepted for API compatibility but is no longer
+    used.  CSV paths are stored relative to the project root since the
+    Bug #2 fix, so no qualification is needed.
     """
     if not csv_output:
         return ""
@@ -361,18 +361,20 @@ def _strip_selectors_from_small_files(directives: str, threshold: int = 100, dir
     For <new> blocks: remove select/query attributes but keep the include.
     For <update> blocks: remove the entire block.
 
-    Resolves relative paths against directory_path when checking file size.
+    Resolves relative paths against the project root so that
+    repo-root-relative CSV paths are found regardless of CWD.
     """
+    from .path_resolution import find_project_root_from_path
+    _found = find_project_root_from_path(directory_path or ".")
+    _project_root = _found if _found else os.path.abspath(directory_path or ".")
+
     def _resolve_and_count(file_path: str) -> int:
-        """Try the path as-is, then relative to directory_path."""
+        """Try the path as-is, then relative to project root."""
         count = _get_file_line_count(file_path)
         if count > 0:
             return count
-        if directory_path:
-            prefix = _directory_prefix(directory_path)
-            if prefix and not file_path.startswith(prefix):
-                resolved = os.path.join(prefix, file_path)
-                count = _get_file_line_count(resolved)
+        resolved = os.path.join(_project_root, file_path)
+        count = _get_file_line_count(resolved)
         return count
 
     def process_new_block(match: str) -> str:

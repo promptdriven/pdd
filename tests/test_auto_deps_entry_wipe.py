@@ -171,9 +171,9 @@ class TestEntryWipeout:
         # File comes back with same content
         py_file.write_text(content)
 
-        # BUG: csv_output_2 no longer has the entry for utils.py because it
-        # was wiped during the scan when the file didn't exist. So even though
-        # the file content is identical, we have to re-summarize it.
+        # After the merge fix, csv_output_2 retains the entry for utils.py
+        # even though the file was absent during that scan.  When the file
+        # reappears with the same content, it should be a cache hit.
         csv_output_3, cost_3, _ = summarize_directory(
             directory_path=str(tmp_path),
             strength=0.5,
@@ -321,6 +321,7 @@ class TestUnnecessaryResummarization:
         When someone adds the selective includes feature, ALL existing entries
         get the _backfilled flag and are re-summarized on next run.
         """
+        (tmp_path / ".pddrc").touch()
         content = "def old_func(): pass"
         (tmp_path / "legacy.py").write_text(content)
 
@@ -358,6 +359,7 @@ class TestUnnecessaryResummarization:
         with relative paths (line 417), so after one run with absolute paths in
         CSV, the next run's relative paths won't match the written output.
         """
+        (tmp_path / ".pddrc").touch()
         content = "x = 1"
         py_file = tmp_path / "mod.py"
         py_file.write_text(content)
@@ -546,5 +548,312 @@ class TestFullWipeoutScenario:
             f"got {len(output_rows)}. Entries for other_dir/ were wiped. "
             f"Output paths: {output_paths}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Projects without any root marker
+# ---------------------------------------------------------------------------
+
+class TestNoProjectMarkerFallback:
+    """When no project root marker exists (.git, .pddrc, pyproject.toml, etc.),
+    summarize_directory stores absolute paths so that files are unambiguous
+    across scans of different directories.  The pipeline should still work:
+    no crashes, cache hits on rescan, entries preserved, and no collisions
+    between same-named files in different directories."""
+
+    def test_no_markers_uses_absolute_paths(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Without project markers, CSV paths should be absolute so they
+        are stable and unambiguous regardless of which directory is scanned."""
+        bare_dir = tmp_path / "no_markers" / "src"
+        bare_dir.mkdir(parents=True)
+        (bare_dir / "app.py").write_text("print('hello')")
+
+        csv_output, _, _ = summarize_directory(
+            directory_path=str(bare_dir),
+            strength=0.5,
+            temperature=0.0,
+        )
+        rows = _parse_csv(csv_output)
+        assert len(rows) == 1
+        assert os.path.isabs(rows[0]['full_path']), (
+            f"Without project markers, path should be absolute, "
+            f"got: {rows[0]['full_path']}"
+        )
+
+    def test_no_markers_no_collision_same_named_files(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Two directories each containing utils.py should produce two
+        distinct CSV entries, not overwrite each other."""
+        dir_a = tmp_path / "no_markers" / "dir_a"
+        dir_a.mkdir(parents=True)
+        (dir_a / "utils.py").write_text("def helper_a(): return 1")
+
+        dir_b = tmp_path / "no_markers" / "dir_b"
+        dir_b.mkdir(parents=True)
+        (dir_b / "utils.py").write_text("def helper_b(): return 2")
+
+        csv1, _, _ = summarize_directory(
+            directory_path=str(dir_a),
+            strength=0.5,
+            temperature=0.0,
+        )
+        csv2, _, _ = summarize_directory(
+            directory_path=str(dir_b),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+
+        rows = _parse_csv(csv2)
+        assert len(rows) == 2, (
+            f"Same-named files in different directories should produce "
+            f"2 distinct entries, got {len(rows)}: "
+            f"{[r['full_path'] for r in rows]}"
+        )
+
+    def test_no_markers_caches_and_preserves(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Without project markers: same-directory rescans get cache hits,
+        and cross-directory entries are preserved."""
+        dir_a = tmp_path / "no_markers" / "dir_a"
+        dir_a.mkdir(parents=True)
+        (dir_a / "app.py").write_text("print('hello')")
+
+        dir_b = tmp_path / "no_markers" / "dir_b"
+        dir_b.mkdir(parents=True)
+        (dir_b / "lib.py").write_text("x = 1")
+
+        # Scan dir_a
+        csv1, cost1, _ = summarize_directory(
+            directory_path=str(dir_a),
+            strength=0.5,
+            temperature=0.0,
+        )
+        assert cost1 > 0
+        mock_llm_invoke.reset_mock()
+
+        # Scan dir_b, passing dir_a's CSV — dir_a's entry preserved
+        csv2, _, _ = summarize_directory(
+            directory_path=str(dir_b),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+        rows2 = _parse_csv(csv2)
+        assert len(rows2) == 2, (
+            f"dir_a entry should be preserved when scanning dir_b, "
+            f"got {len(rows2)} rows: {[r['full_path'] for r in rows2]}"
+        )
+        mock_llm_invoke.reset_mock()
+
+        # Rescan dir_a — should be a cache hit
+        csv3, cost3, _ = summarize_directory(
+            directory_path=str(dir_a),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv2,
+        )
+        assert cost3 == 0, (
+            f"Same-directory rescan should be a cache hit even without "
+            f"project markers, but LLM was called (cost={cost3})"
+        )
+        rows3 = _parse_csv(csv3)
+        assert len(rows3) == 2, (
+            f"Both entries should be preserved after rescan, "
+            f"got {len(rows3)} rows: {[r['full_path'] for r in rows3]}"
+        )
+
+    def test_no_markers_to_git_init_seamless_transition(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """After git init, the next scan should convert absolute paths to
+        project-relative paths without re-summarizing (cache hits via the
+        backward-compat absolute-path lookup)."""
+        import subprocess
+
+        project = tmp_path / "new_project"
+        project.mkdir()
+        src = project / "src"
+        src.mkdir()
+        (src / "app.py").write_text("print('hello')")
+
+        # Scan WITHOUT markers — absolute paths
+        csv1, cost1, _ = summarize_directory(
+            directory_path=str(src),
+            strength=0.5,
+            temperature=0.0,
+        )
+        assert cost1 > 0
+        rows1 = _parse_csv(csv1)
+        assert os.path.isabs(rows1[0]['full_path'])
+        mock_llm_invoke.reset_mock()
+
+        # Now git init — adds a project root marker
+        subprocess.run(
+            ["git", "init"], cwd=str(project), capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "add", "."], cwd=str(project), capture_output=True, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--allow-empty"],
+            cwd=str(project), capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
+        )
+
+        # Rescan — should be a cache hit (absolute path matched via compat)
+        # and output should now use project-relative paths
+        csv2, cost2, _ = summarize_directory(
+            directory_path=str(src),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+        assert cost2 == 0, (
+            f"After git init, rescan should be a cache hit (cost={cost2}). "
+            "The backward-compat absolute-path lookup should match the "
+            "existing CSV entry."
+        )
+        rows2 = _parse_csv(csv2)
+        new_entry = next(r for r in rows2 if 'app' in r['full_path'])
+        assert not os.path.isabs(new_entry['full_path']), (
+            f"After git init, paths should be project-relative, "
+            f"got: {new_entry['full_path']}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-level test: no markers, full insert_includes flow
+# ---------------------------------------------------------------------------
+
+class TestNoMarkerPipeline:
+    """Exercise the full pipeline (insert_includes → auto_include →
+    summarize_directory) in a project with NO root markers (.git, .pddrc,
+    etc.).  Verifies that auto-deps, caching, path resolution, and dedup
+    all still function correctly."""
+
+    def test_insert_includes_pipeline_without_markers(self, tmp_path):
+        """Full pipeline run in a marker-free project:
+        1. First run: files are summarized, LLM picks dependencies, prompt updated
+        2. Second run (same directory): all summarize calls are cache hits
+        3. CSV paths are relative, no crashes anywhere in the chain
+        """
+        from unittest.mock import patch as mock_patch
+        from pdd.insert_includes import insert_includes, InsertIncludesOutput
+        from pdd.auto_include import AutoIncludeResult, NewInclude
+
+        # No .git, .pddrc, pyproject.toml, data/, or .env
+        src_dir = tmp_path / "no_markers_proj" / "src"
+        src_dir.mkdir(parents=True)
+        (src_dir / "utils.py").write_text(
+            "def helper():\n    return 42\n\ndef format_output(data):\n    return str(data)\n"
+        )
+        (src_dir / "models.py").write_text(
+            "class User:\n    def __init__(self, name):\n        self.name = name\n"
+        )
+
+        csv_path = tmp_path / "no_markers_proj" / "deps.csv"
+        # Without markers, CSV stores absolute paths
+        utils_abs = str((src_dir / "utils.py").resolve())
+
+        input_prompt = "Generate a REST API that uses User model and helper utilities."
+
+        # Mock the LLM calls but let everything else (path resolution, caching,
+        # CSV I/O, dedup) run for real.
+        summarize_call_count = [0]
+
+        def mock_summarize_llm(**kwargs):
+            summarize_call_count[0] += 1
+            return {
+                "result": FileSummary(
+                    file_summary="Mock summary",
+                    key_exports=["func"],
+                    dependencies=["os"],
+                ),
+                "cost": 0.001,
+                "model_name": "mock",
+            }
+
+        def mock_auto_include_llm(**kwargs):
+            pydantic_model = kwargs.get("output_pydantic")
+            if pydantic_model == AutoIncludeResult:
+                return {
+                    "result": AutoIncludeResult(
+                        reasoning="Need utils",
+                        new_includes=[NewInclude(file=utils_abs, module="utils")],
+                        existing_include_annotations=[],
+                    ),
+                    "cost": 0.001,
+                    "model_name": "mock",
+                }
+            # insert_includes LLM call
+            prompt_text = kwargs.get("input_json", {}).get("actual_prompt_to_update", "")
+            return {
+                "result": InsertIncludesOutput(
+                    output_prompt=f"<include>{utils_abs}</include>\n" + prompt_text.rstrip()
+                ),
+                "cost": 0.001,
+                "model_name": "mock",
+            }
+
+        with mock_patch("pdd.summarize_directory.load_prompt_template", return_value="template"), \
+             mock_patch("pdd.summarize_directory.llm_invoke", side_effect=mock_summarize_llm), \
+             mock_patch("pdd.auto_include.load_prompt_template", return_value="template"), \
+             mock_patch("pdd.auto_include.llm_invoke", side_effect=mock_auto_include_llm), \
+             mock_patch("pdd.insert_includes.load_prompt_template", return_value="template"), \
+             mock_patch("pdd.insert_includes.preprocess", side_effect=lambda p, **kw: p), \
+             mock_patch("pdd.insert_includes.llm_invoke", side_effect=mock_auto_include_llm):
+
+            # --- Run 1: first scan ---
+            output1, csv_out1, cost1, model1 = insert_includes(
+                input_prompt=input_prompt,
+                directory_path=str(src_dir),
+                csv_filename=str(csv_path),
+                strength=0.5,
+                temperature=0.0,
+                dedup=True,
+            )
+
+            assert "<include" in output1, f"Output should have include tags. Got:\n{output1}"
+            # CSV should have entries
+            rows1 = _parse_csv(csv_out1)
+            assert len(rows1) >= 2, f"CSV should have entries for both files, got {len(rows1)}"
+            # Without markers, paths should be absolute
+            for r in rows1:
+                assert os.path.isabs(r['full_path']), (
+                    f"Without markers, CSV path should be absolute, "
+                    f"got: {r['full_path']}"
+                )
+            run1_summarize_calls = summarize_call_count[0]
+            assert run1_summarize_calls == 2, (
+                f"Run 1 should summarize 2 files, got {run1_summarize_calls}"
+            )
+
+            # --- Run 2: same directory, same CSV — should be all cache hits ---
+            summarize_call_count[0] = 0
+
+            output2, csv_out2, cost2, model2 = insert_includes(
+                input_prompt=output1,  # feed output of run 1
+                directory_path=str(src_dir),
+                csv_filename=str(csv_path),
+                strength=0.5,
+                temperature=0.0,
+                dedup=True,
+            )
+
+            assert summarize_call_count[0] == 0, (
+                f"Run 2 should be all cache hits (0 summarize LLM calls), "
+                f"got {summarize_call_count[0]}. Cache keys are unstable."
+            )
+            rows2 = _parse_csv(csv_out2)
+            assert len(rows2) >= len(rows1), (
+                f"CSV entries should not decrease between runs "
+                f"({len(rows1)} → {len(rows2)})"
+            )
 
 
