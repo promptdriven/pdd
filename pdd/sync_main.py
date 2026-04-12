@@ -25,9 +25,11 @@ from .construct_paths import (
     get_extension
 )
 from .sync_determine_operation import get_pdd_file_paths
+from .architecture_include_validation import print_architecture_include_validation_warnings
 from .sync_orchestration import sync_orchestration
 from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
+from .core.errors import record_core_dump_error
 
 # Blocklist of characters that are dangerous in shell contexts or malformed as paths.
 # Everything else is allowed — frameworks use [], (), +, @, dots, unicode, etc.
@@ -400,7 +402,38 @@ def _detect_languages(basename: str, prompts_dir: Path) -> Dict[str, Path]:
         pattern = f"{glob.escape(name_part)}_*.prompt"
     else:
         pattern = f"{glob.escape(basename)}_*.prompt"
-    for prompt_file in prompts_dir.glob(pattern):
+    # Search root first, then subdirectories if not found (supports prompts
+    # in context-specific subdirs like prompts/src/services/).
+    matches = list(prompts_dir.glob(pattern))
+    if not matches:
+        # When the basename is directory-prefixed (e.g. ``core/cloud``) we
+        # mirror the same dir-aware matching the root-level glob uses: if
+        # ``prompts_dir`` already ends with the prefix, search just for
+        # ``name_part`` recursively; otherwise require the full
+        # ``dir_part/name_part`` so we don't false-match unrelated files
+        # like ``other/cloud_*.prompt`` in sibling subtrees.
+        if dir_parts and prompts_dir.parts[-len(dir_parts):] != dir_parts:
+            recursive_pattern = (
+                f"**/{glob.escape(dir_part)}/{glob.escape(name_part)}_*.prompt"
+            )
+        else:
+            recursive_pattern = f"**/{glob.escape(name_part)}_*.prompt"
+        recursive_matches = list(prompts_dir.glob(recursive_pattern))
+        # Collision detection: warn if same basename found in multiple subdirs
+        if len(recursive_matches) > 1:
+            dirs = {str(m.parent) for m in recursive_matches}
+            if len(dirs) > 1:
+                # Use rich console output (consistent with other CLI warnings
+                # in this module). ``warnings.warn`` is wrong here because
+                # Python deduplicates / silences warnings by default and the
+                # stack-trace formatting is noisy in CLI context.
+                rprint(
+                    f"[yellow]Warning: Prompt '{name_part}' found in multiple "
+                    f"subdirectories: {sorted(dirs)}. Using first match: "
+                    f"{recursive_matches[0]}[/yellow]"
+                )
+        matches = recursive_matches
+    for prompt_file in matches:
         # stem is the filename without extension (e.g., 'cloud_python')
         stem = prompt_file.stem
         # Ensure the file starts with the exact name part followed by an underscore
@@ -639,6 +672,8 @@ def sync_main(
         if not quiet:
             rprint(Panel(f"Displaying sync analysis for [bold cyan]{basename}[/bold cyan]", title="PDD Sync Dry Run", expand=False))
 
+        print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
+
         for lang, prompt_file_path in lang_to_path.items():
             if not quiet:
                 rprint(f"\n--- Log for language: [bold green]{lang}[/bold green] ---")
@@ -689,6 +724,7 @@ def sync_main(
     if not quiet and display_budget < 1.0:
         console.log(f"[yellow]Warning:[/] Budget of ${display_budget:.2f} is low. Complex operations may exceed this limit.")
 
+    print_architecture_include_validation_warnings(quiet=quiet, verbose=verbose)
     if not quiet:
         summary_panel = Panel(
             f"Basename: [bold cyan]{basename}[/bold cyan]\n"
@@ -717,6 +753,17 @@ def sync_main(
                 rprint(f"[yellow]Budget exhausted. Skipping sync for '{lang}'.[/yellow]")
             overall_success = False
             aggregated_results["results_by_language"][lang] = {"success": False, "error": "Budget exhausted"}
+            record_core_dump_error(
+                command="sync",
+                type="BudgetExhausted",
+                message="Budget exhausted. Skipping remaining languages.",
+                details={
+                    "basename": basename,
+                    "language": lang,
+                    "remaining_budget": remaining_budget,
+                    "total_cost_so_far": total_cost,
+                },
+            )
             continue
 
         try:
@@ -852,6 +899,9 @@ def sync_main(
                             original_prompt_file_path=None,
                             force_incremental_flag=False,
                             language=resolved_language,
+                            # output is .pddrc-derived (get_pdd_file_paths uses
+                            # context config), so let front-matter override it.
+                            output_from_config=True,
                         )
                         # code_generator_main returns (content, was_incremental, cost, model)
                         pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0

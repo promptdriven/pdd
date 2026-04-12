@@ -224,6 +224,10 @@ def mock_rich_console_fixture(monkeypatch):
 def mock_env_vars(monkeypatch):
     monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test_firebase_key")
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test_github_id")
+    # Ensure cloud-only env vars don't leak from the host environment
+    # and override local=True in tests (see _env_flag_enabled checks).
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
+    monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
 
 # --- Helper to create files ---
 def create_file(path, content=""):
@@ -1267,6 +1271,176 @@ Generate module for $NAME.
     expected_path = pathlib.Path(str(output_template_path).replace("${NAME}", "Widget")).resolve()
     assert expected_path.exists()
     assert expected_path.read_text() == DEFAULT_MOCK_GENERATED_CODE
+
+
+def test_front_matter_output_overrides_pddrc_config(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    """Front-matter output: should override .pddrc generate_output_path
+    when output_from_config=True (sync flow)."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "fm_override.prompt"
+
+    fm_output = temp_dir_setup["tmp_path"] / "correct_subdir" / "fm_override.py"
+    pddrc_output = temp_dir_setup["output_dir"] / "fm_override.py"
+
+    front_matter_prompt = f"""---
+output: \"{fm_output}\"
+---
+Generate module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(pddrc_output)},
+        "python",
+    )
+
+    # output_from_config=True simulates sync passing .pddrc-resolved path
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(pddrc_output),  # .pddrc output
+        None,
+        False,
+        env_vars={"llm": "true"},
+        output_from_config=True,
+    )
+
+    # Front-matter should win over .pddrc
+    assert fm_output.resolve().exists(), "Front-matter output should override .pddrc path"
+    assert not pddrc_output.exists(), ".pddrc path should NOT be used"
+
+
+def test_cli_output_flag_beats_front_matter(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    """Explicit --output CLI flag should NOT be overridden by front-matter."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "cli_wins.prompt"
+
+    fm_output = temp_dir_setup["tmp_path"] / "fm_path" / "cli_wins.py"
+    cli_output = temp_dir_setup["output_dir"] / "cli_wins.py"
+
+    front_matter_prompt = f"""---
+output: \"{fm_output}\"
+---
+Generate module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(cli_output)},
+        "python",
+    )
+
+    # output_from_config=False (default) = explicit CLI --output
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(cli_output),  # CLI --output
+        None,
+        False,
+        env_vars={"llm": "true"},
+        output_from_config=False,
+    )
+
+    # CLI flag should win over front-matter
+    assert cli_output.exists(), "CLI --output should be used"
+    assert not fm_output.resolve().exists(), "Front-matter should NOT override CLI --output"
+
+
+def test_front_matter_resolution_failure_warns_and_falls_back(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    mock_rich_console_fixture,
+    monkeypatch,
+):
+    """When front-matter ``output:`` resolution raises (e.g. bad path,
+    permission error), the CLI must:
+        1. log a yellow warning to the console
+        2. fall back to the .pddrc / CLI-supplied output path
+        3. NOT crash silently
+
+    Regression: the bare ``except Exception: pass`` previously swallowed
+    these errors, so users would see code written to the wrong location
+    with no indication why.
+    """
+    import pdd.code_generator_main as cgm
+
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['quiet'] = False
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "fm_broken.prompt"
+
+    fallback_output = temp_dir_setup["output_dir"] / "fm_broken.py"
+    front_matter_prompt = """---
+output: \"/tmp/fm_resolve_will_explode.py\"
+---
+Generate module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(fallback_output)},
+        "python",
+    )
+
+    # Force front-matter resolution to raise. We monkeypatch ``_expand_vars``
+    # to raise *only* for the front-matter value — the helper is also called
+    # earlier on the regular ``output_path`` argument, which must succeed so
+    # we actually reach the try/except Greg flagged in code_generator_main.py.
+    real_expand = cgm._expand_vars
+    fm_value = "/tmp/fm_resolve_will_explode.py"
+
+    def selective_boom(text, vars_map=None):
+        if text == fm_value:
+            raise PermissionError("simulated permission error during expansion")
+        return real_expand(text, vars_map)
+
+    monkeypatch.setattr(cgm, "_expand_vars", selective_boom)
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(fallback_output),  # .pddrc-supplied default
+        None,
+        False,
+        env_vars={"llm": "true"},
+        output_from_config=True,  # exercise the broadened sync path
+    )
+
+    # ``mock_rich_console_fixture`` is the autouse fixture that intercepts
+    # ``console.print`` calls in this module — capsys would not see them
+    # because rich's print is replaced with a MagicMock.
+    printed = [
+        " ".join(str(a) for a in call.args)
+        for call in mock_rich_console_fixture.call_args_list
+    ]
+    joined = " ".join(printed)
+    assert "Could not resolve front-matter output path" in joined, (
+        f"Expected fall-back warning in console output, got: {printed}"
+    )
+    assert "simulated permission error" in joined
+    # Fallback path was actually used.
+    assert fallback_output.exists(), "Should fall back to .pddrc / CLI path on resolution failure"
+
 
 
 def test_front_matter_variable_defaults_and_no_override(
@@ -2955,22 +3129,18 @@ class TestIssue687ExampleOutputPath:
         assert "custom/override" in cloud_prompt
         assert "context/examples" not in cloud_prompt
 
-    def test_real_template_references_example_output_path_variable(self):
-        """The actual generate_prompt.prompt template must reference
-        ${EXAMPLE_OUTPUT_PATH} so the injected variable is consumed.
-
-        This is the critical test — without this, injecting the variable
-        into env_vars does nothing because the template never uses it."""
+    def test_real_template_forbids_fabricated_example_paths(self):
+        """The real generate_prompt template should forbid fabricated example includes."""
         template_path = (
             pathlib.Path(__file__).parent.parent
             / "pdd" / "templates" / "generic" / "generate_prompt.prompt"
         )
         template_content = template_path.read_text(encoding="utf-8")
-        assert "${EXAMPLE_OUTPUT_PATH}" in template_content, (
-            "Bug #687: generate_prompt.prompt does not reference "
-            "${EXAMPLE_OUTPUT_PATH}. The template tells the LLM to parse "
-            ".pddrc YAML for example_output_path, which fails when .pddrc "
-            "is missing. The template must use ${EXAMPLE_OUTPUT_PATH} directly."
+        assert "Do NOT fabricate file paths or assume files exist." in template_content, (
+            "generate_prompt.prompt must explicitly forbid fabricated dependency example paths."
+        )
+        assert "${EXAMPLE_OUTPUT_PATH}/[dependency_name]_example.${DEP_EXAMPLE_EXT}." not in template_content, (
+            "generate_prompt.prompt should not instruct the model to synthesize dependency example paths."
         )
 
     def test_real_template_has_example_output_path_default(self):
@@ -3093,6 +3263,68 @@ class TestIssue687ExampleOutputPath:
         assert "EXAMPLE_OUTPUT_PATH" not in cloud_prompt, (
             "${EXAMPLE_OUTPUT_PATH} was not expanded — front-matter default not applied"
         )
+
+
+# === Issue #225 follow-up: include validation must survive architecture tag injection ===
+
+def test_invalid_prompt_includes_are_not_reintroduced_by_architecture_tag_injection(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+    monkeypatch,
+):
+    """Invalid includes should stay replaced when architecture tags are prepended."""
+    mock_ctx.obj["local"] = True
+    monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "generate_prompt.prompt"
+    create_file(prompt_file_path, "Generate a prompt")
+    output_file_path = temp_dir_setup["prompts_dir"] / "user_service_Python.prompt"
+
+    generated_prompt = (
+        "<prompt>\n"
+        "<context_data_dictionary>\n"
+        "<include>prompts/_context/data_dictionary.yaml</include>\n"
+        "</context_data_dictionary>\n"
+        "</prompt>\n"
+    )
+    mock_local_generator_fixture.return_value = (
+        generated_prompt,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate a prompt"},
+        {"output": str(output_file_path)},
+        "prompt",
+    )
+
+    monkeypatch.setattr(
+        "pdd.code_generator_main.get_architecture_entry_for_prompt",
+        lambda _prompt_name: {"reason": "Test reason"},
+    )
+    monkeypatch.setattr(
+        "pdd.code_generator_main.generate_tags_from_architecture",
+        lambda _entry: "<pdd-reason>Test reason</pdd-reason>",
+    )
+    monkeypatch.setattr("pdd.code_generator_main.has_pdd_tags", lambda _content: False)
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+    )
+
+    final_content = output_file_path.read_text(encoding="utf-8")
+    assert "<pdd-reason>Test reason</pdd-reason>" in final_content
+    assert "<context_data_dictionary>" not in final_content
+    assert "<include>prompts/_context/data_dictionary.yaml</include>" not in final_content
 
 
 # === Tests for Issue #1043: Incremental patch identical code fallback ===

@@ -273,7 +273,8 @@ def _infer_module_tags(filename: str) -> List[str]:
 def register_untracked_prompts(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
-    dry_run: bool = False
+    dry_run: bool = False,
+    only_files: Optional[set] = None,
 ) -> Dict[str, Any]:
     """
     Discover prompt files that have PDD tags but no architecture.json entry,
@@ -286,11 +287,23 @@ def register_untracked_prompts(
         prompts_dir: Directory containing prompt files
         architecture_path: Path to architecture.json
         dry_run: If True, return results without writing to file
+        only_files: Optional set of filenames (relative to prompts_dir, as
+            POSIX paths — e.g., {"commands/modify_python.prompt"}) to
+            restrict which prompts are considered for registration. When
+            provided, prompts outside this set are left untouched — even
+            if they have valid PDD tags and no arch.json entry. When
+            ``None`` (the default), all prompts under ``prompts_dir`` are
+            eligible (full-scan behavior, suitable for standalone cleanup
+            runs). In-workflow callers (e.g., ``agentic_change_orchestrator``
+            Step 10) should pass a narrow set containing only the prompts
+            touched by the current workflow, so a single ``pdd change`` run
+            cannot silently sweep unrelated repo-wide drift into the PR.
 
     Returns:
         Dict with keys:
         - registered: List[str] (filenames added to architecture.json)
-        - skipped: List[str] (filenames without PDD tags)
+        - skipped: List[str] (filenames without PDD tags, or filtered out
+          by ``only_files`` scope)
         - errors: List[str] (error messages)
     """
     if not architecture_path.exists():
@@ -310,6 +323,13 @@ def register_untracked_prompts(
         except ValueError:
             continue
         if filename in existing_filenames:
+            continue
+
+        # Scope gate: if only_files is provided, skip prompts outside the
+        # workflow's scope so an in-workflow call cannot silently register
+        # unrelated drift.
+        if only_files is not None and filename not in only_files:
+            skipped.append(filename)
             continue
 
         content = prompt_file.read_text(encoding='utf-8')
@@ -720,14 +740,6 @@ def update_architecture_from_prompt(
         updated = False
         warnings = []
 
-        # Check if prompt has ANY PDD tags (used to determine if dependencies should be cleared)
-        has_any_pdd_tags = (
-            tags['reason'] is not None or
-            tags['interface'] is not None or
-            tags.get('has_dependency_tags', False) or
-            tags['dependencies']
-        )
-
         # Update reason if tag present
         if tags['reason'] is not None:
             old_reason = module_entry.get('reason')
@@ -749,14 +761,12 @@ def update_architecture_from_prompt(
                 module_entry['interface'] = merged_interface
                 updated = True
 
-        # Update dependencies if:
-        # 1. Dependency tags were present in the prompt (even if empty), OR
-        # 2. Prompt has OTHER pdd tags (reason/interface) but no dependency tags = clear dependencies
-        # This ensures removing all <pdd-dependency> tags will clear dependencies in architecture.json
+        # Update dependencies only when <pdd-dependency> metadata is present in the prompt.
+        # Reason/interface-only updates must not clear architecture.json dependencies (those may
+        # still reflect include-based or manually curated edges).
+        # Empty <pdd-dependency></pdd-dependency> still counts (has_dependency_tags) and clears deps.
         should_update_deps = (
-            tags.get('has_dependency_tags', False) or  # Has dependency tags (even if empty)
-            tags['dependencies'] or  # Has dependencies
-            has_any_pdd_tags  # Has any PDD tags = manage all fields including deps
+            tags.get('has_dependency_tags', False) or bool(tags['dependencies'])
         )
         if should_update_deps:
             old_deps = module_entry.get('dependencies', [])

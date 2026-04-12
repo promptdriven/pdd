@@ -98,11 +98,15 @@ When using `page.route()` or similar API mocking in E2E tests:
    - If the last handler calls `route.continue()`, the previous handler for the same URL is skipped entirely
    - ALWAYS use ONE `page.route()` call per URL pattern that switches on request method:
      ```typescript
-     await page.route('**/api/endpoint', async (route) => {
+     await page.route("**/api/boards/**", async (route) => {
        const method = route.request().method();
-       if (method === 'GET') { /* handle GET */ }
-       else if (method === 'POST') { /* handle POST */ }
-       else { await route.continue(); }
+       if (method === 'GET') {
+         return route.fulfill({ status: 200, body: JSON.stringify({ boards: [] }) });
+       }
+       if (method === 'POST') {
+         return route.fulfill({ status: 500, body: JSON.stringify({ message: "Save failed (500)" }) });
+       }
+       return route.continue();
      });
      ```
    - NEVER register two `page.route()` calls for the same URL pattern — the second silently overrides the first

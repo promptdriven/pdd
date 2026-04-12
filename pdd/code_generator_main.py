@@ -29,6 +29,7 @@ from .architecture_sync import (
     has_pdd_tags,
     generate_tags_from_architecture,
 )
+from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
 
@@ -456,10 +457,33 @@ def code_generator_main(
     unit_test_file: Optional[str] = None,
     exclude_tests: bool = False,
     language: Optional[str] = None,
+    output_from_config: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
     local vs. cloud execution, and output.
+
+    Args:
+        ctx: Click context carrying CLI flags (strength, temperature, verbose, force, etc.).
+        prompt_file: Path to the .prompt file to generate from.
+        output: Resolved output path. ``None`` means no caller-supplied path; the
+            front-matter ``output:`` (or .pddrc default) will be used instead.
+        original_prompt_file_path: Optional pinned reference for incremental diff.
+        force_incremental_flag: Force incremental generation when possible.
+        env_vars: Extra environment variables for template expansion.
+        unit_test_file: Optional unit test path used by the cloud generator.
+        exclude_tests: Whether to skip tests in the cloud payload.
+        language: Optional explicit target language override.
+        output_from_config: ``True`` when ``output`` was derived from
+            ``.pddrc`` (``generate_output_path``) rather than an explicit
+            ``--output`` CLI flag. When ``True``, a front-matter ``output:``
+            value (if present) takes precedence over the .pddrc default.
+            When ``False`` (CLI flag), the explicit path always wins. This
+            preserves the documented precedence: CLI > front-matter > .pddrc.
+            Defaults to ``False`` so existing callers stay backward compatible.
+
+    Returns:
+        Tuple of (generated_code, was_incremental, total_cost, model_name).
     """
     cli_params = ctx.obj or {}
     is_local_execution_preferred = cli_params.get('local', False)
@@ -695,14 +719,25 @@ def code_generator_main(
     if output_path:
         output_path = _expand_vars(output_path, env_vars)
 
-    # Honor front-matter output when CLI did not pass --output
-    if output is None and fm_meta and isinstance(fm_meta.get("output"), str):
+    # Honor front-matter output when no explicit --output CLI flag was passed.
+    # Front-matter overrides .pddrc generate_output_path (config default) but
+    # NOT an explicit CLI --output flag. Precedence: CLI > front-matter > .pddrc.
+    if (output is None or output_from_config) and fm_meta and isinstance(fm_meta.get("output"), str):
         try:
             meta_out = _expand_vars(fm_meta["output"], env_vars)
             if meta_out:
                 output_path = str(pathlib.Path(meta_out).resolve())
-        except Exception:
-            pass
+        except Exception as fm_output_err:
+            # Resolving the front-matter `output:` failed (bad path,
+            # permission error, broken expansion, etc.). Fall back to the
+            # caller-supplied path, but warn loudly so users notice — silent
+            # fallback writes code to the wrong location.
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: Could not resolve front-matter output path "
+                    f"'{fm_meta.get('output')}': {fm_output_err}. "
+                    f"Falling back to default output path.[/yellow]"
+                )
 
     # Honor front-matter language if provided (overrides detection for both local and cloud)
     if fm_meta and isinstance(fm_meta.get("language"), str) and fm_meta.get("language"):
@@ -1052,7 +1087,6 @@ def code_generator_main(
                             if cleaned.endswith("```"):
                                 cleaned = cleaned[:-3]
                             generated_code_content = cleaned.strip()
-
                         if not generated_code_content:
                             if cloud_only:
                                 console.print("[red]Cloud execution returned no code.[/red]")
@@ -1358,8 +1392,26 @@ def code_generator_main(
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
 
-                # Inject architecture metadata tags for .prompt files (reverse sync)
                 final_content = generated_code_content
+
+                # Validate <include> tags in generated prompt files (Issue #225 PR #286)
+                if p_output.suffix == '.prompt' or language == 'prompt':
+                    validated_content, invalid_includes = validate_prompt_includes(
+                        final_content,
+                        base_dir=str(p_output.parent),
+                        remove_invalid=False,
+                    )
+                    final_content = validated_content
+                    if invalid_includes:
+                        if verbose or not quiet:
+                            console.print(
+                                f"[yellow]Warning: Found {len(invalid_includes)} invalid <include> tag(s) "
+                                f"referencing non-existent files. Replaced with comments.[/yellow]"
+                            )
+                            for inv_path in invalid_includes:
+                                console.print(f"  [dim]- {inv_path}[/dim]")
+
+                # Inject architecture metadata tags for .prompt files (reverse sync)
                 if p_output.suffix == '.prompt':
                     try:
                         # Check if this prompt has an architecture entry
@@ -1368,11 +1420,11 @@ def code_generator_main(
                         # Only inject tags if:
                         # 1. Architecture entry exists
                         # 2. Content doesn't already have PDD tags (preserve manual edits)
-                        if arch_entry and not has_pdd_tags(generated_code_content):
+                        if arch_entry and not has_pdd_tags(final_content):
                             tags = generate_tags_from_architecture(arch_entry)
                             if tags:
                                 # Prepend tags to the generated content
-                                final_content = tags + '\n\n' + generated_code_content
+                                final_content = tags + '\n\n' + final_content
                                 if verbose:
                                     console.print("[info]Injected architecture metadata tags from architecture.json[/info]")
                     except Exception as e:

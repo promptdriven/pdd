@@ -11,6 +11,8 @@ import pytest
 from pdd.ci_drift_heal import (
     DriftInfo,
     HealResult,
+    _run_pdd_command,
+    _get_git_changed_files,
     detect_drift,
     heal_module,
     commit_and_push,
@@ -155,6 +157,179 @@ class TestDetectDrift:
 
 
 # ---------------------------------------------------------------------------
+# _get_git_changed_files tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetGitChangedFiles:
+    def test_returns_set_of_changed_files(self):
+        mock_result = MagicMock(returncode=0, stdout="pdd/auth.py\npdd/api.py\n")
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result):
+            result = _get_git_changed_files("origin/main...HEAD")
+        assert result == {"pdd/auth.py", "pdd/api.py"}
+
+    def test_returns_empty_on_failure(self):
+        mock_result = MagicMock(returncode=1, stdout="", stderr="error")
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result):
+            result = _get_git_changed_files("origin/main...HEAD")
+        assert result == set()
+
+    def test_returns_empty_on_exception(self):
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=FileNotFoundError):
+            result = _get_git_changed_files("origin/main...HEAD")
+        assert result == set()
+
+    def test_strips_whitespace(self):
+        mock_result = MagicMock(returncode=0, stdout="  pdd/auth.py  \n\n  pdd/api.py\n")
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result):
+            result = _get_git_changed_files("origin/main...HEAD")
+        assert result == {"pdd/auth.py", "pdd/api.py"}
+
+
+# ---------------------------------------------------------------------------
+# detect_drift with diff_base (git-based reclassification) tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectDriftWithDiffBase:
+    def _setup_mocks(self, decisions_map):
+        mock_prompt_files = [
+            Path(f"prompts/{bn}_python.prompt") for bn in decisions_map
+        ]
+        def fake_infer(path):
+            stem = Path(path).stem
+            parts = stem.rsplit("_", 1)
+            return parts[0], parts[1]
+        def fake_sync(basename, language, target_coverage, log_mode):
+            return decisions_map[basename]
+        return mock_prompt_files, fake_infer, fake_sync
+
+    def test_code_changed_prompt_unchanged_reclassified_as_update(self):
+        """When code changed but prompt didn't, auto-deps drift becomes update drift."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"pdd/auth.py", "tests/test_auth.py"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 1
+        assert prompt_drifts[0].basename == "auth"
+        assert prompt_drifts[0].operation == "update"
+        assert prompt_drifts[0].code_path == "pdd/auth.py"
+        assert len(example_drifts) == 0
+
+    def test_prompt_also_changed_stays_as_example(self):
+        """When both code and prompt changed, stays as example drift."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"pdd/auth.py", "prompts/auth_python.prompt"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 0
+        assert len(example_drifts) == 1
+
+    def test_no_diff_base_skips_reclassification(self):
+        """Without diff_base, no git-based reclassification occurs."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.ci_drift_heal._get_git_changed_files") as mock_git:
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"])
+
+        mock_git.assert_not_called()
+        assert len(example_drifts) == 1
+        assert len(prompt_drifts) == 0
+
+    def test_generate_operation_also_reclassified(self):
+        """'generate' operation is also reclassified when code changed but prompt didn't."""
+        decision = MagicMock(operation="generate", reason="New prompt ready for code generation")
+        files, infer, sync = self._setup_mocks({"api": decision})
+        changed_files = {"pdd/api.py"}
+        mock_paths = {"code": Path("pdd/api.py"), "prompt": Path("prompts/api_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 1
+        assert prompt_drifts[0].operation == "update"
+        assert len(example_drifts) == 0
+
+    def test_only_prompt_changed_stays_as_example(self):
+        """When only prompt changed (not code), stays as example drift."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"prompts/auth_python.prompt"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 0
+        assert len(example_drifts) == 1
+
+    def test_git_changed_files_called_once(self):
+        """_get_git_changed_files is called once, not per-module."""
+        d1 = MagicMock(operation="auto-deps", reason="deps")
+        d2 = MagicMock(operation="generate", reason="gen")
+        files, infer, sync = self._setup_mocks({"auth": d1, "api": d2})
+        changed_files = {"pdd/auth.py", "pdd/api.py"}
+
+        def fake_get_paths(basename, language):
+            if basename == "auth":
+                return {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+            return {"code": Path("pdd/api.py"), "prompt": Path("prompts/api_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", side_effect=fake_get_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files) as mock_git:
+            detect_drift(modules=["auth", "api"], diff_base="origin/main...HEAD")
+
+        mock_git.assert_called_once_with("origin/main...HEAD")
+
+    def test_get_pdd_file_paths_failure_falls_back_to_example(self):
+        """If get_pdd_file_paths raises, drift stays as example."""
+        decision = MagicMock(operation="auto-deps", reason="deps")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"pdd/auth.py"}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", side_effect=RuntimeError("fail")), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 0
+        assert len(example_drifts) == 1
+
+
+# ---------------------------------------------------------------------------
 # heal_module tests
 # ---------------------------------------------------------------------------
 
@@ -162,8 +337,8 @@ class TestHealModule:
     def _make_env(self):
         return {"PDD_FORCE": "1", "CI": "1", "NO_COLOR": "1", "PDD_OUTPUT_COST_PATH": "/tmp/c.csv"}
 
-    def test_update_runs_pdd_update_with_code_path(self):
-        """prompt drift (update) runs 'pdd update <code_path>' when code_path is set."""
+    def test_update_runs_update_then_sync(self):
+        """prompt drift (update) runs 'pdd update' then 'pdd sync' in one pass."""
         drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
         mock_result = MagicMock(returncode=0, stderr="")
 
@@ -171,10 +346,11 @@ class TestHealModule:
             result = heal_module(drift, self._make_env())
 
         assert result is True
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["pdd", "update", "/repo/auth.py"]
+        cmds = [c[0][0] for c in mock_run.call_args_list]
+        assert cmds[0] == ["pdd", "update", "/repo/auth.py"]
+        assert cmds[1] == ["pdd", "sync", "auth"]
 
-    def test_update_falls_back_to_repo_wide(self):
+    def test_update_no_code_path_falls_back(self):
         """prompt drift (update) runs 'pdd update' (no args) when code_path is None."""
         drift = DriftInfo("auth", "python", "update", "changed", code_path=None)
         mock_result = MagicMock(returncode=0, stderr="")
@@ -183,8 +359,38 @@ class TestHealModule:
             result = heal_module(drift, self._make_env())
 
         assert result is True
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["pdd", "update"]
+        cmds = [c[0][0] for c in mock_run.call_args_list]
+        assert cmds[0] == ["pdd", "update"]
+        assert cmds[1] == ["pdd", "sync", "auth"]
+
+    def test_update_failure_skips_sync(self):
+        """If pdd update fails, pdd sync is not attempted."""
+        drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
+        mock_result = MagicMock(returncode=1, stderr="error")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is False
+        # Only update was called, not sync
+        assert len(mock_run.call_args_list) == 1
+
+    def test_update_ok_sync_fails_still_returns_true(self):
+        """If update succeeds but sync fails, returns True (prompt update is committed)."""
+        drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
+        call_count = [0]
+
+        def mock_run(cmd, **kwargs):
+            call_count[0] += 1
+            r = MagicMock()
+            r.returncode = 0 if call_count[0] == 1 else 1  # update ok, sync fails
+            r.stderr = "" if call_count[0] == 1 else "sync error"
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            result = heal_module(drift, self._make_env())
+
+        assert result is True  # partial success — prompt was updated
 
     def test_example_runs_pdd_sync(self):
         """example drift runs 'pdd sync <basename>'."""
@@ -195,18 +401,8 @@ class TestHealModule:
             result = heal_module(drift, self._make_env())
 
         assert result is True
-        cmd = mock_run.call_args[0][0]
-        assert cmd == ["pdd", "sync", "api"]
-
-    def test_subprocess_failure(self):
-        """Non-zero exit code returns False."""
-        drift = DriftInfo("auth", "python", "update", "changed")
-        mock_result = MagicMock(returncode=1, stderr="error details")
-
-        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result):
-            result = heal_module(drift, self._make_env())
-
-        assert result is False
+        assert len(mock_run.call_args_list) == 1
+        assert mock_run.call_args[0][0] == ["pdd", "sync", "api"]
 
     def test_subprocess_timeout(self):
         """TimeoutExpired returns False."""
@@ -241,7 +437,9 @@ class TestHealModule:
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
             heal_module(drift, env)
 
-        assert mock_run.call_args[1]["env"] is env
+        # Both update and sync calls should use the same env
+        for call in mock_run.call_args_list:
+            assert call[1]["env"] is env
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +569,7 @@ class TestMain:
         """Module filter is passed to detect_drift."""
         with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [])) as mock_detect:
             main(modules=["auth"])
-        mock_detect.assert_called_once_with(["auth"])
+        mock_detect.assert_called_once_with(["auth"], diff_base=None)
 
     def test_detection_failure_returns_one(self):
         """If detect_drift raises, returns 1."""
@@ -546,6 +744,7 @@ class TestBuildCiEnv:
         assert env["CI"] == "1"
         assert env["NO_COLOR"] == "1"
         assert env["PDD_OUTPUT_COST_PATH"] == "/tmp/cost.csv"
+        assert env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] == "1"
 
     def test_inherits_current_env(self):
         """Inherits existing environment variables."""
@@ -554,6 +753,65 @@ class TestBuildCiEnv:
         with patch.dict(os.environ, {"MY_VAR": "hello"}):
             env = _build_ci_env("/tmp/cost.csv")
         assert env.get("MY_VAR") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# _run_pdd_command rollback tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunPddCommandRollback:
+    def _env(self):
+        env = {"PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE": "1"}
+        return env
+
+    def test_timeout_restores_protected_paths_when_clean(self):
+        """Timed-out sync restores tracked metadata/cache files if they started clean."""
+        clean_status = MagicMock(returncode=0, stdout="", stderr="")
+        restore_ok = MagicMock(returncode=0, stdout="", stderr="")
+
+        def mock_run(cmd, **kwargs):
+            if cmd[:3] == ["git", "status", "--porcelain"]:
+                return clean_status
+            if cmd[:3] == ["git", "restore", "--source=HEAD"]:
+                return restore_ok
+            if cmd == ["pdd", "sync", "auth"]:
+                raise subprocess.TimeoutExpired(cmd, 600)
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_run:
+            result = _run_pdd_command(["pdd", "sync", "auth"], self._env(), "Heal auth")
+
+        assert result is False
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["git", "status", "--porcelain", "--", ".pdd/meta", "project_dependencies.csv"] in calls
+        assert ["git", "restore", "--source=HEAD", "--", ".pdd/meta", "project_dependencies.csv"] in calls
+
+    def test_failure_does_not_restore_when_protected_paths_already_dirty(self):
+        """Pre-existing metadata/cache edits are left alone on heal failure."""
+        dirty_status = MagicMock(
+            returncode=0,
+            stdout=" D .pdd/meta/auth_python.json\n",
+            stderr="",
+        )
+        failed = MagicMock(returncode=1, stdout="", stderr="boom")
+
+        def mock_run(cmd, **kwargs):
+            if cmd[:3] == ["git", "status", "--porcelain"]:
+                return dirty_status
+            if cmd == ["pdd", "sync", "auth"]:
+                return failed
+            if cmd[:2] == ["git", "restore"]:
+                raise AssertionError("restore should not run for already-dirty protected paths")
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_run:
+            result = _run_pdd_command(["pdd", "sync", "auth"], self._env(), "Heal auth")
+
+        assert result is False
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert ["git", "status", "--porcelain", "--", ".pdd/meta", "project_dependencies.csv"] in calls
+        assert not any(cmd[:2] == ["git", "restore"] for cmd in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -612,11 +870,23 @@ class TestParseArgs:
         args = _parse_args(["--modules", "auth,api", "utils"])
         assert args.modules == ["auth", "api", "utils"]
 
+    def test_diff_base(self):
+        """--diff-base parses string value."""
+        from pdd.ci_drift_heal import _parse_args
+        args = _parse_args(["--diff-base", "origin/main...HEAD"])
+        assert args.diff_base == "origin/main...HEAD"
+
+    def test_diff_base_default_none(self):
+        """--diff-base defaults to None."""
+        from pdd.ci_drift_heal import _parse_args
+        args = _parse_args([])
+        assert args.diff_base is None
+
     def test_all_options(self):
         """All options combined."""
         from pdd.ci_drift_heal import _parse_args
-
-        args = _parse_args(["--modules", "auth", "--budget-cap", "3.0", "--skip-ci"])
+        args = _parse_args(["--modules", "auth", "--budget-cap", "3.0", "--skip-ci", "--diff-base", "HEAD~1"])
         assert args.modules == ["auth"]
         assert args.budget_cap == pytest.approx(3.0)
         assert args.skip_ci is True
+        assert args.diff_base == "HEAD~1"

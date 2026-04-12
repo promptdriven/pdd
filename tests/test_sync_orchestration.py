@@ -1652,6 +1652,212 @@ def test_passes():
         )
 
 
+def test_sync_orchestration_records_logical_failure_in_core_dump_errors(tmp_path, monkeypatch):
+    """If sync breaks due to consecutive fix loop protection, it should record structured errors."""
+    import json
+    from unittest.mock import patch, MagicMock
+
+    from pdd.core.errors import clear_core_dump_errors, get_core_dump_errors
+    from pdd.sync_determine_operation import SyncDecision
+    from pdd.sync_orchestration import sync_orchestration
+
+    clear_core_dump_errors()
+    monkeypatch.chdir(tmp_path)
+
+    # Minimal project structure/files so orchestration doesn't crash on missing paths
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    code = tmp_path / "src" / "demo.py"
+    example = tmp_path / "context" / "demo_example.py"
+    test_file = tmp_path / "tests" / "test_demo.py"
+    prompt.write_text("Create demo")
+    code.write_text("print('x')\n")
+    example.write_text("print('example')\n")
+    test_file.write_text("def test_ok(): assert True\n")
+
+    fake_paths = {
+        "prompt": prompt,
+        "code": code,
+        "example": example,
+        "test": test_file,
+        "test_files": [test_file],
+    }
+
+    # Return 'fix' repeatedly so we eventually trigger the consecutive-fix breaker.
+    decisions = [SyncDecision(operation="fix", reason="tests failing")] * 10
+
+    with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+         patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+         patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
+         patch("pdd.sync_orchestration.extract_failing_files_from_output", return_value=[]), \
+         patch("pdd.get_test_command.get_test_command_for_file", return_value=""), \
+         patch("pdd.sync_orchestration.fix_main", return_value=(True, None, None, 1, 0.01, "mock-model")), \
+         patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+         patch("pdd.sync_orchestration.append_log_entry"), \
+         patch("pdd.sync_orchestration.log_event"):
+
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+
+        # Force headless mode so we don't invoke the TUI.
+        result = sync_orchestration(basename="demo", language="python", quiet=True, prompts_dir="prompts")
+
+    assert result["success"] is False
+
+    errs = get_core_dump_errors()
+    # Should include at least one LogicalFailure for the consecutive fix breaker.
+    assert any(e.get("type") == "LogicalFailure" and "consecutive fix" in (e.get("message") or "") for e in errs), errs
+    # And a final SyncFailed entry with details.
+    assert any(e.get("type") == "SyncFailed" and e.get("details", {}).get("basename") == "demo" for e in errs), errs
+
+
+def test_sync_orchestration_fix_captures_truncated_test_output_excerpt(tmp_path, monkeypatch):
+    """Failing test run during fix should be captured (truncated ~5KB) into sync log entry details."""
+    from unittest.mock import patch
+    import subprocess
+
+    from pdd.sync_determine_operation import SyncDecision
+    from pdd.sync_orchestration import sync_orchestration
+    from pdd.get_test_command import TestCommand
+
+    monkeypatch.chdir(tmp_path)
+
+    # Minimal project structure/files
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+    prompt = tmp_path / "prompts" / "demo_ts.prompt"
+    code = tmp_path / "src" / "demo.ts"
+    example = tmp_path / "context" / "demo_example.ts"
+    test_file = tmp_path / "tests" / "test_demo.ts"
+    prompt.write_text("Create demo", encoding="utf-8")
+    code.write_text("export const x = 1;\n", encoding="utf-8")
+    example.write_text("console.log('example')\n", encoding="utf-8")
+    test_file.write_text("test('ok', () => expect(true).toBe(true));\n", encoding="utf-8")
+
+    fake_paths = {
+        "prompt": prompt,
+        "code": code,
+        "example": example,
+        "test": test_file,
+        "test_files": [test_file],
+    }
+
+    # Force: fix, then terminate workflow
+    decisions = [
+        SyncDecision(operation="fix", reason="tests failing"),
+        SyncDecision(operation="all_synced", reason="done"),
+    ]
+
+    # Very long output to force truncation
+    long_out = "X" * (7 * 1024)
+    long_err = "Y" * (7 * 1024)
+    failing_cp = subprocess.CompletedProcess(args=["cmd"], returncode=1, stdout=long_out, stderr=long_err)
+
+    seen_log_entries = []
+
+    def capture_append(_basename, _language, entry):
+        seen_log_entries.append(entry)
+
+    with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+         patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+         patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
+         patch("pdd.sync_orchestration.extract_failing_files_from_output", return_value=[]), \
+         patch("pdd.get_test_command.get_test_command_for_file", return_value=TestCommand("echo run-tests")), \
+         patch("pdd.sync_orchestration._run_fix_operation_test_subprocess", return_value=failing_cp), \
+         patch("pdd.sync_orchestration.fix_main", return_value=(False, None, None, 1, 0.01, "mock-model")), \
+         patch("pdd.sync_orchestration._save_fingerprint_atomic"), \
+         patch("pdd.sync_orchestration.append_log_entry", side_effect=capture_append), \
+         patch("pdd.sync_orchestration.log_event"):
+
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+
+        # Quiet => headless path (no TUI)
+        result = sync_orchestration(basename="demo", language="typescript", quiet=True, prompts_dir="prompts")
+
+    assert result["success"] is False
+
+    # Find the fix operation entry and validate excerpt exists + is truncated
+    fix_entries = [e for e in seen_log_entries if e.get("operation") == "fix"]
+    assert fix_entries, f"No fix log entry captured. Entries: {seen_log_entries}"
+    entry = fix_entries[0]
+    excerpt = (entry.get("details") or {}).get("test_output_excerpt")
+    assert isinstance(excerpt, str) and excerpt, "Expected non-empty test_output_excerpt"
+    assert len(excerpt) <= 5 * 1024 + 200  # allow small truncation suffix
+    assert "truncated" in excerpt
+
+
+def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, monkeypatch):
+    """When an operation fails and llm_invoke recorded a pair, it should be attached to sync log entry details."""
+    from unittest.mock import patch
+
+    from pdd.sync_determine_operation import SyncDecision
+    from pdd.sync_orchestration import sync_orchestration
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    code = tmp_path / "src" / "demo.py"
+    example = tmp_path / "context" / "demo_example.py"
+    test_file = tmp_path / "tests" / "test_demo.py"
+    prompt.write_text("Create demo", encoding="utf-8")
+    code.write_text("print('x')\n", encoding="utf-8")
+    example.write_text("print('example')\n", encoding="utf-8")
+    test_file.write_text("def test_ok(): assert True\n", encoding="utf-8")
+
+    fake_paths = {
+        "prompt": prompt,
+        "code": code,
+        "example": example,
+        "test": test_file,
+        "test_files": [test_file],
+    }
+
+    decisions = [
+        SyncDecision(operation="generate", reason="force"),
+        SyncDecision(operation="error", reason="stop"),
+    ]
+
+    seen_entries = []
+
+    def capture_append(_b, _l, entry):
+        seen_entries.append(entry)
+
+    # Pretend llm trace was recorded for this op (without calling real llm).
+    fake_trace = {"prompt": "P", "response": "R", "model": "m"}
+
+    with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+         patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+         patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
+         patch("pdd.sync_orchestration.code_generator_main", return_value=(None, False, 0.01, "m")), \
+         patch("pdd.sync_orchestration.pop_last_pair", return_value=fake_trace), \
+         patch("pdd.sync_orchestration.append_log_entry", side_effect=capture_append), \
+         patch("pdd.sync_orchestration.log_event"):
+
+        mock_lock.return_value.__enter__.return_value = mock_lock
+        mock_lock.return_value.__exit__.return_value = None
+        res = sync_orchestration(basename="demo", language="python", quiet=True, prompts_dir="prompts")
+
+    assert res["success"] is False
+    gen_entries = [e for e in seen_entries if e.get("operation") == "generate"]
+    assert gen_entries, f"No generate entry: {seen_entries}"
+    details = gen_entries[0].get("details") or {}
+    assert details.get("llm_trace") == fake_trace
+
 # --- Coverage Target Selection Regression Tests ---
 
 class TestCoverageTargetSelection:
@@ -2277,6 +2483,107 @@ class TestNonPythonFixLoopBug:
                 "BUG DETECTED: Non-Python fix operation uses 'Simulated failures' "
                 "instead of running actual test command. This causes infinite loop."
             )
+
+
+def test_auto_deps_rolls_back_shared_files_when_checkpoint_is_interrupted(orchestration_fixture):
+    """Auto-deps must restore prompt/cache/architecture files if sync dies before fingerprint save."""
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+    mock_save_fp = mocks['_save_fingerprint_atomic']
+    prompt_path = mocks['get_pdd_file_paths'].return_value['prompt']
+    tmp_path = prompt_path.parent.parent
+    csv_path = tmp_path / 'project_dependencies.csv'
+    arch_path = tmp_path / 'architecture.json'
+    temp_output = prompt_path.with_name('calculator_python_with_deps.prompt')
+
+    original_prompt = 'Original calculator prompt.\n'
+    original_csv = 'full_path,file_summary,content_hash\nold.py,Old,oldhash\n'
+    original_arch = [
+        {'filename': prompt_path.name, 'dependencies': []},
+    ]
+
+    prompt_path.write_text(original_prompt, encoding='utf-8')
+    csv_path.write_text(original_csv, encoding='utf-8')
+    arch_path.write_text(json.dumps(original_arch), encoding='utf-8')
+
+    def fake_auto_deps(*args, **kwargs):
+        Path(kwargs['output']).write_text(
+            'Original calculator prompt.\n<include>dep_python.prompt</include>\n',
+            encoding='utf-8',
+        )
+        csv_path.write_text(
+            'full_path,file_summary,content_hash\ndep.py,Dep,newhash\n',
+            encoding='utf-8',
+        )
+        arch_path.write_text(
+            json.dumps([{'filename': prompt_path.name, 'dependencies': ['dep_python.prompt']}]),
+            encoding='utf-8',
+        )
+        return ('updated prompt', 0.01, 'mock-model')
+
+    mock_auto_deps.side_effect = fake_auto_deps
+    mock_save_fp.side_effect = KeyboardInterrupt('simulated fingerprint interruption')
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+    ]
+
+    result = sync_orchestration(basename='calculator', language='python', budget=1.0)
+
+    assert result['success'] is False
+    assert 'KeyboardInterrupt' in ' '.join(result.get('errors', []))
+    assert prompt_path.read_text(encoding='utf-8') == original_prompt
+    assert csv_path.read_text(encoding='utf-8') == original_csv
+    assert json.loads(arch_path.read_text(encoding='utf-8')) == original_arch
+    assert not temp_output.exists()
+
+
+def test_auto_deps_keeps_shared_file_updates_after_successful_commit(orchestration_fixture):
+    """Rollback guard must not undo auto-deps changes after the fingerprint save succeeds."""
+    mocks = orchestration_fixture
+    mock_determine = mocks['sync_determine_operation']
+    mock_auto_deps = mocks['auto_deps_main']
+    prompt_path = mocks['get_pdd_file_paths'].return_value['prompt']
+    tmp_path = prompt_path.parent.parent
+    csv_path = tmp_path / 'project_dependencies.csv'
+    arch_path = tmp_path / 'architecture.json'
+    temp_output = prompt_path.with_name('calculator_python_with_deps.prompt')
+
+    prompt_path.write_text('Original calculator prompt.\n', encoding='utf-8')
+    csv_path.write_text('full_path,file_summary,content_hash\nold.py,Old,oldhash\n', encoding='utf-8')
+    arch_path.write_text(
+        json.dumps([{'filename': prompt_path.name, 'dependencies': []}]),
+        encoding='utf-8',
+    )
+
+    def fake_auto_deps(*args, **kwargs):
+        Path(kwargs['output']).write_text(
+            'Original calculator prompt.\n<include>dep_python.prompt</include>\n',
+            encoding='utf-8',
+        )
+        csv_path.write_text(
+            'full_path,file_summary,content_hash\ndep.py,Dep,newhash\n',
+            encoding='utf-8',
+        )
+        arch_path.write_text(
+            json.dumps([{'filename': prompt_path.name, 'dependencies': ['dep_python.prompt']}]),
+            encoding='utf-8',
+        )
+        return ('updated prompt', 0.01, 'mock-model')
+
+    mock_auto_deps.side_effect = fake_auto_deps
+    mock_determine.side_effect = [
+        SyncDecision(operation='auto-deps', reason='Resolve dependencies'),
+        SyncDecision(operation='all_synced', reason='All done'),
+    ]
+
+    result = sync_orchestration(basename='calculator', language='python', budget=1.0)
+
+    assert result['success'] is True
+    assert '<include>dep_python.prompt</include>' in prompt_path.read_text(encoding='utf-8')
+    assert 'dep.py,Dep,newhash' in csv_path.read_text(encoding='utf-8')
+    assert json.loads(arch_path.read_text(encoding='utf-8'))[0]['dependencies'] == ['dep_python.prompt']
+    assert not temp_output.exists()
 
 
 class TestLanguageTestCommandResolution:

@@ -19,8 +19,21 @@ from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import run_agentic_task
-from .agentic_sync_runner import AsyncSyncRunner, _find_pdd_executable, build_dep_graph_from_architecture
-from .construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir, _find_pddrc_file, _load_pddrc_config
+from .agentic_sync_runner import (
+    AsyncSyncRunner,
+    _find_pdd_executable,
+    build_dep_graph_from_architecture,
+)
+from .architecture_include_validation import collect_architecture_include_validation_warnings
+from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
+from .architecture_registry import find_project_root as _find_project_root
+from .construct_paths import (
+    _detect_context_from_basename,
+    _extract_prefix_from_prompts_dir,
+    _find_pddrc_file,
+    _load_pddrc_config,
+)
+from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
@@ -248,19 +261,6 @@ def _filter_invalid_basenames(
     return valid, invalid
 
 
-def _find_project_root(start: Path) -> Path:
-    """Walk up from start to find project root (directory containing .pddrc or .git)."""
-    current = start.resolve()
-    for _ in range(20):
-        if (current / ".pddrc").exists() or (current / ".git").exists():
-            return current
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return start.resolve()
-
-
 def _load_architecture_json(
     project_root: Path,
     issue_number: Optional[int] = None,
@@ -272,33 +272,15 @@ def _load_architecture_json(
 
     Args:
         project_root: Root directory of the project.
-        issue_number: Optional issue number for logging origin info.
+        issue_number: Optional issue number for logging origin info (reserved).
 
     Returns:
         Tuple of (parsed data or None, path to primary architecture.json).
     """
-    from .architecture_registry import find_architecture_for_project
+    from .architecture_registry import load_combined_architecture_data
 
-    arch_files = find_architecture_for_project(project_root)
-    if not arch_files:
-        return None, project_root / "architecture.json"
-
-    primary_path = arch_files[0]
-    combined: List[Dict[str, Any]] = []
-
-    for arch_path in arch_files:
-        try:
-            with open(arch_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                combined.extend(data)
-        except (json.JSONDecodeError, OSError):
-            continue
-
-    if not combined:
-        return None, primary_path
-
-    return combined, primary_path
+    _ = issue_number  # reserved for future origin-aware loading
+    return load_combined_architecture_data(project_root)
 
 
 def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
@@ -341,20 +323,14 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
     Logic:
-    1. If a root .pddrc exists, treat it as authoritative — return project_root.
-       The root .pddrc is the centralized config and should be the default cwd.
-    2. If no root .pddrc exists, scan subdirectories (recursive, max depth 2)
-       for .pddrc files. Deepest match wins.
+    1. Scan subdirectories (recursive, max depth 2) for nested .pddrc files
+       whose context patterns match the basename. Deepest match wins
+       (nearest-config-wins resolution).
        Skip catch-all matches (e.g. paths: ['**']) from subdirectories —
        they match everything and should not claim ownership of unrelated modules.
-    3. Fall back to project_root.
+    2. Fall back to project_root (which may have its own root .pddrc).
     """
-    # 1. If root .pddrc exists, it's authoritative — always use project_root
-    root_pddrc = project_root / ".pddrc"
-    if root_pddrc.exists():
-        return project_root
-
-    # 2. Scan subdirectories for .pddrc files (max depth 2)
+    # 1. Scan subdirectories for .pddrc files (max depth 2)
     best_match: Optional[Path] = None
     best_depth = -1
 
@@ -380,7 +356,7 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     if best_match is not None:
         return best_match
 
-    # 3. Fall back to project root
+    # 2. Fall back to project root
     return project_root
 
 
@@ -774,8 +750,7 @@ def _apply_architecture_corrections(
 
     if changes_made > 0:
         try:
-            with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(architecture, f, indent=2, ensure_ascii=False)
+            atomic_write_json(arch_path, architecture)
             if not quiet:
                 console.print(
                     f"[green]Wrote {changes_made} dependency correction(s) "
@@ -968,7 +943,20 @@ def run_agentic_sync(
 
     # 11. Build dependency graph
     if architecture is not None:
-        dep_graph = build_dep_graph_from_architecture(arch_path, modules_to_sync)
+        dep_graph_result = build_dep_graph_from_architecture(arch_path, modules_to_sync)
+        dep_graph = dep_graph_result.graph
+        if dep_graph_result.warnings and not quiet:
+            for w in dep_graph_result.warnings:
+                console.print(f"[yellow]Warning: {w}[/yellow]")
+        if not quiet and verbose:
+            for w in collect_architecture_include_validation_warnings(project_root):
+                console.print(f"[yellow]Warning: {w}[/yellow]")
+            for w in warnings_for_arch_vs_include_sync_order(
+                dep_graph_from_architecture=dep_graph,
+                modules_to_sync=modules_to_sync,
+                project_root=project_root,
+            ):
+                console.print(f"[yellow]Warning: {w}[/yellow]")
     else:
         # Fallback: scan prompt files for <include> tags
         prompts_dir = project_root / "prompts"

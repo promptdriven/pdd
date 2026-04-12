@@ -375,18 +375,27 @@ The specific language is often determined by the prompt file's naming convention
 
 ## Prompt File Naming Convention
 
-Prompt files in PDD follow this specific naming format:
+Prompt files in PDD commonly follow one of these formats:
 ```
 <basename>_<language>.prompt
 ```
+or, for architecture-driven projects with nested output paths:
+```
+<path/to/output_stem>_<Language>.prompt
+```
 Where:
-- `<basename>` is the base name of the file or project
-- `<language>` is the programming language or context of the prompt file
+- `<basename>` is the base name of the file or project in legacy flat layouts
+- `<path/to/output_stem>` mirrors the output filepath without its extension in architecture-driven layouts
+- `<language>` / `<Language>` is the programming language or prompt context suffix used by the project
 
 Examples:
 - `factorial_calculator_python.prompt` (basename: factorial_calculator, language: python)
 - `responsive_layout_css.prompt` (basename: responsive_layout, language: css)
 - `data_processing_pipeline_python.prompt` (basename: data_processing_pipeline, language: python)
+- `src/models/user_Python.prompt` → generates `src/models/user.py`
+- `app/api/orders/route_TypeScript.prompt` → generates `app/api/orders/route.ts`
+
+PDD supports both conventions. Legacy hand-written prompts are often flat, while prompts generated from `architecture.json` typically mirror the target filepath directory structure.
 
 ## Prompt-Driven Development Philosophy
 
@@ -839,6 +848,7 @@ Options:
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
 - `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
 
@@ -854,10 +864,11 @@ The sync command provides live visual feedback showing:
 - Progress through the workflow steps
 
 **Language Detection**:
-The sync command automatically detects the programming language by scanning for existing prompt files matching the pattern `{basename}_{language}.prompt` in the prompts directory. For example:
+The sync command automatically detects the programming language by scanning for existing development prompt files for the requested basename. In classic layouts this is typically `{basename}_{language}.prompt`; in architecture-driven layouts it can also resolve nested prompt paths whose filenames mirror the target output path. For example:
 - `factorial_calculator_python.prompt` → generates `factorial_calculator.py`
 - `factorial_calculator_typescript.prompt` → generates `factorial_calculator.ts`
 - `factorial_calculator_javascript.prompt` → generates `factorial_calculator.js`
+- `src/models/user_Python.prompt` → generates `src/models/user.py`
 
 If multiple development language prompt files exist for the same basename, sync will process all of them.
 
@@ -868,6 +879,7 @@ If multiple development language prompt files exist for the same basename, sync 
 - **Configuration Hierarchy**: CLI options > .pddrc context > environment variables > defaults
 - **Multi-language Support**: Automatically processes all language variants of a basename
 - **Intelligent Path Resolution**: Uses sophisticated directory management for complex project structures
+- **Architecture-Aware Outputs**: When `architecture.json` provides an explicit `filepath` for a prompt entry, sync uses that code output path instead of flattening to `.pddrc` defaults
 - Context-specific settings include output paths, default language, model parameters, coverage targets, and budgets
 
 **Workflow Logic**:
@@ -882,6 +894,23 @@ The sync command automatically detects what files exist and executes the appropr
 6. **test**: Generate comprehensive unit tests if they don't exist (unless --skip-tests). Auth modules get auth-specific test patterns (mock OAuth servers, JWT fixtures, token lifecycle testing)
 7. **fix**: Resolve any bugs found by unit tests
 8. **update**: Back-propagate any learnings to the prompt file
+
+**One-Session Mode** (`--one-session`):
+
+By default, sync runs each step (example, crash-fix, verify, test, fix) as a separate LLM session. One-session mode runs all these steps in a single agentic session. This results in faster and cheaper sync runs.
+
+One-session mode is enabled by default for agentic sync (GitHub issue URLs) and disabled by default for single-module sync. Use `--one-session` or `--no-one-session` to override.
+
+```bash
+# Single-module sync with one-session mode
+pdd sync --one-session factorial_calculator
+
+# Agentic sync (one-session is the default)
+pdd sync https://github.com/myorg/myrepo/issues/100
+
+# Disable one-session for agentic sync
+pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
+```
 
 **Advanced Decision Making**:
 - **Fingerprint-based Change Detection**: Uses content hashes and timestamps to precisely detect what changed
@@ -1093,8 +1122,8 @@ The 11-step workflow:
 
 **Validation (Steps 9-11):**
 9. **Completeness Validation**: Verify all modules have prompts and dependencies
-10. **Sync Validation**: Run `pdd sync --dry-run` on each module to catch path issues
-11. **Dependency Validation**: Preprocess prompts to verify `<include>` tags resolve
+10. **Sync Validation**: Run `pdd sync --dry-run` on each module to catch prompt-discovery and output path issues, including architecture-driven nested paths
+11. **Dependency Validation**: Preprocess prompts to verify `<include>` tags resolve under the same rules used at runtime, and reject fabricated example-file include paths
 
 Each validation step retries up to 3 times with automatic fixes before proceeding.
 
@@ -1520,7 +1549,8 @@ pdd generate --template frontend/nextjs_architecture_json \
 
 - Template front matter:
   - YAML metadata at the top of `.prompt` files to declare `name`, `description`, `tags`, `version`, `language`, default `output`, and `variables` (with `required`, `default`, `type` such as `string` or `json`).
-  - CLI precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
+  - Variable precedence: values from `-e/--env` override front‑matter defaults; unknowns are validated and surfaced to the user.
+  - Output path precedence: `--output` (CLI) > `output:` (front matter) > `generate_output_path` (`.pddrc`). If front‑matter `output:` cannot be resolved, the CLI emits a yellow warning and falls back to the default path instead of failing silently.
   - Example:
     ```
     ---

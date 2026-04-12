@@ -4,7 +4,26 @@
 Write the `pdd/agentic_bug_orchestrator.py` module.
 
 % Role & Scope
-Orchestrator for the 10-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+Orchestrator for the 12-step agentic bug investigation workflow. Runs each step as a separate agentic task, accumulates context between steps, and tracks overall progress and cost.
+
+% Per-Step Timeouts
+The prompt spec must match the code constant exactly:
+```python
+BUG_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,    # Duplicate Check
+    2: 400.0,    # Docs Check
+    3: 400.0,    # Triage
+    4: 400.0,    # API Research
+    5: 600.0,    # Reproduce (Complex)
+    6: 600.0,    # Root Cause (Complex)
+    7: 600.0,    # Prompt Classification (may auto-fix prompts)
+    8: 340.0,    # Test Plan
+    9: 1000.0,   # Generate Unit Test (Most Complex)
+    10: 600.0,   # Verify Unit Test
+    11: 2000.0,  # E2E Test (Complex - needs to discover env & run tests)
+    12: 240.0,   # Create PR
+}
+```
 
 % Requirements
 1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`

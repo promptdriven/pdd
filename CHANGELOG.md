@@ -1,3 +1,182 @@
+## v0.0.205 (2026-04-11)
+
+### Feat
+
+- fix silent drop of modified prompts without arch.json entries (#1143)
+
+### Fix
+
+- narrow Fix B safety net to workflow scope (address #1144 review)
+- bug: root .pddrc shadows nested .pddrc — sync can't find prompts in subdirectories
+
+## v0.0.204 (2026-04-10)
+
+### Feat
+
+- **arch/include cross-validation**: new `architecture_include_validation` module compares architecture.json dependency declarations against `<include>` targets in prompt files; surfaces drift as warnings during sync and as a failing CLI check (`pdd checkup --validate-arch-includes`) suitable for CI (Issue #733)
+- **prompt include validation**: architecture-aware path resolution for `<include>` tags in generated prompt files, integrated with cloud CI test configuration
+
+### Fix
+
+- **#225**: `validate_prompt_includes` now resolves `<include>` paths against `base_dir` (walking ancestor directories) instead of relying on `get_default_resolver()` / process `cwd`; new `_resolve_include_against_base_dir()` replaces the old resolver dependency
+- **#225**: removed short-lived `validate-arch-includes` CLI command added earlier in this cycle (redundant with `pdd checkup --validate-arch-includes`)
+- **#745**: restore `DepGraphFromArchitectureResult` import in issue 745 E2E cost-tracking test
+- **CI**: align dep graph test mock and restore orchestrator prompt specs
+- **duplicate guard**: extend duplicate CLI invocation detection to `bug`, `crash`, `change`, `update`, `split` subcommands (previously only `sync`, `generate`, `fix`; Issue #768)
+- **prompt**: add missing trailing newline in `agentic_bug_orchestrator_python.prompt`
+
+### Build
+
+- refresh `ci/cloud-batch/test-durations.json` with current timing data
+- update cloud image hash
+
+### Test
+
+- new regression test: include resolution succeeds when process `cwd` differs from `base_dir` (Issue #225)
+- new parametrized tests for each newly guarded subcommand (block + record-after-run)
+
+### Contributors
+
+- Vishal Ramvelu ([`vishalramvelu`](https://github.com/vishalramvelu)) — PR [#754](https://github.com/promptdriven/pdd/pull/754): architecture ↔ prompt include cross-validation, `base_dir` include resolution fix, CI alignment, and issue #745 E2E test repair
+
+## v0.0.203 (2026-04-09)
+
+### Feat
+
+- **validate_prompt_includes**: new `pdd/validate_prompt_includes.py` module validates `<include>` tags in generated prompt files, replacing references to non-existent files with comments before the prompt is saved (Issue #225)
+- **generate**: prompt generation now validates `<include>` tags in `.prompt` output files and warns about invalid references instead of silently writing broken includes
+- **sync**: `get_pdd_file_paths` now checks `architecture.json` for an explicit `filepath` field before falling back to `.pddrc` configuration, enabling architecture-driven nested output paths (Issue #225)
+- **sync**: new helpers `_find_architecture_json`, `_resolve_prompt_path_from_architecture`, and `_get_filepath_from_architecture` for architecture-aware path resolution
+- **generate_prompt template**: rewritten dependency guidance — prompts now forbid fabricated `<include>` paths and require inline interface descriptions when no real example file is available
+
+### Fix
+
+- **generate**: `<include>` paths in `code_generator_main_python.prompt` changed from `./context/...` to `context/...` to match runtime resolution (Issue #225)
+- **generate**: removed stale `get_jwt_token` example include block; JWT is now obtained via `CloudConfig.get_jwt_token(verbose=verbose)`
+- **generate**: added unit test inclusion logic documentation and `validate_prompt_includes` example to prompt spec
+- **generate**: architecture template interface type repair logic added to prompt spec
+- **sync**: architecture metadata tag injection (`has_pdd_tags`, `generate_tags_from_architecture`) now operates on the post-validated `final_content` instead of raw `generated_code_content`
+
+### Docs
+
+- **README**: document architecture-driven prompt naming convention (`<path/to/output_stem>_<Language>.prompt`) and architecture-aware output path resolution in sync
+- **cloud batch**: document xdist findings — `--dist loadfile` avoids test failures but creates worse long-tail chunks; recommend dedicated batch shards instead
+
+### Test
+
+- new `tests/test_issue_225_paths_and_includes.py` (132 lines) covering architecture.json path resolution and include validation
+- new `tests/test_sync_determine_operation.py` (121 lines) covering `_find_architecture_json`, `_get_filepath_from_architecture`, and `_resolve_prompt_path_from_architecture`
+- new `tests/fixtures/test_simple_math.py` fixture for prompt generation test scenarios
+- updated `tests/test_code_generator_main.py` expectations to align with Issue #225 include validation
+
+### Build
+
+- **cloud batch**: expanded sync regression shard range (54–67, up from 54–65); case 3 split into dedicated shard IDs 13/14/15 for parallel budget, max-attempts, and target-coverage checks
+- **cloud batch**: `balance-chunks.py` now excludes `tests/fixtures/one_session_eval/` from test discovery
+- **cloud batch**: `entrypoint.sh` fallback `find` excludes `tests/fixtures/one_session_eval/*` to match `balance-chunks.py`
+- **cloud batch**: cloud and vitest shard ranges shifted to accommodate new sync regression shards
+- new `tests/cloud_regression.sh` script (19 lines) for cloud regression test orchestration
+
+### Contributors
+
+- Enfoirer (`Enfoirer:fix/issue-225-example-import-template`) for the Issue #225 investigation and fix — prompt validation, include path repair, and architecture-aware sync paths
+
+## v0.0.202 (2026-04-08)
+
+### Feat
+
+- **update**: `--dry-run` flag lists drifted modules, included docs, and estimated cost without calling the LLM or writing outputs
+- **update**: `--budget` flag caps repository-wide update cost; processing stops once the cumulative spend reaches the cap
+- **update**: `--all` flag for explicit repo-wide mode (equivalent to passing no file arguments)
+- **checkup**: `--validate-arch-includes` subcommand for local architecture ↔ prompt include cross-validation (replaces the removed standalone command)
+- **core dump v2**: richer debug snapshots — structured `sync_steps` extracted from sync logs, per-operation LLM trace (last prompt/response pair), ANSI-stripped terminal output, and `record_core_dump_error()` for non-exception logical failures such as budget exhaustion, loop breakers, and decision/merge failures
+- **LLM trace**: new `pdd/core/llm_trace.py` module records the last (prompt, response) pair per operation scope; automatically attached to core dumps on failure
+- **json_atomic**: new `pdd/json_atomic.py` utility for crash-safe JSON writes via temp file + `os.replace`; used by architecture.json updates
+- **one-session sync prompt**: rewritten as a shorter, spec-first prompt aimed at better sync quality, speed, and cost, with explicit file-role hierarchy and deliverable rules
+- **one-session eval suite**: 3 new large-module scenarios (s7–s9), bringing the suite to 9 scenarios and covering large-code bug fix, minimal-test generation, and wrong-test correction
+- **arch/include validation**: cross-validate architecture deps vs prompt includes across sync, CLI, and CI
+- **core dump requirements prompt**: new `core_dump_requirements_LLM.prompt` defining the authoritative spec for debug snapshot contents
+
+### Fix
+
+- **sync**: rollback auto-deps and heal mutations on failure — `OperationFileRollback` snapshots prompt, code, deps, and architecture files before each operation and restores them atomically if the operation fails
+- **ci drift heal**: restore `.pdd/meta` and `project_dependencies.csv` via `git restore` when a heal subprocess fails or times out, preventing half-mutated repo state in CI
+- **sync**: record structured core dump errors for consecutive-fix, consecutive-test, and consecutive-crash loop breakers
+- **sync**: budget-exhaustion in multi-language sync now records a core dump error with remaining budget details
+- **cli**: non-zero `click.Exit` codes (e.g. from `--validate-arch-includes`) now propagate directly instead of being misreported as "unexpected error" through `handle_error`
+- **cli**: ANSI stripping regex expanded to cover CSI sequences and OSC terminal escapes
+- **auto-deps**: repair architecture update exception block
+- **prompts**: restore orchestrator prompt; simplify from 12-step to 10-step workflow and remove `timeout_adder`/`use_github_state` parameters
+- **prompt**: Step 11 API mock example uses 'GET'/'POST' for test matchers
+- **sync**: delegate fix-phase test subprocess to a separate symbol (`_run_fix_operation_test_subprocess`) for reliable test patching
+- **test**: use TestCommand mock for cherry-pick compat with gltanaka/pdd
+- remove 18 orphaned entries and sync stale dependencies in architecture.json
+- **arch validation**: `_module_prompt_include_target` now filters non-`.prompt` includes (e.g. context/example files) so validation matches architecture.json semantics
+
+### Refactor
+
+- **cli**: remove standalone `validate-arch-includes` command (moved to `pdd checkup --validate-arch-includes`)
+- **cli**: remove `maintenance.validate_arch_includes` function (36 lines); logic consolidated into `architecture_include_validation.run_validate_arch_includes_cli`
+
+### Build
+
+- **ci**: run unit tests on push events, not just non-draft PRs
+- **ci**: validate-arch-includes CI step now runs via `pdd checkup --validate-arch-includes` with a fixture smoke test and repo-wide check (replaces warning-only wrapper)
+- **cloud batch**: `submit.sh` uploads the working tree (not just `git archive HEAD`), so uncommitted fixes can be validated without an intermediate commit; file list is derived from `git ls-files` with an explicit source-path allowlist
+- **test infrastructure**: ignore fixture `test_*.py` files and macOS `._*` artifacts during pytest/Vitest collection
+
+### Contributors
+
+- Vishal Ramvelu (`@vishalramvelu`) for public merged [PR #712](https://github.com/promptdriven/pdd/pull/712), which contributed the core-dump/debugging improvements plus the validation/update follow-ups in this release
+- Niti Goyal (`@niti-go`) for public merged [PR #713](https://github.com/promptdriven/pdd/pull/713), which contributed the one-session sync prompt rewrite and expanded evaluation suite
+
+## v0.0.201 (2026-04-07)
+
+### Feat
+
+- **duplicate run guard**: `pdd sync`, `generate`, and `fix` now warn/block when the same command is re-run within a configurable time window with identical argv, project root, and git state (HEAD + working tree fingerprint). Controlled via `PDD_DUPLICATE_WINDOW_MIN` (default 15 min) and `PDD_DISABLE_DUPLICATE_GUARD` env vars
+- **architecture ↔ include cross-validation**: new `pdd validate-arch-includes` CLI command and in-sync warnings (behind `--verbose`) that surface mismatches between `architecture.json` dependency lists and actual `<include>` tags in prompt files
+- **auto-deps updates architecture.json**: after `pdd auto-deps` inserts new `<include>` tags referencing other modules, the corresponding `dependencies` entries in `architecture.json` are automatically appended
+- **sync-order consistency check**: agentic sync now compares the dependency graph derived from `architecture.json` against the `<include>`-based graph and warns (in verbose mode) when the two would produce different sync orderings
+- **CI unit-test workflow**: new `.github/workflows/unit-tests.yml` runs `pytest` on push to main and on PRs with a 30-minute timeout on `ubuntu-latest`
+
+### Fix
+
+- **CI validation partial-check masking**: when `gh pr checks` exits 1 with both stderr errors and partial check JSON in stdout, stderr is now inspected *before* classifying — prevents permission/transport errors from silently triggering the LLM fix loop
+- **front-matter output precedence**: `code_generator_main` now correctly follows CLI `--output` > front-matter `output:` > `.pddrc generate_output_path`; sync paths pass `output_from_config=True` so front-matter can override the `.pddrc` default. Failed front-matter output resolution now emits a yellow warning instead of silently falling back
+- **subdirectory prompt discovery**: `_detect_languages` now searches subdirectories recursively when the root `prompts/` glob finds no matches, with collision detection warning when the same basename appears in multiple subdirectories
+- **auto-heal CI git-based drift detection**: `detect_drift` accepts an optional `diff_base` to reclassify modules as "prompt stale" when git shows code changed but the prompt did not — fixes false negatives in CI where fingerprints are absent
+- **orchestrator prompt includes**: added missing `<include>` directives to `agentic_e2e_fix_orchestrator_python.prompt`
+
+### Refactor
+
+- **orchestrator prompt simplified**: removed ~120 lines of duplicated specification from `agentic_e2e_fix_orchestrator_python.prompt` (detailed step tables, helper function contracts, full context variable lists) — retained only loop-control tokens, environment safety, skipped-steps memory, and convergence requirements
+- **`find_project_root` and `load_combined_architecture_data` extracted** to `architecture_registry.py` from `agentic_sync.py`, eliminating duplicate project-root-finding logic
+- **`architecture_include_validation`**, **`auto_deps_architecture`**, **`sync_graph_order_consistency`**, and **`duplicate_cli_guard`** extracted as standalone modules
+
+### Build
+
+- **auto-heal CI workflow**: added architecture-file check to `.github/workflows/auto-heal-drift.yml`
+
+## v0.0.200 (2026-04-06)
+
+### Feat
+
+- add prompt definition for track_cost decorator to log command execution costs
+- add patch verification gate to incremental code generator (#1076)
+
+### Fix
+
+- update test mock to return DepGraphFromArchitectureResult instead of plain dict
+- port #733 dep graph warnings and dependency preservation from PR #736
+- skip BUG_STEP_TIMEOUTS prompt-vs-code test when code prompt unavailable
+- **e2e**: robust Step 9 loop-control handling (cherry-pick from promptdriven/pdd#708)
+- **e2e**: robust Step 9 loop-control handling (cherry-pick from promptdriven/pdd#708)
+- **e2e**: unify Step 9 retry with primary
+- replace LLM verifier with root-cause patcher prompt fix (#1076)
+- address PR review feedback for verification gate (#1076)
+- deduplicate verbose output, add graceful degradation for verification (#1076)
+
 ## v0.0.199 (2026-04-05)
 
 ### Fix

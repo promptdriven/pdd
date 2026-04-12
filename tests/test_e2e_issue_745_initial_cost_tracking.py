@@ -31,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pdd.agentic_sync_runner import AsyncSyncRunner, ModuleState
+from pdd.agentic_sync_runner import AsyncSyncRunner, DepGraphFromArchitectureResult
 
 
 @pytest.mark.e2e
@@ -74,7 +74,7 @@ class TestAgenticSyncInitialCostE2E:
             patch("pdd.agentic_sync._load_architecture_json") as mock_arch,
             patch("pdd.agentic_sync.run_agentic_task") as mock_llm,
             patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}"),
-            patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value={"mymod": []}),
+            patch("pdd.agentic_sync.build_dep_graph_from_architecture", return_value=DepGraphFromArchitectureResult({"mymod": []}, [])),
             patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run,
             patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]),
             patch("pdd.agentic_sync.AsyncSyncRunner", SpyRunner),

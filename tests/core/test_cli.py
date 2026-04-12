@@ -499,6 +499,16 @@ def test_strip_ansi_codes_removes_complex_sequences():
     text = "\x1b[1;31;42mComplex\x1b[0m"
     assert _strip_ansi_codes(text) == "Complex"
 
+def test_strip_ansi_codes_removes_osc_sequences():
+    # OSC title set + BEL terminator
+    text = "pre\x1b]0;mytitle\x07post"
+    assert _strip_ansi_codes(text) == "prepost"
+
+def test_strip_ansi_codes_removes_cursor_sequences():
+    # CSI cursor movement and erase-in-line
+    text = "a\x1b[2Kb\x1b[1Dc"
+    assert _strip_ansi_codes(text) == "abc"
+
 def test_strip_ansi_codes_leaves_plain_text():
     text = "Just plain text"
     assert _strip_ansi_codes(text) == text
@@ -562,6 +572,17 @@ def test_pddcli_invoke_handles_system_exit_error(mock_handle_error):
     result = runner.invoke(group, ["exit"])
     assert result.exit_code == 1
     # PDDCLI catches SystemExit and calls ctx.exit(1) without calling handle_error
+    mock_handle_error.assert_not_called()
+
+@patch('pdd.core.cli.handle_error')
+def test_pddcli_invoke_re_raises_click_exit_without_handle_error(mock_handle_error):
+    """click.exceptions.Exit(1) is intentional failure, not an unexpected error."""
+    def fail_cmd(): raise click.exceptions.Exit(1)
+    cmd = click.Command("fail", callback=fail_cmd)
+    group = PDDCLI(commands={"fail": cmd})
+    runner = CliRunner()
+    result = runner.invoke(group, ["fail"])
+    assert result.exit_code == 1
     mock_handle_error.assert_not_called()
 
 @patch('pdd.core.cli._write_core_dump')

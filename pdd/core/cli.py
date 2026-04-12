@@ -21,13 +21,17 @@ from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
 from .utils import _first_pending_command, _should_show_onboarding_reminder
 from .dump import _write_core_dump
+from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
 
 
 def _strip_ansi_codes(text: str) -> str:
     """Remove ANSI escape codes from text for clean log output."""
-    # Pattern matches ANSI escape sequences
-    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
-    return ansi_escape.sub('', text)
+    # Covers common CSI sequences (\x1b[...m, \x1b[...K, cursor moves),
+    # plus OSC sequences (\x1b]...BEL or \x1b]...\x1b\\) used by some terminals.
+    csi = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+    osc = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)")
+    text = osc.sub("", text)
+    return csi.sub("", text)
 
 
 class OutputCapture:
@@ -155,12 +159,13 @@ class PDDCLI(click.Group):
             ctx.exit(int(e.code) if e.code is not None else 1)
             return
         except click.exceptions.Exit as e:
-            # Let successful Click exits pass through, but handle error exits
+            # Successful exit: propagate for Click to finish cleanly.
             if e.exit_code == 0:
                 raise
-            # Convert error exit to exception
-            error_msg = f"Command exited with code {e.exit_code}"
-            exception_to_handle = RuntimeError(error_msg)
+            # Intentional failure (e.g. checkup --validate-arch-includes, failed sync): do not
+            # route through handle_error — that misreports "unexpected error" after
+            # the command already printed diagnostics.
+            raise
         except Exception as e:
             # Handle all other exceptions
             exception_to_handle = e
@@ -459,6 +464,17 @@ def cli(
         _restore_captured_streams(ctx)
         ctx.exit(0)
 
+    # Block/warn on likely duplicate expensive runs before the subcommand body runs.
+    try:
+        check_duplicate_before_subcommand(ctx)
+    except click.UsageError:
+        _restore_captured_streams(ctx)
+        raise
+    except click.Abort:
+        _restore_captured_streams(ctx)
+        raise
+
+
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
@@ -566,6 +582,8 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         if num_results < num_commands and results is not None and not all(res is None for res in results): # Avoid printing if all failed
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
+
+    record_after_guarded_command(ctx)
 
     # Collect terminal output if capture was enabled
     terminal_output = None
