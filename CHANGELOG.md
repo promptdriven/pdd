@@ -2,12 +2,34 @@
 
 ### Feat
 
-- fix silent drop of modified prompts without arch.json entries (#1143)
+- **auto-register untracked prompts (scoped safety net)**: after Step 10 sanitizers, the change orchestrator auto-registers modified prompts that have PDD tags but no `architecture.json` entry — the case where Step 10's LLM rule 5(b) falls through. Registration is narrowly scoped to prompts touched by the current workflow via a new `only_files` parameter on `register_untracked_prompts`, preventing repo-wide drift from being silently swept into unrelated PRs (#1143)
+- **nearest-config-wins `.pddrc` resolution**: `_resolve_module_cwd` now scans nested `.pddrc` files first (max depth 2, deepest match wins) before falling back to root `.pddrc` / project root, fixing the bug where a root `.pddrc` shadowed nested configs and sync couldn't find prompts in subdirectories (#1128)
+- **Step 10 LLM rule 5(b) expanded**: modified prompts with no existing `architecture.json` entry now get a new entry created from PDD tags (previously silently dropped)
 
 ### Fix
 
-- narrow Fix B safety net to workflow scope (address #1144 review)
-- bug: root .pddrc shadows nested .pddrc — sync can't find prompts in subdirectories
+- **#1144**: narrow auto-register safety net to workflow scope — `register_untracked_prompts` accepts `only_files: Optional[set]` so in-workflow callers pass only the prompts they touched; a full-scan call (38+ unrelated prompts including nonstandard paths like `frontend/components/*.prompt`) would write incorrect metadata
+- **hard stop**: hard stop and clarification stop now return accumulated `changed_files` instead of empty list, so callers can inspect which files were modified before the stop
+- **hard stop**: hard stop now posts a step comment to the GitHub issue before returning (previously skipped the comment)
+- **orchestrator cleanup**: remove duplicate `_fetch_issue_updated_at` definition and duplicate `_CLARIFICATION_STEPS` set; consolidate into single definitions with improved error handling
+
+### Build
+
+- refresh `ci/cloud-batch/test-durations.json` with current timing data
+- update cloud image hash
+
+### Test
+
+- new regression tests for Step 10 auto-register scoping: verify `only_files` is passed (not `None`), empty scope skips call entirely, and out-of-scope prompts are left alone in `architecture.json`
+- new tests: hard stop posts step comment and returns `changed_files`; consecutive provider failure abort after 3 failures
+- new tests for nested `.pddrc` precedence over root for matching modules, including catch-all root configs (#1128)
+- new integration tests: nested `.pddrc` config propagation through `_filter_already_synced` pipeline verifies correct `prompts_dir` and `context_override` reach `sync_determine_operation`
+- new file `test_agentic_sync_nearest_config.py`: real-LLM spec regression tests that verify the prompt spec itself describes nearest-config-wins resolution (requires `PDD_RUN_REAL_LLM_TESTS=1`)
+
+### Docs
+
+- new example `examples/agentic_change_orchestrator_example.py`: demonstrates orchestrator helper functions, mocked full 13-step run, existing PR guard, and resume from cached state
+- PDD tags (`pdd-reason`, `pdd-interface`, `pdd-dependency`) added to `agentic_change_orchestrator_python.prompt`
 
 ## v0.0.204 (2026-04-10)
 
