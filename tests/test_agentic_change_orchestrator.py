@@ -4232,6 +4232,290 @@ def test_step10_auto_registered_appended_to_output(mock_dependencies, temp_cwd):
 
 
 # ---------------------------------------------------------------------------
+# Regression: Step 10 auto-register safety net must NOT sweep unrelated drift
+# ---------------------------------------------------------------------------
+
+
+def test_step10_register_untracked_prompts_scope_narrowed_to_workflow(
+    mock_dependencies, temp_cwd
+):
+    """
+    Regression for Greg's PR review on #1143/#1144: the Step 10 safety net
+    must call register_untracked_prompts with a narrow `only_files` scope
+    limited to this workflow's prompt files, NOT a full-scan call. A
+    full-scan call would silently sweep repo-wide architecture.json drift
+    into an unrelated PR and could write incorrect metadata for prompts
+    with non-standard paths (e.g., frontend/components/*.prompt).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+
+    initial_state = {
+        "issue_number": 1143,
+        "last_completed_step": 8,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 9)},
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+    }
+    mock_load_state.return_value = (initial_state, None)
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # Only this prompt should appear in only_files — it's the one
+            # the workflow actually touched.
+            return (
+                True,
+                "FILES_MODIFIED: prompts/commands/in_scope_python.prompt",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step10":
+            return (True, "Architecture updated.", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR https://github.com/o/r/pull/1143", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator.register_untracked_prompts"
+    ) as mock_reg:
+        mock_reg.return_value = {"registered": [], "skipped": [], "errors": []}
+        success, _, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1143,
+            issue_author="me",
+            issue_title="Scope narrowed test",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True
+    mock_reg.assert_called_once()
+    call_kwargs = mock_reg.call_args.kwargs
+    # The safety net MUST pass only_files (not None) so unrelated repo drift
+    # isn't auto-registered.
+    assert "only_files" in call_kwargs, (
+        "register_untracked_prompts called without only_files — this is a "
+        "full-scan call that would sweep unrelated repo-wide drift into the PR"
+    )
+    only_files = call_kwargs["only_files"]
+    assert only_files is not None, (
+        "only_files is None — equivalent to a full-scan call, which is exactly "
+        "the regression Greg flagged"
+    )
+    assert isinstance(only_files, set), f"only_files must be a set, got {type(only_files).__name__}"
+    # The set must contain the Step 9 FILES_MODIFIED prompt (relative to prompts_dir)
+    assert "commands/in_scope_python.prompt" in only_files, (
+        f"Step 9 prompt not in only_files: {only_files}"
+    )
+    # The set must NOT contain arbitrary other prompts from the repo
+    assert "frontend/components/SyncFromPromptModal_typescriptreact.prompt" not in only_files
+    assert "llm_invoke_python.prompt" not in only_files
+    # dry_run should still be False (not a preview)
+    assert call_kwargs.get("dry_run") is False
+
+
+def test_step10_register_untracked_prompts_skipped_when_no_prompt_files_touched(
+    mock_dependencies, temp_cwd
+):
+    """
+    If Step 9 only touched non-prompt files (e.g., code-only direct edits),
+    `only_files` is empty and the safety net should skip the call entirely
+    rather than auto-registering every untracked prompt in the repo.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_load_state = mocks["load_state"]
+
+    initial_state = {
+        "issue_number": 1143,
+        "last_completed_step": 8,
+        "step_outputs": {str(i): f"out{i}" for i in range(1, 9)},
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+    }
+    mock_load_state.return_value = (initial_state, None)
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            # No .prompt files — only a direct code-file edit.
+            return (True, "FILES_MODIFIED: pdd/some_helper.py", 0.1, "gpt-4")
+        if label == "step10":
+            return (True, "Architecture updated.", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR https://github.com/o/r/pull/1143", 0.1, "gpt-4")
+        return (True, "ok", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator.register_untracked_prompts"
+    ) as mock_reg:
+        mock_reg.return_value = {"registered": [], "skipped": [], "errors": []}
+        success, _, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1143,
+            issue_author="me",
+            issue_title="Empty scope test",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True
+    # When only_files would be empty, the call should be skipped entirely
+    # so there's no opportunity to accidentally auto-register unrelated prompts.
+    mock_reg.assert_not_called()
+
+
+def test_register_untracked_prompts_only_files_leaves_unrelated_alone(tmp_path):
+    """
+    Direct test of the function (not via orchestrator): when only_files is
+    passed, prompts outside the scope must be left alone in arch.json even
+    if they have valid PDD tags.
+
+    This is the strongest regression test for Greg's comment — it proves
+    that calling register_untracked_prompts with a narrow scope does NOT
+    silently sweep in unrelated prompts.
+    """
+    from pdd.architecture_sync import register_untracked_prompts
+
+    prompts_dir = tmp_path / "prompts"
+    commands_dir = prompts_dir / "commands"
+    commands_dir.mkdir(parents=True)
+
+    # In-scope prompt: the one the workflow actually touched
+    (commands_dir / "in_scope_python.prompt").write_text(
+        "<pdd-reason>In-scope CLI command for testing.</pdd-reason>\n"
+        '<pdd-interface>{"type": "command", "cli": {"commands": [{"name": "foo", "signature": "()"}]}}</pdd-interface>\n\n'
+        "% Role & Scope\nIn-scope test prompt.\n"
+    )
+
+    # Out-of-scope prompts: unrelated drift that must NOT be touched
+    (commands_dir / "out_of_scope_python.prompt").write_text(
+        "<pdd-reason>Out-of-scope CLI command that MUST be left alone.</pdd-reason>\n"
+        '<pdd-interface>{"type": "command", "cli": {"commands": [{"name": "bar", "signature": "()"}]}}</pdd-interface>\n\n'
+        "% Role & Scope\nOut-of-scope test prompt.\n"
+    )
+    (prompts_dir / "another_unrelated_python.prompt").write_text(
+        "<pdd-reason>Another unrelated module that MUST be left alone.</pdd-reason>\n"
+        '<pdd-interface>{"type": "module", "module": {"functions": [{"name": "baz", "signature": "()", "returns": "None"}]}}</pdd-interface>\n\n'
+        "% Role & Scope\nAnother test prompt.\n"
+    )
+
+    # architecture.json starts with a single unrelated entry that must be preserved
+    arch_path = tmp_path / "architecture.json"
+    arch_initial = [
+        {
+            "reason": "Pre-existing unrelated entry",
+            "description": "Some other module",
+            "dependencies": [],
+            "priority": 1,
+            "filename": "some_other_python.prompt",
+            "filepath": "pdd/some_other.py",
+            "tags": ["python", "module"],
+            "interface": {"type": "module"},
+        }
+    ]
+    import json
+    arch_path.write_text(json.dumps(arch_initial, indent=2) + "\n")
+
+    # Narrow scope: only the in-scope prompt, same format the orchestrator produces
+    only_files = {"commands/in_scope_python.prompt"}
+
+    result = register_untracked_prompts(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=False,
+        only_files=only_files,
+    )
+
+    # Assertion 1: only the in-scope prompt was registered
+    registered = set(result.get("registered", []))
+    assert registered == {"commands/in_scope_python.prompt"}, (
+        f"Expected only the in-scope prompt to be registered, got {registered}. "
+        f"If more than one prompt is here, the scope filter failed."
+    )
+
+    # Assertion 2: arch.json final state
+    arch_final = json.loads(arch_path.read_text())
+    final_filenames = {e.get("filename") for e in arch_final}
+
+    # The in-scope prompt IS in arch.json
+    assert "commands/in_scope_python.prompt" in final_filenames
+
+    # The out-of-scope prompts are NOT in arch.json (the regression check)
+    assert "commands/out_of_scope_python.prompt" not in final_filenames, (
+        "out_of_scope prompt was silently registered — Greg's concern is reproduced"
+    )
+    assert "another_unrelated_python.prompt" not in final_filenames, (
+        "unrelated prompt at top level was silently registered"
+    )
+
+    # The pre-existing entry was preserved
+    assert "some_other_python.prompt" in final_filenames
+
+    # Total entry count: 1 pre-existing + 1 newly registered = 2
+    assert len(arch_final) == 2, (
+        f"arch.json should have exactly 2 entries (1 pre-existing + 1 in-scope), "
+        f"got {len(arch_final)}: {final_filenames}"
+    )
+
+
+def test_register_untracked_prompts_only_files_none_preserves_full_scan(tmp_path):
+    """
+    Backwards-compat: when only_files is None (the default), behavior should
+    be unchanged — all prompts with PDD tags and no arch entry get registered.
+    This supports standalone cleanup runs and the `sync_all_prompts_to_architecture`
+    pre-pass.
+    """
+    from pdd.architecture_sync import register_untracked_prompts
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    (prompts_dir / "alpha_python.prompt").write_text(
+        "<pdd-reason>Alpha module.</pdd-reason>\n"
+        '<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>\n\n'
+        "% Role & Scope\nAlpha.\n"
+    )
+    (prompts_dir / "beta_python.prompt").write_text(
+        "<pdd-reason>Beta module.</pdd-reason>\n"
+        '<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>\n\n'
+        "% Role & Scope\nBeta.\n"
+    )
+
+    arch_path = tmp_path / "architecture.json"
+    import json
+    arch_path.write_text(json.dumps([], indent=2) + "\n")
+
+    # Full-scan (only_files not passed → defaults to None)
+    result = register_untracked_prompts(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+
+    registered = set(result.get("registered", []))
+    assert registered == {"alpha_python.prompt", "beta_python.prompt"}, (
+        f"Full-scan mode should register both prompts, got {registered}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Hard stop on successful step posts step comment and returns changed_files
 # ---------------------------------------------------------------------------
 

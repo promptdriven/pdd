@@ -52,7 +52,7 @@
       },
       {
         "name": "register_untracked_prompts",
-        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool, only_files: Optional[set] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: registered, skipped, errors"
       }
     ]
@@ -79,7 +79,7 @@ This module handles the synchronization of architecture metadata between `archit
 9. Validate dependencies (check file existence, detect duplicates) and validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
 10. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
 11. Auto-rename: when a prompt file is not found, search for a step-number variant (e.g., step4 -> step5) and auto-update the architecture.json entry if exactly one unambiguous match exists. Use `rglob` to support subdirectory layouts.
-12. Auto-register: `register_untracked_prompts()` discovers prompt files with PDD tags that have no architecture.json entry and creates minimal entries (infer filepath and tags from filename conventions). `sync_all_prompts_to_architecture()` calls this as a pre-pass.
+12. Auto-register: `register_untracked_prompts()` discovers prompt files with PDD tags that have no architecture.json entry and creates minimal entries (infer filepath and tags from filename conventions). `sync_all_prompts_to_architecture()` calls this as a pre-pass. Accepts an optional `only_files: Optional[set] = None` parameter: when provided, the function only considers prompt filenames (relative to `prompts_dir`, as POSIX paths) that are members of this set — prompts outside the set are skipped even if they have valid PDD tags and no arch entry. This scope filter is for in-workflow callers (e.g., `agentic_change_orchestrator` Step 10 post-processing) that need a narrow safety net and must not silently sweep repo-wide drift into an unrelated PR. When `only_files` is `None` (default), the full-scan behavior is preserved for standalone cleanup runs and the `sync_all_prompts_to_architecture` pre-pass.
 13. Filename normalization (Issue #617): `normalize_architecture_filenames()` rewrites each module's `filename` from its `filepath` so prompt filenames mirror the source directory structure (e.g., `app/api/route.ts` -> `app/api/route_TypeScript.prompt`). Import `filepath_to_prompt_filename` from `.architecture_sync_helper`. Also rewrite dependency references to use the new filenames. Skip extensionless files (e.g., Makefile).
 14. `get_architecture_entry_for_prompt` supports both exact path match and basename fallback for callers that pass just the filename without subdirectory prefix.
 15. Use Path.cwd() for default paths to work with user's project directory, not package installation

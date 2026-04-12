@@ -1195,21 +1195,40 @@ def run_agentic_change_orchestrator(
                         + "\n".join(f"- {warning}" for warning in all_warnings)
                     )
 
-                # Auto-register untracked prompts (safety net for Step 10 LLM rule 5(b) fallthrough)
-                try:
-                    reg_result = register_untracked_prompts(
-                        prompts_dir=worktree_path / "prompts",
-                        architecture_path=worktree_path / "architecture.json",
-                        dry_run=False,
-                    )
-                    registered = reg_result.get("registered", [])
-                    if registered:
-                        reg_list = ", ".join(registered)
-                        step_output += f"\n\nORCHESTRATOR_AUTO_REGISTERED: {reg_list}"
-                        if not quiet:
-                            console.print(f"[blue]Auto-registered untracked prompts in arch.json: {reg_list}[/blue]")
-                except Exception:
-                    pass
+                # Auto-register untracked prompts (safety net for Step 10 LLM rule 5(b)
+                # fallthrough). Scope is narrowed to prompts TOUCHED BY THIS WORKFLOW:
+                # any .prompt file in changed_files (Step 9 FILES_CREATED/MODIFIED plus
+                # Step 10's own arch_files). We must NOT auto-register prompts outside
+                # the workflow's scope — that would silently sweep repo-wide arch.json
+                # drift into this PR and could write incorrect metadata for prompts
+                # with non-standard paths (e.g. frontend/components/*.prompt, where
+                # _infer_filepath would produce a wrong Python-style filepath).
+                only_files: set = set()
+                for fp in changed_files:
+                    normalized = fp.replace("\\", "/")
+                    prompts_idx = normalized.rfind("prompts/")
+                    if prompts_idx == -1:
+                        continue
+                    rel = normalized[prompts_idx + len("prompts/"):]
+                    if rel.endswith(".prompt"):
+                        only_files.add(rel)
+
+                if only_files:
+                    try:
+                        reg_result = register_untracked_prompts(
+                            prompts_dir=worktree_path / "prompts",
+                            architecture_path=worktree_path / "architecture.json",
+                            dry_run=False,
+                            only_files=only_files,
+                        )
+                        registered = reg_result.get("registered", [])
+                        if registered:
+                            reg_list = ", ".join(registered)
+                            step_output += f"\n\nORCHESTRATOR_AUTO_REGISTERED: {reg_list}"
+                            if not quiet:
+                                console.print(f"[blue]Auto-registered untracked prompts in arch.json: {reg_list}[/blue]")
+                    except Exception:
+                        pass
 
         context[f"step{step_num}_output"] = step_output
         if step_success:
