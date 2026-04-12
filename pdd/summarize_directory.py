@@ -162,10 +162,6 @@ def summarize_directory(
     
     # Parse existing CSV if provided to validate format and get cached entries
     existing_data: Dict[str, Dict[str, str]] = {}
-    # Secondary index: content_hash → entry.  When the same physical file is
-    # scanned from a different directory_path its relative path changes (e.g.
-    # "cli.py" vs "pdd/cli.py").  The hash index lets us cache-hit anyway.
-    existing_by_hash: Dict[str, Dict[str, str]] = {}
     if csv_file:
         try:
             f = io.StringIO(csv_file)
@@ -182,10 +178,6 @@ def summarize_directory(
                         row['_backfilled'] = True
                     # Use normalized path for cache key consistency
                     existing_data[os.path.normpath(row['full_path'])] = row
-                    # Index by content hash for cross-directory cache hits
-                    h = row['content_hash']
-                    if h and h != 'error':
-                        existing_by_hash[h] = row
         except Exception:
             raise ValueError("Invalid CSV file format.")
 
@@ -263,7 +255,6 @@ def summarize_directory(
             file_path,
             rel_path,
             existing_data,
-            existing_by_hash,
             prompt_template,
             strength,
             temperature,
@@ -285,7 +276,6 @@ def summarize_directory(
                 file_path,
                 rel_path,
                 existing_data,
-                existing_by_hash,
                 prompt_template,
                 strength,
                 temperature,
@@ -380,7 +370,6 @@ def _process_single_file_logic(
     file_path: str,
     rel_path: str,
     existing_data: Dict[str, Dict[str, str]],
-    existing_by_hash: Dict[str, Dict[str, str]],
     prompt_template: str,
     strength: float,
     temperature: float,
@@ -415,18 +404,6 @@ def _process_single_file_logic(
         abs_normalized_path = os.path.normpath(file_path)
 
         cached_entry = existing_data.get(normalized_path) or existing_data.get(abs_normalized_path)
-
-        # Fallback: match by content hash when the same file appears under a
-        # different relative path (e.g. old CSV has "cli.py" from a pre-fix
-        # scan, but current scan produces "pdd/cli.py").  Require the basename
-        # to match to avoid cross-file pollution (e.g. two different empty
-        # __init__.py files sharing a summary).
-        if not cached_entry:
-            hash_candidate = existing_by_hash.get(current_hash)
-            if hash_candidate and os.path.basename(
-                hash_candidate.get('full_path', '')
-            ) == os.path.basename(rel_path):
-                cached_entry = hash_candidate
 
         if cached_entry:
             # Step 6d: Check hash match and that entry was produced by the new format
