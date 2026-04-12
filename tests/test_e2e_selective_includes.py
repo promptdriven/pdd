@@ -311,17 +311,18 @@ class TestPreprocessWithSelectAttribute:
         assert "auth" in result
 
     def test_select_failure_falls_back_to_full_file(self, tmp_path, python_file, monkeypatch):
-        """When selector fails, preprocess falls back to full file content with warning."""
+        """When selector fails, preprocess emits a UserWarning and falls back to full file content."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PDD_QUIET", "1")
 
-        # "def:nonexistent_function" should fail — preprocess should fall back to full file
+        # "def:nonexistent_function" should fail — preprocess should emit a warning
+        # and fall back to full file content.
         prompt = f'<include select="def:nonexistent_function">{python_file.name}</include>'
         from pdd.preprocess import preprocess
-        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        with pytest.warns(UserWarning, match="nonexistent_function"):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         # Should have fallen back to full file content
-        # (preprocess catches SelectorError and includes full file with warning)
         assert "class UserModel" in result or "nonexistent_function" in result.lower() or "error" in result.lower()
 
 
