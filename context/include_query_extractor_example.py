@@ -44,8 +44,8 @@ def _mock_load_prompt_template(name):
 def main():
     tmp_dir = tempfile.mkdtemp(prefix="pdd_iqe_example_")
     try:
-        # Point project root to our temp dir so cache files land there
-        with patch("pdd.include_query_extractor.get_config", return_value={"project_root": tmp_dir}):
+        # Patch find_project_root_from_path so cache files land in our temp dir
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=tmp_dir):
             _run_example(tmp_dir)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
