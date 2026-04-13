@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py')", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
+      {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
       {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)", "returns": "Tuple[bool, str, str, int, float, str]"}
     ]
   }
@@ -36,7 +36,7 @@ The module supports both local and cloud execution modes:
     Ensure the `error_log_file` is populated with the current state before the agent is called.
 7.  **Non-Python Support:** Detect non-Python files by extension. Use `get_test_command_for_file` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
 8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
-9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local. When passing failure context to the cloud, **prepend** a `[PDD failure classification] ...` line (or equivalent prefix) to the `errors` string payload so the remote fix step sees the same classification as local `fix_errors_from_unit_tests`.
+9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local. When passing failure context to the cloud, **prepend** a `[PDD failure classification] ...` line (or equivalent prefix) to the `errors` string payload so the remote fix step sees the same classification as local `fix_errors_from_unit_tests`. <pdd>`protect_tests` should be forwarded in the payload (as `protectTests`) and accepted in the `cloud_fix_errors` signature. The pdd_cloud `fixCode` backend does not yet read this field, so it is a forward-looking no-op in cloud mode — the flag is fully honored in local mode. Keep the param so the contract matches local `fix_errors_from_unit_tests` and flips on when the backend adds support.</pdd>
 10. **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
     *   *Note:* If checks pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and the same model-name convention as implementation (`""` for Python initial pass; `"N/A"` for non-Python initial pass).
 11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
