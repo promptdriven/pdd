@@ -8,6 +8,7 @@ Additionally, tests verify the orchestrator's runtime behavior including
 early exit conditions (issue #468).
 """
 import json
+import os
 import re
 import subprocess
 import sys
@@ -5201,3 +5202,435 @@ class TestStep11CodeCleanup:
 
             assert success is True
             mock_step11.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #1155: _verify_tests_independently safety nets
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyTestsIndependentlyTimeout:
+    """Tests that _verify_tests_independently has an overall timeout that stops
+    processing after VERIFY_TIMEOUT_SECONDS (600s) have elapsed."""
+
+    def test_stops_processing_after_timeout_elapsed(self, tmp_path):
+        """When elapsed time exceeds VERIFY_TIMEOUT_SECONDS, the function should
+        stop processing remaining files and include a TIMEOUT message.
+
+        Bug: Current code has no timeout — all 50 files are processed serially.
+        """
+        test_files = [f"tests/test_{i}.py" for i in range(50)]
+        for tf in test_files:
+            (tmp_path / tf).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / tf).write_text("pass")
+
+        call_count = 0
+
+        def mock_pytest(path):
+            nonlocal call_count
+            call_count += 1
+            return {"test_results": [{"failures": 0, "errors": 0, "passed": 1, "standard_output": ""}]}
+
+        # Simulate time: starts at 0, jumps past 600s after 3rd file
+        time_values = iter([0, 100, 200, 300, 700, 800, 900])
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
+             patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=lambda: next(time_values)):
+            _, output = _verify_tests_independently(test_files, tmp_path)
+
+        # After fix: should stop after 3 files and include TIMEOUT message.
+        # Before fix: processes all 50 files (call_count == 50, no TIMEOUT).
+        assert call_count < 50, f"Expected timeout to stop processing, but all {call_count} files were processed"
+        assert "TIMEOUT" in output, "Expected TIMEOUT message in output"
+
+    def test_completes_normally_when_under_timeout(self, tmp_path):
+        """When time stays well under the timeout, all files should be processed
+        and no TIMEOUT message should appear."""
+        test_files = [f"tests/test_{i}.py" for i in range(3)]
+        for tf in test_files:
+            (tmp_path / tf).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / tf).write_text("pass")
+
+        call_count = 0
+
+        def mock_pytest(path):
+            nonlocal call_count
+            call_count += 1
+            return {"test_results": [{"failures": 0, "errors": 0, "passed": 1, "standard_output": ""}]}
+
+        # Time stays well under 600s
+        time_values = iter([0, 10, 20, 30, 40, 50, 60])
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
+             patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=lambda: next(time_values)):
+            passed, output = _verify_tests_independently(test_files, tmp_path)
+
+        assert call_count == 3, f"Expected all 3 files processed, got {call_count}"
+        assert passed is True
+        assert "TIMEOUT" not in output
+
+    def test_timeout_message_includes_file_count(self, tmp_path):
+        """The TIMEOUT message should include how many files were processed
+        before the timeout triggered.
+
+        Bug: Current code has no timeout and no such message.
+        """
+        test_files = [f"tests/test_{i}.py" for i in range(100)]
+        for tf in test_files:
+            (tmp_path / tf).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / tf).write_text("pass")
+
+        process_count = 0
+
+        def mock_pytest(path):
+            nonlocal process_count
+            process_count += 1
+            return {"test_results": [{"failures": 0, "errors": 0, "passed": 1, "standard_output": ""}]}
+
+        # Time exceeds 600s after 5 files
+        time_values = iter([0, 50, 100, 150, 200, 250, 700, 800])
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
+             patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=lambda: next(time_values)):
+            _, output = _verify_tests_independently(test_files, tmp_path)
+
+        # After fix: output should have TIMEOUT with count of files processed
+        assert "TIMEOUT" in output, "Expected TIMEOUT message in output"
+        assert "5" in output, "Expected file count (5) in TIMEOUT message"
+
+
+class TestExtractTestFilesFallbackCap:
+    """Tests that _extract_test_files fallback scan caps results at MAX_FALLBACK_TEST_FILES."""
+
+    def test_fallback_scan_caps_at_max_files(self, tmp_path):
+        """When fallback scan finds many test files, results should be capped at 20.
+
+        Bug: Current code returns all files found, allowing hundreds of files.
+        """
+        # Create 50 test files in tests/ directory
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(50):
+            (tests_dir / f"test_module_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        # Initialize a git repo so _get_modified_and_untracked works
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--no-gpg-sign"],
+            cwd=tmp_path, capture_output=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"}
+        )
+
+        # No markers, no changed files, no initial hashes -> forces ultimate fallback scan
+        result = _extract_test_files(
+            issue_content="no markers here",
+            changed_files=[],
+            cwd=tmp_path,
+            initial_file_hashes=None,
+        )
+
+        # After fix: should be capped at 20 (MAX_FALLBACK_TEST_FILES)
+        # Before fix: returns all 50 files
+        assert len(result) <= 20, (
+            f"Fallback scan returned {len(result)} files, expected at most 20. "
+            "Missing MAX_FALLBACK_TEST_FILES cap."
+        )
+
+    def test_fallback_scan_returns_all_when_under_cap(self, tmp_path):
+        """When fallback scan finds fewer files than the cap, all are returned."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(5):
+            (tests_dir / f"test_mod_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--no-gpg-sign"],
+            cwd=tmp_path, capture_output=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"}
+        )
+
+        result = _extract_test_files(
+            issue_content="no markers here",
+            changed_files=[],
+            cwd=tmp_path,
+            initial_file_hashes=None,
+        )
+
+        assert len(result) == 5, f"Expected all 5 files, got {len(result)}"
+
+
+class TestGetModifiedAndUntrackedOriginRefs:
+    """Tests that _get_modified_and_untracked tries origin/main and origin/master refs."""
+
+    def test_tries_origin_refs_when_local_refs_fail(self, tmp_path):
+        """When local main/master refs fail (shallow clone), the function should
+        try origin/main and origin/master.
+
+        Bug: Current code only iterates ('main', 'master'), never trying origin refs.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        call_log = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            cmd_str = " ".join(cmd)
+            mock_result = MagicMock()
+
+            if "merge-base" in cmd_str:
+                if "origin/main" in cmd_str:
+                    # origin/main succeeds
+                    mock_result.returncode = 0
+                    mock_result.stdout = "abc123\n"
+                    return mock_result
+                else:
+                    # local main, master, origin/master fail
+                    mock_result.returncode = 128
+                    mock_result.stdout = ""
+                    return mock_result
+
+            if "diff" in cmd_str and "abc123" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "tests/test_new.py\nsrc/module.py\n"
+                return mock_result
+
+            # Default: git diff HEAD, ls-files
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            files = _get_modified_and_untracked(tmp_path)
+
+        # After fix: origin/main is tried, succeeds, and diff files are included
+        # Before fix: only main/master are tried, both fail, no committed files found
+        merge_base_cmds = [c for c in call_log if "merge-base" in " ".join(c)]
+        origin_tried = any("origin/main" in " ".join(c) for c in merge_base_cmds)
+        assert origin_tried, (
+            "Expected _get_modified_and_untracked to try 'origin/main' after local refs failed. "
+            f"Merge-base commands tried: {merge_base_cmds}"
+        )
+        assert "tests/test_new.py" in files, (
+            f"Expected files from origin/main merge-base diff, got: {files}"
+        )
+
+    def test_falls_through_all_refs_gracefully(self, tmp_path):
+        """When all 4 refs fail, function should still return uncommitted/untracked
+        files without raising an exception."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_str = " ".join(cmd)
+            mock_result = MagicMock()
+
+            if "merge-base" in cmd_str:
+                mock_result.returncode = 128
+                mock_result.stdout = ""
+                return mock_result
+
+            if "diff" in cmd_str and "HEAD" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "modified_file.py\n"
+                return mock_result
+
+            if "ls-files" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "untracked_file.py\n"
+                return mock_result
+
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            files = _get_modified_and_untracked(tmp_path)
+
+        assert "modified_file.py" in files
+        assert "untracked_file.py" in files
+
+
+class TestGetModifiedAndUntrackedSubprocessTimeout:
+    """Tests that _get_modified_and_untracked uses timeout=30 and handles TimeoutExpired."""
+
+    def test_handles_timeout_on_git_diff_head(self, tmp_path):
+        """When git diff HEAD hangs (TimeoutExpired), the function should catch
+        the exception and continue gracefully.
+
+        Bug: Current code passes no timeout parameter, so hung git commands block forever.
+        After fix: timeout=30 is passed, and TimeoutExpired is caught.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        call_count = 0
+
+        def mock_subprocess_run(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            cmd_str = " ".join(cmd)
+
+            if "diff" in cmd_str and "HEAD" in cmd_str:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+            mock_result = MagicMock()
+            if "ls-files" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "untracked.py\n"
+                return mock_result
+
+            mock_result.returncode = 128
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            try:
+                files = _get_modified_and_untracked(tmp_path)
+                # After fix: function catches TimeoutExpired, continues, returns partial results
+                assert isinstance(files, set), "Function should return a set"
+            except subprocess.TimeoutExpired:
+                # Before fix: TimeoutExpired propagates because there's no try/except
+                pytest.fail(
+                    "TimeoutExpired was not caught by _get_modified_and_untracked. "
+                    "Missing timeout=30 and try/except subprocess.TimeoutExpired."
+                )
+
+    def test_handles_timeout_on_merge_base_call(self, tmp_path):
+        """When git merge-base hangs (TimeoutExpired), the function should catch it
+        and continue trying other refs.
+
+        Bug: Current code has no timeout on subprocess.run calls, and no try/except
+        for TimeoutExpired.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_str = " ".join(cmd)
+            mock_result = MagicMock()
+
+            if "merge-base" in cmd_str and "main" in cmd_str and "origin" not in cmd_str:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+            if "diff" in cmd_str and "HEAD" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "changed.py\n"
+                return mock_result
+
+            if "ls-files" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = ""
+                return mock_result
+
+            # All other merge-base calls fail normally
+            mock_result.returncode = 128
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            try:
+                files = _get_modified_and_untracked(tmp_path)
+                # After fix: TimeoutExpired caught, skips that ref, tries others
+                assert "changed.py" in files
+            except subprocess.TimeoutExpired:
+                pytest.fail(
+                    "TimeoutExpired from merge-base was not caught. "
+                    "Missing try/except subprocess.TimeoutExpired in merge-base loop."
+                )
+
+
+class TestEndToEndSafetyNetIntegration:
+    """Integration tests verifying safety nets in the orchestrator flow."""
+
+    def test_fallback_scan_caps_files_passed_to_verify(self, tmp_path):
+        """When _extract_test_files uses the fallback scan and finds 50 files,
+        only at most 20 should be passed to _verify_tests_independently.
+
+        Bug: All 50 files are passed through, causing a stall.
+        """
+        # Create 50 test files
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(50):
+            (tests_dir / f"test_mod_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--no-gpg-sign"],
+            cwd=tmp_path, capture_output=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"}
+        )
+
+        # Get the test files the fallback scan would produce
+        files = _extract_test_files(
+            issue_content="",
+            changed_files=[],
+            cwd=tmp_path,
+            initial_file_hashes=None,
+        )
+
+        # After fix: capped at 20
+        # Before fix: all 50 returned
+        assert len(files) <= 20, (
+            f"_extract_test_files returned {len(files)} files from fallback scan. "
+            "Expected at most 20 (MAX_FALLBACK_TEST_FILES cap missing)."
+        )
+
+    def test_verify_timeout_prevents_stall_on_many_files(self, tmp_path):
+        """Simulates the exact stall scenario from issue #1155: 300+ test files
+        are passed to _verify_tests_independently, which should timeout after
+        VERIFY_TIMEOUT_SECONDS rather than processing all of them.
+
+        Bug: All 300 files are processed with no timeout, causing the job to hang.
+        """
+        test_files = [f"tests/test_{i}.py" for i in range(300)]
+        for tf in test_files:
+            (tmp_path / tf).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / tf).write_text("pass")
+
+        files_processed = 0
+
+        def mock_pytest(path):
+            nonlocal files_processed
+            files_processed += 1
+            return {"test_results": [{"failures": 0, "errors": 0, "passed": 1, "standard_output": ""}]}
+
+        # Time advances ~2s per file, exceeds 600s after ~300 files
+        # After fix with timeout check: should stop well before 300
+        counter = [0]
+
+        def mock_monotonic():
+            val = counter[0] * 2.0
+            counter[0] += 1
+            return val
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
+             patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=mock_monotonic):
+            passed, output = _verify_tests_independently(test_files, tmp_path)
+
+        # After fix: should stop after ~300 iterations at most (600/2=300), with TIMEOUT
+        # Before fix: processes all 300 files, no TIMEOUT message
+        # The key assertion: there should be a TIMEOUT message
+        assert "TIMEOUT" in output, (
+            f"Expected TIMEOUT in output after processing {files_processed} of 300 files. "
+            "Missing VERIFY_TIMEOUT_SECONDS elapsed-time check in loop."
+        )
+
+    def test_prompt_safety_nets_loaded_into_orchestrator(self):
+        """The prompt file should be loadable and when used to configure the
+        orchestrator, its safety requirements should result in the code having
+        the VERIFY_TIMEOUT_SECONDS constant available.
+
+        Bug: The prompt file didn't mention safety nets, so regenerated code
+        dropped them. After the prompt fix, loading the prompt should succeed
+        and the module should define the constant.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import VERIFY_TIMEOUT_SECONDS
+        assert VERIFY_TIMEOUT_SECONDS == 600, (
+            f"VERIFY_TIMEOUT_SECONDS should be 600, got {VERIFY_TIMEOUT_SECONDS}. "
+            "Module-level constant is missing."
+        )
