@@ -1,4 +1,4 @@
-<pdd-reason>Recursively discovers and summarizes files in a directory using LLM with caching.</pdd-reason>
+<pdd-reason>Scans and summarizes directory files via LLM, producing a CSV with per-file metadata and content-hash caching.</pdd-reason>
 
 <pdd-interface>
 {
@@ -14,73 +14,37 @@
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
 
-% Role and Responsibility:
-You are an expert Python Programmer. Your goal is to generate a robust utility function called `summarize_directory` that performs automated file summarization for a codebase. This module acts as a documentation and indexing layer, using an LLM to generate concise summaries of source files while implementing an efficient caching mechanism to minimize API costs.
+<include>context/python_preamble.prompt</include>
 
-% Requirements:
-1. Functionality:
-    - Recursively discover files in a directory or via a glob pattern.
-    - Filter out binary files (images, videos, archives, executables, etc.) and common non-source directories (node_modules, .git, etc.).
-    - For each file, compute a SHA-256 hash of its contents.
-    - Implement a caching layer: if a CSV of previous results is provided, skip LLM calls for files where the path and content hash match.
-    - Use an LLM to summarize new or changed files.
-2. Contracts:
-    - Inputs:
-        - `directory_path`: str (path or glob).
-        - `strength`: float (0.0 to 1.0).
-        - `temperature`: float (>= 0).
-        - `time`: float (0.0 to 1.0, default `DEFAULT_TIME`).
-        - `verbose`: bool.
-        - `csv_file`: Optional[str] (existing CSV content).
-        - `progress_callback`: Optional[Callable[[int, int], None]].
-        - `include_docs`: bool (default False). When True, also discover and summarize documentation files (`.md`, `.txt`, `.rst`) in addition to code files. Doc files follow the same caching, hashing, and summarization pipeline as code files.
-        - `max_workers`: int (default 1). When > 1, use `concurrent.futures.ThreadPoolExecutor(max_workers)` to parallelize LLM summarization calls across files. Cache lookups remain sequential; only LLM invocations are parallelized. Thread-safe accumulation of `total_cost`.
-        - `csv_path`: Optional[str] (default None). When provided, flush the accumulated CSV results to this file path after each file is summarized (incremental persistence). Use a helper function `_flush_csv_to_disk(results_data, csv_path)` that writes the CSV atomically.
-    - Outputs: Tuple[`csv_output` (str), `total_cost` (float), `model_name` (str)].
-3. Validation:
-    - Raise `ValueError("Invalid 'directory_path'.")` if empty or not a string.
-    - Raise `ValueError("Invalid 'strength' value.")` if not between 0.0 and 1.0.
-    - Raise `ValueError("Invalid 'temperature' value.")` if < 0.
-    - Raise `ValueError("Invalid 'verbose' value.")` if not a boolean.
-    - Raise `ValueError("Invalid CSV file format.")` if `csv_file` is provided but lacks columns: `full_path`, `file_summary`, `content_hash`.
-4. Error Handling:
-    - If a specific file fails (read error or LLM error), do not crash. Store the error message in the `file_summary` column and "error" in the `content_hash` column.
-    - Raise `FileNotFoundError` if the required prompt template cannot be loaded.
-5. Performance & Logging:
-    - Use `git ls-files` as the primary discovery method (30s timeout) to respect `.gitignore`.
-    - Use `rich.progress` for a CLI progress bar if no `progress_callback` is provided.
+% Goal
+Write the `pdd/summarize_directory.py` module.
 
-% Dependencies:
-<python_preamble>
-    <include>context/python_preamble.prompt</include>
-</python_preamble>
-<llm_invoke>
-    <include>context/llm_invoke_example.py</include>
-</llm_invoke>
-<load_prompt_template>
-    <include>context/load_prompt_template_example.py</include>
-</load_prompt_template>
+% Role & Scope
+Scans files in a directory, summarizes each using an LLM, and produces a CSV with per-file metadata (summary, exports, dependencies, content hash). Supports content-hash caching to skip unchanged files, incremental disk flushing for interrupt safety, and progress reporting.
 
-% Instructions:
-1. Implementation Strategy:
-    - Define a Pydantic model `FileSummary` with a single field `file_summary: str`.
-    - Create a helper `_get_files_from_git(directory_path)` that uses `subprocess` to run `git ls-files`.
-    - Create a helper `_get_files_from_glob(directory_path)` as a fallback that filters out `node_modules`, `.next`, `__pycache__`, `.git`, `dist`, `build`, and `coverage`.
-    - Define a `BINARY_EXTENSIONS` set to skip non-text files (e.g., .png, .zip, .pyc). Documentation extensions (`.md`, `.txt`, `.rst`) must NOT be in `BINARY_EXTENSIONS`.
-    - When `include_docs` is True, include `.md`, `.txt`, and `.rst` files in the discovered file set alongside code files.
-2. Processing Logic:
-    - Load the prompt template `summarize_file_LLM.prompt`.
-    - Parse the `csv_file` input into a dictionary keyed by `os.path.normpath(full_path)`.
-    - For each discovered file:
-        - Read content (use `errors='ignore'` for safety).
-        - Compute SHA-256.
-        - If path and hash exist in cache, reuse the summary.
-        - Else, call `llm_invoke` with the template and `input_json={"file_contents": content}`.
-    - Track `total_cost` and the `model_name` from the last successful LLM call (default to "cached" if no calls made).
-    - When `max_workers > 1`, use `concurrent.futures.ThreadPoolExecutor(max_workers)` to submit LLM summarization calls in parallel. Use a threading lock for thread-safe accumulation of `total_cost`. The `rich.progress` bar updates as futures complete. The `progress_callback` is called per-file completion regardless of parallelism.
-3. Output Generation:
-    - Use `io.StringIO` and `csv.DictWriter` to generate the final CSV string.
-    - Ensure the CSV contains columns: `full_path`, `file_summary`, and `content_hash`.
+% Requirements
+1. Function: `summarize_directory(directory_path, strength, temperature, time=DEFAULT_TIME, verbose=False, csv_file=None, progress_callback=None, include_docs=False, max_workers=1, csv_path=None) -> Tuple[str, float, str]`
+   - Returns `(csv_output, total_cost, model_name)`
+2. CSV columns (always all five): `full_path` (relative, not absolute), `file_summary`, `key_exports` (JSON list), `dependencies` (JSON list), `content_hash` (SHA-256 hex)
+3. Validate inputs: `directory_path` must be a non-empty string, `strength` between 0-1, `temperature` >= 0, `verbose` must be boolean. Raise `ValueError` on invalid input. Raise `ValueError` if `csv_file` is provided but missing required columns (full_path, file_summary, content_hash).
+4. Load prompt template `summarize_file_LLM` via `load_prompt_template`; raise `FileNotFoundError` if empty or missing
+5. File discovery must respect `.gitignore` (e.g., via `git ls-files`); fall back to recursive glob if git is unavailable. Exclude directories, binary files by extension, `.prompt` files, and common non-source directories (`node_modules`, `__pycache__`, `.git`, `dist`, `build`, etc.) in the glob fallback. Documentation extensions (`.md`, `.txt`, `.rst`) must NOT be in the binary exclusion list.
+   - When `include_docs` is True, also discover and summarize documentation files (`.md`, `.txt`, `.rst`) alongside code files
+6. If no files found, return early with CSV header only, `0.0` cost, and `"None"` model_name
+7. Content-hash caching: parse `csv_file` and reuse entries where `content_hash` matches (use normalized path comparison)
+   - Old-format rows missing `key_exports`/`dependencies` columns: backfill with `'[]'` and always re-summarize them
+   - New-format rows with `'[]'` values are valid cache hits (files may have no exports or imports)
+8. Summarize each file via `llm_invoke` with Pydantic `FileSummary` model (`file_summary: str`, `key_exports: list[str]`, `dependencies: list[str]`) and `input_json={"file_contents": content}`
+9. Error resilience: on file read or LLM failure, record error in `file_summary`, set `content_hash` to `"error"`, continue processing
+10. Progress: if `progress_callback` provided, call `progress_callback(current, total)` per file; else if `verbose`, use Rich `Progress` and print per-file summaries for freshly summarized files only
+11. When `max_workers` > 1, parallelize LLM summarization calls using a thread pool. Cache lookups remain sequential; only LLM invocations are parallelized. Accumulate `total_cost` in a thread-safe manner.
+12. Incremental flushing: when `csv_path` provided, flush complete CSV to disk after each file for interrupt safety
 
-% Deliverables:
-A single Python file containing the `FileSummary` Pydantic model, the helper functions `_get_files_from_git` and `_get_files_from_glob`, and the primary `summarize_directory` function.
+% Dependencies
+<internal_modules>
+    <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
+    <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
+</internal_modules>
+
+% Deliverables
+- Code: `pdd/summarize_directory.py`
