@@ -56,7 +56,7 @@ Now, implement those changes to create the updated code:
 
 <output_json_example>
 {{
-  "analysis": "A detailed analysis of the changes needed,
+  "analysis": "A detailed analysis of the changes needed",
   "planned_modifications": "A detailed description of the modifications needed and why this change should not break the existing code",
   "patched_code": "YOUR COMPLETE UPDATED CODE HERE"
 }}
