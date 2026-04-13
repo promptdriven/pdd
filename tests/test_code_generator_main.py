@@ -3048,6 +3048,101 @@ class TestVerifyArchitectureConformance:
             verbose=False,
         )
 
+    def test_type_annotated_module_constant_recognized(self, tmp_path):
+        """Typed module constants (ast.AnnAssign) must be visible to the
+        conformance check. Regression test for issue #1131."""
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "MACHINE_USER_MODEL_MAP",
+                                "signature": "dict[str, str]",
+                                "returns": "Constant mapping machine users to LLM model IDs",
+                            },
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            'MACHINE_USER_MODEL_MAP: dict[str, str] = {\n'
+            '    "pdd-sonnet": "claude-sonnet-4-6",\n'
+            '    "pdd-opus": "claude-opus-4-6",\n'
+            '}\n'
+        )
+
+        # Should NOT raise — MACHINE_USER_MODEL_MAP is declared as a typed
+        # module constant, which the AST walker previously only handled for
+        # plain ast.Assign nodes, missing ast.AnnAssign entirely.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="models_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_plain_module_constant_still_recognized(self, tmp_path):
+        """Backward compatibility: untyped `X = ...` module constants (ast.Assign)
+        must still be recognized after adding AnnAssign handling."""
+        arch = [
+            {
+                "filename": "config_Python.prompt",
+                "filepath": "src/config.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "MAX_RETRIES", "signature": "int"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code="MAX_RETRIES = 5\n",
+            prompt_name="config_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_annassign_without_value_also_recognized(self, tmp_path):
+        """Type-only declarations like `X: int` (AnnAssign with value=None)
+        should also count as a declared symbol."""
+        arch = [
+            {
+                "filename": "types_Python.prompt",
+                "filepath": "src/types.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "GLOBAL_COUNTER", "signature": "int"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code="GLOBAL_COUNTER: int\n",
+            prompt_name="types_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
 
 # === Issue #687 Tests: example_output_path must be injected and consumed ===
 # Root cause: generate_prompt.prompt tells the LLM to parse .pddrc YAML for
