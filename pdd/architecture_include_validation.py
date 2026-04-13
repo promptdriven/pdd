@@ -144,6 +144,34 @@ def resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path:
     return _resolve_architecture_prompt_path(filename, project_root)
 
 
+def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:
+    """
+    Return module basenames declared via ``<pdd-dependency>`` tags in the prompt header.
+
+    Per ``docs/prompting_guide.md``, ``<pdd-dependency>`` is the authoritative
+    architectural declaration and ``<include>`` is purely for LLM context.
+    The forward check treats a ``<pdd-dependency>`` tag as proof that the prompt
+    has declared the dependency, so arch-listed deps backed only by a tag (no
+    ``<include>`` of the module's prompt) are not flagged as drift.
+    """
+    try:
+        content = prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        return set()
+    if not content:
+        return set()
+
+    from .architecture_sync import parse_prompt_tags
+
+    modules: set[str] = set()
+    tags = parse_prompt_tags(content)
+    for dep in tags.get("dependencies", []) or []:
+        m = extract_module_from_include(dep)
+        if m and m != self_mod:
+            modules.add(m)
+    return modules
+
+
 def cross_validate_architecture_with_prompt_includes(
     arch_data: List[Dict[str, Any]],
     project_root: Path,
@@ -151,6 +179,14 @@ def cross_validate_architecture_with_prompt_includes(
     """
     Compare each architecture entry's ``dependencies`` (as module basenames) with
     module targets of ``<include>`` tags in the corresponding prompt file.
+
+    A declared dependency is satisfied if the prompt either ``<include>``s the
+    dependency's prompt OR declares it via ``<pdd-dependency>`` (the metadata
+    tag the prompting guide calls the authoritative architectural declaration).
+
+    The reverse direction (``<include>`` of a module prompt without a matching
+    arch dep) still warns; drift between ``<pdd-dependency>`` tags and
+    ``architecture.json`` is handled by ``architecture_sync``, not this check.
 
     Non-module includes (docs, preambles, etc.) are ignored via
     ``extract_module_from_include``.
@@ -194,13 +230,16 @@ def cross_validate_architecture_with_prompt_includes(
                 include_modules.add(m)
                 include_proof.setdefault(m, inc)
 
+        tag_modules = _pdd_dependency_modules(prompt_path, mod_base)
+        forward_declared = include_modules | tag_modules
+
         arch_modules: set[str] = set()
         for dep_fn in entry.get("dependencies", []):
             db = filename_to_basename.get(dep_fn)
             if db and db != mod_base:
                 arch_modules.add(db)
 
-        for d in sorted(arch_modules - include_modules):
+        for d in sorted(arch_modules - forward_declared):
             dep_fn_proof = next(
                 (
                     df
@@ -212,7 +251,7 @@ def cross_validate_architecture_with_prompt_includes(
             extra = f" ({dep_fn_proof!r})" if dep_fn_proof else ""
             warnings.append(
                 f"architecture.json / <include> mismatch: {fn!r} declares dependency on module "
-                f"{d!r}{extra} but the prompt has no <include> of that module's prompt"
+                f"{d!r}{extra} but the prompt has no <include> or <pdd-dependency> of that module's prompt"
             )
 
         for i in sorted(include_modules - arch_modules):
