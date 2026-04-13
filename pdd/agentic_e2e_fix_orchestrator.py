@@ -665,27 +665,45 @@ def _extract_test_files(
     # Capped at MAX_FALLBACK_TEST_FILES to prevent runaway verification on
     # large repos (see Issues #953, #1010, #1031, #1155).
     if not test_files:
+        candidates: List[str] = []
         scan_dirs = [cwd / "tests", cwd]
         for scan_dir in scan_dirs:
             if not scan_dir.is_dir():
                 continue
             glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
-            for test_py in sorted(glob_fn("test_*.py")):
+            for test_py in glob_fn("test_*.py"):
                 try:
                     rel = str(test_py.relative_to(cwd))
                 except ValueError:
                     continue
                 if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
                     continue
-                _add(rel)
-                if len(test_files) >= MAX_FALLBACK_TEST_FILES:
-                    console.print(
-                        f"[yellow]Fallback scan capped at {MAX_FALLBACK_TEST_FILES} files "
-                        f"(repo has more); targeted discovery failed.[/yellow]"
-                    )
-                    break
-            if len(test_files) >= MAX_FALLBACK_TEST_FILES:
-                break
+                candidates.append(rel)
+
+        # Sort by mtime descending so the cap keeps recently-modified files
+        # (more likely relevant) rather than arbitrary alphabetical order.
+        def _mtime(p: str) -> float:
+            try:
+                return (cwd / p).stat().st_mtime
+            except OSError:
+                return 0.0
+
+        candidates.sort(key=_mtime, reverse=True)
+
+        if len(candidates) > MAX_FALLBACK_TEST_FILES:
+            console.print(
+                f"[yellow]Fallback scan found {len(candidates)} test files, "
+                f"capped at {MAX_FALLBACK_TEST_FILES} most recently modified; "
+                f"targeted discovery failed.[/yellow]"
+            )
+            logger.warning(
+                "Fallback scan capped at %d/%d test files",
+                MAX_FALLBACK_TEST_FILES, len(candidates),
+            )
+            candidates = candidates[:MAX_FALLBACK_TEST_FILES]
+
+        for rel in candidates:
+            _add(rel)
 
     return test_files
 

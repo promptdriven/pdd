@@ -32,9 +32,9 @@ skipped_steps persists across cycles and is NOT cleared when step_outputs is cle
 This behavior is called `skipped_steps_memory`: even skipped steps contribute their prior stepN_output values into downstream prompts.
 The skipped_steps (or equivalent) state persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
 
-% Independent Verification Safety (Issues #953, #1010, #1031)
+% Independent Verification Safety (Issues #953, #1010, #1031, #1155)
 - _verify_tests_independently MUST enforce an overall timeout via a module-level constant VERIFY_TIMEOUT_SECONDS = 600. Before starting each test file, check elapsed time and stop with a TIMEOUT message if exceeded.
-- _extract_test_files fallback scan MUST cap results at MAX_FALLBACK_TEST_FILES = 20 files to prevent stalling on large repos.
+- _extract_test_files fallback scan MUST cap results at MAX_FALLBACK_TEST_FILES = 20 files to prevent stalling on large repos. Before capping, sort candidates by file mtime descending so the most recently modified files are kept (more likely relevant to the current fix).
 - _get_modified_and_untracked MUST try "origin/main" and "origin/master" as additional fallback refs for git merge-base in shallow clones (i.e., iterate over "main", "master", "origin/main", "origin/master").
 - All subprocess.run git calls in _get_modified_and_untracked MUST include timeout=30 and be wrapped in try/except subprocess.TimeoutExpired.
 
