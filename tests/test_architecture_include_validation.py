@@ -230,6 +230,66 @@ def test_collect_skips_examples_tree_when_configured(tmp_path: Path) -> None:
     assert len(strict) == 1
 
 
+def test_pdd_dependency_tag_satisfies_arch_dep(tmp_path: Path) -> None:
+    """<pdd-dependency> alone must satisfy an arch.json dep — no <include> of the .prompt needed.
+
+    Per docs/prompting_guide.md, <pdd-dependency> is the authoritative architectural
+    declaration; <include> is purely for LLM context ("does NOT affect architecture").
+    The forward check must honor <pdd-dependency> as proof of a declared dep so that
+    prompts using the tag aren't flagged as drift.
+    """
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+
+    _write_pair(
+        root,
+        "orchestrator_Python.prompt",
+        "<pdd-dependency>helper_python.prompt</pdd-dependency>\n"
+        "<include>context/helper_example.py</include>\n"
+        "% Body\n",
+    )
+    _write_pair(root, "helper_Python.prompt", "% Helper\n")
+
+    arch = [
+        {
+            "filename": "orchestrator_Python.prompt",
+            "dependencies": ["helper_Python.prompt"],
+        },
+        {"filename": "helper_Python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, root)
+    assert warnings == [], f"Expected no warnings; got: {warnings}"
+
+
+def test_pdd_dependency_and_include_mixed(tmp_path: Path) -> None:
+    """A prompt may satisfy different arch deps via <pdd-dependency> and <include>."""
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+
+    _write_pair(
+        root,
+        "orchestrator_Python.prompt",
+        "<pdd-dependency>helper_python.prompt</pdd-dependency>\n"
+        "% Body\n"
+        "<include>other_python.prompt</include>\n",
+    )
+    _write_pair(root, "helper_Python.prompt", "% Helper\n")
+    _write_pair(root, "other_Python.prompt", "% Other\n")
+
+    arch = [
+        {
+            "filename": "orchestrator_Python.prompt",
+            "dependencies": ["helper_Python.prompt", "other_Python.prompt"],
+        },
+        {"filename": "helper_Python.prompt", "dependencies": []},
+        {"filename": "other_Python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, root)
+    assert warnings == [], f"Expected no warnings; got: {warnings}"
+
+
 @patch("pdd.core.cli.auto_update")
 def test_validate_arch_includes_cli_ok(mock_auto_update, tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
