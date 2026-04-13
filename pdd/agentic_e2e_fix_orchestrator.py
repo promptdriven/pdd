@@ -81,6 +81,17 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     11: 600.0,  # Code cleanup pass
 }
 
+# Maximum wall-clock seconds for _verify_tests_independently.
+# Checked before starting each file, so actual runtime may overshoot by the
+# duration of the last file executed.  Module-level so tests can monkeypatch.
+# See Issues #953, #1010, #1031 for history of fallback-scan stalls.
+VERIFY_TIMEOUT_SECONDS = 600
+
+# Maximum number of test files the fallback directory scan in _extract_test_files
+# may return.  Prevents runaway verification when targeted discovery fails and
+# the scan finds hundreds of files.  See Issue #1010.
+MAX_FALLBACK_TEST_FILES = 20
+
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -651,6 +662,8 @@ def _extract_test_files(
     # Only runs when NO discovery path found ANY files, to avoid
     # pulling the entire test suite into verification (slow + timeouts).
     # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
+    # Capped at MAX_FALLBACK_TEST_FILES to prevent runaway verification on
+    # large repos (see Issues #953, #1010, #1031, #1155).
     if not test_files:
         scan_dirs = [cwd / "tests", cwd]
         for scan_dir in scan_dirs:
@@ -665,6 +678,14 @@ def _extract_test_files(
                 if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
                     continue
                 _add(rel)
+                if len(test_files) >= MAX_FALLBACK_TEST_FILES:
+                    console.print(
+                        f"[yellow]Fallback scan capped at {MAX_FALLBACK_TEST_FILES} files "
+                        f"(repo has more); targeted discovery failed.[/yellow]"
+                    )
+                    break
+            if len(test_files) >= MAX_FALLBACK_TEST_FILES:
+                break
 
     return test_files
 
@@ -675,11 +696,26 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
     Dispatches the correct runner based on file extension:
     - .py → pytest via run_pytest_and_capture_output
     - Non-Python → resolved via get_test_command_for_file (e.g. npx jest, npx playwright)
+
+    Caps total runtime at VERIFY_TIMEOUT_SECONDS to prevent runaway verification
+    when the ultimate fallback in _extract_test_files discovers hundreds of files
+    (e.g., shallow clone where git merge-base fails — see Issues #1010, #1155).
     """
     all_outputs: List[str] = []
     all_passed = True
+    start_time = time.monotonic()
 
     for test_file in test_files:
+        elapsed = time.monotonic() - start_time
+        if elapsed >= VERIFY_TIMEOUT_SECONDS:
+            all_outputs.append(
+                f"TIMEOUT: Independent verification exceeded {VERIFY_TIMEOUT_SECONDS}s "
+                f"after {len(all_outputs)} file(s); skipping remaining "
+                f"{len(test_files) - len(all_outputs)} file(s)."
+            )
+            console.print(f"[yellow]Verification timeout after {elapsed:.0f}s — {len(all_outputs)} files checked[/yellow]")
+            break
+
         abs_path = str(cwd / test_file)
 
         if test_file.endswith(".py"):
@@ -797,48 +833,63 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
     files: Set[str] = set()
 
     # Get modified tracked files (uncommitted changes)
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            files.update(f for f in result.stdout.strip().splitlines() if f)
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: git diff timed out, continuing with partial results[/yellow]")
 
     # Get untracked files
-    result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            files.update(f for f in result.stdout.strip().splitlines() if f)
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: git ls-files timed out, continuing with partial results[/yellow]")
 
     # Get files committed on the feature branch (since diverging from base branch).
     # This catches test files committed during pdd bug that are neither uncommitted
     # nor untracked — they're committed and clean, but new relative to the base.
     # Try merge-base first (feature branch vs main/master), then fall back to
-    # listing all tracked files (single-branch scenario).
-    for base in ("main", "master"):
-        # Use merge-base to find the divergence point
-        mb_result = subprocess.run(
-            ["git", "merge-base", base, "HEAD"],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
-        if mb_result.returncode == 0 and mb_result.stdout.strip():
-            merge_base = mb_result.stdout.strip()
-            result = subprocess.run(
-                ["git", "diff", "--name-only", merge_base, "HEAD"],
+    # origin/ refs for shallow clones where local main/master don't exist (Issue #1010).
+    for base in ("main", "master", "origin/main", "origin/master"):
+        try:
+            mb_result = subprocess.run(
+                ["git", "merge-base", base, "HEAD"],
                 cwd=cwd,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30,
             )
+        except subprocess.TimeoutExpired:
+            continue
+        if mb_result.returncode == 0 and mb_result.stdout.strip():
+            merge_base = mb_result.stdout.strip()
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", merge_base, "HEAD"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                break
             if result.returncode == 0 and result.stdout.strip():
-                files.update(f for f in result.stdout.strip().split("\n") if f)
+                files.update(f for f in result.stdout.strip().splitlines() if f)
             break
 
     # Note: no blanket `git ls-files` fallback here — returning ALL tracked
