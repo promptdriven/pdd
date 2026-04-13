@@ -1,3 +1,15 @@
+## v0.0.206 (2026-04-12)
+
+### Feat
+
+- implement auto-registration for untracked prompts, fix .pddrc resolution precedence, and improve orchestrator safety and testing
+
+### Fix
+
+- **validator**: honor <pdd-dependency> tags in arch-include forward check
+- preserve downstream cloud_fix_errors signature + protect_tests pdd note
+- align prompt signatures with actual code
+
 ## v0.0.205 (2026-04-11)
 
 ### Feat
