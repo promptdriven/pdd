@@ -28,7 +28,8 @@
 <examples>
     <example id="1">
         INPUT:
-        <prompt_to_update>
+```
+<prompt_to_update>
 % You are an expert Python engineer. Write a 'sync' function.
 
 <include>context/python_preamble.prompt</include>
@@ -41,19 +42,21 @@
 % Requirements
 1. Synchronize prompt and code files.
 2. Detect drift between prompt and generated code.
-        </prompt_to_update>
+</prompt_to_update>
 
-        <dependencies_to_insert>
+<dependencies_to_insert>
 <new>
 <pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 </new>
 <new>
 <pdd.diff_utils><include>pdd/diff_utils.py</include></pdd.diff_utils>
 </new>
-        </dependencies_to_insert>
+</dependencies_to_insert>
+```
 
         OUTPUT:
-        <updated_prompt>
+```
+<updated_prompt>
 % You are an expert Python engineer. Write a 'sync' function.
 
 <include>context/python_preamble.prompt</include>
@@ -72,12 +75,14 @@
 % Requirements
 1. Synchronize prompt and code files.
 2. Detect drift between prompt and generated code.
-        </updated_prompt>
+</updated_prompt>
+```
     </example>
 
     <example id="2">
         INPUT:
-        <prompt_to_update>
+```
+<prompt_to_update>
 % You are an expert Python Programmer. Generate a calculator module.
 
 <include>context/python_preamble.prompt</include>
@@ -88,16 +93,18 @@
 % Requirements
 1. Parse and evaluate mathematical expressions.
 2. Support +, -, *, / operators.
-        </prompt_to_update>
+</prompt_to_update>
 
-        <dependencies_to_insert>
+<dependencies_to_insert>
 <new>
 <utils.validators><include select="def:validate_expression">utils/validators.py</include></utils.validators>
 </new>
-        </dependencies_to_insert>
+</dependencies_to_insert>
+```
 
         OUTPUT:
-        <updated_prompt>
+```
+<updated_prompt>
 % You are an expert Python Programmer. Generate a calculator module.
 
 <include>context/python_preamble.prompt</include>
@@ -113,7 +120,8 @@
 % Requirements
 1. Parse and evaluate mathematical expressions.
 2. Support +, -, *, / operators.
-        </updated_prompt>
+</updated_prompt>
+```
     </example>
 </examples>
 

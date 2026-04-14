@@ -1140,3 +1140,69 @@ class TestDedupCwdIndependence:
                 f"Input: {len(input_prompt)} chars, Output: {len(output)} chars. "
                 "Bug #5: dedup resolves file paths against CWD instead of project_root."
             )
+
+
+# ---------------------------------------------------------------------------
+# Bug #6: insert_includes_LLM.prompt must not be processed by preprocess
+# ---------------------------------------------------------------------------
+
+class TestInsertIncludesPromptTemplateIsInert:
+    """The insert_includes_LLM prompt template contains example <include>
+    tags inside its <examples> block. Those tags must be shown to the LLM
+    literally, not inlined by preprocess. If preprocess treats them as real
+    directives, the template gets silently corrupted: matching files get
+    inlined into the examples, and missing paths print File not found
+    warnings at runtime. The examples are wrapped in triple-backtick fenced
+    blocks so preprocess's code-span logic skips them.
+    """
+
+    def test_preprocess_does_not_inline_example_include_tags(self, capsys):
+        """Running preprocess on the template must not print 'Processing XML
+        include' or 'File not found' for any of the example <include> tags,
+        and the <include> tag count must be unchanged."""
+        import re
+        import warnings
+        from pdd.load_prompt_template import load_prompt_template
+        from pdd.preprocess import preprocess
+
+        template = load_prompt_template("insert_includes_LLM")
+        tag_count_before = len(re.findall(r"<include", template))
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            processed = preprocess(
+                template,
+                recursive=False,
+                double_curly_brackets=True,
+                exclude_keys=[
+                    "actual_prompt_to_update",
+                    "actual_dependencies_to_insert",
+                ],
+            )
+
+        tag_count_after = len(re.findall(r"<include", processed))
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+
+        assert "File not found" not in combined, (
+            "preprocess printed 'File not found' while processing the template. "
+            "An <include> tag in the examples block leaked past the fence. "
+            f"Output:\n{combined}"
+        )
+        assert "Processing XML include" not in combined, (
+            "preprocess tried to inline an example <include> tag. "
+            "The examples block is not being treated as literal text. "
+            f"Output:\n{combined}"
+        )
+        file_not_found_warnings = [
+            str(w.message) for w in caught if "File not found" in str(w.message)
+        ]
+        assert not file_not_found_warnings, (
+            f"preprocess emitted File-not-found warnings: {file_not_found_warnings}"
+        )
+        assert tag_count_before == tag_count_after, (
+            f"<include> tag count changed during preprocess "
+            f"({tag_count_before} -> {tag_count_after}) — "
+            "example tags were inlined instead of passed through literally."
+        )
+
