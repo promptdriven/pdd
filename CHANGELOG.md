@@ -1,14 +1,37 @@
+## v0.0.207 (2026-04-13)
+
+### Feat
+
+- add failure-aware fix retries, update cloud interface, and refine prompt dependency validation and documentation
+
+### Fix
+
+- **arch**: sync fix command dependencies from prompt
+- narrow AnnAssign conformance to nodes with a value (#1131)
+- conformance check recognizes type-annotated module constants (#1131)
+- terminate string in code_patcher_LLM.prompt JSON example (#1145) (#1147)
+
 ## v0.0.206 (2026-04-12)
 
 ### Feat
 
-- implement auto-registration for untracked prompts, fix .pddrc resolution precedence, and improve orchestrator safety and testing
+- **failure-aware fix retries** (Issue #709, upstream PR #734 by @vishalramvelu): new `failure_classification_python.prompt` module classifies pytest output into failure kinds (`syntax_import`, `assertion_logic`, `timeout_flaky`). `fix_error_loop` now uses classification to stop early on stuck syntax/import failures (unchanged failure signature across iterations) and stalled timeout/flaky patterns (≥2 consecutive iterations without improvement). New `failure_aware_retries` parameter (default `True`) on `fix_error_loop` and `fix_main` enables opt-out to legacy behavior
+- **`cloud_fix_errors` expanded interface**: new `protect_tests` and `failure_classification` parameters align the cloud function signature with local `fix_errors_from_unit_tests`; failure classification context is prepended to the cloud `errors` payload so the remote fix step sees the same hints as local mode
 
 ### Fix
 
-- **validator**: honor <pdd-dependency> tags in arch-include forward check
-- preserve downstream cloud_fix_errors signature + protect_tests pdd note
-- align prompt signatures with actual code
+- **validator**: `<pdd-dependency>` tags now satisfy architecture.json dependency checks in the forward direction — prompts declaring deps via the authoritative `<pdd-dependency>` tag (per `docs/prompting_guide.md`) are no longer flagged as drift when they don't also `<include>` the dependency's prompt
+- **`cloud_fix_errors` signature**: `protect_tests` forwarded in cloud payload (as `protectTests`) for forward compatibility; pdd note documents that the backend doesn't read it yet
+- **prompt signature alignment**: `<pdd-interface>` blocks and function signatures in `fix_error_loop_python.prompt` and `fix_main_python.prompt` updated to match actual code (`get_test_command_for_file` replaces `default_verify_cmd_for`, `get_cloud_request_timeout` replaces hardcoded constant, model-name convention documented)
+
+### Refactor
+
+- **`fix_error_loop_python.prompt` simplified**: removed prescriptive control-flow diagram (~50-line Mermaid stateDiagram) and step-by-step implementation instructions; replaced with behavioral constraints that keep the prompt requirements-focused rather than implementation-prescriptive
+- **`fix_main_python.prompt`**: added `<pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>` tag declaring architectural dependency
+
+### Test
+
+- new tests for `<pdd-dependency>` tag satisfying arch deps: `test_pdd_dependency_tag_satisfies_arch_dep` (tag alone) and `test_pdd_dependency_and_include_mixed` (tag + `<include>` together) verify no spurious warnings from the forward check
 
 ## v0.0.205 (2026-04-11)
 
