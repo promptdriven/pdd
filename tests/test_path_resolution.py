@@ -118,3 +118,124 @@ class TestFindProjectRootFromPath:
         from_dir = find_project_root_from_path(str(subdir))
         from_file = find_project_root_from_path(str(file_path))
         assert from_dir == from_file
+
+
+class TestNestedMarkerPriority:
+    """Weak markers (.pddrc, pyproject.toml, data/, .env) can legitimately
+    appear multiple times in one project (a monorepo with per-module
+    .pddrc files, a top-level pyproject.toml plus nested data/ dirs, etc.).
+    .git is a stronger signal of the true project/repo boundary and should
+    win over any nested weak marker. When there's no .git, the walk should
+    land on the outermost weak marker — otherwise the same file resolves
+    to different roots depending on which directory the scan started from,
+    which was exactly the bug raised in PR #763's review.
+    """
+
+    def test_git_outside_pddrc_wins_over_pddrc(self, tmp_path):
+        """Layout from the PR review:
+            repo/.git
+            repo/module/.pddrc
+            repo/module/context/a.py
+        The file should resolve to repo/, not repo/module/, so the path
+        stays stable whether we scan repo/module/context or repo/.
+        """
+        (tmp_path / ".git").mkdir()
+        module = tmp_path / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()
+        context = module / "context"
+        context.mkdir()
+        file_path = context / "a.py"
+        file_path.write_text("x = 1")
+
+        from_file = find_project_root_from_path(str(file_path))
+        from_ctx = find_project_root_from_path(str(context))
+        from_repo = find_project_root_from_path(str(tmp_path))
+        assert from_file == str(tmp_path.resolve())
+        assert from_ctx == str(tmp_path.resolve())
+        assert from_repo == str(tmp_path.resolve())
+
+    def test_nested_pddrc_without_git_returns_outermost(self, tmp_path):
+        """No .git anywhere. Outer .pddrc at repo/, inner .pddrc at
+        repo/module/. Without a strong marker, the walk should return
+        the outer (highest) one so nested scans agree on the root.
+        """
+        (tmp_path / ".pddrc").touch()
+        module = tmp_path / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()
+        context = module / "context"
+        context.mkdir()
+        file_path = context / "a.py"
+        file_path.write_text("x = 1")
+
+        assert find_project_root_from_path(str(file_path)) == str(tmp_path.resolve())
+        assert find_project_root_from_path(str(context)) == str(tmp_path.resolve())
+        assert find_project_root_from_path(str(module)) == str(tmp_path.resolve())
+
+    def test_git_below_outer_pddrc_still_wins(self, tmp_path):
+        """Layout:
+            outer/.pddrc
+            outer/repo/.git
+            outer/repo/src/a.py
+        .git is strong, so it should win even though outer/ has a weak
+        marker sitting higher in the tree. This keeps git submodule /
+        vendored-repo layouts resolving to the inner repo, which is
+        almost always what the user wants.
+        """
+        (tmp_path / ".pddrc").touch()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        src = repo / "src"
+        src.mkdir()
+        file_path = src / "a.py"
+        file_path.write_text("x = 1")
+
+        assert find_project_root_from_path(str(file_path)) == str(repo.resolve())
+
+    def test_mixed_weak_markers_highest_wins(self, tmp_path):
+        """Different weak markers stacked at different levels: highest
+        (outermost) should win regardless of marker type.
+        """
+        (tmp_path / "pyproject.toml").touch()
+        mid = tmp_path / "mid"
+        mid.mkdir()
+        (mid / ".pddrc").touch()
+        inner = mid / "inner"
+        inner.mkdir()
+        (inner / ".env").touch()
+        leaf = inner / "leaf.py"
+        leaf.write_text("# leaf")
+
+        assert find_project_root_from_path(str(leaf)) == str(tmp_path.resolve())
+
+    def test_max_levels_limits_walk_even_with_weak_markers(self, tmp_path):
+        """When the outermost weak marker is beyond max_levels, the walk
+        should return the highest weak marker it actually reached, not
+        None. This documents behavior for very deep trees.
+        """
+        (tmp_path / "pyproject.toml").touch()
+        mid = tmp_path / "a" / "b"
+        mid.mkdir(parents=True)
+        (mid / ".pddrc").touch()
+        deep = mid / "c" / "d" / "e"
+        deep.mkdir(parents=True)
+
+        # max_levels=4 from `deep` checks deep, d, c, b — stops before tmp_path.
+        # Highest weak marker seen is mid (b).
+        result = find_project_root_from_path(str(deep), max_levels=4)
+        assert result == str(mid.resolve())
+
+        # max_levels=3 can't reach b → returns None despite the outer
+        # pyproject.toml existing higher up.
+        result_shallow = find_project_root_from_path(str(deep), max_levels=3)
+        assert result_shallow is None
+
+    def test_still_returns_none_when_no_markers_at_all(self, tmp_path):
+        """With no strong or weak markers the function must still return
+        None so the absolute-path fallback in summarize_directory kicks in.
+        """
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        assert find_project_root_from_path(str(deep)) is None

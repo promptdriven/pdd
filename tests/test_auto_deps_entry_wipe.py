@@ -992,3 +992,200 @@ class TestNoMarkerPipeline:
             )
 
 
+# ---------------------------------------------------------------------------
+# Nested project markers: .git wins over nested .pddrc (PR #763 review)
+# ---------------------------------------------------------------------------
+
+class TestNestedProjectMarkers:
+    """Covers the scenario raised in PR #763's review: a repo with .git at
+    the top and nested .pddrc files inside sub-modules.  A file's CSV path
+    must be stable across scans started from different directories,
+    otherwise the cache misses and duplicate entries accumulate — exactly
+    the bug this PR set out to fix, but surfaced again via nested markers.
+    """
+
+    def test_nested_pddrc_does_not_split_root_across_scans(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Layout from Greg's comment:
+            repo/.git
+            repo/module/.pddrc
+            repo/module/context/a.py
+
+        Scan repo/module/context first, then scan repo/. Without the
+        prioritized-.git fix, scan 1 stores "context/a.py" (resolved
+        against module/'s .pddrc) and scan 2 stores "module/context/a.py"
+        (resolved against the outer .git).  The file gets re-summarized
+        and two entries coexist in the CSV.
+
+        With .git prioritized over weak markers, both scans resolve the
+        root to repo/, store "module/context/a.py", and the second scan
+        is a cache hit for a.py.
+        """
+        import subprocess
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "init"], cwd=str(repo), capture_output=True, check=True
+        )
+        module = repo / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()
+        context = module / "context"
+        context.mkdir()
+        file_a = context / "a.py"
+        file_a.write_text("x = 1")
+        # git ls-files only returns tracked files — commit so the scan finds a.py
+        git_env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo),
+                       capture_output=True, check=True, env=git_env)
+
+        # Scan 1: from the innermost directory
+        csv1, cost1, _ = summarize_directory(
+            directory_path=str(context),
+            strength=0.5,
+            temperature=0.0,
+        )
+        rows1 = _parse_csv(csv1)
+        a_rows1 = [r for r in rows1 if r['full_path'].endswith("a.py")]
+        assert len(a_rows1) == 1, f"Scan 1 should find a.py. Rows: {rows1}"
+        path1 = a_rows1[0]['full_path']
+
+        # Scan 2: from the repo root, feeding scan 1's CSV
+        mock_llm_invoke.reset_mock()
+        csv2, cost2, _ = summarize_directory(
+            directory_path=str(repo),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+        rows2 = _parse_csv(csv2)
+        paths2 = [r['full_path'] for r in rows2]
+
+        # No duplicate entry for the same file
+        a_entries = [p for p in paths2 if p.endswith("a.py")]
+        assert len(a_entries) == 1, (
+            f"Scanning from a deeper then shallower directory produced "
+            f"duplicate CSV entries for the same file: {a_entries}. "
+            f"Nested .pddrc should not override the outer .git root."
+        )
+
+        # Both scans agree on the same relative path.
+        assert path1 == a_entries[0], (
+            f"Scan paths disagree: scan1={path1!r}, scan2={a_entries[0]!r}. "
+            f"Both should be 'module/context/a.py' (relative to repo root)."
+        )
+        assert path1 == os.path.join("module", "context", "a.py"), (
+            f"Path should be relative to the .git root (repo/), "
+            f"got: {path1!r}"
+        )
+
+        # Scan 2 must be a cache hit for a.py specifically. git ls-files
+        # from the repo root also returns module/.pddrc (which scan 1 never
+        # saw), so scan 2's total cost is nonzero — check per-file instead:
+        # only newly-discovered files may have triggered LLM calls.
+        newly_discovered = {r['full_path'] for r in rows2} - {r['full_path'] for r in rows1}
+        assert mock_llm_invoke.call_count <= len(newly_discovered), (
+            f"Scan 2 made {mock_llm_invoke.call_count} LLM calls but only "
+            f"{len(newly_discovered)} files were new ({newly_discovered}). "
+            f"Excess calls mean a.py was re-summarized — the nested .pddrc "
+            f"produced a different cache key than scan 1."
+        )
+
+    def test_nested_pddrc_without_git_uses_outermost(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """Same layout but without .git — two nested .pddrc markers.
+        Without a strong marker, the outermost weak marker should win so
+        scans at different depths still agree on the root.
+        """
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".pddrc").touch()  # outer weak marker
+        module = repo / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()  # inner weak marker
+        context = module / "context"
+        context.mkdir()
+        (context / "a.py").write_text("x = 1")
+
+        # Inner scan
+        csv1, _, _ = summarize_directory(
+            directory_path=str(context),
+            strength=0.5,
+            temperature=0.0,
+        )
+        rows1 = _parse_csv(csv1)
+        path1 = rows1[0]['full_path']
+
+        # Outer scan
+        mock_llm_invoke.reset_mock()
+        csv2, cost2, _ = summarize_directory(
+            directory_path=str(repo),
+            strength=0.5,
+            temperature=0.0,
+            csv_file=csv1,
+        )
+        rows2 = _parse_csv(csv2)
+        a_entries = [r['full_path'] for r in rows2 if r['full_path'].endswith("a.py")]
+
+        assert len(a_entries) == 1, (
+            f"Nested .pddrc markers produced duplicate entries: {a_entries}"
+        )
+        assert path1 == a_entries[0], (
+            f"Scan paths disagree: {path1!r} vs {a_entries[0]!r}"
+        )
+        assert path1 == os.path.join("module", "context", "a.py"), (
+            f"Path should be relative to the outermost .pddrc (repo/), "
+            f"got: {path1!r}"
+        )
+        assert cost2 == 0, (
+            f"Outer scan should cache-hit a.py, but cost={cost2}"
+        )
+
+    def test_git_inside_outer_weak_marker_still_uses_git(
+        self, tmp_path, mock_load_prompt_template, mock_llm_invoke
+    ):
+        """A repo vendored inside a larger project (outer pyproject.toml,
+        inner .git) — .git should still win so scans inside the vendored
+        repo resolve to the vendored repo root, not the outer project.
+        This is the common git-submodule shape.
+        """
+        import subprocess
+
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / "pyproject.toml").touch()
+        repo = outer / "vendored_repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "init"], cwd=str(repo), capture_output=True, check=True
+        )
+        src = repo / "src"
+        src.mkdir()
+        (src / "lib.py").write_text("y = 2")
+        git_env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo),
+                       capture_output=True, check=True, env=git_env)
+
+        csv_out, _, _ = summarize_directory(
+            directory_path=str(src),
+            strength=0.5,
+            temperature=0.0,
+        )
+        rows = _parse_csv(csv_out)
+        lib_rows = [r for r in rows if r['full_path'].endswith("lib.py")]
+        assert len(lib_rows) == 1, f"Should find lib.py, got rows: {rows}"
+        # Path should be relative to the vendored repo (the .git dir),
+        # so "src/lib.py", NOT "vendored_repo/src/lib.py".
+        assert lib_rows[0]['full_path'] == os.path.join("src", "lib.py"), (
+            f"Expected path relative to vendored .git root, got: "
+            f"{lib_rows[0]['full_path']!r}"
+        )
+
+

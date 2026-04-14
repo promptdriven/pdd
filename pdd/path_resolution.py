@@ -116,32 +116,50 @@ def get_default_resolver() -> PathResolver:
     )
 
 
-def _has_project_marker(path: Path) -> bool:
+def _has_strong_marker(path: Path) -> bool:
+    return (path / ".git").exists()
+
+
+def _has_weak_marker(path: Path) -> bool:
     return (
-        (path / ".git").exists()
-        or (path / ".pddrc").exists()
+        (path / ".pddrc").exists()
         or (path / "pyproject.toml").exists()
         or (path / "data").is_dir()
         or (path / ".env").exists()
     )
 
 
+def _has_project_marker(path: Path) -> bool:
+    return _has_strong_marker(path) or _has_weak_marker(path)
+
+
 def find_project_root_from_path(start: str, max_levels: int = 10) -> Optional[str]:
     """Walk up from *start* to find the project root.
 
-    Returns the absolute path of the first ancestor directory that contains
-    a project marker (.git, .pddrc, pyproject.toml, data/, .env), or None
-    if no marker is found within *max_levels* parents.
+    .git is a strong marker: the first ancestor containing .git is returned
+    immediately. Weak markers (.pddrc, pyproject.toml, data/, .env) can
+    appear multiple times in nested layouts, so the walk continues past a
+    weak-marker directory in case a .git ancestor exists above it. If no
+    .git is found, the outermost (highest) weak-marker directory seen is
+    returned. Returns None when no marker is found within max_levels
+    parents.
     """
     abs_path = Path(start).resolve()
     current = abs_path if abs_path.is_dir() else abs_path.parent
+
+    highest_weak: Optional[Path] = None
     for _ in range(max_levels):
-        if _has_project_marker(current):
+        if _has_strong_marker(current):
             return str(current)
+        if _has_weak_marker(current):
+            highest_weak = current
         parent = current.parent
         if parent == current:
             break
         current = parent
+
+    if highest_weak is not None:
+        return str(highest_weak)
     return None
 
 
