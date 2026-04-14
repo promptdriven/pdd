@@ -1206,3 +1206,46 @@ class TestInsertIncludesPromptTemplateIsInert:
             "example tags were inlined instead of passed through literally."
         )
 
+
+# ---------------------------------------------------------------------------
+# Dedup when CWD is outside any project (absolute include paths)
+# ---------------------------------------------------------------------------
+
+class TestDedupFromCwdOutsideProject:
+    """_remove_redundant_content anchors relative paths to the project root
+    discovered from CWD. When CWD is outside any project (no markers walking
+    up), that anchor falls back to CWD itself. Absolute paths bypass the
+    anchor entirely and must still work — that's the contract callers rely
+    on when they receive CSV entries with absolute paths (which happens in
+    the no-marker fallback of summarize_directory).
+    """
+
+    def test_absolute_include_path_dedups_when_cwd_has_no_project(
+        self, tmp_path, monkeypatch
+    ):
+        """Project lives at tmp_path/proj/, CWD is tmp_path/elsewhere/ which
+        is NOT a descendant of any project root. Dedup must still find the
+        include file (because its absolute path was given) and strip the
+        inline duplicate."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".pddrc").touch()
+        helper = project / "helper.py"
+        helper_content = "def helper():\n    return 42\n"
+        helper.write_text(helper_content)
+
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+
+        prompt = f"Preamble line\n{helper_content}Postamble line\n"
+
+        result = _remove_redundant_content(prompt, [str(helper.resolve())])
+
+        assert helper_content.strip() not in result, (
+            "Absolute-path include should let dedup find the file even when "
+            "CWD is outside the project. The project-root anchor is only "
+            "needed to resolve relative paths."
+        )

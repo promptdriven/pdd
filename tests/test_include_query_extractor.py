@@ -625,3 +625,38 @@ class TestCacheKeyPathConsistency:
             f"Relative: {key_relative[:16]}..., Absolute: {key_absolute[:16]}.... "
             "compute_cache_key should normalize paths to project-relative form."
         )
+
+    def test_absolute_path_cache_key_stable_across_cwds(
+        self, tmp_path, monkeypatch
+    ):
+        """When compute_cache_key is given an absolute path, the cache key
+        must be identical regardless of CWD. Path normalization to
+        project-relative form uses the file's own project root (found by
+        walking up from the file), not CWD's project root — so moving CWD
+        to an unrelated directory must not change the key.
+        """
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".pddrc").touch()
+        pdd_dir = project / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "utils.py").write_text("def helper(): pass")
+        abs_path = str((pdd_dir / "utils.py").resolve())
+        query = "list helper functions"
+
+        # CWD inside the project
+        monkeypatch.chdir(project)
+        key_from_inside = compute_cache_key(abs_path, query)
+
+        # CWD in a sibling directory with no markers — project root for "."
+        # would resolve to something other than `project`.
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+        key_from_outside = compute_cache_key(abs_path, query)
+
+        assert key_from_inside == key_from_outside, (
+            f"Cache key must depend only on the file's project root, "
+            f"not on CWD. Got inside={key_from_inside[:16]}..., "
+            f"outside={key_from_outside[:16]}..."
+        )
