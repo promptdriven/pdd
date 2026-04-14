@@ -944,11 +944,11 @@ def detect_structural_test_patterns(
             scanned for source-variable tracking (so a ``read_text()`` call
             in old code followed by ``assert "x" in var`` in new code is
             caught), but violations on those pre-existing lines are
-            suppressed.  If ``start_line`` exceeds the file length (e.g. the
-            file was rewritten shorter than the snapshot), it is clamped to 1
-            so the entire file is scanned.  Used to avoid false positives
-            when appending new tests to a file that already contains flagged
-            patterns (issue #990).
+            suppressed.  If ``start_line`` exceeds the file length, no
+            violations are reported (the loop naturally finishes without
+            matching) — the intended behaviour when Step 9 doesn't append.
+            Used to avoid false positives when appending new tests to a
+            file that already contains flagged patterns (issue #990).
 
     Detected patterns:
     - inspect.getsource / inspect.signature used to read source or signatures
@@ -974,10 +974,16 @@ def detect_structural_test_patterns(
 
     # Effective start line for reporting violations.  Lines before this are
     # still scanned for variable tracking but violations are suppressed.
-    # If start_line exceeds the file length (file was rewritten/truncated
-    # rather than appended to), clamp to 1 to scan everything.
+    #
+    # Do NOT clamp when start_line > len(lines): that was the #774 off-by-one.
+    # The normal "no new lines appended" case is start_line == len(lines) + 1,
+    # and the loop only iterates up to len(lines) — so any start_line past the
+    # end naturally suppresses all violations (the intended behaviour).  The
+    # old clamp treated "past the end" as "file shrank, rescan everything",
+    # which false-flagged pre-existing patterns whenever Step 9 left the file
+    # untouched (the exact pdd_cloud #1064 failure mode).
     if start_line is not None and start_line > 1:
-        effective_start = 1 if start_line > len(lines) else start_line
+        effective_start = start_line
     else:
         effective_start = 1
 
@@ -1529,16 +1535,41 @@ def run_agentic_bug_orchestrator(
         if step_num == 9:
             pre_step7_files = _get_modified_and_untracked(current_work_dir)
             # Snapshot line counts for existing test files so the structural
-            # test guard can skip pre-existing patterns (issue #990).
-            tests_dir = current_work_dir / "tests"
-            if tests_dir.is_dir():
-                for py_file in tests_dir.rglob("*.py"):
-                    try:
-                        pre_step9_line_counts[str(py_file.resolve())] = len(
-                            py_file.read_text().splitlines()
-                        )
-                    except (OSError, UnicodeDecodeError):
-                        pass
+            # test guard can skip pre-existing patterns (issues #990, #1026).
+            #
+            # Walk the whole worktree, not just {worktree}/tests/ — real
+            # projects have tests scattered across many locations (e.g.
+            # backend/tests/, extensions/*/tests/, frontend/e2e/tests/).
+            # Matching the #1026 convention: test_*.py, *_test.py, conftest.py.
+            # Check excludes against parts RELATIVE to worktree so dir names
+            # like ".pdd" don't match parent-path components when the worktree
+            # itself lives under ".pdd/worktrees/...".
+            _snapshot_excludes = {
+                ".git", ".venv", "venv", ".env", "env",
+                "node_modules", "__pycache__", ".pdd",
+                ".pytest_cache", ".mypy_cache", ".ruff_cache",
+                ".tox", ".nox", "dist", "build", ".next",
+            }
+            for py_file in current_work_dir.rglob("*.py"):
+                try:
+                    rel_parts = py_file.relative_to(current_work_dir).parts
+                except ValueError:
+                    rel_parts = py_file.parts
+                if any(part in _snapshot_excludes for part in rel_parts):
+                    continue
+                py_file_name = py_file.name
+                if not (
+                    py_file_name.startswith("test_")
+                    or py_file_name.endswith("_test.py")
+                    or py_file_name == "conftest.py"
+                ):
+                    continue
+                try:
+                    pre_step9_line_counts[str(py_file.resolve())] = len(
+                        py_file.read_text().splitlines()
+                    )
+                except (OSError, UnicodeDecodeError):
+                    pass
 
         # Pre-Step 12: deterministic file staging (#912)
         # Stage all tracked changed_files before Step 12 dispatch so the LLM

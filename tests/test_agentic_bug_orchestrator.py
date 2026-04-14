@@ -6885,3 +6885,92 @@ def test_prompt_file_timeout_spec_matches_code_dict():
             f"Code BUG_STEP_TIMEOUTS[{step}] = {actual} but prompt spec says {expected_timeout}. "
             f"The code dict is out of sync with the prompt specification."
         )
+
+
+# ============================================================================
+# Scope bug: pre_step9 snapshot must walk the whole worktree
+# ============================================================================
+
+
+def test_step9_snapshot_covers_nested_test_dirs(
+    mock_dependencies, default_args, tmp_path
+):
+    """Regression: pre_step9_line_counts must walk the whole worktree.
+
+    Real projects keep tests in many locations (backend/tests/,
+    extensions/*/tests/, frontend/e2e/tests/, scripts/*/tests/, etc.),
+    not just {worktree}/tests/. If the snapshot walk is scoped to one
+    directory, test files under any other path get pre_count=0 →
+    start_line=1 → full-file scan → pre-existing patterns false-flagged →
+    spurious retry → Step 9 timeout / SIGKILL.
+
+    This matches the #1026 bug 0 scenario that re-surfaced in production
+    on pdd_cloud #1064: inspect.getsource patterns at lines 3346/3362 of
+    extensions/github_pdd_app/tests/pdd_executor/test_orchestrator.py
+    were falsely flagged because that path lives under extensions/, not
+    under the root tests/ dir.
+
+    Test: place a file with pre-existing structural patterns at a nested
+    path (extensions/app/tests/) and assert Step 9 runs exactly once when
+    the file is unchanged.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Pre-existing test file in a NESTED location (not {worktree}/tests/).
+    test_file = worktree_path / "extensions" / "app" / "tests" / "test_nested.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # Build the content WITHOUT triggering detection-by-substring in this
+    # test file itself.
+    mod = "inspect"
+    fn_body_getsource = (
+        "    source = " + mod + "." + "getsource(module.main)\n"
+        "    " + 'assert "signal" in source\n'
+    )
+    test_file.write_text(
+        "import inspect\n\n"
+        "def test_alpha():\n" + fn_body_getsource + "\n"
+        "def test_beta():\n"
+        "    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get("label", "")
+        if label == "step8":
+            return (
+                True,
+                (
+                    "## Test Plan\n"
+                    "#### Test 1: alpha\n"
+                    "#### Test 2: beta\n"
+                    "\nPLANNED_TEST_COUNT: 2"
+                ),
+                0.1,
+                "gpt-4",
+            )
+        if label == "step9":
+            step9_call_count += 1
+            return (
+                True,
+                "Generated tests\nFILES_MODIFIED: extensions/app/tests/test_nested.py",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    assert step9_call_count == 1, (
+        f"Expected Step 9 to run exactly once when a nested-path file was "
+        f"unchanged. Got {step9_call_count} calls. A retry means the "
+        f"snapshot didn't cover nested test directories — the pdd_cloud "
+        f"#1064 failure mode (tests under extensions/github_pdd_app/tests/ "
+        f"were missed when the snapshot only walked {{worktree}}/tests/)."
+    )
