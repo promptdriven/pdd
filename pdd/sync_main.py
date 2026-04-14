@@ -138,14 +138,22 @@ def _normalize_prompts_root(prompts_dir: Path) -> Path:
 
 
 def _case_insensitive_prompt_lookup(path: Path) -> Path:
-    """Return the actual file path with correct casing, or the original if no match."""
+    """Return the actual file path with correct casing, or the original if no match.
+
+    Searches the immediate parent directory only. Callers that need recursive
+    nested-subdirectory resolution use ``_find_prompt_file()`` in
+    ``sync_determine_operation`` (for ``get_pdd_file_paths``) or
+    ``_resolve_prompt_path_from_architecture`` (for architecture.json). Keeping
+    this helper narrow-scope preserves context isolation for
+    ``_find_prompt_in_contexts``.
+    """
     if path.exists():
         return path
     parent = path.parent
     if parent.is_dir():
         target_lower = path.name.lower()
         for candidate in parent.iterdir():
-            if candidate.name.lower() == target_lower and candidate.is_file():
+            if candidate.is_file() and candidate.name.lower() == target_lower:
                 return candidate
     return path
 

@@ -2055,3 +2055,13 @@ class TestIssue1165_SyncMainEndToEnd:
             "Nested prompts_dir should contain the prompt file — "
             "fix must ensure this directory is used instead of default"
         )
+
+
+# ============================================================================
+# Issue #1169: Nested-subdirectory resolution is handled by _find_prompt_file()
+# and _resolve_prompt_path_from_architecture() (both in sync_determine_operation).
+# _case_insensitive_prompt_lookup intentionally stays narrow-scope to preserve
+# context isolation for _find_prompt_in_contexts — see test_issue_1049_*.
+# Recursive-resolution behaviour is covered by tests/test_find_prompt_file.py
+# and the sync_determine_operation tests for #1169.
+# ============================================================================
