@@ -4371,7 +4371,7 @@ class TestIssue1048GlobEscapingInDetermineOperation:
 # Issue #1169: get_pdd_file_paths fails for nested subdirectories + case mismatch
 # ============================================================================
 
-from sync_determine_operation import _resolve_prompt_path_from_architecture
+from pdd.sync_determine_operation import _resolve_prompt_path_from_architecture
 
 
 def test_get_pdd_file_paths_nested_subdir_case_mismatch(tmp_path, monkeypatch):
@@ -4505,13 +4505,15 @@ def test_resolve_prompt_path_from_architecture_flat_filename_misses_subdirectory
     # The file is at prompts/src/clients/firestore_client_Python.prompt
     # After fix, either _resolve_prompt_path_from_architecture or its caller
     # must search subdirectories to find the actual file
-    from pdd.sync_main import _case_insensitive_prompt_lookup
-    final_path = _case_insensitive_prompt_lookup(resolved)
-
-    assert final_path.exists(), (
-        f"Bug #1169: architecture.json flat filename resolves to non-existent path. "
-        f"Resolved: {resolved}, after lookup: {final_path}. "
-        f"Actual file: {actual_file}"
+    # Post-#1169: _resolve_prompt_path_from_architecture itself performs the
+    # recursive case-insensitive search when the naive join misses. The
+    # returned path must point at the real file on disk.
+    assert resolved.exists(), (
+        f"Bug #1169: architecture.json flat filename must resolve to the nested file. "
+        f"Resolved: {resolved}. Actual file: {actual_file}"
+    )
+    assert resolved == actual_file, (
+        f"Bug #1169: expected resolved path to equal {actual_file}, got {resolved}"
     )
 
 

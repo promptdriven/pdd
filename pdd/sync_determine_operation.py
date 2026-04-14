@@ -157,12 +157,18 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
     if joined.exists():
         return joined
 
-    # Recursive search for the filename under prompts_root
+    # Recursive search for the filename under prompts_root. Collect all matches
+    # and pick the shallowest deterministically to avoid platform-dependent
+    # filesystem ordering when multiple nested files share the basename.
     if prompts_root.is_dir():
         target_lower = Path(architecture_filename).name.lower()
-        for candidate in prompts_root.rglob("*.prompt"):
-            if candidate.is_file() and candidate.name.lower() == target_lower:
-                return candidate
+        matches = [
+            c for c in prompts_root.rglob("*.prompt")
+            if c.is_file() and c.name.lower() == target_lower
+        ]
+        if matches:
+            matches.sort(key=lambda p: (len(p.parts), str(p)))
+            return matches[0]
 
     return joined
 
@@ -224,21 +230,35 @@ def _find_prompt_file(
                 for candidate in joined.parent.iterdir():
                     if candidate.is_file() and candidate.name.lower() == joined_lower:
                         return candidate
-            # 3c: Recursive search for the architecture filename in all subdirectories
+            # 3c: Recursive search for the architecture filename in all subdirectories.
+            # Collect and sort so multiple matches resolve deterministically across
+            # platforms (rglob order is filesystem-dependent).
             arch_basename_lower = Path(arch_filename).name.lower()
-            for candidate in prompts_root.rglob("*.prompt"):
-                if candidate.name.lower() == arch_basename_lower:
-                    return candidate
+            matches = [
+                c for c in prompts_root.rglob("*.prompt")
+                if c.is_file() and c.name.lower() == arch_basename_lower
+            ]
+            if matches:
+                matches.sort(key=lambda p: (len(p.parts), str(p)))
+                return matches[0]
 
     # --- Step 4: Recursive glob fallback (always works) ---
+    # Collect then sort by depth+path so multiple nested matches resolve
+    # deterministically (shallowest wins, lexicographic tie-break).
     escaped_name = glob.escape(name)
     lang_lower = language.lower()
+    matches = []
     for candidate in prompts_root.rglob(f"{escaped_name}_*.prompt"):
+        if not candidate.is_file():
+            continue
         stem = candidate.stem
         if stem.startswith(f"{name}_"):
             suffix = stem[len(name) + 1:]
             if suffix.lower() == lang_lower:
-                return candidate
+                matches.append(candidate)
+    if matches:
+        matches.sort(key=lambda p: (len(p.parts), str(p)))
+        return matches[0]
 
     return None
 

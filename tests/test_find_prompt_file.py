@@ -184,6 +184,79 @@ class TestEdgeCases:
         assert result.name.lower() == "config_python.prompt"
 
 
+# === Deterministic tie-break when multiple nested files share a basename ===
+
+
+class TestDeterministicResolution:
+    def test_step4_prefers_shallowest_match(self, tmp_path):
+        """Two nested files sharing the basename — shallowest wins, not rglob order."""
+        prompts = tmp_path / "prompts"
+        (prompts / "src").mkdir(parents=True)
+        (prompts / "zzz" / "deep" / "nested").mkdir(parents=True)
+        shallow = prompts / "src" / "foo_Python.prompt"
+        deep = prompts / "zzz" / "deep" / "nested" / "foo_Python.prompt"
+        shallow.write_text("shallow")
+        deep.write_text("deep")
+
+        result = _find_prompt_file("foo", "python", prompts)
+        assert result == shallow, (
+            f"Expected shallowest match {shallow}, got {result}. "
+            "Non-deterministic rglob order must be stabilised by depth+path sort."
+        )
+
+    def test_step4_lexicographic_tiebreak_at_same_depth(self, tmp_path):
+        """Two files at the same depth — lexicographic order wins deterministically."""
+        prompts = tmp_path / "prompts"
+        (prompts / "alpha").mkdir(parents=True)
+        (prompts / "beta").mkdir(parents=True)
+        alpha = prompts / "alpha" / "foo_Python.prompt"
+        beta = prompts / "beta" / "foo_Python.prompt"
+        alpha.write_text("a")
+        beta.write_text("b")
+
+        result = _find_prompt_file("foo", "python", prompts)
+        assert result == alpha, f"Expected lexicographic winner {alpha}, got {result}"
+
+    def test_step3c_prefers_shallowest_match(self, tmp_path):
+        """architecture.json hint + two nested matches — shallowest wins."""
+        prompts = tmp_path / "prompts"
+        (prompts / "src").mkdir(parents=True)
+        (prompts / "legacy" / "backup").mkdir(parents=True)
+        shallow = prompts / "src" / "foo_Python.prompt"
+        deep = prompts / "legacy" / "backup" / "foo_Python.prompt"
+        shallow.write_text("shallow")
+        deep.write_text("deep")
+
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(
+            [{"filename": "foo_Python.prompt", "filepath": "src/foo.py"}]
+        ))
+
+        result = _find_prompt_file("foo", "python", prompts, arch_path)
+        assert result == shallow, f"Expected shallowest arch match {shallow}, got {result}"
+
+    def test_stale_flat_file_wins_over_nested(self, tmp_path):
+        """Stale flat file at prompts_root takes precedence over nested — step 1 wins.
+
+        This is documented behaviour: if a user has an old flat prompt AND a nested
+        one, step 1 (direct path) returns the flat one. Users who moved prompts
+        to a subdirectory must delete the old flat file.
+        """
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "src").mkdir()
+        flat = prompts / "foo_Python.prompt"
+        nested = prompts / "src" / "foo_Python.prompt"
+        flat.write_text("flat-stale")
+        nested.write_text("nested-current")
+
+        result = _find_prompt_file("foo", "Python", prompts)
+        assert result == flat, (
+            "Step 1 (direct path) must short-circuit before recursion — "
+            "flat file wins even when a nested version exists."
+        )
+
+
 # === Simulates the exact Cloud Run failure from #1169 ===
 
 class TestCloudRunScenario:
