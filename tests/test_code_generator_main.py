@@ -3116,9 +3116,9 @@ class TestVerifyArchitectureConformance:
             verbose=False,
         )
 
-    def test_annassign_without_value_also_recognized(self, tmp_path):
-        """Type-only declarations like `X: int` (AnnAssign with value=None)
-        should also count as a declared symbol."""
+    def test_annassign_without_value_is_not_a_module_binding(self, tmp_path):
+        """Bare `X: int` (AnnAssign with value=None) does not create a module
+        binding at runtime, so it must NOT satisfy conformance."""
         arch = [
             {
                 "filename": "types_Python.prompt",
@@ -3135,13 +3135,14 @@ class TestVerifyArchitectureConformance:
         ]
         (tmp_path / "architecture.json").write_text(json.dumps(arch))
 
-        _verify_architecture_conformance(
-            generated_code="GLOBAL_COUNTER: int\n",
-            prompt_name="types_Python.prompt",
-            arch_path=str(tmp_path / "architecture.json"),
-            language="python",
-            verbose=False,
-        )
+        with pytest.raises(click.UsageError, match="GLOBAL_COUNTER"):
+            _verify_architecture_conformance(
+                generated_code="GLOBAL_COUNTER: int\n",
+                prompt_name="types_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
 
 
 # === Issue #687 Tests: example_output_path must be injected and consumed ===

@@ -258,11 +258,13 @@ def _verify_architecture_conformance(
                     for target in node.targets:
                         if isinstance(target, ast.Name):
                             actual_symbols.append(target.id)
-                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                    # Handle `X: T = value` — idiomatic for module-level typed
-                    # constants (e.g. `MAX_RETRIES: int = 5`). Without this
-                    # branch the conformance check reports typed constants as
-                    # missing from generated code even when they are present.
+                elif (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.value is not None
+                ):
+                    # Only `X: T = value` binds at runtime; bare `X: T` does not
+                    # create a module export, so it must not satisfy conformance.
                     actual_symbols.append(node.target.id)
         except SyntaxError:
             return  # Can't parse — skip conformance
