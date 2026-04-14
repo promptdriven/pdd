@@ -1,0 +1,78 @@
+<pdd-reason>FastAPI route for browsing and inspecting the .pdd/extracts/ LLM extraction cache via the pdd connect web UI.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "GET /api/v1/extracts", "signature": "(check_freshness: bool = true)", "returns": "ExtractListResponse"},
+      {"name": "GET /api/v1/extracts/{cache_key}", "signature": "(cache_key: str)", "returns": "ExtractContent"},
+      {"name": "GET /api/v1/extracts/for-prompt", "signature": "(prompt_path: str)", "returns": "list[PromptExtractInfo]"},
+      {"name": "POST /api/v1/extracts/prune", "signature": "(dry_run: bool = false)", "returns": "PruneResponse"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>include_query_extractor_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/server/routes/extracts.py` module.
+
+% Role & Scope
+When a PDD prompt contains `<include query="...">file</include>`, the system extracts content from that file using an LLM and caches the result in `.pdd/extracts/` as a `.md` file alongside a `.meta.json` metadata file. This router lets the web UI browse, inspect freshness, and clean up that cache. All endpoints return JSON.
+
+% Requirements
+1. Router prefix: `/api/v1/extracts`, tag: `extracts`
+2. Expose a `get_project_root()` function so the app can inject the project root at startup
+3. Use `pdd.include_query_extractor.compute_cache_key` for cache keys and `hashlib.sha256` for file content hashes. Both must work even if `pdd.include_query_extractor` is not installed (provide a fallback).
+
+% Include Tag Parsing
+- Prompts reference cached extracts via `<include query="...">file.py</include>` tags
+- Parse these tags to capture the query string and the file path
+- Resolve file paths relative to the prompt file's parent directory
+
+% Pydantic Response Models (defined inline, exact field names):
+4. `ExtractMetadata`: cache_key, source_path, query, timestamp (Optional), source_hash (Optional), is_fresh (Optional[bool])
+5. `ExtractContent`: extends ExtractMetadata with `content: str`
+6. `ExtractListResponse`: extracts (List[ExtractMetadata]), total (int), stale_count (int)
+7. `PromptExtractInfo`: include_path, query, cache_key, has_cached_entry (bool), source_path (Optional), timestamp (Optional), is_fresh (Optional[bool])
+8. `PruneResponse`: deleted_count (int), orphaned_keys (List[str]), message (str)
+
+% Endpoints
+9. `GET /` — list all cached extracts
+   - Scan `.meta.json` files in `.pdd/extracts/`, return as `ExtractListResponse`
+   - Sorted by timestamp descending; empty list if directory doesn't exist
+   - Skip corrupted or unreadable meta files
+10. Optional `check_freshness` query param (default true) on the list endpoint
+    - When true: compare `source_hash` against current hash of source file to set `is_fresh`
+    - When false: set `is_fresh` to null
+    - Stale when source file is missing, unreadable, or hash changed
+11. `GET /{cache_key}` — return full content plus metadata for a single extract
+    - Return 404 if cache_key is not a valid hex hash or the entry doesn't exist
+    - Include freshness status
+12. `GET /for-prompt` — list extracts relevant to a specific prompt file
+    - Required `prompt_path` query param (project-relative path)
+    - Reject with 403 if path escapes project root via `../` or absolute paths
+    - Parse the prompt's `<include query="...">` tags, compute cache key for each, check if cached
+    - Don't leak absolute filesystem paths in responses
+    - Return list of `PromptExtractInfo`
+13. `POST /prune` — delete cache entries not referenced by any prompt file
+    - Must not be captured by the `/{cache_key}` wildcard route
+    - Scan all `.prompt` files to collect referenced cache keys (reuse `_collect_referenced_keys` from `pdd.extracts_prune` if available, otherwise scan inline)
+    - Inline scanning must exclude non-project directories (node_modules, .git, .venv, venv, __pycache__, dist, build) and resolve paths prompt-parent-relative first, then project-root-relative
+    - Orphaned = on-disk keys minus referenced keys
+    - Optional `dry_run` query param (default false): return orphaned keys without deleting
+    - Delete both `.md` and `.meta.json` for each orphan
+    - Return `PruneResponse`
+
+% Dependencies
+<include_query_extractor_example><include>context/include_query_extractor_example.py</include></include_query_extractor_example>
+<extracts_prune_example><include>context/extracts_prune_example.py</include></extracts_prune_example>
+<fastapi_example><include>context/fastapi_example.py</include></fastapi_example>
+
+% Deliverables
+- Code: `pdd/server/routes/extracts.py`

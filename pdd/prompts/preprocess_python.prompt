@@ -1,59 +1,87 @@
-% You are an expert Python engineer. Write a 'preprocess' function that preprocesses prompts for LLMs by resolving XML-like tags and optionally escaping curly braces.
+<pdd-reason>Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "preprocess", "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)", "returns": "str"},
+      {"name": "get_file_path", "signature": "(file_name)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+<pdd-dependency>content_selector_python.prompt</pdd-dependency>
+<pdd-dependency>include_query_extractor_python.prompt</pdd-dependency>
 
 <include>./context/python_preamble.prompt</include>
 
-% Function Signature
-    def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None) -> str
+% Goal
+Write the `pdd/preprocess.py` module.
 
-% Inputs/Outputs
-    - prompt: The prompt string to preprocess
-    - recursive: When True, resolve includes but defer `<shell>` and `<web>` execution
-    - double_curly_brackets: When True, escape single curly braces as double braces
-    - exclude_keys: Variable names to exclude from brace doubling
-    - Returns: The preprocessed prompt (preserve leading/trailing whitespace)
+% Role & Scope
+Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<include>`, `<include-many>`, `<shell>`, `<web>`) and optionally escaping curly braces. Supports recursive include resolution, selective extraction, semantic LLM queries, and code block protection.
+
+% Requirements
+1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None) -> str`
+   - `_seen`: set of resolved real paths for circular include detection, passed to child calls
+   - Returns the preprocessed prompt string; preserve leading/trailing whitespace
+   - If `prompt` is not a string, return `str(prompt)`; if empty, print error and return `""`
+2. Tags must be processed in this order: `<pdd>` → `<include>` (and backtick includes) → `<include-many>` → `<shell>` → `<web>`. This order matters because earlier tags can produce content containing later tags (e.g., an included file may contain `<shell>` tags). Apply curly-brace doubling last, only on the top-level call.
+3. Tags inside fenced code blocks (``` or ~~~) or inline backtick spans must NOT be processed. Tags that span into or overlap a code block must also be skipped.
+4. `<pdd>...</pdd>` — delete entire block including tags (human-only comment)
+5. `<include>path</include>` — read file as UTF-8 and replace tag with contents
+   - Also supports self-closing syntax: `<include path="..." />`
+   - Also supports `lines` attribute shorthand: `<include lines="1-10">file</include>`
+   - Parse attributes with `key="value"` or `key='value'` syntax
+6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"`; `"interface"` extracts signatures only.
+   - On failure (import error or selector error), log warning and fall back to full file content
+   - If `query=` was also present, try query extraction before falling back to full file
+7. `<include query="...">file</include>` — delegate to `IncludeQueryExtractor.extract()`. Deferred when `recursive=True` (leave tag intact). On import error or exception, return inline error message in brackets (e.g., `[Error: pdd.include_query_extractor not found...]`).
+8. When both `select=` and `query=` present, keep `select=` and discard `query=`; fall back to `query=` only if `select=` fails
+9. Image includes (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px and convert to base64 data URL. GIF first frame converted to static image. HEIC converted to JPEG (requires `pillow_heif`).
+10. `<include-many>` — comma/newline-separated paths; concatenate with newlines. Missing files → `[File not found: path]`. Deferred when `recursive=True`.
+11. `<shell>cmd</shell>` — execute command string in a shell, replace with stdout. Timeout controlled by `PDD_SHELL_TIMEOUT` env var (default 30s). On non-zero exit, insert error message with exit code and combined stdout/stderr. On timeout, insert timeout message. Deferred when `recursive=True`.
+12. `<web>url</web>` — fetch via Firecrawl (requires `FIRECRAWL_API_KEY`), replace with markdown content. Cache responses via `firecrawl_cache`. Use a hard 30s client-side timeout to prevent hanging. Handle missing API key, import error, empty response, timeout, and scrape failure with inline error messages. Deferred when `recursive=True`.
+13. Backtick includes: ``` `<path>` ``` → ```{file contents}```. Same recursive/missing-file behavior as XML includes.
+
+% Circular Include Detection
+- Detect circular includes by tracking resolved file paths; raise `ValueError` with "Circular include" in the message if a file appears twice in the include chain
+- Include resolution uses a convergence loop (repeat until no changes) to handle diamond dependencies — where two includes both reference the same file, requiring multiple passes to resolve. Cap at 50 iterations to prevent infinite loops.
+
+% Recursive Pass Behavior
+- `recursive=True`: resolve includes recursively. Child `preprocess()` calls must use `recursive=True` and `double_curly_brackets=False` (prevents double-doubling of braces in nested content).
+- Defer `<shell>`, `<web>`, `<include-many>`, and `<include query="...">` — leave tags intact for later passes
+- Missing file during recursive pass: leave tag unchanged for later variable expansion
+- `recursive=False`: execute shell/web tags; missing file → `[File not found: path]`
+
+% Error Handling
+- Best-effort: on unexpected exceptions, return the partially processed prompt instead of raising — this allows the CLI and callers to continue with whatever was produced before the error
+- Always re-raise circular-include `ValueError` and `RecursionError`
+- When `PDD_QUIET=1` env var is set, suppress Rich panel output (start/complete banners) but not error messages
+- Debug mode: when `PDD_PREPROCESS_DEBUG=1`, log detailed processing events to console. When `PDD_PREPROCESS_DEBUG_FILE` is also set, write a debug report to that file path.
+- After processing, scan for risky placeholders remaining outside code fences and log via debug output (no effect on returned prompt):
+  - Single-brace variables like `{name}` that weren't doubled (potential PromptTemplate errors)
+  - `${...}` template literals
+
+% Curly Brace Handling (when double_curly_brackets=True)
+- Double single braces: `{var}` → `{{var}}`
+- Preserve already-doubled: `{{var}}` stays `{{var}}`
+- Skip excluded keys: `{key}` in `exclude_keys` stays `{key}` (exact match only — `{exclude_suffix}` is NOT skipped)
+- `${IDENT}` placeholders → `${{IDENT}}` to prevent PromptTemplate errors
+- Handle unbalanced braces gracefully without crashing
+- Code blocks in specific languages (JSON, JavaScript, TypeScript, Python) should also have their braces doubled
+
+% File Path Resolution
+- `get_file_path(file_name)`: delegate to `PathResolver`. Resolution order: CWD → package_root → repo_root, returning CWD path as default for consistent error behavior.
 
 % Dependencies
 <path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
+<content_selector_example><include>context/content_selector_example.py</include></content_selector_example>
+<include_query_extractor_example><include>context/include_query_extractor_example.py</include></include_query_extractor_example>
+<firecrawl_example><include>./context/firecrawl_example.py</include></firecrawl_example>
 
-% Processing Order
-    Process tags in order: pdd → include/include-many → shell → web. Apply curly-brace doubling last (only to top-level prompt).
-
-% Tag Behaviors
-    `<pdd>...</pdd>` - Human-only comment; delete entire block including tags
-    `<include>path</include>` - Replace with file contents. For images (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px, convert to base64 data URL
-    `<include-many>paths</include-many>` - Comma/newline-separated paths; concatenate contents with newlines
-    `<shell>cmd</shell>` - Execute command, replace with stdout. On error, insert bracketed error message
-    `<web>url</web>` - Fetch via Firecrawl (requires FIRECRAWL_API_KEY), replace with markdown content
-
-    Backtick includes: ``` `<path>` ```  →  ```{file contents}```
-
-% Recursive Pass Behavior
-    When recursive=True:
-    - Resolve includes recursively (preprocess included content with recursive=True, double_curly_brackets=False)
-    - Defer shell and web execution (leave tags intact)
-    - On missing file, leave tag unchanged for later variable expansion
-    When recursive=False:
-    - Execute shell/web tags
-    - On missing file, insert [File not found: path]
-
-% Code Block Protection
-    Tags inside fenced code blocks (``` or ~~~) or inline backticks should NOT be processed.
-
-% Curly Brace Handling (when double_curly_brackets=True)
-    - Double single braces: {var} → {{var}}
-    - Preserve already-doubled: {{var}} stays {{var}}
-    - Skip excluded keys: {key} in exclude_keys stays {key}
-    - Handle ${IDENT} placeholders: convert to ${{IDENT}} to prevent PromptTemplate errors
-
-% File Path Resolution
-    Implement get_file_path(file_name) by delegating to PathResolver:
-    - Import get_default_resolver from pdd/path_resolution.py
-    - resolver = get_default_resolver()
-    - return resolver.resolve_include(file_name)
-    The include resolution must try CWD, then package_root, then repo_root, and
-    return the CWD path as the default for consistent error behavior.
-
-% Firecrawl Usage
-<firecrawl_example>
-    <include>./context/firecrawl_example.py</include>
-</firecrawl_example>
+% Deliverables
+- Code: `pdd/preprocess.py`

@@ -1,4 +1,4 @@
-<pdd-reason>Determines needed dependencies and inserts them into a prompt with optional deduplication.</pdd-reason>
+<pdd-reason>Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.</pdd-reason>
 
 <pdd-interface>
 {
@@ -11,76 +11,62 @@
 }
 </pdd-interface>
 
-<pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>preprocess_python.prompt</pdd-dependency>
-
-% You are an expert Python Programmer. Generate a Python function called 'insert_includes'. The purpose of this function is to determine needed dependencies and insert them into a prompt.
 
 <include>context/python_preamble.prompt</include>
 
-% Here are the inputs and outputs of the function:
-    Inputs:
-        - 'input_prompt': A string containing the prompt
-        - 'directory_path': A string containing the directory path where the possible dependencies for prompt file is located.  An example would be "context/*_example.py".
-        - 'csv_filename': A string containing the name of the csv file that contains the dependencies. It may not exist yet, in which case it will be created.
-        - 'strength': A float value representing the strength parameter for the LLM model, used to influence the model's behavior.
-        - 'temperature': A float value representing the temperature parameter for the LLM model, used to control the randomness of the model's output.
-        - 'time': A float between 0 and 1 that controls the thinking effort for the LLM model, passed to underlying LLM calls. Default is DEFAULT_TIME.
-        - 'verbose': A boolean that indicates whether to print out the details of the function. Default is False.
-        - 'prompt_filename': Optional[str] - The prompt filename being processed, passed through to auto_include. Default is None.
-        - 'progress_callback': Optional[Callable[[int, int], None]] - Callback for progress updates, passed through to auto_include. Default is None.
-        - 'include_docs': A boolean that indicates whether to include documentation files in dependency discovery. Default is False. Passed through to auto_include.
-        - 'max_workers': An integer controlling parallelism for file summarization. Default is 1. Passed through to auto_include.
-        - 'dedup': A boolean that indicates whether to remove redundant inline content after inserting includes. Default is True. When True, after the LLM inserts dependencies, perform a post-processing pass to remove inline content that duplicates included documents.
-    Output:
-        - 'output_prompt': A string containing the prompt with the dependencies inserted.
-        - 'csv_output': A string containing the complete CSV output from the auto_include function, including full dependency information.
-        - 'total_cost': A float value representing the total cost of running the function.
-        - 'model_name': A string representing the name of the LLM model used.
+% Goal
+Write the `pdd/insert_includes.py` module.
 
-% Here is how to use the internal modules:
-    <internal_modules>
-    For llm_invoke to run prompts with the LLM model:
-        <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
-        </llm_invoke_example>
+% Role & Scope
+PDD prompt files contain `<include>file.py</include>` tags to bring in dependency files as context for code generation. This module takes a prompt and automatically adds or updates those `<include>` tags based on what dependencies the prompt needs.
 
-    For loading prompt templates:
-            <load_prompt_template_example>
-                <include>context/load_prompt_template_example.py</include>
-            </load_prompt_template_example>
+It calls `auto_include` to analyze the prompt and get back a string of directives — `<update>` blocks (which modify existing `<include>` tags already in the prompt, e.g. adding `select` or `query` attributes) and `<new>` blocks (which are new `<include>` tags to add). Updates are applied deterministically by matching file paths. New includes are placed into the prompt by an LLM that understands where they should go.
 
-    For determining and generating the proper prompt includes via the auto_include function:
-        <auto_include_example>
-            <include>context/auto_include_example.py</include>
-        </auto_include_example>
+% Requirements
+1. Function: `insert_includes(input_prompt, directory_path, csv_filename, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, dedup=True) -> Tuple[str, str, float, str]`
+   - Returns `(output_prompt, csv_output, total_cost, model_name)`
+2. Load prompt template `insert_includes_LLM` via `load_prompt_template`; raise `ValueError` if not found
+3. Preprocess the template to escape curly braces, but keep `{actual_prompt_to_update}` and `{actual_dependencies_to_insert}` unescaped — these are the two placeholders the template expects to be filled later
+4. Read the CSV file from `csv_filename`; if it doesn't exist, create it with header row `full_path,file_summary,key_exports,dependencies,content_hash`
+5. Call `auto_include` to get `(include_directives, csv_output, total_cost, model_name)`
+   - Pass `csv_filename` as the `csv_path` argument so summarize_directory writes incremental results to disk
+   - Pass through `prompt_filename`, `progress_callback`, `include_docs`, `max_workers`, and LLM params
 
-    For preprocess function for preprocessing the prompt template:
-        <preprocess_example>
-            <include>context/preprocess_example.py</include>
-        </preprocess_example>
-    </internal_modules>
+% Applying Updates (deterministic, no LLM call)
+6. `<update>` blocks modify existing `<include>` tags already in the prompt (e.g., adding `select` or `query` attributes)
+7. For each `<update>` block, extract the `<include>` tag from the block content (ignore surrounding comments or extra lines)
+8. Match against existing `<include>` tags in the prompt by file path (the tag body content)
+9. If full path doesn't match (e.g., prompt has `file.py` but update has `dir/file.py`), fall back to matching by basename — but only when the basename uniquely matches a single `<include>` tag in the prompt
+10. If basename matches multiple includes (ambiguous), skip the update and warn if verbose
 
-% Here is the format of the csv file: full_path,file_summary,content_hash
+% Inserting New Includes (LLM call)
+11. If `<new>` blocks exist after separating out `<update>` blocks, invoke the LLM with `insert_includes_LLM` to place them in the prompt
+    - Pass `actual_prompt_to_update` (prompt after updates applied) and `actual_dependencies_to_insert` (only the `<new>` blocks)
+    - Use Pydantic structured output to get back the updated prompt
+12. If no `<new>` blocks exist (only updates), skip the LLM call and use the updated prompt directly
 
-% The function should do the following:
-    1. Load the prompt template 'insert_includes_LLM.prompt'.
-    2. Read the CSV file from the 'csv_filename' parameter using file.read().
-    3. Preprocess the prompt template using the preprocess function from the preprocess module to double curly brackets and exclude the keys 'actual_prompt_to_update' and 'actual_dependencies_to_insert' but do not recurse.
-    4. Use auto_include to get the dependencies for the input prompt, passing the 'strength', 'temperature', 'time', 'prompt_filename', 'progress_callback', 'include_docs', and 'max_workers' parameters.
-    5. Run with llm_invoke (passing the 'strength', 'temperature', and 'time' parameters) with the insert includes prompt to insert the output of #4 prompt into current prompt:
-        - a. Pass the following string parameters to the prompt during invocation: 'actual_prompt_to_update' and 'actual_dependencies_to_insert'.
-        - b. The Pydantic output will contain the 'output_prompt' key.
-    6. If `dedup` is True, extract the list of include file paths from the `dependencies` string returned by auto_include in step 4 (parse all `<include>...</include>` tags to get the file paths), then run `_remove_redundant_content(output_prompt, extracted_include_paths)` to remove inline content that semantically duplicates what the included documents provide.
-    7. Return the 'output_prompt', the complete csv_output from auto_include, the total_cost and the model_name of the LLM model used.
+% Deduplication (when dedup=True)
+13. After the LLM inserts new includes, remove inline content that duplicates what the included files provide
+    - Extract the list of newly inserted include file paths from the `include_directives` string
+    - For each included file, read its content and find contiguous text blocks (3+ lines) in the prompt that substantially duplicate it
+    - Use similarity matching (>= 0.80 threshold) to detect redundant blocks
+    - Remove redundant blocks while preserving surrounding prompt structure
 
-% Helper function for redundant content removal:
-    _remove_redundant_content(prompt: str, inserted_includes: List[str]) -> str:
-        - For each newly inserted include path, read the included file content.
-        - Find contiguous text blocks (3+ lines) in the prompt that substantially duplicate the included content.
-        - Use `difflib.SequenceMatcher` with a similarity threshold of >= 0.80 to detect redundant blocks.
-        - Remove those redundant blocks, preserving surrounding prompt structure.
-        - Only remove blocks of 3+ lines to avoid false positives on short common phrases.
-        - Return the cleaned prompt string.
+% Error Handling
+- Raise on LLM failure (invalid or missing response)
+- Log errors via Rich and re-raise
+
+% Dependencies
+<internal_modules>
+    <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
+    <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
+    <auto_include_example><include>context/auto_include_example.py</include></auto_include_example>
+    <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+</internal_modules>
+
+% Deliverables
+- Code: `pdd/insert_includes.py`
