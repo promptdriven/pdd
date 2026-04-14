@@ -73,7 +73,7 @@ class PathResolver:
     def resolve_project_root(
         self,
         profile: ProjectRootProfile = "pdd_path_then_marker_then_cwd",
-        max_levels: int = 5,
+        max_levels: int = 10,
     ) -> Path:
         if profile != "pdd_path_then_marker_then_cwd":
             raise ValueError(f"Unsupported project root profile: {profile}")
