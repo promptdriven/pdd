@@ -184,13 +184,33 @@ def _match_path_to_contexts(
     return 'default' if 'default' in contexts else None
 
 
-def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Optional[str]:
-    """Detect context by matching a sync basename against prompts_dir prefixes or paths patterns."""
+def _detect_context_from_basename(
+    basename: str,
+    config: Dict[str, Any],
+    pddrc_path: Optional[Path] = None,
+) -> Optional[str]:
+    """Detect context by matching a sync basename against prompts_dir prefixes or paths patterns.
+
+    When a context's ``prompts_dir`` ends at a ``prompts`` segment with a parent
+    (e.g. ``extensions/app/prompts``), the extracted prefix is empty — ``pdd sync``
+    basenames for that context are naturally relative to the extension's
+    ``prompts_dir``.  Such contexts are skipped by prefix-matching and typically
+    also by path-pattern matching; when no syntactic match succeeds the filesystem
+    is checked for the expected prompt file (Issue #1165).
+
+    Args:
+        pddrc_path: Path to the ``.pddrc`` whose ``config`` was loaded.  Used to
+            resolve relative ``prompts_dir`` paths during the filesystem fallback.
+            When omitted, falls back to ``_find_pddrc_file()`` (cwd-based search).
+    """
     if not basename:
         return None
 
     contexts = config.get('contexts', {})
     matches = []
+    # Contexts whose prompts_dir is nested (e.g. extensions/app/prompts) and
+    # produces an empty prefix — deferred for filesystem disambiguation.
+    nested_candidates: list = []
 
     for context_name, context_config in contexts.items():
         if context_name == 'default':
@@ -205,12 +225,38 @@ def _detect_context_from_basename(basename: str, config: Dict[str, Any]) -> Opti
                 matches.append((context_name, len(prefix)))
                 continue
 
+            # Empty prefix with a nested prompts_dir (parent segments before
+            # "prompts") — defer to filesystem disambiguation below.
+            if not prefix:
+                parts = prompts_dir.rstrip('/').split('/')
+                if len(parts) > 1 and parts[-1] == 'prompts':
+                    nested_candidates.append((context_name, prompts_dir))
+
         for path_pattern in context_config.get('paths', []):
             pattern_base = path_pattern.rstrip('/**').rstrip('/*')
             if fnmatch.fnmatch(basename, path_pattern) or \
                basename.startswith(pattern_base + '/') or \
                basename == pattern_base:
                 matches.append((context_name, len(pattern_base)))
+
+    # Filesystem disambiguation for nested prompts_dir contexts whose basename
+    # didn't match syntactically.  Uses a direct glob (not rglob) to avoid
+    # walking deep trees.
+    if not matches and nested_candidates:
+        resolved_pddrc = pddrc_path or _find_pddrc_file()
+        if resolved_pddrc:
+            pddrc_parent = resolved_pddrc.parent
+            if '/' in basename:
+                dir_part, name_part = basename.rsplit('/', 1)
+            else:
+                dir_part, name_part = '', basename
+            for context_name, prompts_dir in nested_candidates:
+                candidate_dir = pddrc_parent / prompts_dir
+                if dir_part:
+                    candidate_dir = candidate_dir / dir_part
+                if candidate_dir.is_dir() and \
+                   any(candidate_dir.glob(f"{name_part}_*.prompt")):
+                    matches.append((context_name, len(prompts_dir)))
 
     if not matches:
         return None
@@ -477,7 +523,7 @@ def resolve_effective_config(
             else:
                 context = _detect_context(cwd, pddrc_config, None)
         elif basename_hint:
-            detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+            detected_context = _detect_context_from_basename(basename_hint, pddrc_config, pddrc_path=pddrc_path)
             if detected_context:
                 context = detected_context
             else:
@@ -969,7 +1015,7 @@ def construct_paths(
                 else:
                     basename_hint = command_options.get("basename")
                     if basename_hint:
-                        detected_context = _detect_context_from_basename(basename_hint, pddrc_config)
+                        detected_context = _detect_context_from_basename(basename_hint, pddrc_config, pddrc_path=pddrc_path)
                         if detected_context:
                             context = detected_context
                         else:

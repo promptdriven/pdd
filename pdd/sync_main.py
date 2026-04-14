@@ -188,6 +188,15 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
         prompt_template = prompt_config.get('path')
 
         if not prompt_template:
+            # No template — try scanning prompts_dir directly (Issue #1165).
+            prompts_dir_val = defaults.get('prompts_dir', '')
+            if prompts_dir_val:
+                resolved_dir = pddrc_parent / prompts_dir_val
+                if resolved_dir.is_dir():
+                    detected = _detect_languages(basename, resolved_dir)
+                    if detected:
+                        lang, path = next(iter(detected.items()))
+                        return (context_name, path, lang)
             continue
 
         context_basename = _relative_basename_for_context(basename, context_config)

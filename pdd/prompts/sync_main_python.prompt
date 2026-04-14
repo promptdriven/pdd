@@ -40,6 +40,7 @@
 2. **Prompt Discovery** (two-stage):
     - **Template-based discovery (primary)**: Search contexts in .pddrc for `outputs.prompt.path` templates. Expand template with basename and common languages until a prompt file is found. Use `_find_pddrc_file`, `_load_pddrc_config`, and `expand_template` from template_expander.
     - **Directory scanning (fallback)**: If template discovery fails, call `construct_paths` in discovery mode and scan prompts_dir for `{basename}_{language}.prompt` files.
+    - **Template-free contexts**: In `_find_prompt_in_contexts`, when a context has no `outputs.prompt.path` template but does set `prompts_dir`, scan the resolved `prompts_dir` directly for `{basename}_*.prompt` via `_detect_languages` — this supports minimal contexts (e.g. nested extensions) that only declare a `prompts_dir` (Issue #1165).
     - When template discovery succeeds, set `context_override` to the discovered context name (if not already set by user).
     - **Case-insensitive lookup**: Use `_case_insensitive_prompt_lookup()` helper to find prompt files with correct casing on case-sensitive filesystems (e.g., TypeScript vs typescript).
 
