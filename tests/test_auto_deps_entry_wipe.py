@@ -1189,3 +1189,245 @@ class TestNestedProjectMarkers:
         )
 
 
+# ---------------------------------------------------------------------------
+# Full auto_deps_main pipeline with nested .pddrc inside a .git repo
+# ---------------------------------------------------------------------------
+
+class TestAutoDepsMainNestedMarkers:
+    """End-to-end through auto_deps_main (the CLI entry point) with the
+    nested-marker layout from PR #763's review. The previous test class
+    (TestNestedProjectMarkers) only exercises summarize_directory; this
+    one verifies the path-resolution fix flows all the way through
+    auto_include and insert_includes when the full pipeline runs."""
+
+    def test_auto_deps_main_nested_pddrc_cross_directory_scans(
+        self, tmp_path, monkeypatch
+    ):
+        """Layout:
+            repo/.git
+            repo/module/.pddrc
+            repo/module/context/helper.py    # referenced by the prompt
+            repo/module/other/unrelated.py   # different subdir, same repo
+            repo/prompts/task_python.prompt
+
+        Scan module/context/ first, then module/other/ feeding the same
+        CSV. With the prioritized-.git fix, both scans resolve to repo/,
+        so helper.py is stored as "module/context/helper.py" in scan 1
+        and left untouched by scan 2. Without the fix, scan 1 would
+        resolve to module/ (nearest .pddrc) and scan 2 would also
+        resolve to module/ but produce a different scoped CSV — in
+        either case a subtle inconsistency. We assert the behavior a
+        user of auto-deps actually sees: one entry per file, paths
+        rooted at .git, and the second scan doesn't re-summarize the
+        first scan's file.
+        """
+        import subprocess
+        import click
+        from pdd.auto_deps_main import auto_deps_main
+        from pdd.auto_include import AutoIncludeResult, NewInclude
+        from pdd.insert_includes import InsertIncludesOutput
+
+        # Build the layout
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(
+            ["git", "init"], cwd=str(repo), capture_output=True, check=True
+        )
+        module = repo / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()
+        context = module / "context"
+        context.mkdir()
+        helper = context / "helper.py"
+        helper.write_text("def format_output(x):\n    return str(x)\n")
+        other = module / "other"
+        other.mkdir()
+        unrelated = other / "unrelated.py"
+        unrelated.write_text("class Widget:\n    pass\n")
+        prompts_dir = repo / "prompts"
+        prompts_dir.mkdir()
+        prompt_file = prompts_dir / "task_python.prompt"
+        prompt_file.write_text(
+            "Generate a Python function that uses format_output from helper.\n"
+        )
+        # Commit so `git ls-files` in summarize_directory sees the files
+        git_env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+        }
+        subprocess.run(["git", "add", "."], cwd=str(repo),
+                       capture_output=True, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo),
+                       capture_output=True, check=True, env=git_env)
+
+        csv_path = repo / "project_dependencies.csv"
+        output_path = repo / "output.prompt"
+
+        # Mock construct_paths to bypass project-config discovery and just
+        # return the paths we built. This is the same pattern used in
+        # test_e2e_auto_deps_pipeline.py.
+        def mock_construct_paths(**kwargs):
+            return (
+                {},
+                {"prompt_file": prompt_file.read_text()},
+                {"output": str(output_path), "csv": str(csv_path)},
+                None,
+            )
+        monkeypatch.setattr(
+            "pdd.auto_deps_main.construct_paths", mock_construct_paths
+        )
+
+        # summarize_directory's LLM prompt only carries file contents, not
+        # the path. Tag each file by its unique text so we can tell which
+        # file triggered a call.
+        helper_text = helper.read_text()
+        unrelated_text = unrelated.read_text()
+        summarize_calls = []  # list of "helper" | "unrelated" | "other"
+
+        def mock_summarize_llm(**kwargs):
+            input_json = kwargs.get("input_json") or {}
+            contents = input_json.get("file_contents", "")
+            if contents == helper_text:
+                summarize_calls.append("helper")
+            elif contents == unrelated_text:
+                summarize_calls.append("unrelated")
+            else:
+                summarize_calls.append("other")
+            return {
+                "result": FileSummary(
+                    file_summary="Mock summary",
+                    key_exports=["format_output"],
+                    dependencies=[],
+                ),
+                "cost": 0.001,
+                "model_name": "mock",
+            }
+
+        # helper_rel is what auto_include will emit as the <include> target.
+        # Both scans should see this exact same relative path in the CSV.
+        helper_rel = os.path.join("module", "context", "helper.py")
+
+        def mock_auto_include_llm(**kwargs):
+            pyd = kwargs.get("output_pydantic")
+            if pyd == AutoIncludeResult:
+                return {
+                    "result": AutoIncludeResult(
+                        reasoning="Need helper",
+                        new_includes=[
+                            NewInclude(file=helper_rel, module="helper")
+                        ],
+                        existing_include_annotations=[],
+                    ),
+                    "cost": 0.001,
+                    "model_name": "mock",
+                }
+            # insert_includes LLM: echo the prompt with the include tag
+            prompt_text = kwargs.get("input_json", {}).get(
+                "actual_prompt_to_update", ""
+            )
+            return {
+                "result": InsertIncludesOutput(
+                    output_prompt=f"<include>{helper_rel}</include>\n"
+                    + prompt_text.rstrip()
+                ),
+                "cost": 0.001,
+                "model_name": "mock",
+            }
+
+        monkeypatch.setattr(
+            "pdd.summarize_directory.load_prompt_template",
+            lambda *a, **kw: "template",
+        )
+        monkeypatch.setattr(
+            "pdd.summarize_directory.llm_invoke", mock_summarize_llm
+        )
+        monkeypatch.setattr(
+            "pdd.auto_include.load_prompt_template", lambda *a, **kw: "template"
+        )
+        monkeypatch.setattr(
+            "pdd.auto_include.llm_invoke", mock_auto_include_llm
+        )
+        monkeypatch.setattr(
+            "pdd.insert_includes.load_prompt_template",
+            lambda *a, **kw: "template",
+        )
+        monkeypatch.setattr(
+            "pdd.insert_includes.preprocess", lambda p, **kw: p
+        )
+        monkeypatch.setattr(
+            "pdd.insert_includes.llm_invoke", mock_auto_include_llm
+        )
+
+        ctx = click.Context(click.Command("auto-deps"))
+        ctx.obj = {"force": False, "quiet": True}
+
+        # --- Run 1: scan module/context/ ---
+        monkeypatch.chdir(repo)
+        modified_1, cost_1, _ = auto_deps_main(
+            ctx=ctx,
+            prompt_file=str(prompt_file),
+            directory_path=str(context),
+            auto_deps_csv_path=str(csv_path),
+            output=str(output_path),
+        )
+
+        assert csv_path.exists(), "CSV should be written after run 1"
+        rows_1 = _parse_csv(csv_path.read_text())
+        helper_entries_1 = [
+            r for r in rows_1 if r["full_path"].endswith("helper.py")
+        ]
+        assert len(helper_entries_1) == 1, (
+            f"Run 1 should produce exactly one entry for helper.py, "
+            f"got {helper_entries_1}"
+        )
+        # Path is rooted at .git (repo/), not at the nested .pddrc (module/)
+        assert helper_entries_1[0]["full_path"] == helper_rel, (
+            f"helper.py should be keyed relative to .git root, got "
+            f"{helper_entries_1[0]['full_path']!r}"
+        )
+        run1_calls = list(summarize_calls)
+        assert "helper" in run1_calls, (
+            f"Run 1 should have summarized helper.py, calls: {run1_calls}"
+        )
+
+        # Output prompt should have the include tag pointing at the
+        # repo-rooted path. If path resolution leaked the .pddrc nearest-
+        # wins behavior, the include target would differ from the CSV key.
+        assert f"<include>{helper_rel}</include>" in modified_1, (
+            f"Output should include helper at the repo-relative path. "
+            f"Got:\n{modified_1}"
+        )
+
+        # --- Run 2: scan module/other/ feeding the same CSV ---
+        summarize_calls.clear()
+        modified_2, _, _ = auto_deps_main(
+            ctx=ctx,
+            prompt_file=str(prompt_file),
+            directory_path=str(other),
+            auto_deps_csv_path=str(csv_path),
+            output=str(output_path),
+        )
+
+        rows_2 = _parse_csv(csv_path.read_text())
+        paths_2 = [r["full_path"] for r in rows_2]
+        helper_entries_2 = [p for p in paths_2 if p.endswith("helper.py")]
+        assert len(helper_entries_2) == 1, (
+            f"Helper.py should appear exactly once after run 2, got "
+            f"{helper_entries_2}. Nested .pddrc is splitting the root "
+            f"across scans."
+        )
+        assert helper_entries_2[0] == helper_rel, (
+            f"helper.py path drifted between scans: run 1 stored "
+            f"{helper_rel!r}, run 2 has {helper_entries_2[0]!r}"
+        )
+
+        # Run 2 scanned module/other/, which only contains unrelated.py.
+        # helper.py is already cached under the (now consistent) key, so
+        # it must NOT be re-summarized.
+        assert "helper" not in summarize_calls, (
+            f"helper.py should be a cache hit in run 2, but it was "
+            f"re-summarized. Summarize calls: {summarize_calls}"
+        )
+
+

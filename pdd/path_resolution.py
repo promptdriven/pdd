@@ -85,15 +85,25 @@ class PathResolver:
         ):
             return self.pdd_path_env
 
+        # Same prioritization as find_project_root_from_path: a .git
+        # ancestor wins immediately; otherwise fall back to the outermost
+        # weak marker seen. Keeps one consistent project-root rule across
+        # CSV keying (find_project_root_from_path) and CWD-anchored lookups
+        # like llm_invoke's model CSV and firecrawl_cache's DB location.
         current = self.cwd
+        highest_weak: Optional[Path] = None
         for _ in range(max_levels):
-            if _has_project_marker(current):
+            if _has_strong_marker(current):
                 return current
+            if _has_weak_marker(current):
+                highest_weak = current
             parent = current.parent
             if parent == current:
                 break
             current = parent
 
+        if highest_weak is not None:
+            return highest_weak
         return self.cwd
 
 

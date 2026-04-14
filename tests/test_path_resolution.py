@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pdd.path_resolution import find_project_root_from_path, _has_project_marker
+from pdd.path_resolution import find_project_root_from_path
 
 
 class TestFindProjectRootFromPath:
@@ -239,3 +239,60 @@ class TestNestedMarkerPriority:
         deep = tmp_path / "a" / "b" / "c"
         deep.mkdir(parents=True)
         assert find_project_root_from_path(str(deep)) is None
+
+
+class TestPathResolverProjectRootMarkerPriority:
+    """PathResolver.resolve_project_root should use the same .git-wins /
+    outermost-weak-marker rule as find_project_root_from_path, so every
+    project-root consumer in the codebase (CSV keying, llm_invoke's
+    model CSV lookup, firecrawl_cache's DB location) agrees on one root.
+    Previously this method used nearest-wins, so in a monorepo with a
+    nested .pddrc the CWD-anchored consumers could land on a sub-module
+    while CSV keying landed on the .git repo.
+    """
+
+    def _make_resolver(self, cwd, package_root=None, repo_root=None):
+        from pdd.path_resolution import PathResolver
+
+        return PathResolver(
+            cwd=Path(cwd).resolve(),
+            pdd_path_env=None,
+            package_root=Path(package_root or cwd).resolve(),
+            repo_root=Path(repo_root).resolve() if repo_root else None,
+        )
+
+    def test_git_wins_over_nested_pddrc(self, tmp_path):
+        """repo/.git, repo/module/.pddrc; CWD=repo/module — should return
+        repo (the .git ancestor), not repo/module (the nearest weak marker).
+        """
+        (tmp_path / ".git").mkdir()
+        module = tmp_path / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()
+
+        resolver = self._make_resolver(cwd=module)
+        assert resolver.resolve_project_root() == tmp_path.resolve()
+
+    def test_outermost_weak_wins_without_git(self, tmp_path):
+        """Nested .pddrc at repo/ and repo/module/, no .git; CWD=repo/module
+        — outer .pddrc should win so CWD-anchored lookups land on the same
+        root as scans started from deeper in the tree.
+        """
+        (tmp_path / ".pddrc").touch()
+        module = tmp_path / "module"
+        module.mkdir()
+        (module / ".pddrc").touch()
+
+        resolver = self._make_resolver(cwd=module)
+        assert resolver.resolve_project_root() == tmp_path.resolve()
+
+    def test_no_marker_falls_back_to_cwd(self, tmp_path):
+        """Unchanged behavior: if no marker is found within max_levels,
+        return cwd. This keeps firecrawl_cache and llm_invoke working in
+        scratch directories without crashing.
+        """
+        deep = tmp_path / "a" / "b"
+        deep.mkdir(parents=True)
+
+        resolver = self._make_resolver(cwd=deep)
+        assert resolver.resolve_project_root() == deep.resolve()
