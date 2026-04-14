@@ -745,3 +745,409 @@ class TestStartLineCrossBoundaryVarTracking:
         assert len(new_line_violations) == 1, (
             f"New source-string assertion should be flagged: {violations}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests for the new previous_content API (issue #774 fix)
+# These tests FAIL on the current start_line-based implementation and PASS
+# once detect_structural_test_patterns is updated to accept previous_content.
+# ---------------------------------------------------------------------------
+
+
+class TestPreviousContentOffByOneRegression:
+    """Regression: unchanged file with previous_content snapshot returns no violations.
+
+    The off-by-one bug: when start_line = len(lines) + 1 (nothing appended),
+    the clamp fires and rescans the entire file, flagging pre-existing patterns.
+    Fix: use previous_content snapshot + difflib diff; empty diff → no reportable lines.
+    """
+
+    def test_unchanged_file_with_structural_patterns_returns_no_violations(
+        self, tmp_path: Path
+    ) -> None:
+        """Off-by-one regression: unchanged file with a full content snapshot returns [].
+
+        File contains inspect.getsource at two locations (mirrors the real scenario:
+        inspect.getsource at lines 3346/3362 of a 4144-line file).
+        No lines were appended, so the diff is empty and no violations should be reported.
+
+        FAILS on buggy code: calling with previous_content= is a TypeError because the
+        parameter doesn't exist. After the fix, the diff is empty → returns [].
+        """
+        test_file = tmp_path / "test_preexisting.py"
+        _write_fixture(test_file, [_getsource_lines(), _hasattr_lines()])
+
+        # Snapshot the content — nothing is appended after this
+        previous_content = test_file.read_text()
+
+        # File is unchanged: diff is empty → no new lines → no reportable violations
+        violations = detect_structural_test_patterns(
+            str(test_file), previous_content=previous_content
+        )
+
+        assert violations == [], (
+            f"Unchanged file with previous_content snapshot should return no violations. "
+            f"The diff is empty — no new lines exist to report. "
+            f"Got {len(violations)} violation(s): {violations}"
+        )
+
+
+class TestPreviousContentAppendedViolations:
+    """Only violations on lines appended after the snapshot are reported."""
+
+    def test_only_appended_line_numbers_are_flagged(self, tmp_path: Path) -> None:
+        """Snapshot has no patterns; appended lines contain inspect.signature.
+
+        Only the appended region line numbers should appear in violations.
+
+        FAILS on buggy code: previous_content= is not a valid parameter (TypeError).
+        """
+        test_file = tmp_path / "test_append.py"
+        clean = _clean_test_lines(3)
+        test_file.write_text("\n".join(clean) + "\n")
+
+        previous_content = test_file.read_text()
+        pre_line_count = len(clean)
+
+        # Append structural pattern lines after taking the snapshot
+        bad_lines = _sig_check_lines()
+        with open(test_file, "a") as f:
+            f.write("\n".join(bad_lines) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), previous_content=previous_content
+        )
+
+        assert len(violations) >= 1, (
+            f"Expected at least 1 violation in the appended section. Got: {violations}"
+        )
+        # All reported violations must refer to lines in the appended region
+        for v in violations:
+            import re as _re
+            m = _re.search(r"Line (\d+):", v)
+            if m:
+                line_num = int(m.group(1))
+                assert line_num > pre_line_count, (
+                    f"Violation at Line {line_num} is in the pre-snapshot region "
+                    f"(pre_line_count={pre_line_count}): {v}"
+                )
+
+
+class TestPreviousContentPreexistingViolationsSuppressed:
+    """Snapshot already contains structural patterns; they must not be re-reported."""
+
+    def test_preexisting_violations_not_reported_with_previous_content(
+        self, tmp_path: Path
+    ) -> None:
+        """File has inspect.signature + hasattr in snapshot; appending a clean test
+        must return [] because the pre-existing violations are not new.
+
+        FAILS on buggy code: previous_content= is not a valid parameter (TypeError).
+        """
+        test_file = tmp_path / "test_preexisting_then_clean.py"
+        _write_fixture(test_file, [_sig_check_lines(), _hasattr_lines()])
+
+        previous_content = test_file.read_text()
+
+        # Append a clean test — no new violations
+        with open(test_file, "a") as f:
+            f.write("\n".join(_clean_test_lines(2)) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), previous_content=previous_content
+        )
+
+        assert violations == [], (
+            f"Pre-existing violations should not be reported when previous_content "
+            f"snapshot includes them. Got: {violations}"
+        )
+
+
+class TestPreviousContentTruncationSafe:
+    """File rewritten shorter than snapshot: all current lines treated as new."""
+
+    def test_truncated_file_violations_still_caught(self, tmp_path: Path) -> None:
+        """Snapshot is a long clean file; file is overwritten with a short file
+        containing a hasattr assertion.  The rewritten lines are fully new per
+        the diff, so violations must be reported.
+
+        FAILS on buggy code: previous_content= is not a valid parameter (TypeError).
+        """
+        test_file = tmp_path / "test_truncated.py"
+        # Original: long clean file
+        original_lines = _clean_test_lines(20)
+        test_file.write_text("\n".join(original_lines) + "\n")
+        previous_content = test_file.read_text()
+
+        # Overwrite with a short file that has a violation
+        test_file.write_text("\n".join(_hasattr_lines()) + "\n")
+        current_lines = len(test_file.read_text().splitlines())
+
+        assert current_lines < len(original_lines), (
+            "Precondition: rewritten file must be shorter than the snapshot"
+        )
+
+        violations = detect_structural_test_patterns(
+            str(test_file), previous_content=previous_content
+        )
+
+        assert len(violations) >= 1, (
+            f"Truncated/rewritten file should be fully scanned. Got: {violations}"
+        )
+
+
+class TestPreviousContentCrossBoundaryVarTracking:
+    """Cross-boundary: var assigned in snapshot, asserted in new lines."""
+
+    def test_cross_boundary_var_new_assertion_flagged(self, tmp_path: Path) -> None:
+        """Old content assigns src = Path('module.py').read_text(); new content
+        contains assert 'def main' in src.  The new assertion line must be flagged
+        as source string matching.  The old assignment line must NOT be flagged.
+
+        FAILS on buggy code: previous_content= is not a valid parameter (TypeError).
+        """
+        test_file = tmp_path / "test_cross_boundary.py"
+
+        # Old section: read_text assignment (in snapshot)
+        rt_call = '    src = Path("module.py")' + ".read_text()"
+        old_lines = [
+            "from pathlib import Path",
+            "",
+            "def test_old_reads():",
+            rt_call,
+        ]
+        test_file.write_text("\n".join(old_lines) + "\n")
+        previous_content = test_file.read_text()
+        pre_line_count = len(old_lines)
+
+        # New section: assertion using the variable
+        new_assert = '    assert "def main" in ' + "src"
+        new_lines = [
+            "def test_new_asserts():",
+            new_assert,
+        ]
+        with open(test_file, "a") as f:
+            f.write("\n".join(new_lines) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), previous_content=previous_content
+        )
+
+        # The new assertion line must be flagged
+        assert len(violations) >= 1, (
+            f"New source-string assertion should be flagged as structural. "
+            f"Got: {violations}"
+        )
+
+        # The old assignment line (rt_call) must NOT be reported
+        old_line_violations = [
+            v for v in violations
+            if any(f"Line {n}:" in v for n in range(1, pre_line_count + 2))
+        ]
+        assert old_line_violations == [], (
+            f"Old-region lines should not be reported. "
+            f"Old violations: {old_line_violations}, all violations: {violations}"
+        )
+
+
+class TestPreviousContentNoneScansEverything:
+    """previous_content=None (or omitted) scans the entire file — unchanged behavior."""
+
+    def test_no_snapshot_scans_entire_file(self, tmp_path: Path) -> None:
+        """Calling with previous_content=None or without the argument must behave like
+        the old API with no start_line: all violations across the file are reported.
+
+        FAILS on buggy code: previous_content= is not a valid parameter (TypeError).
+        After fix: None means no snapshot → scan everything.
+        """
+        test_file = tmp_path / "test_full_scan.py"
+        _write_fixture(test_file, [_getsource_lines(), _sig_check_lines()])
+
+        violations_explicit_none = detect_structural_test_patterns(
+            str(test_file), previous_content=None
+        )
+        violations_no_arg = detect_structural_test_patterns(str(test_file))
+
+        assert len(violations_explicit_none) >= 2, (
+            f"previous_content=None should scan everything. "
+            f"Got {len(violations_explicit_none)}: {violations_explicit_none}"
+        )
+        assert len(violations_no_arg) >= 2, (
+            f"No previous_content arg should scan everything. "
+            f"Got {len(violations_no_arg)}: {violations_no_arg}"
+        )
+
+
+class TestPreviousContentMiddleInsertion:
+    """difflib correctly identifies mid-file insertions — impossible with start_line."""
+
+    def test_middle_insertion_caught_by_diff(self, tmp_path: Path) -> None:
+        """File has 10 clean lines in snapshot.  Three inspect.getsource lines are
+        inserted between lines 5 and 6.  The inserted lines must be flagged.
+        Original lines renumbered after the insertion must NOT be flagged.
+
+        FAILS on buggy code: previous_content= is not a valid parameter (TypeError).
+        The old start_line approach cannot handle mid-file insertions at all.
+        """
+        test_file = tmp_path / "test_middle_insert.py"
+
+        # Snapshot: 10 clean lines
+        original_lines: List[str] = []
+        for i in range(1, 11):
+            original_lines.append(f"def test_clean_{i}():")
+            original_lines.append(f"    assert {i} == {i}")
+            original_lines.append("")
+        test_file.write_text("\n".join(original_lines) + "\n")
+        previous_content = test_file.read_text()
+
+        # Insert getsource lines between lines 15 and 16 (after test_clean_5)
+        current_text = test_file.read_text()
+        current_lines_list = current_text.splitlines()
+        insert_at = 15  # 0-based, after test_clean_5's assert
+        inserted = _getsource_lines()
+        new_lines = (
+            current_lines_list[:insert_at]
+            + inserted
+            + current_lines_list[insert_at:]
+        )
+        test_file.write_text("\n".join(new_lines) + "\n")
+
+        violations = detect_structural_test_patterns(
+            str(test_file), previous_content=previous_content
+        )
+
+        assert len(violations) >= 1, (
+            f"Inserted getsource lines should be flagged. Got: {violations}"
+        )
+        # Reported line numbers must fall within the inserted region
+        import re as _re2
+        for v in violations:
+            m = _re2.search(r"Line (\d+):", v)
+            if m:
+                line_num = int(m.group(1))
+                # Inserted at 0-based position 15 → 1-based lines 16..18
+                assert insert_at < line_num <= insert_at + len(inserted) + 1, (
+                    f"Violation at Line {line_num} is outside the inserted region "
+                    f"(expected ~lines {insert_at + 1}–{insert_at + len(inserted) + 1}): {v}"
+                )
+
+
+# ---------------------------------------------------------------------------
+# Caller-side test: orchestrator snapshot stores full content, not line count
+# ---------------------------------------------------------------------------
+
+
+class TestCallerPassesPreviousContentToGuard:
+    """The orchestrator's step-9 scan must pass previous_content=<str> to the guard,
+    not start_line=<int>, after the snapshot dict is updated from Dict[str, int]
+    to Dict[str, str].
+
+    FAILS on buggy code: the caller passes start_line=pre_count+1 (an int),
+    so 'previous_content' is absent from mock.call_args.kwargs.
+    """
+
+    def test_step9_caller_passes_previous_content_string(
+        self, tmp_path: Path
+    ) -> None:
+        """After the fix, the orchestrator passes previous_content=<file content string>
+        to detect_structural_test_patterns for files that existed before Step 9.
+
+        Setup:
+        - A test file exists in the worktree's tests/ dir before Step 9 runs.
+        - Step 9 output claims FILES_CREATED: tests/test_preexisting.py.
+        - detect_structural_test_patterns is patched.
+        - We assert it was called with previous_content=<string>, not start_line=<int>.
+        """
+        from unittest.mock import patch, MagicMock
+        from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+        mock_worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+        mock_worktree_path.mkdir(parents=True, exist_ok=True)
+
+        # Create a pre-existing test file in the worktree tests/ directory.
+        # The orchestrator snapshots this before Step 9 runs.
+        tests_dir = mock_worktree_path / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        pre_existing_file = tests_dir / "test_preexisting.py"
+        pre_existing_content = "def test_clean():\n    assert 1 + 1 == 2\n"
+        pre_existing_file.write_text(pre_existing_content)
+
+        with patch("pdd.agentic_bug_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_bug_orchestrator.load_prompt_template",
+                   return_value="Prompt for {issue_number}"), \
+             patch("pdd.agentic_bug_orchestrator.console"), \
+             patch("pdd.agentic_bug_orchestrator._setup_worktree",
+                   return_value=(mock_worktree_path, None)), \
+             patch("pdd.agentic_bug_orchestrator.preprocess",
+                   side_effect=lambda t, **kw: t), \
+             patch("pdd.agentic_bug_orchestrator.save_workflow_state",
+                   return_value=None), \
+             patch("pdd.agentic_bug_orchestrator.load_workflow_state",
+                   return_value=(None, None)), \
+             patch("pdd.agentic_bug_orchestrator._get_git_root",
+                   return_value=tmp_path), \
+             patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \
+             patch("pdd.agentic_bug_orchestrator._get_modified_and_untracked",
+                   return_value=[]), \
+             patch("pdd.agentic_bug_orchestrator.subprocess") as mock_subprocess, \
+             patch("pdd.agentic_bug_orchestrator.detect_structural_test_patterns") as mock_detect, \
+             patch("pdd.agentic_bug_orchestrator._count_planned_tests",
+                   return_value=0), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests",
+                   return_value=(1, 0)):
+
+            def run_side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if label == "step9":
+                    # Step 9 claims it created/modified the pre-existing file
+                    return (
+                        True,
+                        "Generated tests.\nFILES_CREATED: tests/test_preexisting.py",
+                        0.1,
+                        "model",
+                    )
+                return (True, "ok", 0.1, "model")
+
+            mock_run.side_effect = run_side_effect
+            mock_detect.return_value = []  # no violations → no retry loop
+            mock_subprocess.run.return_value = MagicMock(
+                returncode=0, stdout="", stderr=""
+            )
+
+            run_agentic_bug_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1",
+                issue_content="Bug description",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="user",
+                issue_title="Bug Title",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        # The guard must have been called at least once during the step 9 scan
+        mock_detect.assert_called()
+
+        # Find the call for test_preexisting.py and check its keyword arguments.
+        # On buggy code: kwargs has start_line=<int> → assertion fails.
+        # On fixed code: kwargs has previous_content=<str> → assertion passes.
+        target_calls = [
+            c for c in mock_detect.call_args_list
+            if c.args and "test_preexisting" in str(c.args[0])
+        ]
+        assert len(target_calls) >= 1, (
+            f"detect_structural_test_patterns was never called for test_preexisting.py. "
+            f"All calls: {mock_detect.call_args_list}"
+        )
+        call = target_calls[0]
+        assert "previous_content" in call.kwargs, (
+            f"Caller should pass previous_content=<str> after the fix, "
+            f"not start_line=<int>. Got kwargs: {call.kwargs}"
+        )
+        assert isinstance(call.kwargs["previous_content"], str), (
+            f"previous_content must be a string (file content), not "
+            f"{type(call.kwargs['previous_content'])}. Got: {call.kwargs}"
+        )
