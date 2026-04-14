@@ -58,7 +58,13 @@
      filesystem: a context matches when its prompts_dir contains a prompt file whose directory
      structure agrees with the basename (Issue #1165). `pddrc_path` is used to resolve the
      relative prompts_dir during this filesystem check; when omitted, `_find_pddrc_file()`
-     (cwd-based search) is used.
+     (cwd-based search) is used. Basenames with glob metacharacters (e.g. `app/routes/[id]`)
+     are escaped via `glob.escape()` before the filesystem check.
+     Example — nested prompts_dir discovery:
+       .pddrc contexts: { ext-app: { defaults: { prompts_dir: "extensions/app/prompts" } } }
+       File on disk: extensions/app/prompts/src/services/solver_Python.prompt
+       _detect_context_from_basename("src/services/solver", config) → "ext-app"
+       (prefix is empty because prompts_dir ends at 'prompts'; falls back to filesystem glob).
    - `_get_relative_basename(input_path, pattern)`: Computes basename relative to matched pattern base.
      E.g., 'frontend/components/marketplace/AssetCard' with pattern 'frontend/components/**'
      returns 'marketplace/AssetCard'. Falls back to returning input_path as-is.

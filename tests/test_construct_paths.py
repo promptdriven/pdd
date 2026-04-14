@@ -3552,6 +3552,34 @@ class TestIssue1165_DetectContextFromBasename:
 
         assert result == "ext-app"
 
+    def test_bracket_basename_glob_metacharacters_escaped(self, tmp_path):
+        """Regression: basenames with glob metacharacters like app/routes/[id]
+        must not be interpreted as character classes during filesystem disambiguation.
+
+        Bug: candidate_dir.glob(f"{name_part}_*.prompt") treats '[id]' as a
+        character class, so the prompt file is never found even when it exists."""
+        prompt_dir = tmp_path / "extensions" / "app" / "prompts" / "app" / "routes"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "[id]_TypeScriptReact.prompt").write_text("# bracket prompt")
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts",
+                    },
+                },
+            }
+        }
+
+        result = _detect_context_from_basename(
+            "app/routes/[id]", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "ext-app"
+
 
 class TestIssue1165_ConstructPaths:
     """Issue #1165: construct_paths should resolve nested prompts_dir for basename."""

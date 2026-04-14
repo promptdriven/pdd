@@ -255,7 +255,7 @@ def _detect_context_from_basename(
                 if dir_part:
                     candidate_dir = candidate_dir / dir_part
                 if candidate_dir.is_dir() and \
-                   any(candidate_dir.glob(f"{name_part}_*.prompt")):
+                   any(candidate_dir.glob(f"{glob.escape(name_part)}_*.prompt")):
                     matches.append((context_name, len(prompts_dir)))
 
     if not matches:
