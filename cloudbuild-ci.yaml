@@ -7,6 +7,38 @@ steps:
       - '-c'
       - 'pip install build --quiet && python -m build --quiet'
 
+  # Unit tests — ported from .github/workflows/unit-tests.yml.
+  # Runs in parallel with the wheel build and smoke tests.
+  - name: 'python:3.12-slim'
+    id: unit-tests
+    waitFor: ['-']
+    entrypoint: bash
+    env:
+      - 'PDD_PATH=/workspace/pdd'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        apt-get update -qq && apt-get install -y -qq git
+        git config --global user.email "ci@pdd.dev"
+        git config --global user.name "PDD CI"
+        git config --global init.defaultBranch main
+        pip install --quiet -e ".[dev]" pytest-timeout
+        pdd checkup --validate-arch-includes --project-root tests/fixtures/arch_include_validate_ok
+        pdd checkup --validate-arch-includes
+        pytest tests/ \
+          -m "not integration and not e2e and not real and not private_prompt" \
+          -v --tb=short --timeout=60 -n auto \
+          --ignore=tests/commands/test_connect.py \
+          --ignore=tests/test_bug_to_unit_test.py \
+          --ignore=tests/test_context_generator.py \
+          --ignore=tests/test_crash_main.py \
+          --ignore=tests/test_generate_test.py \
+          --ignore=tests/test_fix_error_loop.py \
+          --ignore=tests/test_llm_invoke.py \
+          --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh \
+          --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
+
   # Test 1: package install + pdd preprocess (parallel with test-sync)
   - name: 'python:3.12-slim'
     id: test-package-install
@@ -69,4 +101,5 @@ steps:
 
 options:
   logging: 'CLOUD_LOGGING_ONLY'
-timeout: '1800s'
+  machineType: 'E2_HIGHCPU_8'
+timeout: '2700s'

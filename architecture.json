@@ -7022,7 +7022,11 @@
   {
     "reason": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
     "description": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_e2e_fix_python.prompt",
+      "fix_main_python.prompt",
+      "track_cost_python.prompt"
+    ],
     "priority": 220,
     "filename": "commands/fix_python.prompt",
     "filepath": "pdd/commands/fix.py",
