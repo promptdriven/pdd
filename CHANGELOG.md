@@ -1,3 +1,16 @@
+## v0.0.207 (2026-04-13)
+
+### Feat
+
+- add failure-aware fix retries, update cloud interface, and refine prompt dependency validation and documentation
+
+### Fix
+
+- **arch**: sync fix command dependencies from prompt
+- narrow AnnAssign conformance to nodes with a value (#1131)
+- conformance check recognizes type-annotated module constants (#1131)
+- terminate string in code_patcher_LLM.prompt JSON example (#1145) (#1147)
+
 ## v0.0.206 (2026-04-12)
 
 ### Feat
