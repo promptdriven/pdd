@@ -133,39 +133,25 @@ def _directory_prefix(directory_path: str) -> str:
     return parent if parent else prefix
 
 
-def _qualify_path(file_path: str, directory_path: str) -> str:
-    """Return the file path unchanged.
+def _enforce_select_query_exclusivity(result: AutoIncludeResult) -> None:
+    """Drop redundant ``query=`` attributes when ``select=`` is also set.
 
-    CSV paths are now stored relative to the git repo root, so no
-    directory_path prepending is needed.  This function is retained for
-    backward compatibility with callers.
+    For file types that support structural selectors (.py, .md, .json,
+    .yaml, .yml), ``select=`` is deterministic and should win over
+    ``query=``. The LLM occasionally produces both; this normalizes the
+    result in-place.
     """
-    return file_path
-
-
-def _qualify_result_paths(result: AutoIncludeResult, directory_path: str) -> None:
-    """Qualify all file paths in an AutoIncludeResult in-place.
-
-    Ensures that both new includes and annotation updates carry
-    CWD-relative paths so the preprocessor can find the files.
-    Also enforces mutual exclusivity of select/query: when both are
-    present and the file type supports structural selectors, query is
-    dropped in favour of the deterministic select.
-    """
-    if not directory_path or not isinstance(result, AutoIncludeResult):
+    if not isinstance(result, AutoIncludeResult):
         return
 
-    # File extensions that support structural selectors (def:, class:, etc.)
     _STRUCTURAL_EXTENSIONS = {'.py', '.md', '.json', '.yaml', '.yml'}
 
     for inc in result.new_includes:
-        inc.file = _qualify_path(inc.file, directory_path)
         if inc.select and inc.query:
             ext = os.path.splitext(inc.file)[1].lower()
             if ext in _STRUCTURAL_EXTENSIONS:
                 inc.query = None
     for ann in result.existing_include_annotations:
-        ann.file = _qualify_path(ann.file, directory_path)
         if ann.select and ann.query:
             ext = os.path.splitext(ann.file)[1].lower()
             if ext in _STRUCTURAL_EXTENSIONS:
@@ -501,9 +487,10 @@ def auto_include(
         # Req 7: on LLM failure, return empty include_directives
         return "", csv_output, summary_cost, summary_model
 
-    # Qualify file paths so <include> tags use CWD-relative paths that
-    # the preprocessor can resolve regardless of which directory it runs from.
-    _qualify_result_paths(llm_result, directory_path)
+    # Normalize the structured result: when the LLM returns both select= and
+    # query= on the same include, keep only the deterministic select= for
+    # file types that support structural selectors.
+    _enforce_select_query_exclusivity(llm_result)
 
     # Req 4: build include_directives from structured result
     include_directives = _build_include_directives(llm_result)

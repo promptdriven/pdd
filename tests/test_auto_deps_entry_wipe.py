@@ -341,12 +341,22 @@ class TestUnnecessaryResummarization:
         # This SHOULD re-summarize (old format lacks key_exports/dependencies)
         assert cost > 0, "Old-format entries should trigger re-summarization"
 
-        # Verify the new entry has all columns
+        # Verify the new entry has all columns populated from the fresh LLM call.
+        # The mock_llm_invoke fixture returns key_exports=["func"], dependencies=["os"],
+        # so a successful re-summarization must produce exactly those values — this
+        # proves the entry was rewritten, not just silently promoted to the new format.
         rows = _parse_csv(csv_output)
         assert len(rows) == 1
-        assert rows[0]['key_exports'] != '[]' or rows[0]['dependencies'] != '[]' or True
         assert 'key_exports' in rows[0]
         assert 'dependencies' in rows[0]
+        assert rows[0]['key_exports'] == '["func"]', (
+            f"Re-summarized entry should carry the mock's key_exports, "
+            f"got {rows[0]['key_exports']!r}"
+        )
+        assert rows[0]['dependencies'] == '["os"]', (
+            f"Re-summarized entry should carry the mock's dependencies, "
+            f"got {rows[0]['dependencies']!r}"
+        )
 
     def test_absolute_vs_relative_path_in_csv_cache_hit(
         self, tmp_path, mock_load_prompt_template, mock_llm_invoke

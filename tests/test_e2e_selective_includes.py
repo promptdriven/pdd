@@ -2967,7 +2967,8 @@ class TestCrossDirectoryPipelineE2E:
         entries that came from the pdd/ scan.
 
         This is the core path corruption bug: _format_csv_rows_for_llm
-        and _qualify_result_paths blindly use directory_path as a prefix.
+        blindly used directory_path as a prefix when preparing CSV rows
+        for the LLM, turning cross-directory entries into invalid paths.
         """
         tmp_path, context_dir, pdd_dir = project_with_two_dirs
         monkeypatch.chdir(tmp_path)

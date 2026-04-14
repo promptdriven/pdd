@@ -63,9 +63,7 @@ Test Plan for auto_include module
     - test_build_update_block
     - test_build_update_block_empty
 
-11. Path qualification tests (unit tests):
-    - test_qualify_path_absolute
-    - test_qualify_path_relative
+11. Directory prefix helper (unit tests):
     - test_directory_prefix_glob
     - test_directory_prefix_empty
 
