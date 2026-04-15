@@ -124,14 +124,12 @@ class TestEntryWipeout:
         rows = _parse_csv(csv_output)
         paths = {row['full_path'] for row in rows}
 
-        # BUG: currently dir_a/module_a.py gets wiped because it wasn't
-        # in the scan. This test documents the expected behavior.
-        assert 'dir_a/module_a.py' in paths or any(
-            'module_a' in p for p in paths
-        ), (
-            "Entry for module_a.py was wiped from the CSV even though its "
-            "content hasn't changed. The CSV should preserve entries for "
-            f"files outside the current scan scope. Got paths: {paths}"
+        # The merge step preserves existing entries verbatim, so the
+        # original 'dir_a/module_a.py' string should survive unchanged.
+        assert 'dir_a/module_a.py' in paths, (
+            "Entry for dir_a/module_a.py was wiped from the CSV even though "
+            "its content hasn't changed. The CSV should preserve entries "
+            f"for files outside the current scan scope. Got paths: {paths}"
         )
 
     def test_deleted_then_readded_file_not_resummarized(
@@ -230,8 +228,8 @@ class TestEntryWipeout:
         rows = _parse_csv(csv_output)
         paths = {row['full_path'] for row in rows}
 
-        # BUG: beta.js gets dropped because *.py glob doesn't match it
-        assert any('beta' in p for p in paths), (
+        # Existing entry preserved verbatim by the merge step.
+        assert 'beta.js' in paths, (
             f"Entry for beta.js was wiped when scanning only *.py files. "
             f"Got paths: {paths}"
         )

@@ -63,10 +63,6 @@ Test Plan for auto_include module
     - test_build_update_block
     - test_build_update_block_empty
 
-11. Directory prefix helper (unit tests):
-    - test_directory_prefix_glob
-    - test_directory_prefix_empty
-
 Z3 Formal Verification:
    - Strength/temperature range validation can be verified with Z3
      to prove all valid/invalid ranges are handled correctly.
@@ -94,7 +90,6 @@ from pdd.auto_include import (
     _build_new_block,
     _build_update_block,
     _build_include_directives,
-    _directory_prefix,
     _strip_selectors_from_small_files,
     AutoIncludeResult,
     NewInclude,
@@ -600,52 +595,6 @@ def test_auto_include_with_malformed_csv_still_runs(
 # (the fix for CSV wipeout), downstream code must handle mixed-origin paths
 # correctly. These tests surface bugs where it doesn't.
 # ============================================================================
-
-
-class TestFormatCsvRowsCrossDirectoryPaths:
-    """_format_csv_rows_for_llm blindly prepends directory_path to ALL
-    relative paths. When the CSV has entries from a different scan scope,
-    this produces nonexistent paths."""
-
-    def test_cross_directory_entries_not_misqualified(self, tmp_path):
-        """CSV has 'cli.py' (from pdd/ scan) and 'example_a.py' (from
-        context/ scan). Formatting with directory_path=context/ should NOT
-        turn 'cli.py' into 'context/cli.py'.
-        """
-        context_dir = tmp_path / "context"
-        context_dir.mkdir()
-
-        csv_data = (
-            "full_path,file_summary,key_exports,dependencies,content_hash\n"
-            "example_a.py,An example file,\"[]\",\"[]\",abc123\n"
-            "cli.py,CLI entry point,\"[]\",\"[]\",def456\n"
-        )
-        result = _format_csv_rows_for_llm(csv_data, directory_path=str(context_dir))
-        lines = result.split("\n")
-        file_lines = [l for l in lines if l.startswith("File:")]
-        misqualified = [l for l in file_lines if "context" in l and "cli.py" in l]
-        assert not misqualified, (
-            f"cli.py was misqualified with context/ prefix. It came from a "
-            f"different scan (pdd/) and should not be requalified. "
-            f"File lines: {file_lines}"
-        )
-
-    def test_already_qualified_paths_not_double_qualified(self, tmp_path):
-        """CSV has 'context/example_a.py' (already qualified from a root
-        scan). Formatting with directory_path='context/' should NOT produce
-        'context/context/example_a.py'.
-        """
-        context_dir = tmp_path / "context"
-        context_dir.mkdir()
-
-        csv_data = (
-            "full_path,file_summary,key_exports,dependencies,content_hash\n"
-            "context/example_a.py,An example,\"[]\",\"[]\",abc123\n"
-        )
-        result = _format_csv_rows_for_llm(csv_data, directory_path=str(context_dir))
-        assert "context/context" not in result and "context\\context" not in result, (
-            f"Path was double-qualified. Result:\n{result}"
-        )
 
 
 class TestAutoIncludeCrossDirectoryPaths:

@@ -60,7 +60,7 @@ def _validate_input(strength: float, temperature: float) -> None:
         raise ValueError("Temperature must be between 0 and 1")
 
 
-def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
+def _format_csv_rows_for_llm(csv_output: str) -> str:
     """Format CSV rows as structured metadata for the LLM.
 
     Each row becomes:
@@ -69,9 +69,8 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
         Key Exports: {key_exports}
         Dependencies: {dependencies}
 
-    ``directory_path`` is accepted for API compatibility but is no longer
-    used.  CSV paths are stored relative to the project root since the
-    Bug #2 fix, so no qualification is needed.
+    CSV paths are stored relative to the project root (or absolute when no
+    project marker exists), so no further qualification is needed.
     """
     if not csv_output:
         return ""
@@ -80,7 +79,6 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
         entries = []
         for _, row in dataframe.iterrows():
             full_path = row.get('full_path', '')
-            # CSV paths are repo-root-relative, no qualification needed.
             file_summary = row.get('file_summary', '')
             key_exports = row.get('key_exports', '[]')
             dependencies = row.get('dependencies', '[]')
@@ -113,24 +111,6 @@ def _embed_and_rank(input_prompt: str, candidates: List[str], top_n: int = 50) -
     except Exception as ex:
         console.print(f"[yellow]Warning: embed_and_rank fallback – {ex}[/yellow]")
         return candidates
-
-
-def _directory_prefix(directory_path: str) -> str:
-    """Extract the directory portion from a directory_path that may be a glob.
-
-    E.g. ``'context/*.py'`` → ``'context'``,  ``'test_auto_deps/'`` → ``'test_auto_deps'``.
-    Returns ``''`` if no meaningful directory prefix can be determined.
-    """
-    if not directory_path:
-        return ""
-    # Strip glob wildcards
-    prefix = directory_path.split('*')[0].rstrip('/')
-    if not prefix:
-        return ""
-    if os.path.isdir(prefix):
-        return prefix
-    parent = os.path.dirname(prefix)
-    return parent if parent else prefix
 
 
 def _enforce_select_query_exclusivity(result: AutoIncludeResult) -> None:
@@ -448,7 +428,7 @@ def auto_include(
         **llm_kwargs,
     )
 
-    available_includes = _format_csv_rows_for_llm(csv_output, directory_path=directory_path)
+    available_includes = _format_csv_rows_for_llm(csv_output)
 
     # Req 3: Two-stage retrieval — pre-filter with embeddings when candidates > 50
     if available_includes:
