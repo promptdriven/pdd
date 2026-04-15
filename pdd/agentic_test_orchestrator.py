@@ -718,20 +718,20 @@ def run_agentic_test_orchestrator(
     # so Steps 13/16 can validate tests from both worktree root and CI cwd.
     likely_ci_cwd = ""
     if worktree_path:
-        # Look for test directories mentioned in step 5 output or issue content
-        test_dirs = []
+        # Extract test file paths from step outputs or issue content.
+        # LLM output contains markdown so we regex for filesystem paths.
+        test_file_paths: list[str] = []
+        _py_path_re = re.compile(r'((?:[\w][\w.-]*/)+test[\w.-]*\.py)')
         for ctx_key in ("step5_output", "step3_output", "issue_content"):
             ctx_val = context.get(ctx_key, "")
             if ctx_val:
-                for line in ctx_val.splitlines():
-                    stripped = line.strip()
-                    if stripped.endswith(".py") and "test" in stripped.lower():
-                        test_dirs.append(stripped)
-                        break
-                if test_dirs:
+                for match in _py_path_re.finditer(ctx_val):
+                    test_file_paths.append(match.group(1))
                     break
+            if test_file_paths:
+                break
         # Try to detect subproject root from any test file path
-        for test_ref in test_dirs:
+        for test_ref in test_file_paths:
             candidate = worktree_path / test_ref
             detected = _detect_py_project_root(candidate)
             if detected and str(detected) != str(worktree_path):
