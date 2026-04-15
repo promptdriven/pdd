@@ -4365,3 +4365,179 @@ class TestIssue1048GlobEscapingInDetermineOperation:
 
         assert "test_[id]_extra.py" in test_file_names, \
             f"Bug #1048: prompt-missing glob missed test_[id]_extra.py. Found: {test_file_names}"
+
+
+# ============================================================================
+# Issue #1169: get_pdd_file_paths fails for nested subdirectories + case mismatch
+# ============================================================================
+
+from pdd.sync_determine_operation import _resolve_prompt_path_from_architecture
+
+
+def test_get_pdd_file_paths_nested_subdir_case_mismatch(tmp_path, monkeypatch):
+    """Bug #1169: get_pdd_file_paths must find prompts in nested subdirs with case mismatch.
+
+    Production scenario: prompt at prompts/src/clients/firestore_client_Python.prompt
+    but get_pdd_file_paths("firestore_client", "python", "prompts") constructs
+    prompts/firestore_client_python.prompt (wrong case, wrong dir).
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Create nested directory structure matching the issue's reproduction
+    nested_dir = tmp_path / "prompts" / "src" / "clients"
+    nested_dir.mkdir(parents=True)
+    actual_prompt = nested_dir / "firestore_client_Python.prompt"
+    actual_prompt.write_text("Generate Firestore client")
+
+    # Create minimal .pdd structure
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    paths = get_pdd_file_paths("firestore_client", "python", "prompts")
+
+    # BUG: Current code constructs prompts/firestore_client_python.prompt (wrong case + wrong dir)
+    # After fix, should resolve to the actual file in the nested subdirectory
+    assert paths['prompt'].exists(), (
+        f"Bug #1169: prompt not found. Got path: {paths['prompt']}. "
+        f"Expected to find: {actual_prompt}"
+    )
+
+
+def test_get_pdd_file_paths_architecture_json_nested_subdir(tmp_path, monkeypatch):
+    """Bug #1169: architecture.json lookup must resolve prompts in nested subdirs.
+
+    When architecture.json has filename: "firestore_client_Python.prompt",
+    _resolve_prompt_path_from_architecture naively joins to prompts_root (flat),
+    missing the actual file in prompts/src/clients/.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Create nested prompt file
+    nested_dir = tmp_path / "prompts" / "src" / "clients"
+    nested_dir.mkdir(parents=True)
+    actual_prompt = nested_dir / "firestore_client_Python.prompt"
+    actual_prompt.write_text("Generate Firestore client")
+
+    # Create code file
+    code_dir = tmp_path / "src" / "clients"
+    code_dir.mkdir(parents=True)
+    (code_dir / "firestore_client.py").write_text("# client code")
+
+    # Create architecture.json with filename (not full path)
+    arch = {
+        "modules": [{
+            "filename": "firestore_client_Python.prompt",
+            "filepath": "src/clients/firestore_client.py"
+        }]
+    }
+    (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+    # Create minimal .pdd structure
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    paths = get_pdd_file_paths("firestore_client", "python", "prompts")
+
+    # BUG: _resolve_prompt_path_from_architecture joins prompts_root + filename → flat path
+    # Then _case_insensitive_prompt_lookup searches only prompts/, not prompts/src/clients/
+    assert paths['prompt'].exists(), (
+        f"Bug #1169: prompt not found via architecture.json path. Got: {paths['prompt']}. "
+        f"Expected to resolve to: {actual_prompt}"
+    )
+    # Verify code path resolves correctly from architecture.json
+    assert "firestore_client.py" in str(paths['code'])
+
+
+def test_get_pdd_file_paths_nested_subdir_logging_shows_exists_true(tmp_path, monkeypatch, caplog):
+    """Bug #1169: Logging must show exists=True when prompt is in nested subdir.
+
+    Production logs showed 'exists=False' for every sync attempt on nested prompts.
+    After fix, the log should show exists=True.
+    """
+    import logging
+    monkeypatch.chdir(tmp_path)
+
+    # Create nested prompt file
+    nested_dir = tmp_path / "prompts" / "src" / "clients"
+    nested_dir.mkdir(parents=True)
+    actual_prompt = nested_dir / "firestore_client_Python.prompt"
+    actual_prompt.write_text("Generate Firestore client")
+
+    # Create minimal .pdd structure
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    with caplog.at_level(logging.INFO, logger="pdd.sync_determine_operation"):
+        paths = get_pdd_file_paths("firestore_client", "python", "prompts")
+
+    # BUG: Current code logs "exists=False" because it looks in prompts/ not prompts/src/clients/
+    exists_log_entries = [r for r in caplog.records if "exists=" in r.message]
+    assert any("exists=True" in r.message for r in exists_log_entries), (
+        f"Bug #1169: Expected 'exists=True' in logs but got: "
+        f"{[r.message for r in exists_log_entries]}"
+    )
+
+
+def test_resolve_prompt_path_from_architecture_flat_filename_misses_subdirectory(tmp_path):
+    """Bug #1169: _resolve_prompt_path_from_architecture produces wrong path for flat filenames.
+
+    When architecture.json has filename: "firestore_client_Python.prompt" (no subdirectory),
+    _resolve_prompt_path_from_architecture joins it to prompts_root producing
+    prompts/firestore_client_Python.prompt. But the file is actually at
+    prompts/src/clients/firestore_client_Python.prompt.
+
+    The resolved path must exist when the file is in a nested subdirectory.
+    This tests that the architecture.json lookup + path resolution chain
+    produces a path that actually resolves to the file on disk.
+    """
+    prompts_root = tmp_path / "prompts"
+    nested_dir = prompts_root / "src" / "clients"
+    nested_dir.mkdir(parents=True)
+    actual_file = nested_dir / "firestore_client_Python.prompt"
+    actual_file.write_text("prompt content")
+
+    # This is what happens in the buggy code: architecture.json returns just the filename
+    resolved = _resolve_prompt_path_from_architecture(
+        prompts_root, "firestore_client_Python.prompt"
+    )
+
+    # BUG: resolved is prompts/firestore_client_Python.prompt which doesn't exist
+    # The file is at prompts/src/clients/firestore_client_Python.prompt
+    # After fix, either _resolve_prompt_path_from_architecture or its caller
+    # must search subdirectories to find the actual file
+    # Post-#1169: _resolve_prompt_path_from_architecture itself performs the
+    # recursive case-insensitive search when the naive join misses. The
+    # returned path must point at the real file on disk.
+    assert resolved.exists(), (
+        f"Bug #1169: architecture.json flat filename must resolve to the nested file. "
+        f"Resolved: {resolved}. Actual file: {actual_file}"
+    )
+    assert resolved == actual_file, (
+        f"Bug #1169: expected resolved path to equal {actual_file}, got {resolved}"
+    )
+
+
+def test_get_pdd_file_paths_deep_nesting_different_language(tmp_path, monkeypatch):
+    """Bug #1169: Nested subdirectory resolution must work for all languages.
+
+    Tests deeper nesting with TypeScript to ensure the fix isn't Python-specific.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    # Create deeply nested prompt file with TypeScript language
+    deep_dir = tmp_path / "prompts" / "api" / "v2" / "handlers"
+    deep_dir.mkdir(parents=True)
+    actual_prompt = deep_dir / "user_handler_TypeScript.prompt"
+    actual_prompt.write_text("Generate user handler")
+
+    # Create minimal .pdd structure
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    paths = get_pdd_file_paths("user_handler", "typescript", "prompts")
+
+    # BUG: Constructs prompts/user_handler_typescript.prompt (wrong case + wrong dir)
+    assert paths['prompt'].exists(), (
+        f"Bug #1169: prompt not found for TypeScript in deep nesting. Got: {paths['prompt']}. "
+        f"Expected to find: {actual_prompt}"
+    )

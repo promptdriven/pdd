@@ -137,7 +137,11 @@
 
 6. **`_case_insensitive_prompt_lookup(path: Path) -> Path`**:
    - Return actual file path with correct casing, or original if no match
-   - Search parent directory for case-insensitive filename match
+   - Search parent directory only for case-insensitive filename match
+   - **Issue #1169**: This helper stays narrow-scope (same-dir) to preserve
+     context isolation for `_find_prompt_in_contexts`. Recursive nested-
+     subdirectory resolution is handled by `_find_prompt_file` and
+     `_resolve_prompt_path_from_architecture` in `sync_determine_operation`.
 
 7. **`_find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]`**:
    - Search for prompt file across all contexts using outputs.prompt.path templates
