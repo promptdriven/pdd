@@ -63,8 +63,12 @@ def _detect_py_project_root(test_path: Path) -> Optional[Path]:
                     return search_dir
             except OSError:
                 pass
+        # conftest.py is only a project root signal if NOT in a test directory
+        # (tests/ dirs commonly have conftest.py for fixtures, not as project markers)
         if (search_dir / "conftest.py").exists():
-            return search_dir
+            dir_name = search_dir.name.lower()
+            if dir_name not in ("tests", "test", "testing", "_tests"):
+                return search_dir
         parent = search_dir.parent
         if parent == search_dir:
             break

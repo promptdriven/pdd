@@ -816,6 +816,21 @@ class TestPythonProjectRootDetection:
         result = _detect_py_project_root(test_file)
         assert result == nested
 
+    def test_conftest_in_tests_dir_is_skipped(self, tmp_path):
+        """conftest.py in a tests/ directory should NOT be treated as project root."""
+        subproject = tmp_path / "extensions" / "app"
+        subproject.mkdir(parents=True)
+        (subproject / ".pddrc").write_text("")
+        tests_dir = subproject / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "conftest.py").write_text("import pytest\n")
+        test_file = tests_dir / "test_smoke.py"
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        # Should find .pddrc at app/, NOT conftest.py at tests/
+        assert result == subproject
+
     def test_returns_none_when_no_markers(self, tmp_path):
         """Returns None when no project markers found within 5 levels."""
         deep = tmp_path / "a" / "b" / "c" / "d" / "e"
