@@ -147,7 +147,8 @@ class TestDirectoryScanTriggersWhenNothingFound:
                 initial_file_hashes=None,
             )
 
-        # All 52 test files should be found via directory scan
-        assert len(result) == 52, (
-            f"Expected all 52 test files from directory scan, got {len(result)}"
+        # Directory scan should find files, capped at MAX_FALLBACK_TEST_FILES=20
+        # per Issue #1155 safety net to prevent runaway verification on large repos
+        assert len(result) == 20, (
+            f"Expected 20 test files from directory scan (capped at MAX_FALLBACK_TEST_FILES), got {len(result)}"
         )

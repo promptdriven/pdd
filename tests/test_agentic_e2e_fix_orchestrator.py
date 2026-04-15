@@ -5201,3 +5201,316 @@ class TestStep11CodeCleanup:
 
             assert success is True
             mock_step11.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #1155: _verify_tests_independently safety nets
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyTestsIndependentlyTimeout:
+    """_verify_tests_independently must stop after VERIFY_TIMEOUT_SECONDS."""
+
+    def test_stops_processing_after_timeout_elapsed(self, tmp_path):
+        """Timeout triggers after elapsed time exceeds VERIFY_TIMEOUT_SECONDS,
+        remaining files are skipped, and the output includes a diagnostic."""
+        test_files = [f"tests/test_{i}.py" for i in range(50)]
+        for tf in test_files:
+            (tmp_path / tf).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / tf).write_text("pass")
+
+        call_count = 0
+
+        def mock_pytest(path):
+            nonlocal call_count
+            call_count += 1
+            return {"test_results": [{"failures": 0, "errors": 0, "passed": 1, "standard_output": ""}]}
+
+        # Time jumps past 600s after 3rd file
+        time_values = iter([0, 100, 200, 300, 700, 800, 900])
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
+             patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=lambda: next(time_values)):
+            passed, output = _verify_tests_independently(test_files, tmp_path)
+
+        assert passed is False, "Timeout must fail closed — partial run cannot count as verified"
+        assert call_count < 50, f"Expected timeout to stop processing, but all {call_count} files were processed"
+        assert "TIMEOUT" in output
+        assert str(call_count) in output, "TIMEOUT message should include count of files processed"
+
+    def test_completes_normally_when_under_timeout(self, tmp_path):
+        """All files processed and no TIMEOUT when time stays under the limit."""
+        test_files = [f"tests/test_{i}.py" for i in range(3)]
+        for tf in test_files:
+            (tmp_path / tf).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / tf).write_text("pass")
+
+        call_count = 0
+
+        def mock_pytest(path):
+            nonlocal call_count
+            call_count += 1
+            return {"test_results": [{"failures": 0, "errors": 0, "passed": 1, "standard_output": ""}]}
+
+        time_values = iter([0, 10, 20, 30, 40, 50, 60])
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
+             patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=lambda: next(time_values)):
+            passed, output = _verify_tests_independently(test_files, tmp_path)
+
+        assert call_count == 3
+        assert passed is True
+        assert "TIMEOUT" not in output
+
+
+class TestExtractTestFilesFallbackCap:
+    """_extract_test_files fallback scan must cap at MAX_FALLBACK_TEST_FILES."""
+
+    def test_fallback_scan_caps_at_max_files(self, tmp_path):
+        """When the fallback scan finds more files than the cap, only
+        MAX_FALLBACK_TEST_FILES are returned."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(50):
+            (tests_dir / f"test_module_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            result = _extract_test_files(
+                issue_content="no markers here",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert len(result) <= 20, (
+            f"Fallback scan returned {len(result)} files, expected at most 20"
+        )
+
+    def test_fallback_scan_returns_all_when_under_cap(self, tmp_path):
+        """When fewer files than the cap exist, all are returned."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(5):
+            (tests_dir / f"test_mod_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            result = _extract_test_files(
+                issue_content="no markers here",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert len(result) == 5, f"Expected all 5 files, got {len(result)}"
+
+    def test_fallback_scan_prefers_recently_modified(self, tmp_path):
+        """When capped, the most recently modified files are kept."""
+        import os
+        import time as _time
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(30):
+            p = tests_dir / f"test_{i:03d}.py"
+            p.write_text(f"def test_f{i}(): pass")
+
+        # Set the first 25 files to an old mtime
+        old_ts = _time.time() - 86400
+        for i in range(25):
+            f = tests_dir / f"test_{i:03d}.py"
+            os.utime(f, (old_ts, old_ts))
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            result = _extract_test_files(
+                issue_content="",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        # The 5 recent files (test_025..test_029) should all be in the result
+        recent_names = {f"tests/test_{i:03d}.py" for i in range(25, 30)}
+        assert recent_names.issubset(set(result)), (
+            f"Recently modified files missing from capped result: "
+            f"{recent_names - set(result)}"
+        )
+
+    def test_fallback_cap_sets_capped_flag(self, tmp_path):
+        """When fallback scan exceeds the cap, _fallback_scan_was_capped is set
+        so callers can fail closed instead of treating partial verification as
+        authoritative success."""
+        import pdd.agentic_e2e_fix_orchestrator as mod
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(50):
+            (tests_dir / f"test_module_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            result = _extract_test_files(
+                issue_content="no markers here",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert mod._fallback_scan_was_capped is True, (
+            "Expected _fallback_scan_was_capped=True when fallback scan exceeds cap"
+        )
+        assert len(result) <= 20
+
+    def test_fallback_no_cap_clears_capped_flag(self, tmp_path):
+        """When fallback scan is under the cap, _fallback_scan_was_capped is False."""
+        import pdd.agentic_e2e_fix_orchestrator as mod
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(5):
+            (tests_dir / f"test_mod_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            _extract_test_files(
+                issue_content="no markers here",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert mod._fallback_scan_was_capped is False, (
+            "Expected _fallback_scan_was_capped=False when scan is under cap"
+        )
+
+
+class TestGetModifiedAndUntrackedOriginRefs:
+    """_get_modified_and_untracked must try origin/ refs for shallow clones."""
+
+    def test_tries_origin_refs_when_local_refs_fail(self, tmp_path):
+        """When local main/master fail, origin/main and origin/master are tried."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        call_log = []
+
+        def mock_subprocess_run(cmd, **kwargs):
+            call_log.append(cmd)
+            cmd_str = " ".join(cmd)
+            mock_result = MagicMock()
+
+            if "merge-base" in cmd_str:
+                if "origin/main" in cmd_str:
+                    mock_result.returncode = 0
+                    mock_result.stdout = "abc123\n"
+                    return mock_result
+                else:
+                    mock_result.returncode = 128
+                    mock_result.stdout = ""
+                    return mock_result
+
+            if "diff" in cmd_str and "abc123" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "tests/test_new.py\nsrc/module.py\n"
+                return mock_result
+
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            files = _get_modified_and_untracked(tmp_path)
+
+        merge_base_cmds = [c for c in call_log if "merge-base" in " ".join(c)]
+        origin_tried = any("origin/main" in " ".join(c) for c in merge_base_cmds)
+        assert origin_tried, f"origin/main never tried. Commands: {merge_base_cmds}"
+        assert "tests/test_new.py" in files
+
+    def test_falls_through_all_refs_gracefully(self, tmp_path):
+        """When all 4 refs fail, uncommitted/untracked files still returned."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_str = " ".join(cmd)
+            mock_result = MagicMock()
+
+            if "merge-base" in cmd_str:
+                mock_result.returncode = 128
+                mock_result.stdout = ""
+                return mock_result
+
+            if "diff" in cmd_str and "HEAD" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "modified_file.py\n"
+                return mock_result
+
+            if "ls-files" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "untracked_file.py\n"
+                return mock_result
+
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            files = _get_modified_and_untracked(tmp_path)
+
+        assert "modified_file.py" in files
+        assert "untracked_file.py" in files
+
+
+class TestGetModifiedAndUntrackedSubprocessTimeout:
+    """_get_modified_and_untracked must use timeout=30 and handle TimeoutExpired."""
+
+    def test_handles_timeout_on_git_diff_head(self, tmp_path):
+        """TimeoutExpired on git diff HEAD is caught; partial results returned."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_str = " ".join(cmd)
+
+            if "diff" in cmd_str and "HEAD" in cmd_str:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+            mock_result = MagicMock()
+            if "ls-files" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "untracked.py\n"
+                return mock_result
+
+            mock_result.returncode = 128
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            files = _get_modified_and_untracked(tmp_path)
+
+        assert isinstance(files, set)
+        assert "untracked.py" in files
+
+    def test_handles_timeout_on_merge_base_call(self, tmp_path):
+        """TimeoutExpired on merge-base is caught; other refs still tried."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_modified_and_untracked
+
+        def mock_subprocess_run(cmd, **kwargs):
+            cmd_str = " ".join(cmd)
+            mock_result = MagicMock()
+
+            if "merge-base" in cmd_str and "main" in cmd_str and "origin" not in cmd_str:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=30)
+
+            if "diff" in cmd_str and "HEAD" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = "changed.py\n"
+                return mock_result
+
+            if "ls-files" in cmd_str:
+                mock_result.returncode = 0
+                mock_result.stdout = ""
+                return mock_result
+
+            mock_result.returncode = 128
+            mock_result.stdout = ""
+            return mock_result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_subprocess_run):
+            files = _get_modified_and_untracked(tmp_path)
+
+        assert "changed.py" in files

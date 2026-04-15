@@ -81,6 +81,22 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     11: 600.0,  # Code cleanup pass
 }
 
+# Maximum wall-clock seconds for _verify_tests_independently.
+# Checked before starting each file, so actual runtime may overshoot by the
+# duration of the last file executed.  Module-level so tests can monkeypatch.
+# See Issues #953, #1010, #1031 for history of fallback-scan stalls.
+VERIFY_TIMEOUT_SECONDS = 600
+
+# Maximum number of test files the fallback directory scan in _extract_test_files
+# may return.  Prevents runaway verification when targeted discovery fails and
+# the scan finds hundreds of files.  See Issue #1010.
+MAX_FALLBACK_TEST_FILES = 20
+
+# Set by _extract_test_files when the fallback scan exceeds MAX_FALLBACK_TEST_FILES.
+# Callers check this after verification to avoid treating a partial run as
+# authoritative success (see PR #1162 review).
+_fallback_scan_was_capped = False
+
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -284,6 +300,12 @@ def _apply_step9_resolved_token(
         test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
         if test_files:
             verified, verify_output = _verify_tests_independently(test_files, cwd)
+            if _fallback_scan_was_capped and verified:
+                verified = False
+                verify_output += (
+                    f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                    "hundreds of test files were verified; cannot confirm full suite pass."
+                )
             if verified:
                 console.print(
                     f"[green]LOCAL_TESTS_PASS verified by independent pytest run ({tag}).[/green]"
@@ -569,7 +591,14 @@ def _extract_test_files(
     - Test files actually created/modified on disk (hash comparison)
 
     Returns only paths that exist on disk, deduplicated.
+
+    Sets module-level ``_fallback_scan_was_capped`` to True when the ultimate
+    fallback directory scan exceeds MAX_FALLBACK_TEST_FILES (callers must check
+    this to avoid treating a capped partial run as authoritative success).
     """
+    global _fallback_scan_was_capped
+    _fallback_scan_was_capped = False
+
     test_files: List[str] = []
     seen: set = set()
 
@@ -651,20 +680,49 @@ def _extract_test_files(
     # Only runs when NO discovery path found ANY files, to avoid
     # pulling the entire test suite into verification (slow + timeouts).
     # Scoped to tests/ dir (recursive) and root-level test_*.py (non-recursive).
+    # Capped at MAX_FALLBACK_TEST_FILES to prevent runaway verification on
+    # large repos (see Issues #953, #1010, #1031, #1155).
     if not test_files:
+        candidates: List[str] = []
         scan_dirs = [cwd / "tests", cwd]
         for scan_dir in scan_dirs:
             if not scan_dir.is_dir():
                 continue
             glob_fn = scan_dir.rglob if scan_dir != cwd else scan_dir.glob
-            for test_py in sorted(glob_fn("test_*.py")):
+            for test_py in glob_fn("test_*.py"):
                 try:
                     rel = str(test_py.relative_to(cwd))
                 except ValueError:
                     continue
                 if any(part.startswith(".") or part == "__pycache__" for part in Path(rel).parts):
                     continue
-                _add(rel)
+                candidates.append(rel)
+
+        # Sort by mtime descending so the cap keeps recently-modified files
+        # (more likely relevant) rather than arbitrary alphabetical order.
+        def _mtime(p: str) -> float:
+            try:
+                return (cwd / p).stat().st_mtime
+            except OSError:
+                return 0.0
+
+        candidates.sort(key=_mtime, reverse=True)
+
+        if len(candidates) > MAX_FALLBACK_TEST_FILES:
+            _fallback_scan_was_capped = True
+            console.print(
+                f"[yellow]Fallback scan found {len(candidates)} test files, "
+                f"capped at {MAX_FALLBACK_TEST_FILES} most recently modified; "
+                f"targeted discovery failed.[/yellow]"
+            )
+            logger.warning(
+                "Fallback scan capped at %d/%d test files",
+                MAX_FALLBACK_TEST_FILES, len(candidates),
+            )
+            candidates = candidates[:MAX_FALLBACK_TEST_FILES]
+
+        for rel in candidates:
+            _add(rel)
 
     return test_files
 
@@ -675,11 +733,27 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
     Dispatches the correct runner based on file extension:
     - .py → pytest via run_pytest_and_capture_output
     - Non-Python → resolved via get_test_command_for_file (e.g. npx jest, npx playwright)
+
+    Caps total runtime at VERIFY_TIMEOUT_SECONDS to prevent runaway verification
+    when the ultimate fallback in _extract_test_files discovers hundreds of files
+    (e.g., shallow clone where git merge-base fails — see Issues #1010, #1155).
     """
     all_outputs: List[str] = []
     all_passed = True
+    start_time = time.monotonic()
 
     for test_file in test_files:
+        elapsed = time.monotonic() - start_time
+        if elapsed >= VERIFY_TIMEOUT_SECONDS:
+            all_passed = False
+            all_outputs.append(
+                f"TIMEOUT: Independent verification exceeded {VERIFY_TIMEOUT_SECONDS}s "
+                f"after {len(all_outputs)} file(s); skipping remaining "
+                f"{len(test_files) - len(all_outputs)} file(s)."
+            )
+            console.print(f"[yellow]Verification timeout after {elapsed:.0f}s — {len(all_outputs)} files checked[/yellow]")
+            break
+
         abs_path = str(cwd / test_file)
 
         if test_file.endswith(".py"):
@@ -797,48 +871,63 @@ def _get_modified_and_untracked(cwd: Path) -> Set[str]:
     files: Set[str] = set()
 
     # Get modified tracked files (uncommitted changes)
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            files.update(f for f in result.stdout.strip().splitlines() if f)
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: git diff timed out, continuing with partial results[/yellow]")
 
     # Get untracked files
-    result = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        files.update(f for f in result.stdout.strip().split("\n") if f)
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            files.update(f for f in result.stdout.strip().splitlines() if f)
+    except subprocess.TimeoutExpired:
+        console.print("[yellow]Warning: git ls-files timed out, continuing with partial results[/yellow]")
 
     # Get files committed on the feature branch (since diverging from base branch).
     # This catches test files committed during pdd bug that are neither uncommitted
     # nor untracked — they're committed and clean, but new relative to the base.
     # Try merge-base first (feature branch vs main/master), then fall back to
-    # listing all tracked files (single-branch scenario).
-    for base in ("main", "master"):
-        # Use merge-base to find the divergence point
-        mb_result = subprocess.run(
-            ["git", "merge-base", base, "HEAD"],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
-        if mb_result.returncode == 0 and mb_result.stdout.strip():
-            merge_base = mb_result.stdout.strip()
-            result = subprocess.run(
-                ["git", "diff", "--name-only", merge_base, "HEAD"],
+    # origin/ refs for shallow clones where local main/master don't exist (Issue #1010).
+    for base in ("main", "master", "origin/main", "origin/master"):
+        try:
+            mb_result = subprocess.run(
+                ["git", "merge-base", base, "HEAD"],
                 cwd=cwd,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=30,
             )
+        except subprocess.TimeoutExpired:
+            continue
+        if mb_result.returncode == 0 and mb_result.stdout.strip():
+            merge_base = mb_result.stdout.strip()
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", merge_base, "HEAD"],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                break
             if result.returncode == 0 and result.stdout.strip():
-                files.update(f for f in result.stdout.strip().split("\n") if f)
+                files.update(f for f in result.stdout.strip().splitlines() if f)
             break
 
     # Note: no blanket `git ls-files` fallback here — returning ALL tracked
@@ -1257,6 +1346,8 @@ def _run_step11_code_cleanup(
     test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
     if test_files:
         verified, verify_output = _verify_tests_independently(test_files, cwd)
+        if _fallback_scan_was_capped and verified:
+            verified = False
         if verified:
             # Commit cleanup as a separate commit
             cleanup_changed = _detect_changed_files(cwd, initial_file_hashes)
@@ -1473,6 +1564,12 @@ def run_agentic_e2e_fix_orchestrator(
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
                                 verified, verify_output = _verify_tests_independently(test_files, cwd)
+                                if _fallback_scan_was_capped and verified:
+                                    verified = False
+                                    verify_output += (
+                                        f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                                        "hundreds of test files were verified; cannot confirm full suite pass."
+                                    )
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
@@ -1517,6 +1614,12 @@ def run_agentic_e2e_fix_orchestrator(
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
                                 verified, verify_output = _verify_tests_independently(test_files, cwd)
+                                if _fallback_scan_was_capped and verified:
+                                    verified = False
+                                    verify_output += (
+                                        f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                                        "hundreds of test files were verified; cannot confirm full suite pass."
+                                    )
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
@@ -1721,6 +1824,12 @@ def run_agentic_e2e_fix_orchestrator(
                     test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                     if test_files:
                         verified, verify_output = _verify_tests_independently(test_files, cwd)
+                        if _fallback_scan_was_capped and verified:
+                            verified = False
+                            verify_output += (
+                                f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                                "hundreds of test files were verified; cannot confirm full suite pass."
+                            )
                         if verified:
                             console.print("[green]ALL_TESTS_PASS verified by independent pytest run.[/green]")
                             success = True

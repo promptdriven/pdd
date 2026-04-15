@@ -138,14 +138,22 @@ def _normalize_prompts_root(prompts_dir: Path) -> Path:
 
 
 def _case_insensitive_prompt_lookup(path: Path) -> Path:
-    """Return the actual file path with correct casing, or the original if no match."""
+    """Return the actual file path with correct casing, or the original if no match.
+
+    Searches the immediate parent directory only. Callers that need recursive
+    nested-subdirectory resolution use ``_find_prompt_file()`` in
+    ``sync_determine_operation`` (for ``get_pdd_file_paths``) or
+    ``_resolve_prompt_path_from_architecture`` (for architecture.json). Keeping
+    this helper narrow-scope preserves context isolation for
+    ``_find_prompt_in_contexts``.
+    """
     if path.exists():
         return path
     parent = path.parent
     if parent.is_dir():
         target_lower = path.name.lower()
         for candidate in parent.iterdir():
-            if candidate.name.lower() == target_lower and candidate.is_file():
+            if candidate.is_file() and candidate.name.lower() == target_lower:
                 return candidate
     return path
 
@@ -188,6 +196,15 @@ def _find_prompt_in_contexts(basename: str) -> Optional[Tuple[str, Path, str]]:
         prompt_template = prompt_config.get('path')
 
         if not prompt_template:
+            # No template — try scanning prompts_dir directly (Issue #1165).
+            prompts_dir_val = defaults.get('prompts_dir', '')
+            if prompts_dir_val:
+                resolved_dir = pddrc_parent / prompts_dir_val
+                if resolved_dir.is_dir():
+                    detected = _detect_languages(basename, resolved_dir)
+                    if detected:
+                        lang, path = next(iter(detected.items()))
+                        return (context_name, path, lang)
             continue
 
         context_basename = _relative_basename_for_context(basename, context_config)

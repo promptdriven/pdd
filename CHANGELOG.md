@@ -1,15 +1,34 @@
+## v0.0.208 (2026-04-14)
+
+### Fix
+
+- restore _verify_tests_independently safety nets dropped by 45991e0c3 (#1155)
+- address review — case-insensitive basename, context scoping, .pddrc prefix (#1169)
+- recursive prompt resolution for nested subdirectories (#1169)
+- escape glob metacharacters in nested prompts_dir disambiguation
+- resolve #1165 by disambiguating nested prompts_dir contexts
+
+### Refactor
+
+- clean up #1155 PR — remove duplicate tests, add mtime sorting, fix prompt drift
+
 ## v0.0.207 (2026-04-13)
 
 ### Feat
 
-- add failure-aware fix retries, update cloud interface, and refine prompt dependency validation and documentation
+- **selective includes & LLM-powered extraction prompts** (upstream PR #552 by @niti-go): new prompt specs for `content_selector`, `include_query_extractor`, `extracts_prune`, and `server/routes/extracts` modules — defines the prompt-driven contracts for selective file extraction (`<include select="...">`, `<include query="...">`), persistent `.pdd/extracts/` caching of LLM extractions, a `pdd extracts prune` CLI subcommand for orphaned cache cleanup, and a FastAPI route for browsing the extracts cache
+- **prompt rewrites for selective includes**: `auto_include`, `insert_includes`, `preprocess`, and `summarize_directory` prompts rewritten from imperative instructions to requirements-focused format; `auto_include` now emits `<new>`/`<update>` directives with `select` and `query` attributes; `preprocess` handles `<include select="...">` and `<include query="...">` tag variants with fallback chains; `summarize_directory` outputs enriched CSV with `key_exports` and `dependencies` columns (Pydantic `FileSummary` model)
+- **frontend extracts API**: new TypeScript types (`ExtractMetadata`, `ExtractContent`, `ExtractListResponse`, `PromptExtractInfo`) and client methods (`listExtracts`, `getExtract`, `getExtractsForPrompt`) added to `api_typescript.prompt`
 
 ### Fix
 
-- **arch**: sync fix command dependencies from prompt
-- narrow AnnAssign conformance to nodes with a value (#1131)
-- conformance check recognizes type-annotated module constants (#1131)
-- terminate string in code_patcher_LLM.prompt JSON example (#1145) (#1147)
+- **arch**: sync fix command dependencies from prompt — `architecture.json` now declares `agentic_e2e_fix_python.prompt`, `fix_main_python.prompt`, and `track_cost_python.prompt` as dependencies for `commands/fix_python.prompt`
+- **conformance**: type-annotated module constants (`X: T = value` via `ast.AnnAssign`) now satisfy architecture conformance checks; bare annotations without values (`X: T`) are correctly excluded since they don't bind at runtime
+- **prompt**: terminate unterminated string in `code_patcher_LLM.prompt` JSON example
+
+### Build
+
+- **ci**: migrate unit tests from GitHub Actions to Cloud Build — deleted `.github/workflows/unit-tests.yml`, added parallel `unit-tests` step to `cloudbuild-ci.yaml` with `E2_HIGHCPU_8` machine type and increased timeout (1800s → 2700s)
 
 ## v0.0.206 (2026-04-12)
 
