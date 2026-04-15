@@ -92,6 +92,11 @@ VERIFY_TIMEOUT_SECONDS = 600
 # the scan finds hundreds of files.  See Issue #1010.
 MAX_FALLBACK_TEST_FILES = 20
 
+# Set by _extract_test_files when the fallback scan exceeds MAX_FALLBACK_TEST_FILES.
+# Callers check this after verification to avoid treating a partial run as
+# authoritative success (see PR #1162 review).
+_fallback_scan_was_capped = False
+
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -295,6 +300,12 @@ def _apply_step9_resolved_token(
         test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
         if test_files:
             verified, verify_output = _verify_tests_independently(test_files, cwd)
+            if _fallback_scan_was_capped and verified:
+                verified = False
+                verify_output += (
+                    f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                    "hundreds of test files were verified; cannot confirm full suite pass."
+                )
             if verified:
                 console.print(
                     f"[green]LOCAL_TESTS_PASS verified by independent pytest run ({tag}).[/green]"
@@ -580,7 +591,14 @@ def _extract_test_files(
     - Test files actually created/modified on disk (hash comparison)
 
     Returns only paths that exist on disk, deduplicated.
+
+    Sets module-level ``_fallback_scan_was_capped`` to True when the ultimate
+    fallback directory scan exceeds MAX_FALLBACK_TEST_FILES (callers must check
+    this to avoid treating a capped partial run as authoritative success).
     """
+    global _fallback_scan_was_capped
+    _fallback_scan_was_capped = False
+
     test_files: List[str] = []
     seen: set = set()
 
@@ -691,6 +709,7 @@ def _extract_test_files(
         candidates.sort(key=_mtime, reverse=True)
 
         if len(candidates) > MAX_FALLBACK_TEST_FILES:
+            _fallback_scan_was_capped = True
             console.print(
                 f"[yellow]Fallback scan found {len(candidates)} test files, "
                 f"capped at {MAX_FALLBACK_TEST_FILES} most recently modified; "
@@ -726,6 +745,7 @@ def _verify_tests_independently(test_files: List[str], cwd: Path) -> Tuple[bool,
     for test_file in test_files:
         elapsed = time.monotonic() - start_time
         if elapsed >= VERIFY_TIMEOUT_SECONDS:
+            all_passed = False
             all_outputs.append(
                 f"TIMEOUT: Independent verification exceeded {VERIFY_TIMEOUT_SECONDS}s "
                 f"after {len(all_outputs)} file(s); skipping remaining "
@@ -1326,6 +1346,8 @@ def _run_step11_code_cleanup(
     test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
     if test_files:
         verified, verify_output = _verify_tests_independently(test_files, cwd)
+        if _fallback_scan_was_capped and verified:
+            verified = False
         if verified:
             # Commit cleanup as a separate commit
             cleanup_changed = _detect_changed_files(cwd, initial_file_hashes)
@@ -1542,6 +1564,12 @@ def run_agentic_e2e_fix_orchestrator(
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
                                 verified, verify_output = _verify_tests_independently(test_files, cwd)
+                                if _fallback_scan_was_capped and verified:
+                                    verified = False
+                                    verify_output += (
+                                        f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                                        "hundreds of test files were verified; cannot confirm full suite pass."
+                                    )
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
@@ -1586,6 +1614,12 @@ def run_agentic_e2e_fix_orchestrator(
                             test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                             if test_files:
                                 verified, verify_output = _verify_tests_independently(test_files, cwd)
+                                if _fallback_scan_was_capped and verified:
+                                    verified = False
+                                    verify_output += (
+                                        f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                                        "hundreds of test files were verified; cannot confirm full suite pass."
+                                    )
                                 if verified:
                                     console.print("[green]ALL_TESTS_PASS (Step 1) verified — Step 2 skipped. Exiting early.[/green]")
                                     success = True
@@ -1790,6 +1824,12 @@ def run_agentic_e2e_fix_orchestrator(
                     test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
                     if test_files:
                         verified, verify_output = _verify_tests_independently(test_files, cwd)
+                        if _fallback_scan_was_capped and verified:
+                            verified = False
+                            verify_output += (
+                                f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                                "hundreds of test files were verified; cannot confirm full suite pass."
+                            )
                         if verified:
                             console.print("[green]ALL_TESTS_PASS verified by independent pytest run.[/green]")
                             success = True

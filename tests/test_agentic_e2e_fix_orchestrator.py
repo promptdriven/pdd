@@ -5231,8 +5231,9 @@ class TestVerifyTestsIndependentlyTimeout:
 
         with patch("pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output", side_effect=mock_pytest), \
              patch("pdd.agentic_e2e_fix_orchestrator.time.monotonic", side_effect=lambda: next(time_values)):
-            _, output = _verify_tests_independently(test_files, tmp_path)
+            passed, output = _verify_tests_independently(test_files, tmp_path)
 
+        assert passed is False, "Timeout must fail closed — partial run cannot count as verified"
         assert call_count < 50, f"Expected timeout to stop processing, but all {call_count} files were processed"
         assert "TIMEOUT" in output
         assert str(call_count) in output, "TIMEOUT message should include count of files processed"
@@ -5332,6 +5333,51 @@ class TestExtractTestFilesFallbackCap:
         assert recent_names.issubset(set(result)), (
             f"Recently modified files missing from capped result: "
             f"{recent_names - set(result)}"
+        )
+
+    def test_fallback_cap_sets_capped_flag(self, tmp_path):
+        """When fallback scan exceeds the cap, _fallback_scan_was_capped is set
+        so callers can fail closed instead of treating partial verification as
+        authoritative success."""
+        import pdd.agentic_e2e_fix_orchestrator as mod
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(50):
+            (tests_dir / f"test_module_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            result = _extract_test_files(
+                issue_content="no markers here",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert mod._fallback_scan_was_capped is True, (
+            "Expected _fallback_scan_was_capped=True when fallback scan exceeds cap"
+        )
+        assert len(result) <= 20
+
+    def test_fallback_no_cap_clears_capped_flag(self, tmp_path):
+        """When fallback scan is under the cap, _fallback_scan_was_capped is False."""
+        import pdd.agentic_e2e_fix_orchestrator as mod
+
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        for i in range(5):
+            (tests_dir / f"test_mod_{i}.py").write_text(f"def test_f{i}(): pass")
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            _extract_test_files(
+                issue_content="no markers here",
+                changed_files=[],
+                cwd=tmp_path,
+                initial_file_hashes=None,
+            )
+
+        assert mod._fallback_scan_was_capped is False, (
+            "Expected _fallback_scan_was_capped=False when scan is under cap"
         )
 
 
