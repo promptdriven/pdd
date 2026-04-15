@@ -28,6 +28,50 @@ class TestCommand:
     cwd: Optional[Path] = None
 
 
+def _detect_py_project_root(test_path: Path) -> Optional[Path]:
+    """Detect Python subproject root by walking up from the test file.
+
+    Looks for Python project markers: .pddrc, pyproject.toml, pytest.ini,
+    setup.cfg, or conftest.py. Stops at the repo root (.git directory).
+    Returns the directory containing the first marker, or None.
+
+    Mirrors _detect_ts_test_runner() for Python monorepos, ensuring tests
+    in subdirectories (e.g., extensions/app/tests/) run with the correct cwd.
+    """
+    search_dir = test_path.resolve().parent
+    for _ in range(5):  # Walk up at most 5 levels
+        # Stop at repo root
+        if (search_dir / ".git").exists():
+            return None
+        # Check markers in priority order
+        if (search_dir / ".pddrc").exists():
+            return search_dir
+        pyproject = search_dir / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                content = pyproject.read_text()
+                if "[tool.pytest" in content or "[project]" in content:
+                    return search_dir
+            except OSError:
+                pass
+        if (search_dir / "pytest.ini").exists():
+            return search_dir
+        if (search_dir / "setup.cfg").exists():
+            try:
+                content = (search_dir / "setup.cfg").read_text()
+                if "[tool:pytest]" in content:
+                    return search_dir
+            except OSError:
+                pass
+        if (search_dir / "conftest.py").exists():
+            return search_dir
+        parent = search_dir.parent
+        if parent == search_dir:
+            break
+        search_dir = parent
+    return None
+
+
 def _detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]:
     """Detect Playwright, Jest, or Vitest config by walking up from the test file.
 
@@ -99,6 +143,11 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     if resolved_language is None:
         resolved_language = get_language(ext)
 
+    # Pre-step: For Python files, detect subproject root for cwd
+    detected_cwd: Optional[Path] = None
+    if ext == '.py':
+        detected_cwd = _detect_py_project_root(test_path)
+
     # 1. For TypeScript/TSX: detect Jest or Vitest config and use appropriate runner
     if ext in ('.ts', '.tsx') and resolved_language and resolved_language.lower() in ('typescript', 'typescriptreact'):
         runner_result = _detect_ts_test_runner(test_path)
@@ -111,13 +160,13 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
-            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)), cwd=None)
+            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)), cwd=detected_cwd)
 
     # 3. Smart detection
     if resolved_language:
         smart_cmd = default_verify_cmd_for(resolved_language.lower(), str(test_file))
         if smart_cmd:
-            return TestCommand(command=smart_cmd, cwd=None)
+            return TestCommand(command=smart_cmd, cwd=detected_cwd)
 
     # 4. No command available
     return None

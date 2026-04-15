@@ -25,6 +25,7 @@ from .agentic_common import (
     set_agentic_progress,
     clear_agentic_progress,
 )
+from .get_test_command import _detect_py_project_root
 from .load_prompt_template import load_prompt_template
 
 
@@ -712,6 +713,31 @@ def run_agentic_test_orchestrator(
         current_work_dir = worktree_path
         state["worktree_path"] = str(worktree_path)
         context["worktree_path"] = str(worktree_path)
+
+    # CI working directory detection: find the nearest subproject root
+    # so Steps 13/16 can validate tests from both worktree root and CI cwd.
+    likely_ci_cwd = ""
+    if worktree_path:
+        # Look for test directories mentioned in step 5 output or issue content
+        test_dirs = []
+        for ctx_key in ("step5_output", "step3_output", "issue_content"):
+            ctx_val = context.get(ctx_key, "")
+            if ctx_val:
+                for line in ctx_val.splitlines():
+                    stripped = line.strip()
+                    if stripped.endswith(".py") and "test" in stripped.lower():
+                        test_dirs.append(stripped)
+                        break
+                if test_dirs:
+                    break
+        # Try to detect subproject root from any test file path
+        for test_ref in test_dirs:
+            candidate = worktree_path / test_ref
+            detected = _detect_py_project_root(candidate)
+            if detected and str(detected) != str(worktree_path):
+                likely_ci_cwd = str(detected)
+                break
+    context["likely_ci_cwd"] = likely_ci_cwd
 
     # Steps 12-17
     steps_tail = [

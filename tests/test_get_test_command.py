@@ -7,7 +7,7 @@ import sys
 import os
 
 # Import the module under test
-from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner, TestCommand
+from pdd.get_test_command import get_test_command_for_file, _detect_ts_test_runner, _detect_py_project_root, TestCommand
 
 
 class TestGetTestCommandForFilePython:
@@ -725,3 +725,128 @@ class TestIssue1080MonorepoCwd:
         assert result is not None
         # Bug #1080: 'str' has no attribute 'cwd' → AttributeError
         assert result.cwd is None
+
+
+class TestPythonProjectRootDetection:
+    """Tests for _detect_py_project_root() — Python monorepo cwd detection (#1174)."""
+
+    def test_finds_pddrc(self, tmp_path):
+        """Detects .pddrc as subproject root."""
+        subproject = tmp_path / "extensions" / "app"
+        subproject.mkdir(parents=True)
+        (subproject / ".pddrc").write_text("contexts:\n  default:\n")
+        test_file = subproject / "tests" / "test_smoke.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result == subproject
+
+    def test_finds_pyproject_toml_with_pytest(self, tmp_path):
+        """Detects pyproject.toml with [tool.pytest] section."""
+        subproject = tmp_path / "backend"
+        subproject.mkdir()
+        (subproject / "pyproject.toml").write_text("[tool.pytest.ini_options]\ntestpaths = ['tests']\n")
+        test_file = subproject / "tests" / "test_api.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result == subproject
+
+    def test_ignores_pyproject_without_pytest_or_project(self, tmp_path):
+        """pyproject.toml without [tool.pytest] or [project] is not a marker."""
+        subproject = tmp_path / "lib"
+        subproject.mkdir()
+        (subproject / "pyproject.toml").write_text("[build-system]\nrequires = ['setuptools']\n")
+        test_file = subproject / "test_lib.py"
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result is None
+
+    def test_finds_conftest(self, tmp_path):
+        """Detects conftest.py as subproject root."""
+        subproject = tmp_path / "plugins" / "auth"
+        subproject.mkdir(parents=True)
+        (subproject / "conftest.py").write_text("import pytest\n")
+        test_file = subproject / "tests" / "test_auth.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result == subproject
+
+    def test_pddrc_takes_priority_over_conftest(self, tmp_path):
+        """When both .pddrc and conftest.py exist, .pddrc wins."""
+        subproject = tmp_path / "app"
+        subproject.mkdir()
+        (subproject / ".pddrc").write_text("")
+        (subproject / "conftest.py").write_text("")
+        test_file = subproject / "tests" / "test_app.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result == subproject
+
+    def test_stops_at_git_root(self, tmp_path):
+        """Does not walk past the .git directory."""
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".pddrc").write_text("")  # marker AT git root — should not be found
+        test_file = tmp_path / "tests" / "test_example.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result is None
+
+    def test_nearest_marker_wins(self, tmp_path):
+        """With nested markers, the nearest (deepest) one wins."""
+        root = tmp_path / "repo"
+        root.mkdir()
+        (root / ".pddrc").write_text("")
+        nested = root / "extensions" / "app"
+        nested.mkdir(parents=True)
+        (nested / ".pddrc").write_text("")
+        test_file = nested / "tests" / "test_nested.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result == nested
+
+    def test_returns_none_when_no_markers(self, tmp_path):
+        """Returns None when no project markers found within 5 levels."""
+        deep = tmp_path / "a" / "b" / "c" / "d" / "e"
+        deep.mkdir(parents=True)
+        test_file = deep / "test_deep.py"
+        test_file.write_text("")
+
+        result = _detect_py_project_root(test_file)
+        assert result is None
+
+    def test_python_file_gets_cwd_from_subproject(self, tmp_path):
+        """End-to-end: Python test file in subproject gets cwd set on TestCommand."""
+        subproject = tmp_path / "extensions" / "app"
+        subproject.mkdir(parents=True)
+        (subproject / ".pddrc").write_text("")
+        test_file = subproject / "tests" / "test_e2e.py"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = get_test_command_for_file(str(test_file), language="python")
+        assert result is not None
+        assert result.cwd == subproject
+
+    def test_ts_detection_still_works(self, tmp_path):
+        """Regression: TS detection unaffected by Python detection changes."""
+        (tmp_path / "jest.config.js").write_text("module.exports = {};")
+        test_file = tmp_path / "tests" / "test_calc.ts"
+        test_file.parent.mkdir()
+        test_file.write_text("")
+
+        result = get_test_command_for_file(str(test_file), language="typescript")
+        assert result is not None
+        assert "npx jest" in result.command
+        assert result.cwd == tmp_path
