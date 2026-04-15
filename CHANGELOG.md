@@ -1,3 +1,17 @@
+## v0.0.208 (2026-04-14)
+
+### Fix
+
+- restore _verify_tests_independently safety nets dropped by 45991e0c3 (#1155)
+- address review — case-insensitive basename, context scoping, .pddrc prefix (#1169)
+- recursive prompt resolution for nested subdirectories (#1169)
+- escape glob metacharacters in nested prompts_dir disambiguation
+- resolve #1165 by disambiguating nested prompts_dir contexts
+
+### Refactor
+
+- clean up #1155 PR — remove duplicate tests, add mtime sorting, fix prompt drift
+
 ## v0.0.207 (2026-04-13)
 
 ### Feat
