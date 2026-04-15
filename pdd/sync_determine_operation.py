@@ -131,7 +131,14 @@ def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]
 
 
 def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_filename: str) -> Path:
-    """Build a prompt path from architecture.json without duplicating subdirectories."""
+    """Build a prompt path from architecture.json without duplicating subdirectories.
+
+    Issue #1169: If the naively-joined path does not exist on disk, search
+    recursively under prompts_root for a case-insensitive filename match.
+    Handles the common case where architecture.json stores just the filename
+    (e.g. "firestore_client_Python.prompt") while the file lives in a nested
+    subdirectory (e.g. prompts/src/clients/).
+    """
     arch_path = Path(architecture_filename)
     if arch_path.is_absolute():
         return arch_path
@@ -146,7 +153,159 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
             overlap = candidate
             break
 
-    return prompts_root.joinpath(*arch_parts[overlap:])
+    joined = prompts_root.joinpath(*arch_parts[overlap:])
+    if joined.exists():
+        return joined
+
+    # Recursive search for the filename under prompts_root. Collect all matches
+    # and pick the shallowest deterministically to avoid platform-dependent
+    # filesystem ordering when multiple nested files share the basename.
+    if prompts_root.is_dir():
+        target_lower = Path(architecture_filename).name.lower()
+        matches = [
+            c for c in prompts_root.rglob("*.prompt")
+            if c.is_file() and c.name.lower() == target_lower
+        ]
+        if matches:
+            matches.sort(key=lambda p: (len(p.parts), str(p)))
+            return matches[0]
+
+    return joined
+
+
+def _find_prompt_file(
+    basename: str,
+    language: str,
+    prompts_root: Path,
+    architecture_path: Optional[Path] = None,
+    context_override: Optional[str] = None,
+) -> Optional[Path]:
+    """Authoritative prompt file resolution — case-insensitive, subdirectory-aware.
+
+    Single source of truth for finding prompt files on disk. Handles:
+    - Case-sensitive filesystems (Linux): _Python vs _python
+    - Nested subdirectories: prompts/src/clients/foo_Python.prompt
+    - Architecture.json filename hints with correct casing
+    - Glob metacharacters in basenames: [id], (group)
+    - Execution from temp directories (/tmp/pdd_job_xxx)
+    - Context-aware scoping via context_override
+
+    Resolution cascade (fast → expensive):
+    1. Direct path in prompts_root
+    2. Case-insensitive match in prompts_root
+    3. Architecture.json hint → recursive case-insensitive search
+    4. Recursive glob fallback across all subdirectories
+
+    When multiple matches exist, context_override (via .pddrc prompts_dir)
+    is used to prefer matches within the correct context subdirectory.
+
+    Returns:
+        Actual filesystem Path with correct casing, or None if not found.
+    """
+    name = basename.split('/')[-1] if '/' in basename else basename
+
+    # Resolve context prefix from .pddrc for scoping recursive searches.
+    # e.g., context 'backend-utils' with prompts_dir='prompts/backend/utils'
+    # yields context_prefix='backend/utils' so we prefer matches under that path.
+    context_prefix = None
+    if context_override:
+        pddrc_path = _find_pddrc_file()
+        if pddrc_path:
+            try:
+                config = _load_pddrc_config(pddrc_path)
+                context_config = config.get('contexts', {}).get(context_override, {})
+                prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
+                if prompts_dir_config:
+                    from pdd.construct_paths import _extract_prefix_from_prompts_dir
+                    context_prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
+            except (ValueError, KeyError):
+                pass
+
+    # --- Step 1: Direct path (fast path for simple/flat projects) ---
+    direct = prompts_root / f"{name}_{language}.prompt"
+    if direct.exists():
+        return direct
+
+    # --- Step 2: Case-insensitive match in prompts_root ---
+    target_lower = f"{name}_{language}.prompt".lower()
+    if prompts_root.is_dir():
+        for candidate in prompts_root.iterdir():
+            if candidate.is_file() and candidate.name.lower() == target_lower:
+                return candidate
+
+    # --- Step 3: Architecture.json hint → recursive search ---
+    if architecture_path and architecture_path.exists():
+        _, arch_filename = _get_filepath_from_architecture(
+            architecture_path,
+            f"{name}_{language}.prompt",
+            basename=basename,
+            language=language,
+        )
+        if arch_filename:
+            # 3a: Direct join (handles architecture filenames with subdirectory paths)
+            joined = _resolve_prompt_path_from_architecture(prompts_root, arch_filename)
+            if joined.exists():
+                return joined
+            # 3b: Case-insensitive in the joined parent directory
+            if joined.parent.is_dir():
+                joined_lower = joined.name.lower()
+                for candidate in joined.parent.iterdir():
+                    if candidate.is_file() and candidate.name.lower() == joined_lower:
+                        return candidate
+            # 3c: Recursive search for the architecture filename in all subdirectories.
+            # Collect all matches and pick shallowest deterministically.
+            arch_basename_lower = Path(arch_filename).name.lower()
+            arch_matches = [
+                c for c in prompts_root.rglob("*.prompt")
+                if c.is_file() and c.name.lower() == arch_basename_lower
+            ]
+            if arch_matches:
+                if len(arch_matches) > 1:
+                    # Prefer match within context prefix (e.g., backend/utils)
+                    if context_prefix:
+                        ctx_filtered = [m for m in arch_matches if context_prefix in str(m.relative_to(prompts_root))]
+                        if ctx_filtered:
+                            arch_matches = ctx_filtered
+                    # Then prefer match matching directory hint from basename
+                    dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
+                    if dir_hint and len(arch_matches) > 1:
+                        hint_filtered = [m for m in arch_matches if dir_hint in str(m)]
+                        if hint_filtered:
+                            arch_matches = hint_filtered
+                arch_matches.sort(key=lambda p: (len(p.parts), str(p)))
+                return arch_matches[0]
+
+    # --- Step 4: Recursive glob fallback (always works) ---
+    # Case-insensitive on both basename and language suffix.
+    # rglob("*.prompt") + manual filtering because rglob patterns are
+    # case-sensitive on Linux, so we can't rely on the glob pattern for
+    # basenames like "dashboard" vs on-disk "Dashboard".
+    name_lower = name.lower()
+    lang_lower = language.lower()
+    target_lower = f"{name_lower}_{lang_lower}.prompt"
+    dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
+    matches = []
+    for candidate in prompts_root.rglob("*.prompt"):
+        if not candidate.is_file():
+            continue
+        if candidate.name.lower() == target_lower:
+            matches.append(candidate)
+    if matches:
+        if len(matches) > 1:
+            # Prefer match within context prefix (e.g., backend/utils)
+            if context_prefix:
+                ctx_filtered = [m for m in matches if context_prefix in str(m.relative_to(prompts_root))]
+                if ctx_filtered:
+                    matches = ctx_filtered
+            # Then prefer match matching directory hint from basename
+            if dir_hint and len(matches) > 1:
+                hint_matches = [m for m in matches if dir_hint in str(m)]
+                if hint_matches:
+                    matches = hint_matches
+        matches.sort(key=lambda p: (len(p.parts), str(p)))
+        return matches[0]
+
+    return None
 
 
 def _get_filepath_from_architecture(
@@ -576,46 +735,59 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
     try:
         # Use construct_paths to get configuration-aware paths
         prompts_root = _resolve_prompts_root(prompts_dir)
-        # Extract name part from basename to avoid path duplication when basename contains '/'
-        # (e.g., 'frontend/app/page' -> 'page')
         name = basename.split('/')[-1] if '/' in basename else basename
-        prompt_filename = f"{name}_{language}.prompt"
-        prompt_path = str(prompts_root / prompt_filename)
 
         # Issue #225: Check architecture.json for filepath FIRST
-        # This takes priority over .pddrc configuration
         arch_path = _find_architecture_json()
+
+        # Issue #1169: Use _find_prompt_file for authoritative prompt resolution.
+        # This handles case-insensitive matching, nested subdirectories, and
+        # architecture.json hints in a single code path.
+        resolved_prompt = _find_prompt_file(basename, language, prompts_root, arch_path, context_override=context_override)
+        if resolved_prompt:
+            prompt_path = str(resolved_prompt)
+        else:
+            # File doesn't exist yet (new module being created) — construct expected path
+            # Respect .pddrc context's prompts_dir prefix so new modules land in the
+            # correct subdirectory (e.g., prompts/backend/utils/ not prompts/).
+            prompt_filename = f"{name}_{language}.prompt"
+            prompt_path = str(prompts_root / prompt_filename)
+            pddrc_path = _find_pddrc_file()
+            if pddrc_path:
+                try:
+                    config = _load_pddrc_config(pddrc_path)
+                    context_name = context_override or _detect_context(Path.cwd(), config, None)
+                    context_config = config.get('contexts', {}).get(context_name or '', {})
+                    prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
+                    if prompts_dir_config:
+                        from pdd.construct_paths import _extract_prefix_from_prompts_dir
+                        prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
+                        prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
+                        if prefix and not prompts_root_ends_with_prefix and not (basename == prefix or basename.startswith(prefix + '/')):
+                            prompt_path = str(prompts_root / prefix / prompt_filename)
+                except ValueError:
+                    pass
+
+        logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
+
+        # If architecture.json has a filepath, use it for code/test/example paths
         arch_filepath = None
-        arch_prompt_filename = None
         if arch_path:
-            arch_filepath, arch_prompt_filename = _get_filepath_from_architecture(
+            prompt_filename_for_lookup = Path(prompt_path).name
+            arch_filepath, _ = _get_filepath_from_architecture(
                 arch_path,
-                prompt_filename,
+                prompt_filename_for_lookup,
                 basename=basename,
                 language=language
             )
             if arch_filepath:
                 logger.info(f"Found filepath in architecture.json: {arch_filepath}")
-                if arch_prompt_filename:
-                    from pdd.sync_main import _case_insensitive_prompt_lookup
-                    prompt_path = str(
-                        _case_insensitive_prompt_lookup(
-                            _resolve_prompt_path_from_architecture(prompts_root, arch_prompt_filename)
-                        )
-                    )
-
-                # Use the filepath from architecture.json
                 extension = get_extension(language)
 
                 # Resolve filepath relative to architecture.json's directory (project root)
-                # This ensures paths work correctly even when sync is run from a subdirectory
                 project_root = arch_path.parent
                 code_path = project_root / arch_filepath
-
-                # Derive example and test paths from the code path
-                # Example: src/backend/models/findings.py -> examples/findings_example.py
-                # Test: src/backend/models/findings.py -> tests/test_findings.py
-                code_stem = code_path.stem  # "findings"
+                code_stem = code_path.stem
 
                 # Get configured directories from .pddrc if available
                 pddrc_path = _find_pddrc_file()
@@ -636,11 +808,9 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     except ValueError:
                         pass
 
-                # Example and test paths are also relative to project root
                 example_path = project_root / f"{example_dir}{code_stem}_example.{extension}"
                 test_path = project_root / f"{test_dir}test_{code_stem}.{extension}"
 
-                # Find matching test files
                 test_dir_path = test_path.parent
                 test_stem = f"test_{code_stem}"
                 if test_dir_path.exists():
@@ -657,31 +827,6 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 }
                 logger.info(f"get_pdd_file_paths returning (from architecture.json): {result}")
                 return result
-        pddrc_path = _find_pddrc_file()
-        if pddrc_path:
-            try:
-                config = _load_pddrc_config(pddrc_path)
-                context_name = context_override or _detect_context(Path.cwd(), config, None)
-                context_config = config.get('contexts', {}).get(context_name or '', {})
-                prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
-                if prompts_dir_config:
-                    prefix = _extract_prefix_from_prompts_dir(prompts_dir_config)
-                    # Only prepend prefix if prompts_root doesn't already end with it
-                    # (when prompts_dir is passed as an absolute path like
-                    # /path/to/prompts/recruiting, prompts_root already contains the prefix)
-                    prompts_root_ends_with_prefix = prefix and prompts_root.parts[-len(Path(prefix).parts):] == Path(prefix).parts
-                    if prefix and not prompts_root_ends_with_prefix and not (basename == prefix or basename.startswith(prefix + '/')):
-                        prompt_path = str(prompts_root / prefix / prompt_filename)
-            except ValueError:
-                pass
-
-        # Case-insensitive prompt file lookup: if the exact path doesn't exist,
-        # search for a case-insensitive match (e.g., "task_model_python.prompt"
-        # should find "task_model_Python.prompt" on case-sensitive filesystems)
-        from pdd.sync_main import _case_insensitive_prompt_lookup
-        prompt_path = str(_case_insensitive_prompt_lookup(Path(prompt_path)))
-
-        logger.info(f"Checking prompt_path={prompt_path}, exists={Path(prompt_path).exists()}")
 
         # Check if prompt file exists - if not, we still need configuration-aware paths
         if not Path(prompt_path).exists():

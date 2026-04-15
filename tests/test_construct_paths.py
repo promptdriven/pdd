@@ -3418,3 +3418,193 @@ class TestStripLanguageSuffixWithSubdir:
             Path("/Users/me/project/prompts/ci_validation_python.prompt")
         )
         assert result == "ci_validation"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Issue #1165: pdd sync ignores prompts_dir from .pddrc when resolving basenames
+# ──────────────────────────────────────────────────────────────────────────────
+
+from pdd.construct_paths import _detect_context_from_basename, _extract_prefix_from_prompts_dir
+
+
+def _setup_nested_prompts_project(tmp_path: Path) -> dict:
+    """Create a project simulating the .pddrc from issue #1165.
+
+    Returns the config dict that mirrors the .pddrc content.
+    """
+    # Create nested prompt file
+    nested_dir = tmp_path / "extensions" / "github_pdd_app" / "prompts" / "src" / "services"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "solving_orchestrator_Python.prompt").write_text("# prompt content")
+
+    # Create empty default prompts dir
+    (tmp_path / "prompts").mkdir(exist_ok=True)
+
+    # Write .pddrc
+    pddrc_content = """
+version: "1.0"
+contexts:
+  extensions-github_pdd_app:
+    paths:
+      - "extensions/github_pdd_app/**"
+    defaults:
+      prompts_dir: "extensions/github_pdd_app/prompts"
+  default:
+    defaults:
+      default_language: "python"
+"""
+    (tmp_path / ".pddrc").write_text(pddrc_content)
+
+    return {
+        "contexts": {
+            "extensions-github_pdd_app": {
+                "paths": ["extensions/github_pdd_app/**"],
+                "defaults": {
+                    "prompts_dir": "extensions/github_pdd_app/prompts",
+                },
+            },
+            "default": {
+                "defaults": {"default_language": "python"},
+            },
+        }
+    }
+
+
+class TestIssue1165_DetectContextFromBasename:
+    """Issue #1165: _detect_context_from_basename should find context via prompts_dir filesystem scan."""
+
+    def test_basename_in_nested_prompts_dir_returns_context(self, tmp_path):
+        """Test 1: basename 'src/services/solving_orchestrator' should match context
+        'extensions-github_pdd_app' when prompt file exists in that context's prompts_dir.
+
+        Bug: _extract_prefix_from_prompts_dir returns '' for 'extensions/github_pdd_app/prompts',
+        and the `if prefix and ...` guard skips the context. Basename doesn't match paths pattern
+        'extensions/github_pdd_app/**' either, so returns None."""
+        config = _setup_nested_prompts_project(tmp_path)
+
+        result = _detect_context_from_basename(
+            "src/services/solving_orchestrator", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "extensions-github_pdd_app"
+
+    def test_prompts_dir_with_suffix_still_works(self, tmp_path):
+        """Test 8 (non-regression): prefix-based matching continues to work when
+        prompts_dir has a suffix after the 'prompts' segment."""
+        # Create prompt file for this test
+        prompt_dir = tmp_path / "extensions" / "app" / "prompts" / "frontend"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "Button_Python.prompt").write_text("# button prompt")
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts/frontend",
+                    },
+                },
+            }
+        }
+
+        result = _detect_context_from_basename("frontend/Button", config)
+
+        # prefix = "frontend", basename starts with "frontend/" — existing path works
+        assert result == "ext-app"
+
+    def test_multiple_contexts_selects_correct_one(self, tmp_path):
+        """Test 9: When multiple contexts have nested prompts_dir with empty prefix,
+        the context whose prompts_dir actually contains the prompt file is selected."""
+        # Context ext-app has the prompt
+        app_dir = tmp_path / "extensions" / "app" / "prompts" / "src" / "services"
+        app_dir.mkdir(parents=True)
+        (app_dir / "solving_orchestrator_Python.prompt").write_text("# app prompt")
+
+        # Context ext-api does NOT have the prompt
+        api_dir = tmp_path / "extensions" / "api" / "prompts"
+        api_dir.mkdir(parents=True)
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts",
+                    },
+                },
+                "ext-api": {
+                    "paths": ["extensions/api/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/api/prompts",
+                    },
+                },
+                "default": {
+                    "defaults": {"default_language": "python"},
+                },
+            }
+        }
+
+        result = _detect_context_from_basename(
+            "src/services/solving_orchestrator", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "ext-app"
+
+    def test_bracket_basename_glob_metacharacters_escaped(self, tmp_path):
+        """Regression: basenames with glob metacharacters like app/routes/[id]
+        must not be interpreted as character classes during filesystem disambiguation.
+
+        Bug: candidate_dir.glob(f"{name_part}_*.prompt") treats '[id]' as a
+        character class, so the prompt file is never found even when it exists."""
+        prompt_dir = tmp_path / "extensions" / "app" / "prompts" / "app" / "routes"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "[id]_TypeScriptReact.prompt").write_text("# bracket prompt")
+
+        config = {
+            "contexts": {
+                "ext-app": {
+                    "paths": ["extensions/app/**"],
+                    "defaults": {
+                        "prompts_dir": "extensions/app/prompts",
+                    },
+                },
+            }
+        }
+
+        result = _detect_context_from_basename(
+            "app/routes/[id]", config,
+            pddrc_path=tmp_path / ".pddrc",
+        )
+
+        assert result == "ext-app"
+
+
+class TestIssue1165_ConstructPaths:
+    """Issue #1165: construct_paths should resolve nested prompts_dir for basename."""
+
+    def test_construct_paths_returns_nested_prompts_dir(self, tmp_path):
+        """Test 4: construct_paths discovery mode should return the nested prompts_dir
+        from the matching context, not the default 'prompts/' directory.
+
+        Bug: context detection fails -> falls back to default 'prompts' at line 1065."""
+        config = _setup_nested_prompts_project(tmp_path)
+
+        with patch("pdd.construct_paths._find_pddrc_file", return_value=tmp_path / ".pddrc"):
+            try:
+                resolved_config, _, _, _ = construct_paths(
+                    input_file_paths={},
+                    force=False,
+                    quiet=True,
+                    command="sync",
+                    command_options={"basename": "src/services/solving_orchestrator"},
+                    context_override=None,
+                )
+                prompts_dir = resolved_config.get("prompts_dir", "prompts")
+                assert prompts_dir == "extensions/github_pdd_app/prompts"
+            except Exception:
+                pytest.fail(
+                    "construct_paths failed to resolve context for basename "
+                    "'src/services/solving_orchestrator' with nested prompts_dir"
+                )
