@@ -1,3 +1,14 @@
+<pdd-reason>Runs generated tests with multi-cwd validation to catch CI-mirror path brittleness.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer handling a test generation request. Your task is to run the generated tests and report results.
 
 % Context
@@ -73,11 +84,24 @@ You are working on step 13 of 18 in an agentic test generation workflow. Previou
    npm test -- tests/test_file.test.ts
    ```
 
-3. **Collect results**
+3. **Multi-cwd validation (CRITICAL for monorepos)**
+   Before reporting PASS, verify the tests run correctly from **two** working directories:
+   - **(a) The worktree root** (`{worktree_path}`)
+   - **(b) The likely CI working directory** (`{likely_ci_cwd}` — the nearest directory above the test file containing `.pddrc`, `pyproject.toml`, or `conftest.py`)
+
+   If `{likely_ci_cwd}` is empty or the same as the worktree root, skip the second run.
+
+   If the test passes from one cwd but fails from the other, the test is **cwd-brittle**:
+   - Report **FAIL**
+   - Identify the path dependency causing the divergence (typically a hardcoded relative path in `subprocess.run(cwd=...)` or file reads)
+   - Fix by computing paths from `Path(__file__).resolve().parents[N]`
+
+4. **Collect results**
    - Note which tests passed
    - Note which tests failed (with error messages)
    - Capture any screenshots or traces (Playwright)
    - Note any environment or setup issues
+   - Note if any cwd-brittleness was detected
 
 % Output
 

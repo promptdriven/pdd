@@ -373,7 +373,7 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
     "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
     "dependencies": [],
     "priority": 18,
@@ -1261,8 +1261,8 @@
     }
   },
   {
-    "reason": "Returns test execution command for a language.",
-    "description": "Provides the command to run tests in a given language. Defaults to pytest for Python.",
+    "reason": "Resolves test runner command and working directory for a given test file across monorepos.",
+    "description": "Provides the command to run tests in a given language with cwd detection for monorepos. Defaults to pytest for Python.",
     "dependencies": [],
     "priority": 38,
     "filename": "get_test_command_python.prompt",
@@ -1278,11 +1278,18 @@
         "functions": [
           {
             "name": "get_test_command_for_file",
-            "signature": "(test_file: str, language: Optional[str] = None) -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(test_file: str, language: Optional[str] = None)",
+            "returns": "Optional[TestCommand]"
+          },
+          {
+            "name": "_detect_py_project_root",
+            "signature": "(test_path: Path)",
+            "returns": "Optional[Path]"
+          },
+          {
+            "name": "_detect_ts_test_runner",
+            "signature": "(test_path: Path)",
+            "returns": "Optional[Tuple[str, Path]]"
           }
         ]
       }
@@ -6138,7 +6145,11 @@
   {
     "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt",
+      "get_test_command_python.prompt"
+    ],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
     "filepath": "pdd/agentic_test_orchestrator.py",
@@ -6347,8 +6358,8 @@
     }
   },
   {
-    "reason": "LLM prompt template for running generated tests.",
-    "description": "Step 13 of the 18-step agentic test workflow. Runs the generated tests and reports results.",
+    "reason": "Runs generated tests with multi-cwd validation to catch CI-mirror path brittleness.",
+    "description": "Step 13 of the 18-step agentic test workflow. Runs the generated tests with multi-cwd validation and reports results.",
     "dependencies": [],
     "priority": 204,
     "filename": "agentic_test_step7_run_tests_LLM.prompt",
@@ -6394,6 +6405,31 @@
     },
     "position": {
       "x": 18600,
+      "y": 440
+    }
+  },
+  {
+    "reason": "Runs Step 15 tests with multi-cwd validation to catch CI-mirror path brittleness.",
+    "description": "Step 16 of the 18-step agentic test workflow. Runs newly generated tests from Step 15 with multi-cwd validation and reports results.",
+    "dependencies": [],
+    "priority": 205,
+    "filename": "agentic_test_step16_run_tests_LLM.prompt",
+    "filepath": "prompts/agentic_test_step16_run_tests_LLM.prompt",
+    "tags": [
+      "agentic",
+      "config",
+      "llm",
+      "template",
+      "testing"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": []
+      }
+    },
+    "position": {
+      "x": 18880,
       "y": 440
     }
   },
@@ -6885,7 +6921,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator that explores the project, identifies problems, and optionally fixes them.",
     "dependencies": [],
     "priority": 217,
@@ -6941,7 +6977,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [],
     "priority": 218,
@@ -6998,7 +7034,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",

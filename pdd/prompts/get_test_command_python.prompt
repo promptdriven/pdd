@@ -1,3 +1,18 @@
+<pdd-reason>Resolves test runner command and working directory for a given test file across monorepos.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_test_command_for_file", "signature": "(test_file: str, language: Optional[str] = None)", "returns": "Optional[TestCommand]"},
+      {"name": "_detect_py_project_root", "signature": "(test_path: Path)", "returns": "Optional[Path]"},
+      {"name": "_detect_ts_test_runner", "signature": "(test_path: Path)", "returns": "Optional[Tuple[str, Path]]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python software engineer. Your task is to create a module `get_test_command` that resolves the appropriate test command for a given test file based on its language.
 
 <include>context/python_preamble.prompt</include>
@@ -12,10 +27,11 @@
 
   2) Function `get_test_command_for_file(test_file: str, language: Optional[str] = None) -> Optional[TestCommand]`:
      - Returns a `TestCommand` with the resolved command (and optional cwd), or `None` if no command can be determined.
+     - Pre-step (Python only): call `_detect_py_project_root()` to detect the nearest subproject root. If found, store as `detected_cwd` to attach to whichever command is resolved below.
      - Resolution order (first match wins):
        a) For TS/TSX: smart runner detection via `_detect_ts_test_runner()` which walks up from the test file to find Jest/Vitest/Playwright config — returns both the command and the directory where the config was found (the `cwd`). This is critical for monorepos where test runner configs live in subdirectories (e.g., `frontend/jest.config.js`).
-       b) CSV `run_test_command` column from `language_format.csv` (if non-empty after stripping). `cwd` is `None` for CSV commands.
-       c) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`. `cwd` is `None`.
+       b) CSV `run_test_command` column from `language_format.csv` (if non-empty after stripping). For Python, attach `detected_cwd` if available; otherwise `cwd` is `None`.
+       c) Smart detection via `default_verify_cmd_for()` from `agentic_langtest`. For Python, attach `detected_cwd` if available; otherwise `cwd` is `None`.
        d) `None` (signals to caller that agentic fallback is needed)
 
   3) Language resolution:
@@ -24,7 +40,13 @@
 
   4) CSV lookup via a private `_load_language_format()` helper that returns a dict keyed by extension. Try package-relative then project-root-relative paths; return empty dict if CSV not found.
 
-  5) `_detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]`:
+  5) `_detect_py_project_root(test_path: Path) -> Optional[Path]`:
+     - Walk up from the test file (max 5 levels) looking for Python subproject markers: `.pddrc`, `pyproject.toml` (containing `[tool.pytest]` or `[project]`), `pytest.ini`, `setup.cfg`, or `conftest.py`.
+     - Stop walking at the repo root (directory containing `.git`).
+     - Return the directory containing the first marker found, or `None` if no subproject root is detected before reaching the repo root.
+     - This mirrors `_detect_ts_test_runner()` for Python monorepos, ensuring tests in subdirectories (e.g., `extensions/github_pdd_app/tests/`) run with the correct `cwd`.
+
+  6) `_detect_ts_test_runner(test_path: Path) -> Optional[Tuple[str, Path]]`:
      - Walk up from the test file (max 5 levels) looking for test runner config files (jest.config.*, vitest.config.*, playwright.config.*).
      - Return `(command, config_directory)` — the config_directory is the directory where the config file was found (used as cwd by callers).
      - For `.spec.ts`/`.spec.tsx` files, check Playwright config before Jest/Vitest.

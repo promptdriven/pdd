@@ -13,6 +13,7 @@
 
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>get_test_command_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
@@ -107,6 +108,14 @@ Parse step output to detect stop conditions. Return early with error:
 6. Switch `current_work_dir` to worktree for Steps 12-17
 7. Add `worktree_path` to context dict
 
+% CI Working Directory Detection (before Step 12, after worktree setup)
+After setting up the worktree and before running Step 12, detect the likely CI working directory:
+1. Import `_detect_py_project_root` from `get_test_command`
+2. Parse the test file paths from the Step 5 test plan output (look for target test directories or file paths)
+3. For each test file path, call `_detect_py_project_root(Path(test_file))` to find the nearest subproject root
+4. Store the result as `likely_ci_cwd` in the context dict (empty string if no subproject root detected or if it equals the worktree root)
+5. Pass `likely_ci_cwd` to Steps 13 and 16 template context so the multi-cwd validation prompts can reference `{likely_ci_cwd}`
+
 % Context Accumulation
 - Step outputs stored as `step{N}_output` in context dict
 - Step 4 extracts TEST_TYPE and TARGET_URL tags
@@ -132,6 +141,7 @@ This marker is required for the executor's credential waterfall to detect succes
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `validate_cached_state`
 Import `load_prompt_template` from `load_prompt_template`
+Import `_detect_py_project_root` from `get_test_command`
 Import `shutil`, `os`, `json`, `re`, `subprocess`, `time` from stdlib
 
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
