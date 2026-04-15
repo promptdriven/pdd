@@ -6885,3 +6885,254 @@ def test_prompt_file_timeout_spec_matches_code_dict():
             f"Code BUG_STEP_TIMEOUTS[{step}] = {actual} but prompt spec says {expected_timeout}. "
             f"The code dict is out of sync with the prompt specification."
         )
+
+
+# ============================================================================
+# Scope bug: pre_step9 snapshot must walk the whole worktree
+# ============================================================================
+
+
+def test_step9_snapshot_covers_nested_test_dirs(
+    mock_dependencies, default_args, tmp_path
+):
+    """Regression: pre_step9_snapshots must walk the whole worktree.
+
+    Real projects keep tests in many locations (backend/tests/,
+    extensions/*/tests/, frontend/e2e/tests/, scripts/*/tests/, etc.),
+    not just {worktree}/tests/. If the snapshot walk is scoped to one
+    directory, test files under any other path get pre_count=0 →
+    start_line=1 → full-file scan → pre-existing patterns false-flagged →
+    spurious retry → Step 9 timeout / SIGKILL.
+
+    This matches the #1026 bug 0 scenario that re-surfaced in production
+    on pdd_cloud #1064: inspect.getsource patterns at lines 3346/3362 of
+    extensions/github_pdd_app/tests/pdd_executor/test_orchestrator.py
+    were falsely flagged because that path lives under extensions/, not
+    under the root tests/ dir.
+
+    Test: place a file with pre-existing structural patterns at a nested
+    path (extensions/app/tests/) and assert Step 9 runs exactly once when
+    the file is unchanged.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    # Pre-existing test file in a NESTED location (not {worktree}/tests/).
+    test_file = worktree_path / "extensions" / "app" / "tests" / "test_nested.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # Build the content WITHOUT triggering detection-by-substring in this
+    # test file itself.
+    mod = "inspect"
+    fn_body_getsource = (
+        "    source = " + mod + "." + "getsource(module.main)\n"
+        "    " + 'assert "signal" in source\n'
+    )
+    test_file.write_text(
+        "import inspect\n\n"
+        "def test_alpha():\n" + fn_body_getsource + "\n"
+        "def test_beta():\n"
+        "    assert True\n"
+    )
+
+    step9_call_count = 0
+
+    def side_effect_run(*args, **kwargs):
+        nonlocal step9_call_count
+        label = kwargs.get("label", "")
+        if label == "step8":
+            return (
+                True,
+                (
+                    "## Test Plan\n"
+                    "#### Test 1: alpha\n"
+                    "#### Test 2: beta\n"
+                    "\nPLANNED_TEST_COUNT: 2"
+                ),
+                0.1,
+                "gpt-4",
+            )
+        if label == "step9":
+            step9_call_count += 1
+            return (
+                True,
+                "Generated tests\nFILES_MODIFIED: extensions/app/tests/test_nested.py",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    assert step9_call_count == 1, (
+        f"Expected Step 9 to run exactly once when a nested-path file was "
+        f"unchanged. Got {step9_call_count} calls. A retry means the "
+        f"snapshot didn't cover nested test directories — the pdd_cloud "
+        f"#1064 failure mode (tests under extensions/github_pdd_app/tests/ "
+        f"were missed when the snapshot only walked {{worktree}}/tests/)."
+    )
+
+
+# ============================================================================
+# Content-based change detection (gltanaka's review of #1064 / PR #1173)
+#
+# Line counts alone can't distinguish "unchanged" from "rewritten" — a
+# rewrite can land on the same (or fewer) lines, leaving the line-count
+# heuristic blind.  pre_step9_snapshots stores full content and the helper
+# _scan_step9_file_for_new_patterns does proper change detection.
+#
+# These tests drive the orchestrator end-to-end through three scenarios
+# the gltanaka review called out:
+#   1. unchanged file with pre-existing pattern  -> no retry
+#   2. rewrite shorter than snapshot, new pattern -> retry triggered
+#   3. rewrite same-length as snapshot, new pattern -> retry triggered
+# ============================================================================
+
+
+def _unchanged_violation_text() -> str:
+    """File content with a real structural pattern (built without
+    triggering substring detection in *this* test file)."""
+    mod = "inspect"
+    return (
+        "import inspect\n\n"
+        "def test_alpha():\n"
+        "    src = " + mod + "." + "getsource(module.main)\n"
+        "    " + 'assert "signal" in src\n'
+    )
+
+
+def _clean_text(n_tests: int = 5) -> str:
+    body = "import pytest\n\n"
+    for i in range(n_tests):
+        body += f"def test_x_{i}():\n    assert True\n\n"
+    return body
+
+
+def test_step9_unchanged_file_with_preexisting_pattern_no_retry(
+    mock_dependencies, default_args, tmp_path
+):
+    """Unchanged file (snapshot == post) must not trigger a retry, even when
+    it contains pre-existing structural patterns. This is the pdd_cloud
+    #1064 SIGKILL pattern."""
+    mock_run, _, _ = mock_dependencies
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_unchanged.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(_unchanged_violation_text())
+
+    step9_calls = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal step9_calls
+        label = kwargs.get("label", "")
+        if label == "step8":
+            return (True, "PLANNED_TEST_COUNT: 1", 0.1, "gpt-4")
+        if label == "step9":
+            step9_calls += 1
+            # Mock leaves the file untouched
+            return (True, "FILES_MODIFIED: tests/test_unchanged.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    assert step9_calls == 1, (
+        f"Unchanged file with pre-existing pattern must not retry. "
+        f"Got {step9_calls} step9 calls (the pdd_cloud #1064 failure)."
+    )
+
+
+def test_step9_rewrite_shorter_with_new_pattern_triggers_retry(
+    mock_dependencies, default_args, tmp_path
+):
+    """Rewrite that produces a SHORTER file with a new structural pattern
+    must trigger a retry. Line-count-only logic would miss this because
+    start_line = pre_count + 1 overshoots the new (shorter) file length."""
+    mock_run, _, _ = mock_dependencies
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_rewrite.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-snapshot: long, clean file
+    test_file.write_text(_clean_text(20))
+    pre_lines = len(test_file.read_text().splitlines())
+
+    step9_calls = 0
+    rewrite_text = _unchanged_violation_text()
+    assert len(rewrite_text.splitlines()) < pre_lines, (
+        "Test precondition: rewrite is shorter than snapshot"
+    )
+
+    def side_effect(*args, **kwargs):
+        nonlocal step9_calls
+        label = kwargs.get("label", "")
+        if label == "step8":
+            return (True, "PLANNED_TEST_COUNT: 1", 0.1, "gpt-4")
+        if label == "step9":
+            step9_calls += 1
+            # Rewrite the file shorter, with a violation. The retry path will
+            # see the same content again and re-detect the violation.
+            test_file.write_text(rewrite_text)
+            return (True, "FILES_MODIFIED: tests/test_rewrite.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    assert step9_calls >= 2, (
+        f"Shorter rewrite with new pattern must trigger at least one retry. "
+        f"Got {step9_calls} step9 calls. This is gltanaka's first review case: "
+        f"line-count-only logic computed start_line past EOF, missing the violation."
+    )
+
+
+def test_step9_rewrite_same_length_with_new_pattern_triggers_retry(
+    mock_dependencies, default_args, tmp_path
+):
+    """Rewrite that lands on the SAME line count must still trigger a retry.
+    This is the second false-negative gltanaka identified."""
+    mock_run, _, _ = mock_dependencies
+    worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+
+    test_file = worktree_path / "tests" / "test_same_len.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+
+    rewrite_text = _unchanged_violation_text()
+    target_lines = len(rewrite_text.splitlines())
+    # Build a clean snapshot with EXACTLY the same line count.
+    pre_text = "import os\n\n" + "\n".join(["x = 1"] * (target_lines - 2))
+    assert len(pre_text.splitlines()) == target_lines, (
+        "Test precondition: snapshot has same line count as rewrite"
+    )
+    test_file.write_text(pre_text)
+
+    step9_calls = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal step9_calls
+        label = kwargs.get("label", "")
+        if label == "step8":
+            return (True, "PLANNED_TEST_COUNT: 1", 0.1, "gpt-4")
+        if label == "step9":
+            step9_calls += 1
+            test_file.write_text(rewrite_text)
+            return (True, "FILES_MODIFIED: tests/test_same_len.py", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_bug_orchestrator(**default_args)
+
+    assert step9_calls >= 2, (
+        f"Same-length rewrite with new pattern must trigger at least one retry. "
+        f"Got {step9_calls} step9 calls. This is gltanaka's second review case."
+    )
