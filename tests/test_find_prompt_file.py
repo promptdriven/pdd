@@ -283,3 +283,157 @@ class TestCloudRunScenario:
         assert result.exists()
         assert result.name == "firestore_client_Python.prompt"
         assert "clients" in str(result)
+
+
+# === Greg review issue #1: basename directory hint disambiguation ===
+
+class TestDirectoryHintDisambiguation:
+    def test_two_subdirs_same_basename_no_arch_prefers_dir_hint(self, tmp_path):
+        """basename='src/routers/foo' must NOT resolve to prompts/src/clients/foo_Python.prompt."""
+        prompts = tmp_path / "prompts"
+        (prompts / "src" / "clients").mkdir(parents=True)
+        (prompts / "src" / "routers").mkdir(parents=True)
+        clients = prompts / "src" / "clients" / "foo_Python.prompt"
+        routers = prompts / "src" / "routers" / "foo_Python.prompt"
+        clients.write_text("client")
+        routers.write_text("router")
+
+        result = _find_prompt_file("src/routers/foo", "python", prompts)
+        assert result == routers, (
+            f"basename='src/routers/foo' should prefer the routers match, got {result}"
+        )
+
+    def test_two_subdirs_same_basename_no_hint_picks_shallowest(self, tmp_path):
+        """Without a dir hint in basename, shallowest/lex wins deterministically."""
+        prompts = tmp_path / "prompts"
+        (prompts / "alpha").mkdir(parents=True)
+        (prompts / "beta").mkdir(parents=True)
+        alpha = prompts / "alpha" / "foo_Python.prompt"
+        beta = prompts / "beta" / "foo_Python.prompt"
+        alpha.write_text("a")
+        beta.write_text("b")
+
+        result = _find_prompt_file("foo", "python", prompts)
+        assert result == alpha, f"Expected lex winner {alpha}, got {result}"
+
+
+# === Greg review issue #3: context_override scoping ===
+
+class TestContextOverrideScoping:
+    def test_context_override_prefers_correct_context_subdir(self, tmp_path, monkeypatch):
+        """context_override='backend-utils' must pick prompts/backend/utils/ not prompts/frontend/."""
+        monkeypatch.chdir(tmp_path)
+        prompts = tmp_path / "prompts"
+        (prompts / "frontend").mkdir(parents=True)
+        (prompts / "backend" / "utils").mkdir(parents=True)
+        frontend = prompts / "frontend" / "credit_helpers_Python.prompt"
+        backend = prompts / "backend" / "utils" / "credit_helpers_Python.prompt"
+        frontend.write_text("wrong context")
+        backend.write_text("right context")
+
+        # Create .pddrc with two contexts
+        pddrc = {
+            "contexts": {
+                "frontend": {"defaults": {"prompts_dir": "prompts/frontend"}},
+                "backend-utils": {"defaults": {"prompts_dir": "prompts/backend/utils"}}
+            }
+        }
+        (tmp_path / ".pddrc").write_text(json.dumps(pddrc))
+
+        result = _find_prompt_file(
+            "credit_helpers", "python", prompts, context_override="backend-utils"
+        )
+        assert result == backend, (
+            f"context_override='backend-utils' should prefer {backend}, got {result}"
+        )
+
+    def test_context_override_without_pddrc_still_works(self, tmp_path):
+        """context_override without a .pddrc file degrades gracefully."""
+        prompts = tmp_path / "prompts" / "src"
+        prompts.mkdir(parents=True)
+        target = prompts / "foo_Python.prompt"
+        target.write_text("content")
+
+        result = _find_prompt_file("foo", "python", tmp_path / "prompts", context_override="anything")
+        assert result is not None
+        assert result.exists()
+
+
+# === Greg review issue #4: case-insensitive basename ===
+
+class TestCaseInsensitiveBasename:
+    def test_lowercase_basename_finds_pascalcase_file(self, tmp_path):
+        """basename='dashboard' must find Dashboard_TypeScriptReact.prompt."""
+        prompts = tmp_path / "prompts" / "frontend" / "components"
+        prompts.mkdir(parents=True)
+        target = prompts / "Dashboard_TypeScriptReact.prompt"
+        target.write_text("component")
+
+        result = _find_prompt_file("dashboard", "typescriptreact", tmp_path / "prompts")
+        assert result is not None, (
+            "Lowercase basename 'dashboard' should find PascalCase 'Dashboard_TypeScriptReact.prompt'"
+        )
+        assert result.exists()
+        assert result.name == "Dashboard_TypeScriptReact.prompt"
+
+    def test_uppercase_basename_finds_lowercase_file(self, tmp_path):
+        """basename='MyModule' finds mymodule_python.prompt (all lowercase on disk)."""
+        prompts = tmp_path / "prompts" / "src"
+        prompts.mkdir(parents=True)
+        target = prompts / "mymodule_Python.prompt"
+        target.write_text("content")
+
+        result = _find_prompt_file("MyModule", "python", tmp_path / "prompts")
+        assert result is not None, "PascalCase basename should find lowercase file"
+        assert result.exists()
+
+    def test_case_insensitive_basename_in_flat_dir(self, tmp_path):
+        """Case-insensitive basename works for flat (non-nested) prompts too."""
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        target = prompts / "Config_Python.prompt"
+        target.write_text("flat config")
+
+        result = _find_prompt_file("config", "python", prompts)
+        assert result is not None, "Lowercase 'config' should find 'Config_Python.prompt'"
+        # On case-insensitive FS (macOS), Step 1 matches with original casing;
+        # on case-sensitive FS (Linux), Step 2 returns the actual filename.
+        # Either way the file must be found and names must match case-insensitively.
+        assert result.name.lower() == "config_python.prompt"
+
+
+# === Greg review issue #2: .pddrc prefix for prompt creation paths ===
+# (Tested at the get_pdd_file_paths level since _find_prompt_file returns None
+# for non-existent files — the prefix logic is in the caller.)
+
+from pdd.sync_determine_operation import get_pdd_file_paths
+
+
+class TestPddrcPrefixForNewModules:
+    def test_new_module_respects_pddrc_prompts_dir_prefix(self, tmp_path, monkeypatch):
+        """When prompt doesn't exist, the path must include the .pddrc context prefix."""
+        monkeypatch.chdir(tmp_path)
+        prompts = tmp_path / "prompts" / "backend" / "utils"
+        prompts.mkdir(parents=True)
+
+        # .pddrc with a context that maps to a prompts subdirectory
+        pddrc = {
+            "contexts": {
+                "backend-utils": {
+                    "defaults": {"prompts_dir": "prompts/backend/utils"},
+                    "match": {"paths": ["backend/utils/"]}
+                }
+            }
+        }
+        (tmp_path / ".pddrc").write_text(json.dumps(pddrc))
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+        # No prompt file exists — this is a new module being created
+        paths = get_pdd_file_paths("credit_helpers", "python", "prompts", context_override="backend-utils")
+
+        # The prompt path should include the context prefix, not be flat
+        prompt_str = str(paths['prompt'])
+        assert "backend/utils" in prompt_str or "backend\\utils" in prompt_str, (
+            f"New module prompt path should include .pddrc prefix 'backend/utils', got: {prompt_str}"
+        )
