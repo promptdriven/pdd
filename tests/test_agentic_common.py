@@ -2439,6 +2439,47 @@ def test_codex_no_model_env_var_omits_model_flag(mock_cwd, mock_env, mock_load_m
     assert "--model" not in cmd, f"Did not expect --model in command, got: {cmd}"
 
 
+def test_codex_reasoning_effort_env_var_passed_to_cli(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """When CODEX_REASONING_EFFORT is set, Codex CLI gets model_reasoning_effort."""
+
+    def which_side_effect(cmd):
+        return "/bin/codex" if cmd == "codex" else None
+
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["OPENAI_API_KEY"] = "key"
+    os.environ["CODEX_REASONING_EFFORT"] = "xhigh"
+
+    jsonl_output = [
+        json.dumps({"type": "init"}),
+        json.dumps(
+            {
+                "type": "result",
+                "output": "Done.",
+                "usage": {"input_tokens": 100, "output_tokens": 100, "cached_input_tokens": 0},
+            }
+        ),
+    ]
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = "\n".join(jsonl_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success
+    assert provider == "openai"
+
+    args, kwargs = mock_subprocess.call_args
+    cmd = args[0]
+    effort_idx = cmd.index('-c')
+    assert cmd[effort_idx + 1] == 'model_reasoning_effort=\"xhigh\"'
+
+
 # ---------------------------------------------------------------------------
 # PDD_USER_FEEDBACK Injection Tests
 # ---------------------------------------------------------------------------
@@ -4563,4 +4604,3 @@ class TestIssue1072FailureLogging:
                 "Success should not be logged when verbose=False — "
                 "only failures need always-on logging"
             )
-
