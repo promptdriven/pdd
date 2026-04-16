@@ -4564,3 +4564,134 @@ class TestIssue1072FailureLogging:
                 "only failures need always-on logging"
             )
 
+
+# ---------------------------------------------------------------------------
+# Regression tests for issue #1189 — cloud one-session sync empty-response fix
+# ---------------------------------------------------------------------------
+
+
+def test_is_error_true_returns_failure(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Claude Code JSON with is_error=true must be reported as failure, not
+    success-with-text. The downstream false-positive branch shouldn't be the
+    thing that notices; the parser is the right place to surface the CLI's
+    own error signal.
+
+    Regression: pdd_cloud#1109 — parser swallowed is_error so auth failures
+    and refusals came back as (True, text, cost) and got treated as empty
+    successes by the false-positive branch.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result",
+        "is_error": True,
+        "result": "Not logged in · Please run /login",
+        "total_cost_usd": 0.0,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task(
+        "Fix the bug", mock_cwd, max_retries=1,
+    )
+
+    assert not success, "is_error=true must propagate as failure"
+    assert "Not logged in" in msg, (
+        f"Error message from CLI must be preserved for diagnostics, got: {msg!r}"
+    )
+
+
+def test_false_positive_retries_instead_of_breaking(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Transient empty-result success from the Claude CLI must trigger a
+    retry (with backoff) rather than an immediate break to the next provider.
+    With only anthropic configured (the cloud case) the old `break` meant
+    zero retries — one flaky response failed the entire sync.
+
+    Regression: pdd_cloud#1109 — false positive branch at
+    pdd/agentic_common.py:886-891 used `break`, skipping retry + backoff.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    # Remove google/openai creds so only anthropic is the candidate
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        os.environ.pop(k, None)
+
+    empty_response = json.dumps({
+        "type": "result",
+        "is_error": False,
+        "result": "",
+        "total_cost_usd": 0.0,
+    })
+    real_response = json.dumps({
+        "type": "result",
+        "is_error": False,
+        "result": "Task completed successfully after retry.",
+        "total_cost_usd": 0.05,
+    })
+    returns = [
+        MagicMock(returncode=0, stdout=empty_response, stderr=""),
+        MagicMock(returncode=0, stdout=real_response, stderr=""),
+    ]
+    mock_subprocess.side_effect = returns
+
+    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            mock_cwd,
+            max_retries=2,
+            retry_delay=0.01,  # Fast test
+        )
+
+    assert success, f"Should succeed on retry, got msg={msg!r}"
+    assert msg == "Task completed successfully after retry."
+    assert mock_subprocess.call_count == 2, (
+        f"Expected 2 subprocess calls (first empty -> retry -> success), "
+        f"got {mock_subprocess.call_count}. Break-on-false-positive regression."
+    )
+    assert mock_sleep.called, (
+        "Expected backoff sleep between attempts; retry path must use "
+        "exponential delay, not immediate retry."
+    )
+
+
+def test_aggregate_deadline_scales_with_max_retries(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """With max_retries>=2 the aggregate per-task deadline must leave room
+    for all retries at full session_timeout. The old fixed cap of
+    2 × effective_timeout meant retry #3 was cut off before it started.
+
+    Regression: pdd_cloud#1109 — aggregate_deadline = 2 × timeout meant
+    budget ran out before retry #3 on long one-session flows.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        os.environ.pop(k, None)
+
+    # Every attempt returns empty to exhaust retries and exercise the full budget
+    empty_response = json.dumps({
+        "type": "result",
+        "is_error": False,
+        "result": "",
+        "total_cost_usd": 0.0,
+    })
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = empty_response
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            mock_cwd,
+            max_retries=3,
+            retry_delay=0.01,
+            timeout=60.0,  # Small so the test's wall-clock is bounded
+        )
+
+    assert not success, "All attempts returned empty — expect failure"
+    # With aggregate = max(2, max_retries) * timeout we now get full 3 retries.
+    # Old behaviour: 2 * timeout cap cut off the 3rd attempt.
+    assert mock_subprocess.call_count == 3, (
+        f"Expected 3 attempts with max_retries=3 and scaled aggregate_deadline, "
+        f"got {mock_subprocess.call_count}. Deadline-scaling regression."
+    )

@@ -34,11 +34,14 @@ _BOX_CHARS_RE = re.compile(r'^[\s╭╮╰╯─│┌┐└┘├┤┬┴┼�
 
 # Maximum concurrent syncs
 MAX_WORKERS = 4
-# Per-module timeout in seconds (60 min — complex modules with 4K+ line test files
-# can legitimately take 15-25 min, and with max_retries=3 in one-session sync we
-# need room for 3 attempts × ~20 min each if the Claude CLI returns transient
-# empty responses mid-session).
-MODULE_TIMEOUT = 3600
+# Per-module timeout in seconds (50 min — complex modules with 4K+ line test
+# files can legitimately take 30-47 min (observed staging p95: 46m38s on the
+# agentic_change_orchestrator module). With max_retries=2 in one-session sync
+# a stuck job burns at most 2 × 1200s = 40 min of CLI time before giving up,
+# so MODULE_TIMEOUT only bounds hung-process cleanup — it does not influence
+# cost-on-failure. Previous value of 30 min was below the observed legitimate
+# p95 and caused successful runs to be killed mid-verify.
+MODULE_TIMEOUT = 3000
 # State file for resumability (relative to project root)
 STATE_FILE_PATH = ".pdd/agentic_sync_state.json"
 

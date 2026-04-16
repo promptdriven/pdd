@@ -282,7 +282,12 @@ def run_one_session_sync(
             quiet=quiet,
             label=f"one_session_sync:{basename}",
             timeout=session_timeout,
-            max_retries=3,  # One-session runs are long; retry on transient empty-result
+            # One-session runs are long; retry ONCE on transient empty-result.
+            # Worst-case burn with 2 attempts × 1200s = 40min / ~$10-14
+            # (vs 3 attempts = 60min / ~$20). The common flaky case clears on
+            # the second attempt per observed staging runs; a third attempt
+            # rarely converts and inflates cost.
+            max_retries=2,
         )
     finally:
         stop_heartbeat.set()
