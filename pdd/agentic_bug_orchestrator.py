@@ -944,11 +944,11 @@ def detect_structural_test_patterns(
             scanned for source-variable tracking (so a ``read_text()`` call
             in old code followed by ``assert "x" in var`` in new code is
             caught), but violations on those pre-existing lines are
-            suppressed.  If ``start_line`` exceeds the file length (e.g. the
-            file was rewritten shorter than the snapshot), it is clamped to 1
-            so the entire file is scanned.  Used to avoid false positives
-            when appending new tests to a file that already contains flagged
-            patterns (issue #990).
+            suppressed.  If ``start_line`` exceeds the file length, no
+            violations are reported (the loop naturally finishes without
+            matching) — the intended behaviour when Step 9 doesn't append.
+            Used to avoid false positives when appending new tests to a
+            file that already contains flagged patterns (issue #990).
 
     Detected patterns:
     - inspect.getsource / inspect.signature used to read source or signatures
@@ -974,10 +974,16 @@ def detect_structural_test_patterns(
 
     # Effective start line for reporting violations.  Lines before this are
     # still scanned for variable tracking but violations are suppressed.
-    # If start_line exceeds the file length (file was rewritten/truncated
-    # rather than appended to), clamp to 1 to scan everything.
+    #
+    # Do NOT clamp when start_line > len(lines): that was the #774 off-by-one.
+    # The normal "no new lines appended" case is start_line == len(lines) + 1,
+    # and the loop only iterates up to len(lines) — so any start_line past the
+    # end naturally suppresses all violations (the intended behaviour).  The
+    # old clamp treated "past the end" as "file shrank, rescan everything",
+    # which false-flagged pre-existing patterns whenever Step 9 left the file
+    # untouched (the exact pdd_cloud #1064 failure mode).
     if start_line is not None and start_line > 1:
-        effective_start = 1 if start_line > len(lines) else start_line
+        effective_start = start_line
     else:
         effective_start = 1
 
@@ -1156,6 +1162,57 @@ def detect_structural_test_patterns(
                         )
 
     return violations
+
+
+def _scan_step9_file_for_new_patterns(
+    file_path: Union[str, Path],
+    pre_snapshot: Optional[str],
+) -> List[str]:
+    """Return only structural violations introduced since the pre-Step-9 snapshot.
+
+    Distinguishes "unchanged" from "rewritten" by content comparison, not by
+    line count alone — line counts can match exactly while content differs
+    (the gltanaka review of pdd_cloud #1064 surfaced this).
+
+    Args:
+        file_path: Path to the file as it stands now (post-Step 9).
+        pre_snapshot: Full file content captured before Step 9 ran, or
+            ``None`` if the file did not exist pre-Step 9.
+
+    Behaviour:
+        - ``pre_snapshot is None`` -> file is brand new, full scan.
+        - ``current == pre_snapshot`` -> file is byte-identical, return ``[]``
+          (this is the unchanged case that was being false-flagged).
+        - pre-snapshot is a strict line-prefix of current -> pure append,
+          scan only appended lines (preserves issue #990 optimisation).
+        - any other change (rewrite shorter, rewrite same length, or a
+          rewrite that happens to extend the file) -> full scan, so real
+          violations introduced by the rewrite are still caught.
+    """
+    path = Path(file_path)
+
+    if pre_snapshot is None:
+        return detect_structural_test_patterns(str(path))
+
+    try:
+        current = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    if current == pre_snapshot:
+        return []
+
+    pre_lines = pre_snapshot.splitlines()
+    cur_lines = current.splitlines()
+    if (
+        len(cur_lines) >= len(pre_lines)
+        and cur_lines[: len(pre_lines)] == pre_lines
+    ):
+        return detect_structural_test_patterns(
+            str(path), start_line=len(pre_lines) + 1
+        )
+
+    return detect_structural_test_patterns(str(path))
 
 
 def _extract_violation_snippets(
@@ -1525,20 +1582,48 @@ def run_agentic_bug_orchestrator(
 
         # Snapshot filesystem BEFORE step 9 (generate) runs (for fallback detection)
         pre_step7_files: List[str] = []
-        pre_step9_line_counts: Dict[str, int] = {}
+        # Snapshot full content (not just line counts) so the structural test
+        # guard can distinguish "unchanged" from "rewritten with same/fewer
+        # lines" — a distinction line counts alone can't make.  See the
+        # gltanaka review of pdd_cloud #1064: a rewrite that happens to land
+        # on the same line count would silently skip violation detection.
+        pre_step9_snapshots: Dict[str, str] = {}
         if step_num == 9:
             pre_step7_files = _get_modified_and_untracked(current_work_dir)
-            # Snapshot line counts for existing test files so the structural
-            # test guard can skip pre-existing patterns (issue #990).
-            tests_dir = current_work_dir / "tests"
-            if tests_dir.is_dir():
-                for py_file in tests_dir.rglob("*.py"):
-                    try:
-                        pre_step9_line_counts[str(py_file.resolve())] = len(
-                            py_file.read_text().splitlines()
-                        )
-                    except (OSError, UnicodeDecodeError):
-                        pass
+            # Snapshot existing test files so the structural test guard can
+            # skip pre-existing patterns (issues #990, #1026).
+            #
+            # Walk the whole worktree, not just {worktree}/tests/ — real
+            # projects have tests scattered across many locations (e.g.
+            # backend/tests/, extensions/*/tests/, frontend/e2e/tests/).
+            # Matching the #1026 convention: test_*.py, *_test.py, conftest.py.
+            # Check excludes against parts RELATIVE to worktree so dir names
+            # like ".pdd" don't match parent-path components when the worktree
+            # itself lives under ".pdd/worktrees/...".
+            _snapshot_excludes = {
+                ".git", ".venv", "venv", ".env", "env",
+                "node_modules", "__pycache__", ".pdd",
+                ".pytest_cache", ".mypy_cache", ".ruff_cache",
+                ".tox", ".nox", "dist", "build", ".next",
+            }
+            for py_file in current_work_dir.rglob("*.py"):
+                try:
+                    rel_parts = py_file.relative_to(current_work_dir).parts
+                except ValueError:
+                    rel_parts = py_file.parts
+                if any(part in _snapshot_excludes for part in rel_parts):
+                    continue
+                py_file_name = py_file.name
+                if not (
+                    py_file_name.startswith("test_")
+                    or py_file_name.endswith("_test.py")
+                    or py_file_name == "conftest.py"
+                ):
+                    continue
+                try:
+                    pre_step9_snapshots[str(py_file.resolve())] = py_file.read_text()
+                except (OSError, UnicodeDecodeError):
+                    pass
 
         # Pre-Step 12: deterministic file staging (#912)
         # Stage all tracked changed_files before Step 12 dispatch so the LLM
@@ -1865,9 +1950,9 @@ def run_agentic_bug_orchestrator(
             all_violations: List[str] = []
             for fpath in extracted:
                 abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
-                pre_count = pre_step9_line_counts.get(str(abs_path.resolve()), 0)
-                violations = detect_structural_test_patterns(
-                    str(abs_path), start_line=pre_count + 1
+                pre_snapshot = pre_step9_snapshots.get(str(abs_path.resolve()))
+                violations = _scan_step9_file_for_new_patterns(
+                    str(abs_path), pre_snapshot
                 )
                 if violations:
                     file_violations[fpath] = violations
@@ -2133,8 +2218,8 @@ def run_agentic_bug_orchestrator(
                         cov_violations: List[str] = []
                         for fpath in cov_retry_extracted:
                             abs_path = (current_work_dir / fpath) if not Path(fpath).is_absolute() else Path(fpath)
-                            pre_count = pre_step9_line_counts.get(str(abs_path.resolve()), 0)
-                            v = detect_structural_test_patterns(str(abs_path), start_line=pre_count + 1)
+                            pre_snapshot = pre_step9_snapshots.get(str(abs_path.resolve()))
+                            v = _scan_step9_file_for_new_patterns(str(abs_path), pre_snapshot)
                             if v:
                                 cov_violations.extend(v)
                         if cov_violations and not quiet:
