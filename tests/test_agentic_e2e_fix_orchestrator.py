@@ -547,9 +547,12 @@ class TestNotABugEarlyExit:
 
         mock_run.side_effect = side_effect
 
-        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
-            **e2e_fix_default_args
-        )
+        # Patch _detect_changed_files to [] — genuine not-a-bug, no direct edits
+        # (fix #779: guard now also checks direct edits, so we must ensure none here).
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
 
         # The orchestrator should have stopped after Step 3
         # Only 3 calls: Step 1, Step 2, Step 3
@@ -580,9 +583,11 @@ class TestNotABugEarlyExit:
 
         mock_run.side_effect = side_effect
 
-        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
-            **e2e_fix_default_args
-        )
+        # Patch _detect_changed_files to [] — genuine not-a-bug, no direct edits.
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
 
         # Should still detect NOT_A_BUG and stop after 3 steps
         assert mock_run.call_count == 3, (
@@ -3869,7 +3874,11 @@ class TestClassifyStepOutputWiring:
             return (True, "Step output", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
-        success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+        # Patch _detect_changed_files to [] so NOT_A_BUG actually stops the workflow
+        # (fix #779: guard now checks direct edits; without this patch the workflow
+        # would loop and call classify multiple times).
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         mock_classify.assert_called_once()
 

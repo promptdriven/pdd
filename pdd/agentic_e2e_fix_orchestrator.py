@@ -1868,7 +1868,8 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
-                    if has_fixed_units:
+                    has_direct_edits = bool(_detect_changed_files(cwd, initial_file_hashes))
+                    if has_fixed_units or has_direct_edits:
                         console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
                     else:
                         console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
@@ -2008,7 +2009,8 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Check if NOT_A_BUG was detected (exit outer loop too)
             has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
-            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG" and not has_fixed_units:
+            has_direct_edits = bool(_detect_changed_files(cwd, initial_file_hashes))
+            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG" and not has_fixed_units and not has_direct_edits:
                 break
 
             # Check if workflow was stopped due to missing loop control token or max cycles
