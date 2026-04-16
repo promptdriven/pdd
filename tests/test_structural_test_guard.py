@@ -18,7 +18,10 @@ from typing import List
 
 import pytest
 
-from pdd.agentic_bug_orchestrator import detect_structural_test_patterns
+from pdd.agentic_bug_orchestrator import (
+    _scan_step9_file_for_new_patterns,
+    detect_structural_test_patterns,
+)
 
 # Fixture files: real pdd-bug output from issue #591 validation run.
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -654,16 +657,25 @@ class TestBackwardCompatNoStartLine:
         )
 
 
-class TestStartLineTruncationSafety:
-    """When start_line exceeds file length, clamp to 1 and scan everything.
+class TestStartLinePastEOF:
+    """When start_line exceeds file length, no violations are reported.
 
-    This handles the case where Step 9 rewrites a file shorter than the
-    pre-step-9 snapshot — the offset would overshoot EOF, so clamping to 1
-    ensures violations in the rewritten content are still caught.
+    The old clamp (``effective_start = 1 if start_line > len(lines)``)
+    treated "past EOF" as "file shrank, rescan everything", but the
+    normal "no new lines appended" case is ``start_line = len(lines) + 1``
+    — which tripped the clamp and false-flagged every pre-existing
+    pattern.  This was the pdd_cloud #1064 failure (issue #774).
+
+    With the clamp removed, past-EOF start_line naturally reports no
+    violations because the line-iteration loop only runs up to
+    ``len(lines)``.  The "file shrank" case is now correctly handled at
+    the call site by ``_scan_step9_file_for_new_patterns``, which uses
+    content comparison (not line counts) to distinguish unchanged from
+    rewritten files.
     """
 
-    def test_start_line_beyond_eof_scans_full_file(self, tmp_path: Path) -> None:
-        """When start_line exceeds file length, all violations are reported."""
+    def test_start_line_beyond_eof_reports_no_violations(self, tmp_path: Path) -> None:
+        """start_line past EOF must not report violations (fix for #774)."""
         test_file = tmp_path / "test_example.py"
         _write_fixture(test_file, [
             _sig_check_lines(),
@@ -675,26 +687,30 @@ class TestStartLineTruncationSafety:
             str(test_file), start_line=total_lines + 100
         )
 
-        assert len(violations) >= 2, (
-            f"start_line beyond EOF should clamp to 1 and scan everything. "
-            f"Got {len(violations)}: {violations}"
+        assert len(violations) == 0, (
+            f"start_line beyond EOF must not report violations. "
+            f"Got {len(violations)}: {violations}. "
+            f"This was the #774 bug — the clamp rescanned the whole file, "
+            f"false-flagging pre-existing patterns when Step 9 left the file "
+            f"untouched."
         )
 
-    def test_truncated_file_scans_from_line_1(self, tmp_path: Path) -> None:
-        """Simulates a file rewritten shorter than the snapshot line count."""
+    def test_start_line_equals_len_plus_one_reports_no_violations(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact #774 scenario: start_line = len(lines) + 1 (off-by-one)."""
         test_file = tmp_path / "test_example.py"
-        # Write a short file with violations (5 lines)
         _write_fixture(test_file, [_hasattr_lines()])
-        current_lines = len(test_file.read_text().splitlines())
+        total_lines = len(test_file.read_text().splitlines())
 
-        # Pass a start_line as if the original file had 50 lines
+        # This is the snapshot+1 case that tripped #774 on pdd_cloud.
         violations = detect_structural_test_patterns(
-            str(test_file), start_line=50
+            str(test_file), start_line=total_lines + 1
         )
 
-        assert current_lines < 50, "Precondition: file is shorter than start_line"
-        assert len(violations) >= 1, (
-            f"Truncated file should be fully scanned. Got: {violations}"
+        assert len(violations) == 0, (
+            f"Snapshot+1 (no lines appended) must report 0 violations. "
+            f"Got {len(violations)}: {violations}. Issue #774."
         )
 
 
@@ -744,4 +760,199 @@ class TestStartLineCrossBoundaryVarTracking:
         ]
         assert len(new_line_violations) == 1, (
             f"New source-string assertion should be flagged: {violations}"
+        )
+
+
+# ============================================================================
+# Helper: _scan_step9_file_for_new_patterns
+#
+# Content-based change detection (introduced after the gltanaka review of
+# pdd_cloud #1064 surfaced two false negatives in the line-count-only
+# approach).  The helper distinguishes:
+#   - file unchanged          -> skip (no violations)
+#   - pure append             -> scan only appended lines (#990 optimisation)
+#   - rewrite (any line count)-> full scan (catch real violations)
+#   - brand-new file          -> full scan
+# ============================================================================
+
+
+def _build_violation_text() -> str:
+    """Return file content containing a real structural violation."""
+    mod = "inspect"
+    return (
+        "import inspect\n\n"
+        "def test_thing():\n"
+        "    src = " + mod + "." + "getsource(thing.fn)\n"
+        "    " + 'assert "signal" in src\n'
+    )
+
+
+def _build_clean_text(n: int = 5) -> str:
+    """Return clean test file content with ``n`` simple test functions."""
+    body = "import pytest\n\n"
+    for i in range(n):
+        body += f"def test_thing_{i}():\n    assert {i} == {i}\n\n"
+    return body
+
+
+class TestScanStep9HelperUnchanged:
+    """Unchanged file (current == pre_snapshot) reports zero violations.
+
+    Even when the snapshot itself contains pre-existing structural
+    patterns, an unchanged file means Step 9 introduced nothing new — so
+    the helper must report zero violations.  This is the pdd_cloud #1064
+    failure mode that drove the SIGKILL retry loop.
+    """
+
+    def test_unchanged_file_with_preexisting_violation_reports_zero(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "test_x.py"
+        snap = _build_violation_text()
+        f.write_text(snap)
+
+        violations = _scan_step9_file_for_new_patterns(str(f), snap)
+
+        assert violations == [], (
+            f"Unchanged file (current == snapshot) must report 0 violations "
+            f"even when the snapshot itself contains structural patterns. "
+            f"Got: {violations}"
+        )
+
+    def test_unchanged_clean_file_reports_zero(self, tmp_path: Path) -> None:
+        f = tmp_path / "test_y.py"
+        snap = _build_clean_text(5)
+        f.write_text(snap)
+
+        violations = _scan_step9_file_for_new_patterns(str(f), snap)
+
+        assert violations == []
+
+
+class TestScanStep9HelperRewriteShorter:
+    """Rewrite that produces a SHORTER file must still flag new violations.
+
+    This is the first false-negative the gltanaka review identified:
+    line-count-only logic computed start_line = pre_count + 1 which
+    overshoots the new (shorter) file length, suppressing all violations.
+    Content comparison correctly recognises this as a rewrite (snapshot
+    is not a line-prefix of current) and triggers a full scan.
+    """
+
+    def test_rewrite_shorter_with_new_violation_is_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "test_x.py"
+        # Pre-snapshot: long, clean file
+        pre_snap = _build_clean_text(20)
+        # Post-Step-9: short file with a new violation
+        new_content = _build_violation_text()
+        assert len(new_content.splitlines()) < len(pre_snap.splitlines()), (
+            "Precondition: rewritten file is strictly shorter than snapshot"
+        )
+        f.write_text(new_content)
+
+        violations = _scan_step9_file_for_new_patterns(str(f), pre_snap)
+
+        assert len(violations) > 0, (
+            f"Rewritten shorter file must still flag violations. Got: {violations}. "
+            f"This is gltanaka's first review case: line-count-only logic would "
+            f"compute start_line past EOF and silently report zero."
+        )
+        assert any("inspect.getsource" in v for v in violations)
+
+
+class TestScanStep9HelperRewriteSameLength:
+    """Rewrite that lands on the SAME line count must still flag new violations.
+
+    This is the second false-negative the gltanaka review identified:
+    line-count-only logic would compute start_line = len(lines) + 1, which
+    is past EOF for the same-length rewrite.  Content comparison rejects
+    the prefix match and triggers a full scan.
+    """
+
+    def test_rewrite_same_length_with_new_violation_is_flagged(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "test_x.py"
+        viol = _build_violation_text()
+        # Build a clean snapshot with EXACTLY the same line count.
+        target_lines = len(viol.splitlines())
+        clean = "import os\n\n" + "\n".join(["x = 1"] * (target_lines - 2))
+        assert len(clean.splitlines()) == target_lines, (
+            "Precondition: snapshot has same line count as rewritten content"
+        )
+        f.write_text(viol)
+
+        violations = _scan_step9_file_for_new_patterns(str(f), clean)
+
+        assert len(violations) > 0, (
+            f"Same-line-count rewrite must still flag violations. Got: {violations}. "
+            f"This is gltanaka's second review case."
+        )
+        assert any("inspect.getsource" in v for v in violations)
+
+
+class TestScanStep9HelperPureAppend:
+    """Pure append (snapshot is a line-prefix of current) skips pre-existing
+    violations but flags new ones — preserving the issue #990 optimisation.
+    """
+
+    def test_pure_append_skips_preexisting_violation(self, tmp_path: Path) -> None:
+        f = tmp_path / "test_x.py"
+        snap = _build_violation_text()  # snapshot already has violation
+        f.write_text(snap + "\n\ndef test_clean():\n    assert True\n")
+
+        violations = _scan_step9_file_for_new_patterns(str(f), snap)
+
+        assert violations == [], (
+            f"Pure append must skip pre-existing violations (#990). Got: {violations}"
+        )
+
+    def test_pure_append_flags_new_violation_in_appended_lines(
+        self, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "test_x.py"
+        snap = _build_clean_text(5)
+        f.write_text(snap + "\n\n" + _build_violation_text())
+
+        violations = _scan_step9_file_for_new_patterns(str(f), snap)
+
+        assert len(violations) > 0, (
+            f"Pure append with new violation must be flagged. Got: {violations}"
+        )
+
+
+class TestScanStep9HelperEdgeCases:
+    """Brand-new files, missing files, empty snapshots."""
+
+    def test_brand_new_file_with_violation_is_flagged(self, tmp_path: Path) -> None:
+        """pre_snapshot=None → file did not exist pre-Step 9 → full scan."""
+        f = tmp_path / "test_new.py"
+        f.write_text(_build_violation_text())
+
+        violations = _scan_step9_file_for_new_patterns(str(f), None)
+
+        assert len(violations) > 0
+
+    def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
+        """Missing file (Step 9 deleted it?) is not an error condition."""
+        f = tmp_path / "test_gone.py"
+        # File was never created
+        violations = _scan_step9_file_for_new_patterns(str(f), "old content")
+        assert violations == []
+
+    def test_partial_prefix_match_triggers_full_scan(self, tmp_path: Path) -> None:
+        """If snapshot's first lines match but middle differs, treat as rewrite."""
+        f = tmp_path / "test_x.py"
+        snap = _build_clean_text(5)
+        # Replace first line, keep the rest, then add a violation.
+        # Snapshot is NOT a strict line-prefix of new content.
+        new = "import inspect\n" + snap + "\n" + _build_violation_text()
+        f.write_text(new)
+
+        violations = _scan_step9_file_for_new_patterns(str(f), snap)
+
+        assert len(violations) > 0, (
+            f"Non-prefix change should trigger full scan. Got: {violations}"
         )

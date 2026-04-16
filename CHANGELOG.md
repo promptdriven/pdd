@@ -1,15 +1,33 @@
-## v0.0.208 (2026-04-14)
+## v0.0.209 (2026-04-15)
+
+### Feat
+
+- implement authoritative prompt resolution, independent verification safety nets, and template-free context discovery with associated refactors and git robustness fixes
 
 ### Fix
 
-- restore _verify_tests_independently safety nets dropped by 45991e0c3 (#1155)
-- address review — case-insensitive basename, context scoping, .pddrc prefix (#1169)
+- content-based change detection for Step 9 structural guard
+- structural validator misses nested test dirs and false-flags on identical snapshot
+
+## v0.0.208 (2026-04-14)
+
+### Feat
+
+- **authoritative prompt resolution** (#1169): new `_find_prompt_file` function provides a single source of truth for finding prompt files on disk — handles case-insensitive filesystems, nested subdirectories, architecture.json filename hints, and glob metacharacters in basenames via a 4-step cascade (direct path → case-insensitive parent → architecture.json hint + recursive search → recursive glob fallback); context-override scoping disambiguates when multiple nested files share a basename
+- **independent verification safety nets** (#1155): `_verify_tests_independently` enforces a 600s wall-clock timeout (`VERIFY_TIMEOUT_SECONDS`), failing closed when exceeded; fallback directory scan capped at 20 files (`MAX_FALLBACK_TEST_FILES`) sorted by mtime descending; new `_fallback_scan_was_capped` flag ensures partial verification is never treated as ALL_TESTS_PASS
+- **template-free context discovery** (#1165): `_find_prompt_in_contexts` scans `prompts_dir` directly for contexts that have no `outputs.prompt.path` template, supporting minimal contexts (e.g. nested extensions)
+
+### Fix
+
+- `_get_modified_and_untracked` now tries `origin/main` and `origin/master` as fallback refs for `git merge-base` in shallow clones; all git subprocess calls include `timeout=30` with `TimeoutExpired` handling
+- `_resolve_prompt_path_from_architecture` recursively searches under prompts_root when naively-joined path doesn't exist, picking shallowest match deterministically
+- `_detect_context_from_basename` falls back to filesystem glob when nested `prompts_dir` (e.g. `extensions/app/prompts`) produces an empty prefix (#1165)
+- escape glob metacharacters in basenames (e.g. `[id]`, `(group)`) during filesystem disambiguation
 - recursive prompt resolution for nested subdirectories (#1169)
-- escape glob metacharacters in nested prompts_dir disambiguation
-- resolve #1165 by disambiguating nested prompts_dir contexts
 
 ### Refactor
 
+- `get_pdd_file_paths` refactored to delegate prompt resolution to `_find_prompt_file`, replacing scattered `_case_insensitive_prompt_lookup` calls with a single entry point
 - clean up #1155 PR — remove duplicate tests, add mtime sorting, fix prompt drift
 
 ## v0.0.207 (2026-04-13)
