@@ -282,6 +282,7 @@ def run_one_session_sync(
             quiet=quiet,
             label=f"one_session_sync:{basename}",
             timeout=session_timeout,
+            max_retries=3,  # One-session runs are long; retry on transient empty-result
         )
     finally:
         stop_heartbeat.set()

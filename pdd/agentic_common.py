@@ -885,10 +885,19 @@ def run_agentic_task(
 
                     if is_false_positive:
                         if not quiet:
-                            console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt})[/yellow]")
-                        # False positives are provider-side bad outputs. Fall through to
-                        # the next provider instead of burning retries on the same one.
-                        break
+                            console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt}/{max_retries})[/yellow]")
+                        # Retry with backoff instead of immediately falling through
+                        # to the next provider. With only one provider (common for
+                        # anthropic), the old `break` meant zero retries on transient
+                        # empty-result responses — causing every cloud one-session
+                        # sync to fail on a single flaky call.
+                        if attempt < max_retries:
+                            fp_backoff = min(retry_delay * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+                            if not quiet:
+                                console.print(f"[dim]Retrying in {fp_backoff:.0f}s...[/dim]")
+                            time.sleep(fp_backoff)
+                            continue
+                        break  # Exhausted retries — fall through to next provider
                     else:
                         # Check for suspicious files (C, E, T)
                         suspicious = []
@@ -1221,6 +1230,16 @@ def _run_with_provider(
             f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
             f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
         )
+    else:
+        # Stdout is non-empty but the JSON result text might be empty.
+        # Log JSON keys + is_error + result length so we can distinguish
+        # "empty result text" from "no JSON at all" in cloud logs.
+        _stdout_preview = result.stdout.strip()[:200]
+        if verbose or ('"result":""' in _stdout_preview or '"result": ""' in _stdout_preview or '"result":null' in _stdout_preview):
+            console.print(
+                f"[dim]Provider {provider} exit=0 stdout_len={len(result.stdout)} "
+                f"preview={_stdout_preview!r}[/dim]"
+            )
 
     # Parse JSON Output
     try:
@@ -1359,7 +1378,12 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
                 cost = _calculate_anthropic_cost(data)
             # Result might be in 'result' or 'response'
             output_text = data.get("result") or data.get("response") or ""
-            
+            # Claude Code JSON includes is_error when the session failed
+            # (auth, refusal, crash). Propagate as failure so callers can
+            # retry instead of treating it as an empty success.
+            if data.get("is_error"):
+                return False, str(output_text) or "CLI reported is_error with no message", cost
+
         elif provider == "google":
             stats = data.get("stats", {})
             cost = _calculate_gemini_cost(stats)
