@@ -14,7 +14,7 @@
 # 8. Testing Support: try/except ImportError stubs for pdd imports
 #
 # MOCKING STRATEGY:
-# - Mock `pdd.extracts_prune.get_config` (external dependency)
+# - Mock `pdd.path_resolution.find_project_root_from_path` (external dependency)
 # - Mock `pdd.extracts_prune.compute_cache_key` (external dependency from pdd.preprocess)
 # - Mock `pdd.extracts_prune.parse_include_tags` (external dependency from pdd.preprocess)
 # - Do NOT mock internal functions like _collect_referenced_keys, _cache_dir, etc.
@@ -88,8 +88,8 @@ def cli_env(project_dir):
     """
     cache_dir = project_dir / ".pdd" / "extracts"
     with patch(
-        "pdd.extracts_prune.get_config",
-        return_value={"project_root": str(project_dir)},
+        "pdd.extracts_prune.find_project_root_from_path",
+        return_value=str(project_dir),
     ):
         from pdd.extracts_prune import extracts
         yield extracts, project_dir, cache_dir
@@ -147,8 +147,10 @@ class TestPruneCacheKeyConsistency:
             "likely computed the key with an absolute path."
         )
 
-    def test_absolute_keyed_entry_is_orphaned(self, cli_env, runner):
-        """Entry keyed by absolute path should be treated as orphaned."""
+    def test_old_absolute_keyed_entry_is_orphaned(self, cli_env, runner):
+        """Cache entry created with an old-style absolute-path key should be
+        treated as orphaned, because compute_cache_key now normalizes to
+        project-relative paths — producing a different key than the old one."""
         qc, project_dir, cache_dir = cli_env
 
         src_file = project_dir / "src.py"
@@ -156,6 +158,7 @@ class TestPruneCacheKeyConsistency:
 
         abs_path = str(src_file.resolve())
         query = "extract x"
+        # Simulate an old-style cache entry keyed by absolute path (normpath only)
         abs_key = _compute_cache_key(abs_path, query)
         _create_cache_entry(cache_dir, abs_key, source_path=abs_path, query=query)
 
@@ -167,7 +170,10 @@ class TestPruneCacheKeyConsistency:
 
         result = runner.invoke(qc, ["prune", "--force"], obj={"force": False})
         assert result.exit_code == 0
-        assert not (cache_dir / f"{abs_key}.md").exists()
+        assert not (cache_dir / f"{abs_key}.md").exists(), (
+            "Old-style absolute-keyed cache entry should be pruned – "
+            "compute_cache_key now normalizes to project-relative paths."
+        )
 
     def test_subdirectory_prompt_relative_include(self, cli_env, runner):
         """Prompt in subdirectory with ../ include resolves correctly."""
@@ -242,8 +248,8 @@ class TestPruneEarlyExit:
     def test_no_cache_directory(self, tmp_path, runner):
         """No .pdd/extracts/ → info message, exit 0."""
         with patch(
-            "pdd.extracts_prune.get_config",
-            return_value={"project_root": str(tmp_path)},
+            "pdd.extracts_prune.find_project_root_from_path",
+            return_value=str(tmp_path),
         ):
             from pdd.extracts_prune import extracts
             result = runner.invoke(extracts, ["prune"], obj={"force": False})

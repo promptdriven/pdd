@@ -41,11 +41,19 @@ def _remove_redundant_content(prompt: str, inserted_includes: List[str]) -> str:
     if not inserted_includes:
         return prompt
 
-    # Collect content of each included file
+    # Collect content of each included file.
+    # Paths may be project-root-relative, so resolve against project root
+    # rather than relying on CWD.
+    from .path_resolution import find_project_root_from_path
+    _found = find_project_root_from_path(".")
+    _project_root = Path(_found).resolve() if _found else Path(".").resolve()
+
     included_contents: List[str] = []
     for file_path in inserted_includes:
         try:
             path = Path(file_path)
+            if not path.is_absolute():
+                path = _project_root / path
             if path.is_file():
                 included_contents.append(path.read_text(encoding="utf-8", errors="replace"))
         except Exception:

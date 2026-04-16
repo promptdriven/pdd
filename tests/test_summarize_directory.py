@@ -36,6 +36,7 @@ def mock_dependencies():
 
 
 def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
+    (tmp_path / ".pddrc").touch()
     # Create some temporary files
     file1 = tmp_path / "file1.py"
     file1.write_text("print('Hello World')")
@@ -73,6 +74,7 @@ def test_valid_inputs_no_existing_csv(tmp_path, mock_load_prompt_template, mock_
 def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test that cache is used when content hash matches."""
     import hashlib
+    (tmp_path / ".pddrc").touch()
 
     # Create temporary files
     file1 = tmp_path / "file1.py"
@@ -84,9 +86,9 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     # Compute content hash for file1
     file1_hash = hashlib.sha256(file1_content.encode()).hexdigest()
 
-    # Create existing CSV with file1 (using absolute path since glob returns absolute)
+    # Create existing CSV with file1 using project-relative path
     existing_csv = f'''full_path,file_summary,key_exports,dependencies,content_hash
-{str(file1)},Existing summary.,"[""print""]","[""builtins""]",{file1_hash}'''
+file1.py,Existing summary.,"[""print""]","[""builtins""]",{file1_hash}'''
 
     directory_path = str(tmp_path / "*.py")
     strength = 0.5
@@ -108,11 +110,13 @@ def test_valid_inputs_with_existing_csv(tmp_path, mock_load_prompt_template, moc
     assert len(rows) == 2
 
     # Check that file1 reused summary (based on content hash match)
-    for row in rows:
-        if row['full_path'] == file1.name:
-            assert row['file_summary'] == "Existing summary."
-        elif row['full_path'] == file2.name:
-            assert row['file_summary'] == "This is a summary."
+    summaries = {row['full_path']: row['file_summary'] for row in rows}
+    assert summaries.get('file1.py') == "Existing summary.", (
+        f"file1.py should have used cached summary. Got paths: {list(summaries.keys())}"
+    )
+    assert summaries.get('file2.py') == "This is a summary.", (
+        f"file2.py should have been freshly summarized. Got paths: {list(summaries.keys())}"
+    )
 
     assert total_cost == 0.01  # Only file2 was summarized
     assert model_name == "TestModel"
@@ -296,6 +300,7 @@ def test_load_prompt_template_not_found(tmp_path, mock_llm_invoke):
 
 def test_partial_summarization(tmp_path, mock_load_prompt_template, mock_llm_invoke):
     """Test partial cache hit: file1 cached, file2 content changed, file3 new."""
+    (tmp_path / ".pddrc").touch()
     import hashlib
 
     # Create multiple temporary files
@@ -835,6 +840,7 @@ def test_file_filtering(mock_dependencies, tmp_path):
 
 def test_summarization_no_cache(mock_dependencies, tmp_path):
     """Test full summarization flow without existing cache."""
+    (tmp_path / ".pddrc").touch()
     mock_load, mock_invoke = mock_dependencies
     
     file_path = tmp_path / "test.py"
@@ -1012,6 +1018,7 @@ class TestRelativePaths:
 
     def test_output_paths_are_relative_not_absolute(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """full_path column should contain relative paths, not absolute."""
+        (tmp_path / ".pddrc").touch()
         file1 = tmp_path / "file1.py"
         file1.write_text("print('hello')")
 
@@ -1032,6 +1039,7 @@ class TestRelativePaths:
 
     def test_relative_paths_with_subdirectories(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """Relative paths should preserve directory structure."""
+        (tmp_path / ".pddrc").touch()
         subdir = tmp_path / "src"
         subdir.mkdir()
         (subdir / "main.py").write_text("print('main')")
@@ -1056,6 +1064,7 @@ class TestRelativePaths:
 
     def test_relative_paths_in_cache_lookup(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """Cache lookup should work correctly with relative paths in existing CSV."""
+        (tmp_path / ".pddrc").touch()
         import hashlib
 
         file1 = tmp_path / "cached.py"
@@ -1605,6 +1614,7 @@ class TestCacheInvalidationEdgeCases:
 
     def test_cache_hit_when_key_exports_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """New-format CSV with key_exports='[]' should still cache (file may have no exports)."""
+        (tmp_path / ".pddrc").touch()
         import hashlib
         content = "x"
         (tmp_path / "test.py").write_text(content)
@@ -1622,6 +1632,7 @@ class TestCacheInvalidationEdgeCases:
 
     def test_cache_hit_when_dependencies_empty_new_format(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
         """New-format CSV with dependencies='[]' should still cache (file may have no imports)."""
+        (tmp_path / ".pddrc").touch()
         import hashlib
         content = "x"
         (tmp_path / "test.py").write_text(content)
@@ -1733,6 +1744,7 @@ class TestReturnValueShape:
         assert isinstance(model, str)
 
     def test_model_name_cached_when_all_from_cache(self, tmp_path, mock_load_prompt_template, mock_llm_invoke):
+        (tmp_path / ".pddrc").touch()
         import hashlib
         content = "x"
         (tmp_path / "f.py").write_text(content)
@@ -1908,3 +1920,122 @@ class TestMaxWorkers:
             )
 
         assert abs(cost - 0.5) < 1e-9, f"Expected 0.5 total cost for 5 files, got {cost}"
+
+
+# ---------------------------------------------------------------------------
+# Real-LLM: Multi-directory CSV accumulation and cache (requires API key)
+# ---------------------------------------------------------------------------
+
+RUN_ALL_TESTS_ENABLED = os.getenv("PDD_RUN_ALL_TESTS") == "1"
+
+
+def _skip_unless_llm():
+    if not (os.getenv("PDD_RUN_REAL_LLM_TESTS") or RUN_ALL_TESTS_ENABLED):
+        pytest.skip(
+            "Real LLM tests require network/API access; set "
+            "PDD_RUN_REAL_LLM_TESTS=1 or PDD_RUN_ALL_TESTS=1."
+        )
+
+
+class TestRealLlmMultiDirectoryCSV:
+    """Real LLM: multi-directory CSV accumulation and cache validation.
+
+    Scans context/ then pdd/ with real LLM calls, verifies entries accumulate
+    and re-scanning is all cache hits (cost=0).
+    """
+
+    @pytest.fixture(autouse=True)
+    def set_pdd_path(self, monkeypatch):
+        import pdd
+        from pathlib import Path
+        monkeypatch.setenv("PDD_PATH", str(Path(pdd.__file__).parent))
+
+    @pytest.fixture
+    def project_dir(self, tmp_path):
+        import subprocess
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        for name in ["example_a.py", "example_b.py", "example_c.py"]:
+            (context_dir / name).write_text(
+                f'"""Example module {name}."""\n\ndef {name.replace(".py", "_func")}():\n    return "{name}"\n'
+            )
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        for name in ["cli.py", "sync.py", "config.py"]:
+            (pdd_dir / name).write_text(
+                f'"""PDD module {name}."""\n\ndef {name.replace(".py", "_main")}():\n    pass\n'
+            )
+
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--allow-empty"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
+        )
+        return tmp_path
+
+    def test_real_llm_multi_directory_csv_accumulation_and_cache(self, project_dir, monkeypatch):
+        """Real LLM: scan context/ then pdd/, verify accumulation and cache hits."""
+        _skip_unless_llm()
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.chdir(project_dir)
+
+        def _parse_csv(csv_str):
+            return list(csv.DictReader(StringIO(csv_str)))
+
+        # Step 1: scan context/
+        csv_1, cost_1, _ = summarize_directory(
+            directory_path=str(project_dir / "context"),
+            strength=0.5, temperature=0.0, verbose=True,
+        )
+        rows_1 = _parse_csv(csv_1)
+        print(f"\n  Step 1 — context/ scan: {len(rows_1)} entries, cost=${cost_1:.4f}")
+        assert len(rows_1) == 3, f"Expected 3 context entries, got {len(rows_1)}"
+        assert cost_1 > 0
+
+        for row in rows_1:
+            assert row.get("key_exports", "[]") != "[]" or row.get("file_summary", ""), (
+                f"Entry {row['full_path']} has empty key_exports and file_summary"
+            )
+
+        # Step 2: scan pdd/ with context/ CSV
+        csv_2, cost_2, _ = summarize_directory(
+            directory_path=str(project_dir / "pdd"),
+            strength=0.5, temperature=0.0, csv_file=csv_1, verbose=True,
+        )
+        rows_2 = _parse_csv(csv_2)
+        all_paths_2 = {r["full_path"] for r in rows_2}
+        print(f"  Step 2 — pdd/ scan: {len(rows_2)} entries, cost=${cost_2:.4f}")
+
+        assert len(rows_2) >= 6, (
+            f"CSV should have >= 6 entries (3 context + 3 pdd), got {len(rows_2)}. "
+            f"Bug #1: context/ entries were wiped. Paths: {all_paths_2}"
+        )
+
+        # Step 3: re-scan context/ — should be all cache hits
+        csv_3, cost_3, _ = summarize_directory(
+            directory_path=str(project_dir / "context"),
+            strength=0.5, temperature=0.0, csv_file=csv_2, verbose=True,
+        )
+        rows_3 = _parse_csv(csv_3)
+        all_paths_3 = {r["full_path"] for r in rows_3}
+        print(f"  Step 3 — context/ re-scan: {len(rows_3)} entries, cost=${cost_3:.4f}")
+
+        assert cost_3 == 0, (
+            f"Re-scanning context/ should be all cache hits (cost=0), got cost={cost_3:.4f}. "
+            "Bug #2: cache miss due to path inconsistency."
+        )
+        assert len(rows_3) >= 6, (
+            f"CSV should still have >= 6 entries, got {len(rows_3)}. "
+            f"Bug #1: pdd/ entries were wiped. Paths: {all_paths_3}"
+        )
+
+        for row in rows_3:
+            assert row.get("file_summary", "").strip(), (
+                f"Entry {row['full_path']} has empty file_summary"
+            )
+
+        print("  All 3 steps passed.")

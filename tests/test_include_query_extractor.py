@@ -33,10 +33,10 @@ from pdd.include_query_extractor import (
 @pytest.fixture
 def temp_project(tmp_path, monkeypatch):
     """Sets up a temporary project with mocked config, LLM, and cache enabled."""
-    def mock_get_config():
-        return {"project_root": str(tmp_path)}
-
-    monkeypatch.setattr("pdd.include_query_extractor.get_config", mock_get_config)
+    monkeypatch.setattr(
+        "pdd.path_resolution.find_project_root_from_path",
+        lambda *args, **kwargs: str(tmp_path),
+    )
     monkeypatch.setenv(_ENV_CACHE_ENABLE, "true")
 
     source_file = tmp_path / "test_doc.txt"
@@ -555,3 +555,108 @@ class TestAtomicCacheWrites:
         meta_files = list(cache_dir.glob("*.meta.json"))
         assert len(md_files) == 0, f"Orphan .md files found: {md_files}"
         assert len(meta_files) == 0, f"Orphan .meta.json files found: {meta_files}"
+
+
+# ---------------------------------------------------------------------------
+# Path handling bug tests (issue #603)
+# ---------------------------------------------------------------------------
+
+class TestCacheKeyPathConsistency:
+    """compute_cache_key should produce the same key for the same physical
+    file regardless of how the path is expressed (relative, absolute,
+    different CWD). Currently it uses os.path.normpath which does NOT
+    resolve to absolute paths, so these tests fail."""
+
+    def test_relative_vs_absolute_path_same_key(self):
+        """Same file referenced as 'src/file.py' vs its absolute path
+        should produce the same cache key."""
+        abs_path = os.path.abspath("src/file.py")
+        key_rel = compute_cache_key("src/file.py", "summarize this")
+        key_abs = compute_cache_key(abs_path, "summarize this")
+        assert key_rel == key_abs, (
+            f"Same file produces different cache keys when referenced by "
+            f"relative vs absolute path. Relative key: {key_rel[:16]}..., "
+            f"Absolute key: {key_abs[:16]}..."
+        )
+
+    def test_different_relative_paths_same_file(self):
+        """'./subdir/../src/file.py' and 'src/file.py' refer to the same
+        file — normpath resolves them identically, so this already works."""
+        key1 = compute_cache_key("./subdir/../src/file.py", "query")
+        key2 = compute_cache_key("src/file.py", "query")
+        assert key1 == key2, (
+            "normpath should collapse '../' — if this fails, normpath behavior changed"
+        )
+
+    def test_repo_root_relative_paths_are_stable(self):
+        """Repo-root-relative paths (the format used after the CSV path fix)
+        produce consistent cache keys regardless of trivial variations."""
+        key1 = compute_cache_key("src/file.py", "query")
+        key2 = compute_cache_key("./src/file.py", "query")
+        key3 = compute_cache_key("src//file.py", "query")
+        assert key1 == key2 == key3, (
+            f"Trivial path variations should produce the same cache key. "
+            f"'src/file.py': {key1[:16]}..., "
+            f"'./src/file.py': {key2[:16]}..., "
+            f"'src//file.py': {key3[:16]}..."
+        )
+
+    def test_absolute_vs_relative_path_same_cache_key(self, tmp_path):
+        """Bug #4 from PR #763: absolute and relative paths for the same file
+        should produce identical cache keys after normalization to
+        project-relative form."""
+        from unittest.mock import patch
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "utils.py").write_text("def helper(): pass")
+
+        with patch(
+            "pdd.path_resolution.find_project_root_from_path",
+            return_value=str(tmp_path),
+        ):
+            key_relative = compute_cache_key("pdd/utils.py", "What functions are available?")
+            key_absolute = compute_cache_key(
+                str(tmp_path / "pdd" / "utils.py"), "What functions are available?"
+            )
+
+        assert key_relative == key_absolute, (
+            f"Bug #4: Cache keys differ for same file. "
+            f"Relative: {key_relative[:16]}..., Absolute: {key_absolute[:16]}.... "
+            "compute_cache_key should normalize paths to project-relative form."
+        )
+
+    def test_absolute_path_cache_key_stable_across_cwds(
+        self, tmp_path, monkeypatch
+    ):
+        """When compute_cache_key is given an absolute path, the cache key
+        must be identical regardless of CWD. Path normalization to
+        project-relative form uses the file's own project root (found by
+        walking up from the file), not CWD's project root — so moving CWD
+        to an unrelated directory must not change the key.
+        """
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".pddrc").touch()
+        pdd_dir = project / "pdd"
+        pdd_dir.mkdir()
+        (pdd_dir / "utils.py").write_text("def helper(): pass")
+        abs_path = str((pdd_dir / "utils.py").resolve())
+        query = "list helper functions"
+
+        # CWD inside the project
+        monkeypatch.chdir(project)
+        key_from_inside = compute_cache_key(abs_path, query)
+
+        # CWD in a sibling directory with no markers — project root for "."
+        # would resolve to something other than `project`.
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+        key_from_outside = compute_cache_key(abs_path, query)
+
+        assert key_from_inside == key_from_outside, (
+            f"Cache key must depend only on the file's project root, "
+            f"not on CWD. Got inside={key_from_inside[:16]}..., "
+            f"outside={key_from_outside[:16]}..."
+        )

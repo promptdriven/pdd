@@ -820,3 +820,432 @@ def test_include_docs_and_max_workers_passed_to_auto_include():
         assert kw.get("max_workers") == 8, (
             f"max_workers not passed to auto_include. Got kwargs: {list(kw.keys())}"
         )
+
+
+# ============================================================================
+# Path handling bug tests (issue #603)
+#
+# _remove_redundant_content uses Path(file_path).is_file() which resolves
+# relative to CWD. If auto_include returned paths relative to a different
+# base directory, the dedup silently skips (file not found = no dedup).
+# ============================================================================
+
+from pathlib import Path
+
+
+class TestRemoveRedundantContentPathResolution:
+    """_remove_redundant_content assumes include paths are resolvable from CWD."""
+
+    def test_dedup_works_when_paths_relative_to_cwd(self, tmp_path):
+        """When the included file path is resolvable from CWD, dedup works."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        # Create a file with known content
+        test_file = tmp_path / "helper.py"
+        content = "def helper():\n    return 42\n"
+        test_file.write_text(content)
+
+        # Prompt has the same content inline
+        prompt = f"Some preamble\n{content}Some postamble\n"
+
+        # Use absolute path — always resolvable
+        result = _remove_redundant_content(prompt, [str(test_file)])
+        assert content.strip() not in result, (
+            "Dedup should have removed inline content that matches the included file"
+        )
+
+    def test_dedup_works_when_cwd_is_not_project_root(self, tmp_path, monkeypatch):
+        """When CWD is a subdirectory (e.g. tests/) but include paths are
+        relative to the project root (e.g. 'context/helper.py'), dedup
+        should still find the file and remove duplicate inline content.
+        """
+        from pdd.insert_includes import _remove_redundant_content
+
+        # Set up project structure: project_root/context/helper.py
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        subdir = project_root / "context"
+        subdir.mkdir()
+        test_file = subdir / "helper.py"
+        content = "def helper():\n    return 42\n"
+        test_file.write_text(content)
+
+        # CWD is project_root/tests/ — a sibling, NOT the project root
+        tests_dir = project_root / "tests"
+        tests_dir.mkdir()
+        monkeypatch.chdir(tests_dir)
+
+        # Mock find_project_root_from_path to return the correct project root
+        monkeypatch.setattr(
+            "pdd.path_resolution.find_project_root_from_path",
+            lambda *args, **kwargs: str(project_root),
+        )
+
+        # Prompt has the same content inline
+        prompt = f"Some preamble\n{content}Some postamble\n"
+
+        # Path is relative to project root, not to CWD
+        result = _remove_redundant_content(prompt, ["context/helper.py"])
+
+        assert content.strip() not in result, (
+            "Dedup should remove inline content that matches the included "
+            "file even when CWD is not the project root. The path "
+            "'context/helper.py' is project-relative and should be resolved "
+            "against the project root, not CWD."
+        )
+
+
+# ============================================================================
+# Update-block basename fallback with mixed-origin CSV paths (issue #603)
+#
+# insert_includes applies <update> blocks by matching the file path in the
+# update against existing <include> tags. When the full path doesn't match,
+# it falls back to basename matching (line 214). With mixed-origin CSVs,
+# multiple files can share the same basename (e.g. pdd/utils.py and
+# context/utils.py), making the basename fallback ambiguous.
+# ============================================================================
+
+
+class TestUpdateBlockBasenameFallbackMixedOrigin:
+    """When the CSV has entries from multiple directories, update blocks may
+    carry qualified paths that don't match bare include tags. The basename
+    fallback kicks in but can be ambiguous with shared basenames."""
+
+    @patch('pdd.insert_includes.load_prompt_template')
+    @patch('pdd.insert_includes.llm_invoke')
+    @patch('pdd.insert_includes.auto_include')
+    def test_ambiguous_basename_skips_update(
+        self, mock_auto_include, mock_llm, mock_template
+    ):
+        """When two includes share a basename, the update block should NOT
+        be applied (ambiguous match). Verify the prompt is unchanged."""
+        mock_template.return_value = "template"
+
+        # Prompt has two includes with the same basename but different dirs
+        input_prompt = (
+            "% prompt\n"
+            "<include>pdd/utils.py</include>\n"
+            "<include>context/utils.py</include>\n"
+        )
+
+        # auto_include returns an update for 'context/utils.py' but the
+        # path might not match exactly if it was re-qualified
+        update_directive = (
+            "<update>"
+            '<include select="def:helper">context/utils.py</include>'
+            "</update>"
+        )
+        mock_auto_include.return_value = (
+            update_directive,
+            "csv_output",
+            0.01,
+            "model",
+        )
+
+        result, _, _, _ = insert_includes(
+            input_prompt=input_prompt,
+            directory_path=".",
+            csv_filename="deps.csv",
+        )
+
+        # The update should match 'context/utils.py' exactly (full path match)
+        assert '<include select="def:helper">context/utils.py</include>' in result, (
+            "Full path match should have applied the update"
+        )
+        # 'pdd/utils.py' should remain untouched
+        assert "<include>pdd/utils.py</include>" in result, (
+            "pdd/utils.py should not be affected by the update to context/utils.py"
+        )
+
+    @patch('pdd.insert_includes.load_prompt_template')
+    @patch('pdd.insert_includes.llm_invoke')
+    @patch('pdd.insert_includes.auto_include')
+    def test_basename_fallback_with_unique_basename(
+        self, mock_auto_include, mock_llm, mock_template
+    ):
+        """When a basename is unique in the prompt, basename fallback should
+        work even with a qualified path from a mixed-origin CSV."""
+        mock_template.return_value = "template"
+
+        input_prompt = (
+            "% prompt\n"
+            "<include>cli.py</include>\n"
+            "<include>context/example.py</include>\n"
+        )
+
+        # Update uses a qualified path 'pdd/cli.py' that doesn't match
+        # the bare 'cli.py' in the prompt. Basename fallback should work
+        # because 'cli.py' is unique.
+        update_directive = (
+            "<update>"
+            '<include select="def:main">pdd/cli.py</include>'
+            "</update>"
+        )
+        mock_auto_include.return_value = (
+            update_directive,
+            "csv_output",
+            0.01,
+            "model",
+        )
+
+        result, _, _, _ = insert_includes(
+            input_prompt=input_prompt,
+            directory_path=".",
+            csv_filename="deps.csv",
+        )
+
+        # Basename fallback should have replaced the bare 'cli.py' include
+        assert '<include select="def:main">pdd/cli.py</include>' in result, (
+            f"Basename fallback should have applied the update. Result:\n{result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dedup CWD independence (Bug #5 from PR #763)
+# ---------------------------------------------------------------------------
+
+class TestDedupCwdIndependence:
+    """_remove_redundant_content should resolve file paths against project_root
+    (from get_config), not CWD. Bug #5: dedup silently skipped when CWD != project root."""
+
+    def test_dedup_works_regardless_of_cwd(self, tmp_path, monkeypatch):
+        """Run insert_includes with dedup from CWD=root and CWD=subdir.
+        Both should successfully remove inline duplicate content."""
+        import os
+        import subprocess
+        import textwrap
+        from pathlib import Path
+        from unittest.mock import patch as mock_patch
+        from pdd.summarize_directory import FileSummary
+        from pdd.auto_include import AutoIncludeResult, NewInclude
+
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+        utils_content = textwrap.dedent('''\
+            """Utility functions for the application."""
+
+            import hashlib
+            from typing import Any
+
+
+            def hash_string(value: str) -> str:
+                """Return SHA-256 hex digest of a string."""
+                return hashlib.sha256(value.encode()).hexdigest()
+
+
+            def sanitize_input(value: str) -> str:
+                """Strip and lowercase user input."""
+                return value.strip().lower()
+
+
+            def format_error(code: int, message: str) -> dict:
+                """Format a standard error response."""
+                return {"error": {"code": code, "message": message}}
+        ''')
+        (pdd_dir / "utils.py").write_text(utils_content)
+
+        # Init git repo
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init", "--allow-empty"],
+            cwd=str(tmp_path), capture_output=True, check=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
+        )
+
+        import pdd
+        monkeypatch.setenv("PDD_PATH", str(Path(pdd.__file__).parent))
+        monkeypatch.setattr("pdd.summarize_directory.load_prompt_template", lambda _: "template")
+        monkeypatch.setattr("pdd.insert_includes.load_prompt_template", lambda _: "template")
+        monkeypatch.setattr("pdd.insert_includes.preprocess", lambda p, **kw: p)
+        monkeypatch.setattr("pdd.auto_include.load_prompt_template", lambda _: "template")
+
+        def summarize_dispatch(**kwargs):
+            return {
+                "result": FileSummary(file_summary="Utils", key_exports=["hash_string"], dependencies=["hashlib"]),
+                "cost": 0.001, "model_name": "mock",
+            }
+        monkeypatch.setattr("pdd.summarize_directory.llm_invoke", summarize_dispatch)
+
+        def auto_include_dispatch(**kwargs):
+            return {
+                "result": AutoIncludeResult(
+                    reasoning="needs utils",
+                    new_includes=[NewInclude(file="pdd/utils.py", module="utils")],
+                    existing_include_annotations=[],
+                ),
+                "cost": 0.005, "model_name": "mock",
+            }
+        monkeypatch.setattr("pdd.auto_include.llm_invoke", auto_include_dispatch)
+
+        def insert_dispatch(**kwargs):
+            prompt = kwargs.get("input_json", {}).get("actual_prompt_to_update", "")
+            return {
+                "result": InsertIncludesOutput(
+                    output_prompt="<include>pdd/utils.py</include>\n" + prompt.rstrip()
+                ),
+                "cost": 0.003, "model_name": "mock",
+            }
+        monkeypatch.setattr("pdd.insert_includes.llm_invoke", insert_dispatch)
+
+        # Prompt with inline utils content surrounded by unique spec text
+        input_prompt = textwrap.dedent(f"""\
+            % Goal
+            Generate a Python REST API endpoint that processes user registrations.
+            The endpoint should accept POST requests with JSON bodies.
+
+            % Requirements
+            1. Accept name, email, and password fields
+            2. Validate all inputs before processing
+            3. Hash the password before storing
+            4. Return 201 on success with the user ID
+            5. Return 400 on validation failure with error details
+            6. Return 500 on unexpected errors
+
+            % Reference implementation (inline)
+            {utils_content}
+
+            % Additional constraints
+            - All responses must be JSON formatted
+            - Use proper HTTP status codes
+            - Log all registration attempts
+            - Rate limit to 10 requests per minute per IP
+            - Sanitize all string inputs before processing
+        """)
+
+        csv_path = tmp_path / "deps.csv"
+        for test_cwd in [tmp_path, tmp_path / "pdd"]:
+            monkeypatch.chdir(test_cwd)
+            csv_path.write_text("full_path,file_summary,key_exports,dependencies,content_hash\n")
+
+            with mock_patch(
+                "pdd.path_resolution.find_project_root_from_path",
+                return_value=str(tmp_path),
+            ):
+                output, _, _, _ = insert_includes(
+                    input_prompt=input_prompt,
+                    directory_path="pdd/" if test_cwd == tmp_path else str(tmp_path / "pdd"),
+                    csv_filename=str(csv_path),
+                    prompt_filename="prompts/test_python.prompt",
+                    strength=0.5, temperature=0.0, verbose=False, dedup=True,
+                )
+
+            assert "<include" in output, (
+                f"Include tag missing from output when CWD={test_cwd.name}. "
+                f"Got ({len(output)} chars): {output[:200]}"
+            )
+            assert len(output) < len(input_prompt) + 50, (
+                f"Dedup failed when CWD={test_cwd.name}. "
+                f"Input: {len(input_prompt)} chars, Output: {len(output)} chars. "
+                "Bug #5: dedup resolves file paths against CWD instead of project_root."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Bug #6: insert_includes_LLM.prompt must not be processed by preprocess
+# ---------------------------------------------------------------------------
+
+class TestInsertIncludesPromptTemplateIsInert:
+    """The insert_includes_LLM prompt template contains example <include>
+    tags inside its <examples> block. Those tags must be shown to the LLM
+    literally, not inlined by preprocess. If preprocess treats them as real
+    directives, the template gets silently corrupted: matching files get
+    inlined into the examples, and missing paths print File not found
+    warnings at runtime. The examples are wrapped in triple-backtick fenced
+    blocks so preprocess's code-span logic skips them.
+    """
+
+    def test_preprocess_does_not_inline_example_include_tags(self, capsys):
+        """Running preprocess on the template must not print 'Processing XML
+        include' or 'File not found' for any of the example <include> tags,
+        and the <include> tag count must be unchanged."""
+        import re
+        import warnings
+        from pdd.load_prompt_template import load_prompt_template
+        from pdd.preprocess import preprocess
+
+        template = load_prompt_template("insert_includes_LLM")
+        tag_count_before = len(re.findall(r"<include", template))
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            processed = preprocess(
+                template,
+                recursive=False,
+                double_curly_brackets=True,
+                exclude_keys=[
+                    "actual_prompt_to_update",
+                    "actual_dependencies_to_insert",
+                ],
+            )
+
+        tag_count_after = len(re.findall(r"<include", processed))
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+
+        assert "File not found" not in combined, (
+            "preprocess printed 'File not found' while processing the template. "
+            "An <include> tag in the examples block leaked past the fence. "
+            f"Output:\n{combined}"
+        )
+        assert "Processing XML include" not in combined, (
+            "preprocess tried to inline an example <include> tag. "
+            "The examples block is not being treated as literal text. "
+            f"Output:\n{combined}"
+        )
+        file_not_found_warnings = [
+            str(w.message) for w in caught if "File not found" in str(w.message)
+        ]
+        assert not file_not_found_warnings, (
+            f"preprocess emitted File-not-found warnings: {file_not_found_warnings}"
+        )
+        assert tag_count_before == tag_count_after, (
+            f"<include> tag count changed during preprocess "
+            f"({tag_count_before} -> {tag_count_after}) — "
+            "example tags were inlined instead of passed through literally."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dedup when CWD is outside any project (absolute include paths)
+# ---------------------------------------------------------------------------
+
+class TestDedupFromCwdOutsideProject:
+    """_remove_redundant_content anchors relative paths to the project root
+    discovered from CWD. When CWD is outside any project (no markers walking
+    up), that anchor falls back to CWD itself. Absolute paths bypass the
+    anchor entirely and must still work — that's the contract callers rely
+    on when they receive CSV entries with absolute paths (which happens in
+    the no-marker fallback of summarize_directory).
+    """
+
+    def test_absolute_include_path_dedups_when_cwd_has_no_project(
+        self, tmp_path, monkeypatch
+    ):
+        """Project lives at tmp_path/proj/, CWD is tmp_path/elsewhere/ which
+        is NOT a descendant of any project root. Dedup must still find the
+        include file (because its absolute path was given) and strip the
+        inline duplicate."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        project = tmp_path / "proj"
+        project.mkdir()
+        (project / ".pddrc").touch()
+        helper = project / "helper.py"
+        helper_content = "def helper():\n    return 42\n"
+        helper.write_text(helper_content)
+
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        monkeypatch.chdir(outside)
+
+        prompt = f"Preamble line\n{helper_content}Postamble line\n"
+
+        result = _remove_redundant_content(prompt, [str(helper.resolve())])
+
+        assert helper_content.strip() not in result, (
+            "Absolute-path include should let dedup find the file even when "
+            "CWD is outside the project. The project-root anchor is only "
+            "needed to resolve relative paths."
+        )
