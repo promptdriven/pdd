@@ -5514,3 +5514,206 @@ class TestGetModifiedAndUntrackedSubprocessTimeout:
             files = _get_modified_and_untracked(tmp_path)
 
         assert "changed.py" in files
+
+
+# ============================================================================
+# Issue #779: NOT_A_BUG early exit fires incorrectly when direct-edit fix
+# was applied to a non-PDD-managed module (no .prompt file).
+#
+# Bug: the Step 3 NOT_A_BUG guard only inspects dev_unit_states (populated
+# for PDD-managed modules at Step 8). When Step 1 applies a direct edit to
+# a module with no .prompt file, dev_unit_states stays empty and the guard
+# wrongly treats NOT_A_BUG as a false failure even though files changed.
+#
+# Fix (issue suggestion + Step 6 scope expansion): also consult
+# _detect_changed_files so direct edits count as "fixes already applied"
+# at BOTH the inner-loop guard (:1868-1877) and the outer-loop guard
+# (:2010-2012).
+# ============================================================================
+
+
+class TestIssue779NotABugDirectEditGuard:
+    """Regression tests for issue #779: NOT_A_BUG guard must honor direct
+    edits to non-PDD-managed modules, not just PDD-tracked dev_unit_states.
+    """
+
+    def test_not_a_bug_ignored_when_direct_edits_present(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Inner-loop guard (pdd/agentic_e2e_fix_orchestrator.py:1868-1877):
+        NOT_A_BUG should be ignored when files changed via direct edit,
+        even though dev_unit_states is empty.
+
+        Scenario from issue #779 (observed on issue #777 with
+        code_generator_main.py which has no .prompt file):
+          - Step 1 applies a direct edit (no PDD dev unit to track).
+          - Step 3 correctly classifies "bug already fixed" → NOT_A_BUG.
+          - dev_unit_states is empty (no PDD-managed modules).
+          - _detect_changed_files reports non-empty change list.
+
+        Expected behavior after the fix: the guard recognizes the direct
+        edit and does NOT halt the workflow with "Issue determined to be
+        not a bug."
+
+        On buggy code: the guard only checks has_fixed_units (False) and
+        exits with final_message == "Issue determined to be not a bug."
+        so this test FAILS.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        # Default fixture already sets _detect_changed_files to ["module.py"],
+        # which represents direct edits to a non-PDD-managed module.
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "All issue tests pass — the reported behavior has already been fixed.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # The workflow must NOT terminate with the "not a bug" failure message
+        # when direct edits were applied (has_direct_edits == True).
+        assert msg != "Issue determined to be not a bug.", (
+            "Issue #779: NOT_A_BUG guard at pdd/agentic_e2e_fix_orchestrator.py:1868-1877 "
+            "fired a false failure. Direct edits to a non-PDD-managed module were "
+            "present (default _detect_changed_files returns ['module.py']) but the "
+            "guard only checked has_fixed_units. Expected the guard to also honor "
+            f"has_direct_edits via _detect_changed_files. Got msg={msg!r}."
+        )
+        assert "not a bug" not in (msg or "").lower(), (
+            f"Issue #779: workflow halted with a 'not a bug' message ({msg!r}) "
+            "despite direct edits being present."
+        )
+
+    # Scope addition: covers expansion item "outer-loop NOT_A_BUG guard at
+    # pdd/agentic_e2e_fix_orchestrator.py:2010-2012 uses the same
+    # has_fixed_units-only check and must also OR in has_direct_edits via
+    # _detect_changed_files" identified by Step 6 but absent from Step 8's plan.
+    def test_not_a_bug_outer_loop_guard_honors_direct_edits(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Outer-loop guard (pdd/agentic_e2e_fix_orchestrator.py:2010-2012):
+        the post-inner-loop NOT_A_BUG break must also recognize direct
+        edits. Without the fix, even if somebody repaired the inner guard,
+        the outer guard would still exit the multi-cycle loop at
+        step_num == 3 because it only inspects has_fixed_units.
+
+        This test asserts the observable end-to-end behavior: with direct
+        edits present, the workflow must progress past Step 3 (i.e., the
+        inner loop must not break there) and must not have its outer loop
+        cut short by the sibling guard. We verify by counting step calls:
+        if either guard still short-circuits, the workflow stops at 3
+        step calls; after the fix, the workflow advances to Step 4+.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        # Override max_cycles to 1 so we are only measuring a single cycle's
+        # step progression — this isolates the guard behavior from cycle
+        # advancement logic.
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause analysis: NOT_A_BUG — the bug has already been fixed.",
+                    0.1,
+                    "gpt-4",
+                )
+            # Step 9 gets CONTINUE_CYCLE so the loop exits cleanly without
+            # exercising unrelated break paths.
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        labels_called = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+
+        # On buggy code, the inner guard breaks at Step 3 → exactly 3 step
+        # calls (step1, step2, step3) and then the outer guard also breaks
+        # the outer loop. After the fix, both guards honor has_direct_edits
+        # and the workflow continues to Step 4+ (we expect steps 4, 5, ...
+        # to be invoked before the cycle ends).
+        assert mock_run.call_count > 3, (
+            f"Issue #779 (scope expansion): expected the workflow to proceed "
+            f"past Step 3 when direct edits exist, but only {mock_run.call_count} "
+            f"step call(s) were made. Labels: {labels_called}. The guards at "
+            f"pdd/agentic_e2e_fix_orchestrator.py:1868-1877 and :2010-2012 "
+            f"must OR has_direct_edits (via _detect_changed_files) into their "
+            f"'fixes already applied' check."
+        )
+        # And must not halt with the false-failure message.
+        assert msg != "Issue determined to be not a bug.", (
+            f"Issue #779 (scope expansion): outer-loop guard fired despite "
+            f"direct edits. msg={msg!r}"
+        )
+
+    def test_legitimate_not_a_bug_still_fails_when_no_changes(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Regression: the fix must not break the legitimate NOT_A_BUG
+        failure path. If Step 3 classifies NOT_A_BUG AND no fixes were
+        applied (no PDD dev units fixed AND no direct edits), the workflow
+        should still exit with the 'Issue determined to be not a bug.'
+        failure — that is the original correct behavior preserved by
+        TestNotABugEarlyExit::test_not_a_bug_early_exit_step3.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause: NOT_A_BUG - This is expected behavior, not a bug.",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Override the default _detect_changed_files so NO direct edits
+        # are reported. This is the "genuine not-a-bug" scenario where
+        # nothing was fixed — guard must still fail.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        # Workflow should still correctly identify this as not-a-bug.
+        assert success is False, (
+            "Issue #779 regression: legitimate NOT_A_BUG (no fixes applied, "
+            "no direct edits) must still exit with success=False, got "
+            f"success={success}, msg={msg!r}"
+        )
+        assert "not a bug" in (msg or "").lower(), (
+            "Issue #779 regression: legitimate NOT_A_BUG (no fixes applied, "
+            f"no direct edits) must still exit with 'not a bug' message, got msg={msg!r}"
+        )
+        # And it must have stopped early — only 3 step calls.
+        assert mock_run.call_count == 3, (
+            f"Issue #779 regression: expected 3 step calls (Steps 1-3) for "
+            f"legitimate NOT_A_BUG path, got {mock_run.call_count}."
+        )
