@@ -796,8 +796,13 @@ def run_agentic_task(
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
     task_start_time = time.time()
-    # Issue #902: Cap total time across all providers to prevent 150min burn
-    aggregate_deadline = task_start_time + (2 * effective_timeout)
+    # Issue #902: Cap total time across all providers to prevent 150min burn.
+    # Scale aggregate deadline with max_retries so retries actually have
+    # budget to run — the old fixed 2× cap meant max_retries=3 with 20min
+    # session_timeout would run out of budget after the 2nd attempt.
+    # Keep a minimum floor of 2× for cases where max_retries=1 (no-retry path
+    # still wants slack for provider fallback).
+    aggregate_deadline = task_start_time + max(2, max_retries) * effective_timeout
 
     # Create a unique temp file for the prompt
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
