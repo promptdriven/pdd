@@ -73,7 +73,7 @@ class PathResolver:
     def resolve_project_root(
         self,
         profile: ProjectRootProfile = "pdd_path_then_marker_then_cwd",
-        max_levels: int = 5,
+        max_levels: int = 10,
     ) -> Path:
         if profile != "pdd_path_then_marker_then_cwd":
             raise ValueError(f"Unsupported project root profile: {profile}")
@@ -85,15 +85,25 @@ class PathResolver:
         ):
             return self.pdd_path_env
 
+        # Same prioritization as find_project_root_from_path: a .git
+        # ancestor wins immediately; otherwise fall back to the outermost
+        # weak marker seen. Keeps one consistent project-root rule across
+        # CSV keying (find_project_root_from_path) and CWD-anchored lookups
+        # like llm_invoke's model CSV and firecrawl_cache's DB location.
         current = self.cwd
+        highest_weak: Optional[Path] = None
         for _ in range(max_levels):
-            if _has_project_marker(current):
+            if _has_strong_marker(current):
                 return current
+            if _has_weak_marker(current):
+                highest_weak = current
             parent = current.parent
             if parent == current:
                 break
             current = parent
 
+        if highest_weak is not None:
+            return highest_weak
         return self.cwd
 
 
@@ -116,13 +126,51 @@ def get_default_resolver() -> PathResolver:
     )
 
 
-def _has_project_marker(path: Path) -> bool:
+def _has_strong_marker(path: Path) -> bool:
+    return (path / ".git").exists()
+
+
+def _has_weak_marker(path: Path) -> bool:
     return (
-        (path / ".git").exists()
+        (path / ".pddrc").exists()
         or (path / "pyproject.toml").exists()
         or (path / "data").is_dir()
         or (path / ".env").exists()
     )
+
+
+def _has_project_marker(path: Path) -> bool:
+    return _has_strong_marker(path) or _has_weak_marker(path)
+
+
+def find_project_root_from_path(start: str, max_levels: int = 10) -> Optional[str]:
+    """Walk up from *start* to find the project root.
+
+    .git is a strong marker: the first ancestor containing .git is returned
+    immediately. Weak markers (.pddrc, pyproject.toml, data/, .env) can
+    appear multiple times in nested layouts, so the walk continues past a
+    weak-marker directory in case a .git ancestor exists above it. If no
+    .git is found, the outermost (highest) weak-marker directory seen is
+    returned. Returns None when no marker is found within max_levels
+    parents.
+    """
+    abs_path = Path(start).resolve()
+    current = abs_path if abs_path.is_dir() else abs_path.parent
+
+    highest_weak: Optional[Path] = None
+    for _ in range(max_levels):
+        if _has_strong_marker(current):
+            return str(current)
+        if _has_weak_marker(current):
+            highest_weak = current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    if highest_weak is not None:
+        return str(highest_weak)
+    return None
 
 
 def _is_within(path: Path, parent: Path) -> bool:

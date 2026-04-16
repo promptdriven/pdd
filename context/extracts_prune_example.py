@@ -183,8 +183,8 @@ def example_prune_with_force():
         cache_dir = tmp / ".pdd" / "extracts"
 
         with patch(
-            "pdd.extracts_prune.get_config",
-            return_value={"project_root": str(tmp)},
+            "pdd.extracts_prune.find_project_root_from_path",
+            return_value=str(tmp),
         ):
             result = runner.invoke(
                 extracts,
@@ -226,8 +226,8 @@ def example_prune_interactive():
         _setup_sample_project(tmp)
 
         with patch(
-            "pdd.extracts_prune.get_config",
-            return_value={"project_root": str(tmp)},
+            "pdd.extracts_prune.find_project_root_from_path",
+            return_value=str(tmp),
         ):
             # Simulate user typing "y" at the confirmation prompt
             result = runner.invoke(
@@ -262,8 +262,8 @@ def example_prune_global_force():
         cache_dir = tmp / ".pdd" / "extracts"
 
         with patch(
-            "pdd.extracts_prune.get_config",
-            return_value={"project_root": str(tmp)},
+            "pdd.extracts_prune.find_project_root_from_path",
+            return_value=str(tmp),
         ):
             result = runner.invoke(
                 extracts,
@@ -295,8 +295,8 @@ def example_prune_no_cache():
         tmp = Path(tmp_str)
 
         with patch(
-            "pdd.extracts_prune.get_config",
-            return_value={"project_root": str(tmp)},
+            "pdd.extracts_prune.find_project_root_from_path",
+            return_value=str(tmp),
         ):
             result = runner.invoke(
                 extracts,
@@ -325,8 +325,8 @@ def example_inspect_orphans():
         _setup_sample_project(tmp)
 
         with patch(
-            "pdd.extracts_prune.get_config",
-            return_value={"project_root": str(tmp)},
+            "pdd.extracts_prune.find_project_root_from_path",
+            return_value=str(tmp),
         ):
             project_root = tmp.resolve()
 

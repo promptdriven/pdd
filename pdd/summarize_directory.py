@@ -30,6 +30,16 @@ BINARY_EXTENSIONS = {
 }
 
 
+def _get_project_root(directory_path: str) -> Optional[str]:
+    """Return the project root for *directory_path*, or None.
+
+    Uses the shared marker-walking logic from path_resolution, which
+    recognises .git, .pddrc, pyproject.toml, data/, and .env.
+    """
+    from .path_resolution import find_project_root_from_path
+    return find_project_root_from_path(directory_path)
+
+
 def _get_files_from_git(directory_path: str) -> Optional[List[str]]:
     """Get tracked files using git ls-files (respects .gitignore)."""
     try:
@@ -199,21 +209,27 @@ def summarize_directory(
 
     # Step 4: Return early if no files
     if not files:
-        # Return empty CSV header
+        # No files discovered, but preserve any existing cached entries
         output_io = io.StringIO()
-        writer = csv.DictWriter(output_io, fieldnames=['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash'])
+        fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
+        writer = csv.DictWriter(output_io, fieldnames=fieldnames)
         writer.writeheader()
+        for entry in existing_data.values():
+            writer.writerow({k: entry.get(k, '') for k in fieldnames})
         return output_io.getvalue(), 0.0, "None"
 
-    # Determine base directory for relative paths
-    if os.path.isdir(directory_path):
-        base_dir = os.path.abspath(directory_path)
+    # Determine base directory for relative paths.
+    # Prefer project root so that CSV paths are stable across different
+    # directory_path values (scanning pdd/ vs context/ vs .).
+    # When no project root marker exists, base_dir is None and we store
+    # absolute paths — they're unambiguous regardless of which directory
+    # is scanned, and convert seamlessly to project-relative paths once
+    # a marker (e.g. git init) is added.
+    project_root = _get_project_root(directory_path)
+    if project_root:
+        base_dir = project_root
     else:
-        prefix = directory_path.split('*')[0]
-        if os.path.isdir(prefix):
-            base_dir = os.path.abspath(prefix)
-        else:
-            base_dir = os.path.abspath(os.path.dirname(prefix))
+        base_dir = None
 
     results_data: List[Dict[str, str]] = []
     total_cost = 0.0
@@ -222,9 +238,13 @@ def summarize_directory(
     # Step 6: Iterate through files with progress reporting
     total_files = len(files)
 
+    def _compute_rel_path(file_path: str) -> str:
+        real = os.path.realpath(file_path)
+        return os.path.relpath(real, base_dir) if base_dir else real
+
     def _process_file(i: int, file_path: str) -> Tuple[float, str]:
         """Process a single file and accumulate results."""
-        rel_path = os.path.relpath(file_path, base_dir)
+        rel_path = _compute_rel_path(file_path)
         return _process_single_file_logic(
             file_path,
             rel_path,
@@ -244,7 +264,7 @@ def summarize_directory(
 
         def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str]:
             """Thread-safe wrapper that returns index for ordering."""
-            rel_path = os.path.relpath(file_path, base_dir)
+            rel_path = _compute_rel_path(file_path)
             local_results: List[Dict[str, str]] = []
             cost, model = _process_single_file_logic(
                 file_path,
@@ -314,16 +334,34 @@ def summarize_directory(
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
 
-    # Step 7: Generate CSV output
-    output_io = io.StringIO()
+    # Step 7: Merge in existing entries that were not part of this scan.
+    # This preserves cached summaries for files outside the current
+    # directory_path / glob scope so they are not silently dropped.
+    scanned_paths = set()
+    for row in results_data:
+        scanned_paths.add(os.path.normpath(row['full_path']))
+        # Also track the absolute version so entries keyed by absolute path
+        # are recognized as already present when the scan wrote a relative path.
+        if base_dir:
+            abs_candidate = os.path.normpath(os.path.join(base_dir, row['full_path']))
+            scanned_paths.add(abs_candidate)
+            # Also track the realpath form for symlink consistency
+            scanned_paths.add(os.path.normpath(os.path.realpath(
+                os.path.join(base_dir, row['full_path']))))
     fieldnames = ['full_path', 'file_summary', 'key_exports', 'dependencies', 'content_hash']
+    for norm_path, entry in existing_data.items():
+        if norm_path not in scanned_paths:
+            results_data.append({k: entry.get(k, '') for k in fieldnames})
+
+    # Step 8: Generate CSV output
+    output_io = io.StringIO()
     writer = csv.DictWriter(output_io, fieldnames=fieldnames)
-    
+
     writer.writeheader()
     writer.writerows(results_data)
-    
+
     csv_output = output_io.getvalue()
-    
+
     return csv_output, total_cost, last_model_name
 
 def _process_single_file_logic(
@@ -343,28 +381,35 @@ def _process_single_file_logic(
     """
     cost = 0.0
     model_name = "cached"
-    
+
     try:
         # Step 6a: Read file
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-        
+
         # Step 6b: Compute hash
         current_hash = hashlib.sha256(content.encode('utf-8')).hexdigest()
-        
+
         summary = ""
         key_exports = "[]"
         dependencies = "[]"
-        
+
         # Step 6c: Check cache (using normalized relative path)
         normalized_path = os.path.normpath(rel_path)
         cache_hit = False
-        
-        # Also check absolute path for backward compatibility with older caches
+
+        # Also check absolute path for backward compatibility with older caches.
+        # Check both normpath and realpath forms to handle platforms where
+        # symlinks cause path divergence (e.g. macOS /var -> /private/var).
         abs_normalized_path = os.path.normpath(file_path)
-        
-        cached_entry = existing_data.get(normalized_path) or existing_data.get(abs_normalized_path)
-        
+        abs_realpath = os.path.normpath(os.path.realpath(file_path))
+
+        cached_entry = (
+            existing_data.get(normalized_path)
+            or existing_data.get(abs_normalized_path)
+            or existing_data.get(abs_realpath)
+        )
+
         if cached_entry:
             # Step 6d: Check hash match and that entry was produced by the new format
             # (old-format entries lack key_exports/dependencies columns entirely;

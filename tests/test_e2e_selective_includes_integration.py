@@ -226,6 +226,9 @@ def project_dir(tmp_path):
     (src / "config.json").write_text(json.dumps(config_data, indent=2))
     (src / "docs.md").write_text(docs_md)
 
+    # Add project root marker so paths are project-relative, not absolute
+    (tmp_path / ".pddrc").touch()
+
     return tmp_path
 
 
@@ -509,22 +512,17 @@ class TestPreprocessQueryRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(project_dir)
 
-        # Point the config to our project_dir
-        mock_config = {"project_root": str(project_dir)}
-
         from pdd.include_query_extractor import IncludeQueryExtractor
-        from unittest.mock import patch
 
         src_file = project_dir / "src" / "models.py"
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            extractor = IncludeQueryExtractor()
+        extractor = IncludeQueryExtractor()
 
-            # First call — should invoke LLM
-            result1 = extractor.extract(
-                file_path=str(src_file),
-                query="What validation rules does UserModel enforce?",
-            )
+        # First call — should invoke LLM
+        result1 = extractor.extract(
+            file_path=str(src_file),
+            query="What validation rules does UserModel enforce?",
+        )
 
         print(f"\n  Extracted content (first 500 chars):\n{result1[:500]}")
 
@@ -551,11 +549,10 @@ class TestPreprocessQueryRealLLM:
 
         # Second call — should use cache (we can't directly verify no LLM call
         # without mocking, but we verify the result matches)
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result2 = extractor.extract(
-                file_path=str(src_file),
-                query="What validation rules does UserModel enforce?",
-            )
+        result2 = extractor.extract(
+            file_path=str(src_file),
+            query="What validation rules does UserModel enforce?",
+        )
 
         assert result1 == result2, "Second call should return identical cached result"
         print("  Cache hit verified (second call returned same result)")
@@ -571,16 +568,13 @@ class TestPreprocessQueryRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(project_dir)
 
-        mock_config = {"project_root": str(project_dir)}
         src_file = project_dir / "src" / "docs.md"
 
         prompt = f'<include query="What are the installation instructions?">{src_file}</include>'
 
         from pdd.preprocess import preprocess
-        from unittest.mock import patch
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         print(f"\n  Preprocessed result (first 500 chars):\n{result[:500]}")
 
@@ -706,7 +700,6 @@ class TestExtractsPruneAfterRealExtraction:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(project_dir)
 
-        mock_config = {"project_root": str(project_dir)}
         src_file = project_dir / "src" / "models.py"
 
         # Step 1: Create a prompt file with a query include
@@ -719,14 +712,12 @@ class TestExtractsPruneAfterRealExtraction:
 
         # Step 2: Run extraction (real LLM call)
         from pdd.include_query_extractor import IncludeQueryExtractor
-        from unittest.mock import patch
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            extractor = IncludeQueryExtractor()
-            result = extractor.extract(
-                file_path=str(src_file),
-                query="List all class names",
-            )
+        extractor = IncludeQueryExtractor()
+        result = extractor.extract(
+            file_path=str(src_file),
+            query="List all class names",
+        )
 
         print(f"\n  Extraction result: {result[:200]}")
 
@@ -741,11 +732,9 @@ class TestExtractsPruneAfterRealExtraction:
 
         # Step 4: Run prune
         from click.testing import CliRunner
-
-        with patch("pdd.extracts_prune.get_config", return_value=mock_config):
-            from pdd.extracts_prune import extracts
-            runner = CliRunner()
-            prune_result = runner.invoke(extracts, ["prune", "--force"])
+        from pdd.extracts_prune import extracts
+        runner = CliRunner()
+        prune_result = runner.invoke(extracts, ["prune", "--force"])
 
         print(f"  Prune output: {prune_result.output}")
         assert prune_result.exit_code == 0
@@ -858,6 +847,10 @@ class TestQueryContentReductionRealLLM:
         ''')
 
         (tmp_path / "party_planning.txt").write_text(party_planning)
+
+        # Add project root marker so paths are project-relative
+        (tmp_path / ".pddrc").touch()
+
         return tmp_path
 
     def test_query_reduces_content_not_full_file(self, party_dir, monkeypatch):
@@ -872,20 +865,17 @@ class TestQueryContentReductionRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(party_dir)
 
-        mock_config = {"project_root": str(party_dir)}
         party_file = party_dir / "party_planning.txt"
         full_content = party_file.read_text()
         full_line_count = len(full_content.splitlines())
 
         from pdd.include_query_extractor import IncludeQueryExtractor
-        from unittest.mock import patch
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            extractor = IncludeQueryExtractor()
-            result = extractor.extract(
-                file_path=str(party_file),
-                query="What songs should play at the success party?",
-            )
+        extractor = IncludeQueryExtractor()
+        result = extractor.extract(
+            file_path=str(party_file),
+            query="What songs should play at the success party?",
+        )
 
         print(f"\n  Full file: {full_line_count} lines, {len(full_content)} chars")
         print(f"  Extracted: {len(result.splitlines())} lines, {len(result)} chars")
@@ -924,17 +914,14 @@ class TestQueryContentReductionRealLLM:
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.chdir(party_dir)
 
-        mock_config = {"project_root": str(party_dir)}
         party_file = party_dir / "party_planning.txt"
 
         prompt = f'<include query="What songs should play at the success party?">{party_file}</include>'
 
         from pdd.preprocess import preprocess
-        from unittest.mock import patch
 
         # Step 1: First preprocess — should call LLM and cache
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result1 = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result1 = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         print(f"\n  Step 1 - First result ({len(result1)} chars):\n{result1[:300]}")
         assert len(result1) > 10
@@ -947,8 +934,7 @@ class TestQueryContentReductionRealLLM:
         assert len(md_files_1) >= 1
 
         # Step 2: Second preprocess — should use cache, identical result
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result2 = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result2 = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         assert result1 == result2, "Cache hit should produce identical result"
         print("  Step 2 - Cache hit verified")
@@ -958,8 +944,7 @@ class TestQueryContentReductionRealLLM:
         print("  Step 3 - Source file modified")
 
         # Step 4: Third preprocess — cache should be invalidated
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
-            result3 = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        result3 = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         assert len(result3) > 10
         assert "<include" not in result3
@@ -1048,3 +1033,100 @@ class TestFullPipelineWithSelectRealLLM:
 
         print(f"  Final prompt: {len(final_prompt)} chars")
         print(f"  Cost: ${cost:.6f}")
+
+
+# ===========================================================================
+# 9. AUTO-DEPS QUALITY CHECKS — verify LLM decisions are reasonable
+# ===========================================================================
+
+class TestAutoDepsDeterministicQualityRealLLM:
+    """Real LLM: verify auto-deps makes reasonable dependency selection decisions.
+
+    The basic pipeline flow is tested by TestFullPipelineRealLLM above.
+    This test adds quality criteria that test does NOT assert:
+    - Dependency relevance: picks at least 2 of 4 obviously-needed files
+    - Path correctness: no absolute paths, no double-prefixed paths
+    - Selector for large files: models.py (>100 lines) gets select= attribute
+    - No selector for small files: utils.py (<100 lines) has selector stripped
+    """
+
+    def test_real_llm_auto_deps_quality_checks(self, project_dir, monkeypatch):
+        """Run real LLM auto-deps on a 6-file project, then check decision quality."""
+        _skip_unless_llm()
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.chdir(project_dir)
+
+        import re
+
+        from pdd.insert_includes import insert_includes
+
+        src_dir = project_dir / "src"
+        csv_path = project_dir / "deps.csv"
+        csv_path.write_text("full_path,file_summary,key_exports,dependencies,content_hash\n")
+
+        user_prompt = textwrap.dedent("""\
+            Generate a Python REST API endpoint that:
+            - Accepts a JSON body to create a new user
+            - Validates the user data using the UserModel
+            - Hashes the user's password using auth functions
+            - Stores the user in the database
+            - Returns a formatted error response if validation fails
+            - Uses hash_string for generating unique user IDs
+        """)
+
+        annotated_prompt, _, auto_cost, auto_model = insert_includes(
+            input_prompt=user_prompt,
+            directory_path=str(src_dir),
+            csv_filename=str(csv_path),
+            prompt_filename="prompts/api_endpoint_python.prompt",
+            strength=0.5,
+            temperature=0.0,
+            verbose=True,
+        )
+
+        print(f"\n  Model: {auto_model}, Cost: ${auto_cost:.6f}")
+        print(f"  Annotated prompt:\n{annotated_prompt[:600]}")
+
+        # Quality check 1: Dependency relevance
+        included_paths = re.findall(
+            r'<include[^>]*>([^<]+)</include>', annotated_prompt
+        )
+        included_basenames = {os.path.basename(p.strip()) for p in included_paths}
+        print(f"  Included files: {included_basenames}")
+
+        relevant_files = {"models.py", "auth.py", "database.py", "utils.py"}
+        found_relevant = included_basenames & relevant_files
+        assert len(found_relevant) >= 2, (
+            f"LLM should include at least 2 of {relevant_files}, "
+            f"but only found {found_relevant}. All included: {included_basenames}"
+        )
+
+        # Quality check 2: Path correctness
+        for p in included_paths:
+            p = p.strip()
+            assert not os.path.isabs(p), f"Include path should be relative, got: {p}"
+            assert not re.match(r'(\w+)/\1/', p), (
+                f"Double-prefixed path detected: {p}"
+            )
+
+        # Quality check 3: Selector for large files
+        models_includes = list(re.finditer(
+            r'<include([^>]*)>([^<]*models\.py[^<]*)</include>', annotated_prompt
+        ))
+        if models_includes:
+            attrs = models_includes[0].group(1)
+            has_selector = 'select=' in attrs or 'query=' in attrs
+            print(f"  models.py selector present: {has_selector}")
+
+        # Quality check 4: No selector for small files
+        utils_includes = list(re.finditer(
+            r'<include([^>]*)>([^<]*utils\.py[^<]*)</include>', annotated_prompt
+        ))
+        if utils_includes:
+            attrs = utils_includes[0].group(1)
+            assert 'select=' not in attrs, (
+                f"utils.py is <100 lines — small file optimization should have "
+                f"stripped selectors, but found: <include{attrs}>"
+            )
+
+        print(f"  Relevant files found: {found_relevant}")

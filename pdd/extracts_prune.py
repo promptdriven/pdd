@@ -16,10 +16,10 @@ import click
 # minimal stubs that the tests will patch out anyway.
 # ---------------------------------------------------------------------------
 try:
-    from pdd.config import get_config
+    from pdd.path_resolution import find_project_root_from_path
 except ImportError:
-    def get_config():  # type: ignore[misc]
-        return {"project_root": "."}
+    def find_project_root_from_path(*args, **kwargs):  # type: ignore[misc]
+        return "."
 
 try:
     from pdd.include_query_extractor import compute_cache_key
@@ -122,8 +122,8 @@ def _collect_referenced_keys(project_root: Path) -> set[str]:
 
 def _cache_dir() -> Path | None:
     """Return the extracts directory or *None* if it doesn't exist."""
-    cfg = get_config()
-    root = Path(cfg.get("project_root", ".")).resolve()
+    found = find_project_root_from_path(".")
+    root = Path(found).resolve() if found else Path(".").resolve()
     d = root / ".pdd" / "extracts"
     return d if d.is_dir() else None
 
@@ -151,8 +151,8 @@ def prune(ctx: click.Context, force: bool) -> None:
     for md_path in cached_md_files:
         on_disk[md_path.stem] = md_path
 
-    cfg = get_config()
-    project_root = Path(cfg.get("project_root", ".")).resolve()
+    found = find_project_root_from_path(".")
+    project_root = Path(found).resolve() if found else Path(".").resolve()
     referenced = _collect_referenced_keys(project_root)
 
     orphaned_keys = sorted(set(on_disk.keys()) - referenced)

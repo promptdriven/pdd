@@ -311,17 +311,18 @@ class TestPreprocessWithSelectAttribute:
         assert "auth" in result
 
     def test_select_failure_falls_back_to_full_file(self, tmp_path, python_file, monkeypatch):
-        """When selector fails, preprocess falls back to full file content with warning."""
+        """When selector fails, preprocess emits a UserWarning and falls back to full file content."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("PDD_QUIET", "1")
 
-        # "def:nonexistent_function" should fail — preprocess should fall back to full file
+        # "def:nonexistent_function" should fail — preprocess should emit a warning
+        # and fall back to full file content.
         prompt = f'<include select="def:nonexistent_function">{python_file.name}</include>'
         from pdd.preprocess import preprocess
-        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        with pytest.warns(UserWarning, match="nonexistent_function"):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
 
         # Should have fallen back to full file content
-        # (preprocess catches SelectorError and includes full file with warning)
         assert "class UserModel" in result or "nonexistent_function" in result.lower() or "error" in result.lower()
 
 
@@ -522,7 +523,7 @@ class TestIncludeQueryExtractorCaching:
 
         # Point config to tmp_path as project root
         mock_config = {"project_root": str(tmp_path)}
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", return_value={"result": "Extracted auth logic", "cost": 0.0, "model_name": "mock"}):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="template"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="processed"):
@@ -559,7 +560,7 @@ class TestIncludeQueryExtractorCaching:
             call_count["llm"] += 1
             return {"result": "LLM result", "cost": 0.0, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=counting_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -587,7 +588,7 @@ class TestIncludeQueryExtractorCaching:
             call_count["llm"] += 1
             return {"result": f"LLM result v{call_count['llm']}", "cost": 0.0, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=counting_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -612,7 +613,7 @@ class TestIncludeQueryExtractorCaching:
 
         mock_config = {"project_root": str(tmp_path)}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=[
                     {"result": "result_a", "cost": 0.0, "model_name": "mock"},
                     {"result": "result_b", "cost": 0.0, "model_name": "mock"},
@@ -688,9 +689,7 @@ class TestExtractsPruneE2E:
             f'<include query="referenced query">src.py</include>'
         )
 
-        mock_config = {"project_root": str(tmp_path)}
-
-        with patch("pdd.extracts_prune.get_config", return_value=mock_config):
+        with patch("pdd.extracts_prune.find_project_root_from_path", return_value=str(tmp_path)):
             # Need to also patch compute_cache_key to match our key computation
             from pdd.extracts_prune import extracts, prune
             runner = CliRunner()
@@ -711,8 +710,7 @@ class TestExtractsPruneE2E:
         cache_dir = tmp_path / ".pdd" / "extracts"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        mock_config = {"project_root": str(tmp_path)}
-        with patch("pdd.extracts_prune.get_config", return_value=mock_config):
+        with patch("pdd.extracts_prune.find_project_root_from_path", return_value=str(tmp_path)):
             from pdd.extracts_prune import extracts
             runner = CliRunner()
             result = runner.invoke(extracts, ["prune", "--force"], catch_exceptions=False)
@@ -1956,7 +1954,7 @@ class TestAutoDepsThenPreprocessPipeline:
         def mock_llm_invoke(**kwargs):
             return {"result": music_section, "cost": 0.001, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=mock_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -1994,7 +1992,7 @@ class TestAutoDepsThenPreprocessPipeline:
             call_count["n"] += 1
             return original_mock(**kwargs)
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=counting_mock):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -2022,7 +2020,7 @@ class TestAutoDepsThenPreprocessPipeline:
             call_count["n"] += 1
             return {"result": f"Music v{call_count['n']}", "cost": 0.001, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=mock_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -2070,7 +2068,7 @@ class TestAutoDepsThenPreprocessPipeline:
         def mock_llm_invoke(**kwargs):
             return {"result": "Music: We Are The Champions", "cost": 0.001, "model_name": "mock"}
 
-        with patch("pdd.include_query_extractor.get_config", return_value=mock_config):
+        with patch("pdd.path_resolution.find_project_root_from_path", return_value=mock_config.get("project_root", ".")):
             with patch("pdd.include_query_extractor.llm_invoke", side_effect=mock_llm_invoke):
                 with patch("pdd.include_query_extractor.load_prompt_template", return_value="t"):
                     with patch("pdd.include_query_extractor.preprocess", return_value="p"):
@@ -2834,3 +2832,196 @@ class TestSelectContentReductionRichFixture:
             f"Got {result_len}/{full_len} chars ({100 - reduction_pct:.0f}%)"
         )
         print(f"  Two functions: {result_len} chars / {full_len} full ({reduction_pct:.0f}% reduction)")
+
+
+# ============================================================================
+# E2E: Cross-directory CSV path integrity through the full pipeline
+#
+# This tests the compound path corruption bug (issue #603): when
+# summarize_directory scans multiple directories into the same CSV, then
+# auto_include and insert_includes process that CSV, paths from one
+# directory must not be misqualified with another directory's prefix.
+# ============================================================================
+
+
+class TestCrossDirectoryPipelineE2E:
+    """E2E test for the full auto-deps pipeline with multi-directory scans.
+
+    The real-world pattern is:
+    1. summarize_directory scans context/ → CSV has context-relative paths
+    2. summarize_directory scans pdd/ → CSV accumulates pdd-relative paths
+    3. insert_includes reads the mixed CSV and calls auto_include
+    4. auto_include formats CSV entries for the LLM and qualifies result paths
+    5. insert_includes applies the returned directives to the prompt
+
+    The bug: step 4 blindly prepends the current directory_path to all CSV
+    entries, corrupting paths from other directories.
+    """
+
+    @pytest.fixture
+    def project_with_two_dirs(self, tmp_path):
+        """Set up a mini project with context/ and pdd/ directories."""
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+        pdd_dir = tmp_path / "pdd"
+        pdd_dir.mkdir()
+
+        # context/ has example files
+        (context_dir / "data_example.py").write_text(textwrap.dedent('''\
+            """Example demonstrating data processing."""
+
+            import json
+
+            def load_data(path: str) -> dict:
+                """Load data from a JSON file."""
+                with open(path) as f:
+                    return json.load(f)
+
+            def transform_data(data: dict) -> list:
+                """Transform raw data into processed format."""
+                return [{"key": k, "value": v} for k, v in data.items()]
+
+            if __name__ == "__main__":
+                raw = load_data("input.json")
+                print(transform_data(raw))
+        '''))
+
+        # pdd/ has source files
+        (pdd_dir / "cli.py").write_text(textwrap.dedent('''\
+            """CLI entry point for pdd."""
+
+            import click
+
+            @click.command()
+            @click.argument("action")
+            def main(action: str):
+                """Run a pdd action."""
+                if action == "sync":
+                    print("Syncing...")
+                elif action == "generate":
+                    print("Generating...")
+                else:
+                    raise click.UsageError(f"Unknown action: {action}")
+
+            if __name__ == "__main__":
+                main()
+        '''))
+
+        return tmp_path, context_dir, pdd_dir
+
+    def test_multi_directory_scan_preserves_all_entries(
+        self, project_with_two_dirs, monkeypatch
+    ):
+        """Scanning context/ then pdd/ should produce a CSV with entries
+        from both directories, and neither scan should wipe the other's entries.
+        """
+        tmp_path, context_dir, pdd_dir = project_with_two_dirs
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.summarize_directory import summarize_directory, FileSummary
+
+        mock_resp = {
+            'result': FileSummary(
+                file_summary="Mock summary",
+                key_exports=["func"],
+                dependencies=["os"],
+            ),
+            'cost': 0.01,
+            'model_name': "mock",
+        }
+
+        with patch("pdd.summarize_directory.load_prompt_template", return_value="prompt"), \
+             patch("pdd.summarize_directory.llm_invoke", return_value=mock_resp):
+
+            # Scan context/
+            csv1, _, _ = summarize_directory(
+                directory_path=str(context_dir),
+                strength=0.5,
+                temperature=0.0,
+            )
+
+            # Scan pdd/ with context/'s CSV as cache
+            csv2, _, _ = summarize_directory(
+                directory_path=str(pdd_dir),
+                strength=0.5,
+                temperature=0.0,
+                csv_file=csv1,
+            )
+
+        import csv as csv_mod
+        from io import StringIO
+        rows = list(csv_mod.DictReader(StringIO(csv2)))
+        paths = {r['full_path'] for r in rows}
+
+        # Both files must be present
+        assert len(rows) >= 2, (
+            f"Expected entries from both context/ and pdd/ scans, "
+            f"got {len(rows)} rows. Paths: {paths}"
+        )
+
+    def test_auto_include_does_not_corrupt_cross_directory_paths(
+        self, project_with_two_dirs, monkeypatch
+    ):
+        """When auto_include processes a mixed-origin CSV with
+        directory_path='context/', it must not prepend 'context/' to
+        entries that came from the pdd/ scan.
+
+        This is the core path corruption bug: _format_csv_rows_for_llm
+        blindly used directory_path as a prefix when preparing CSV rows
+        for the LLM, turning cross-directory entries into invalid paths.
+        """
+        tmp_path, context_dir, pdd_dir = project_with_two_dirs
+        monkeypatch.chdir(tmp_path)
+
+        # Build a mixed-origin CSV as summarize_directory would produce
+        mixed_csv = (
+            "full_path,file_summary,key_exports,dependencies,content_hash\n"
+            "data_example.py,Data processing example,"
+            '"[""load_data"",""transform_data""]","[""json""]",aaa\n'
+            "cli.py,CLI entry point,"
+            '"[""main""]","[""click""]",bbb\n'
+        )
+
+        from pdd.auto_include import auto_include, AutoIncludeResult, NewInclude
+
+        # LLM returns a recommendation that includes cli.py (from pdd/ scan)
+        mock_result = AutoIncludeResult(
+            reasoning="The prompt needs CLI functionality",
+            new_includes=[NewInclude(file="cli.py", module="cli")],
+            existing_include_annotations=[],
+        )
+
+        def mock_llm(**kwargs):
+            if kwargs.get("output_pydantic") == AutoIncludeResult:
+                return {"result": mock_result, "cost": 0.01, "model_name": "mock"}
+            return {"result": "summary", "cost": 0.001, "model_name": "mock"}
+
+        # Make files large enough that selectors aren't stripped
+        (context_dir / "data_example.py").write_text(
+            (context_dir / "data_example.py").read_text() + "\n# padding\n" * 100
+        )
+        (pdd_dir / "cli.py").write_text(
+            (pdd_dir / "cli.py").read_text() + "\n# padding\n" * 100
+        )
+
+        def mock_summarize(**_kwargs):
+            return (mixed_csv, 0.001, "mock")
+
+        with patch("pdd.auto_include.llm_invoke", side_effect=mock_llm), \
+             patch("pdd.auto_include.summarize_directory", side_effect=mock_summarize):
+            directives, _, _, _ = auto_include(
+                input_prompt="Generate a tool that processes data",
+                directory_path=str(context_dir),
+                strength=0.7,
+                temperature=0.0,
+            )
+
+        # cli.py should NOT be qualified as context/cli.py
+        assert "context/cli.py" not in directives, (
+            f"cli.py from pdd/ scan was misqualified with context/ prefix. "
+            f"Directives:\n{directives}"
+        )
+        # cli.py should appear in the output as-is or with its correct prefix
+        assert "cli.py" in directives, (
+            f"cli.py should appear in directives. Got:\n{directives}"
+        )

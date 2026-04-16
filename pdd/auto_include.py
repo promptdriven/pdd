@@ -60,7 +60,7 @@ def _validate_input(strength: float, temperature: float) -> None:
         raise ValueError("Temperature must be between 0 and 1")
 
 
-def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
+def _format_csv_rows_for_llm(csv_output: str) -> str:
     """Format CSV rows as structured metadata for the LLM.
 
     Each row becomes:
@@ -69,9 +69,8 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
         Key Exports: {key_exports}
         Dependencies: {dependencies}
 
-    When ``directory_path`` is provided, it is prepended to relative
-    ``full_path`` values so the LLM sees (and later emits) paths that are
-    resolvable from the current working directory.
+    CSV paths are stored relative to the project root (or absolute when no
+    project marker exists), so no further qualification is needed.
     """
     if not csv_output:
         return ""
@@ -80,11 +79,6 @@ def _format_csv_rows_for_llm(csv_output: str, directory_path: str = "") -> str:
         entries = []
         for _, row in dataframe.iterrows():
             full_path = row.get('full_path', '')
-            # Qualify relative paths so the LLM emits CWD-relative paths.
-            if directory_path and full_path and not os.path.isabs(full_path):
-                prefix = _directory_prefix(directory_path)
-                if prefix and not full_path.startswith(prefix):
-                    full_path = os.path.normpath(os.path.join(prefix, full_path))
             file_summary = row.get('file_summary', '')
             key_exports = row.get('key_exports', '[]')
             dependencies = row.get('dependencies', '[]')
@@ -119,65 +113,25 @@ def _embed_and_rank(input_prompt: str, candidates: List[str], top_n: int = 50) -
         return candidates
 
 
-def _directory_prefix(directory_path: str) -> str:
-    """Extract the directory portion from a directory_path that may be a glob.
+def _enforce_select_query_exclusivity(result: AutoIncludeResult) -> None:
+    """Drop redundant ``query=`` attributes when ``select=`` is also set.
 
-    E.g. ``'context/*.py'`` → ``'context'``,  ``'test_auto_deps/'`` → ``'test_auto_deps'``.
-    Returns ``''`` if no meaningful directory prefix can be determined.
+    For file types that support structural selectors (.py, .md, .json,
+    .yaml, .yml), ``select=`` is deterministic and should win over
+    ``query=``. The LLM occasionally produces both; this normalizes the
+    result in-place.
     """
-    if not directory_path:
-        return ""
-    # Strip glob wildcards
-    prefix = directory_path.split('*')[0].rstrip('/')
-    if not prefix:
-        return ""
-    if os.path.isdir(prefix):
-        return prefix
-    parent = os.path.dirname(prefix)
-    return parent if parent else prefix
-
-
-def _qualify_path(file_path: str, directory_path: str) -> str:
-    """Prepend directory_path to a relative file path if needed.
-
-    Returns the path unchanged when it is absolute or already starts with
-    the directory prefix.
-    """
-    if not directory_path or not file_path:
-        return file_path
-    if os.path.isabs(file_path):
-        return file_path
-    prefix = _directory_prefix(directory_path)
-    if not prefix:
-        return file_path
-    if file_path.startswith(prefix):
-        return file_path
-    return os.path.normpath(os.path.join(prefix, file_path))
-
-
-def _qualify_result_paths(result: AutoIncludeResult, directory_path: str) -> None:
-    """Qualify all file paths in an AutoIncludeResult in-place.
-
-    Ensures that both new includes and annotation updates carry
-    CWD-relative paths so the preprocessor can find the files.
-    Also enforces mutual exclusivity of select/query: when both are
-    present and the file type supports structural selectors, query is
-    dropped in favour of the deterministic select.
-    """
-    if not directory_path or not isinstance(result, AutoIncludeResult):
+    if not isinstance(result, AutoIncludeResult):
         return
 
-    # File extensions that support structural selectors (def:, class:, etc.)
     _STRUCTURAL_EXTENSIONS = {'.py', '.md', '.json', '.yaml', '.yml'}
 
     for inc in result.new_includes:
-        inc.file = _qualify_path(inc.file, directory_path)
         if inc.select and inc.query:
             ext = os.path.splitext(inc.file)[1].lower()
             if ext in _STRUCTURAL_EXTENSIONS:
                 inc.query = None
     for ann in result.existing_include_annotations:
-        ann.file = _qualify_path(ann.file, directory_path)
         if ann.select and ann.query:
             ext = os.path.splitext(ann.file)[1].lower()
             if ext in _STRUCTURAL_EXTENSIONS:
@@ -373,18 +327,20 @@ def _strip_selectors_from_small_files(directives: str, threshold: int = 100, dir
     For <new> blocks: remove select/query attributes but keep the include.
     For <update> blocks: remove the entire block.
 
-    Resolves relative paths against directory_path when checking file size.
+    Resolves relative paths against the project root so that
+    repo-root-relative CSV paths are found regardless of CWD.
     """
+    from .path_resolution import find_project_root_from_path
+    _found = find_project_root_from_path(directory_path or ".")
+    _project_root = _found if _found else os.path.abspath(directory_path or ".")
+
     def _resolve_and_count(file_path: str) -> int:
-        """Try the path as-is, then relative to directory_path."""
+        """Try the path as-is, then relative to project root."""
         count = _get_file_line_count(file_path)
         if count > 0:
             return count
-        if directory_path:
-            prefix = _directory_prefix(directory_path)
-            if prefix and not file_path.startswith(prefix):
-                resolved = os.path.join(prefix, file_path)
-                count = _get_file_line_count(resolved)
+        resolved = os.path.join(_project_root, file_path)
+        count = _get_file_line_count(resolved)
         return count
 
     def process_new_block(match: str) -> str:
@@ -472,7 +428,7 @@ def auto_include(
         **llm_kwargs,
     )
 
-    available_includes = _format_csv_rows_for_llm(csv_output, directory_path=directory_path)
+    available_includes = _format_csv_rows_for_llm(csv_output)
 
     # Req 3: Two-stage retrieval — pre-filter with embeddings when candidates > 50
     if available_includes:
@@ -511,9 +467,10 @@ def auto_include(
         # Req 7: on LLM failure, return empty include_directives
         return "", csv_output, summary_cost, summary_model
 
-    # Qualify file paths so <include> tags use CWD-relative paths that
-    # the preprocessor can resolve regardless of which directory it runs from.
-    _qualify_result_paths(llm_result, directory_path)
+    # Normalize the structured result: when the LLM returns both select= and
+    # query= on the same include, keep only the deterministic select= for
+    # file types that support structural selectors.
+    _enforce_select_query_exclusivity(llm_result)
 
     # Req 4: build include_directives from structured result
     include_directives = _build_include_directives(llm_result)
