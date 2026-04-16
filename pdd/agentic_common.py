@@ -1177,6 +1177,9 @@ def _run_with_provider(
         codex_model = env.get("CODEX_MODEL")
         if codex_model:
             cmd.extend(["--model", codex_model])
+        codex_reasoning_effort = env.get("CODEX_REASONING_EFFORT")
+        if codex_reasoning_effort:
+            cmd.extend(["-c", f'model_reasoning_effort="{codex_reasoning_effort}"'])
     else:
         return False, f"Unknown provider {provider}", 0.0
 
