@@ -3691,3 +3691,275 @@ def test_issue_1048_find_default_test_files_bracket_stem(tmp_path):
         f"glob treats [id] as char class. Found: {result_names}"
     assert "test_i_page.py" not in result_names, \
         f"Bug #1048: Matched decoy test_i_page.py via [id] char class. Found: {result_names}"
+
+
+# =============================================================================
+# Issue #777: generate crashes on 0-byte output file
+# -----------------------------------------------------------------------------
+# Bug: code_generator_main.py:761 uses `if existing_code_content is not None`
+#      which passes for an empty string, entering the incremental path. Then
+#      incremental_code_generator.py:59 rejects empty `existing_code` with
+#      ValueError("All required inputs ... must be provided").
+#
+# Fix: after reading the existing file, normalize empty/whitespace-only content
+#      to None so the caller falls through to full generation.
+#
+# These tests exercise the caller→callee boundary. The incremental mock is
+# given a ValueError side_effect matching the REAL validation at
+# incremental_code_generator.py:59-60 so that the test fails on buggy code
+# (caller enters incremental path, mock raises, outer handler turns it into
+# click.UsageError) and passes on the fix (caller skips incremental, local
+# generator runs full generation).
+# =============================================================================
+
+
+def _incremental_mock_with_real_validation():
+    """Return a MagicMock whose side_effect mirrors the real incremental_code_generator
+    input validation at pdd/incremental_code_generator.py:59-60."""
+    def _side_effect(*args, **kwargs):
+        original_prompt = kwargs.get("original_prompt")
+        new_prompt = kwargs.get("new_prompt")
+        existing_code = kwargs.get("existing_code")
+        language = kwargs.get("language")
+        if not original_prompt or not new_prompt or not existing_code or not language:
+            raise ValueError(
+                "All required inputs (original_prompt, new_prompt, existing_code, language) must be provided."
+            )
+        return ("Updated code", True, 0.002, "inc_model")
+    m = MagicMock(side_effect=_side_effect)
+    return m
+
+
+def test_issue_777_empty_output_file_falls_back_to_full_generation(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """Primary repro: 0-byte output file + explicit original_prompt_file.
+
+    Bug: empty_string passes `is not None` guard, so caller enters the
+    incremental path with existing_code="". The real incremental generator
+    raises ValueError on empty existing_code, which is wrapped as
+    click.UsageError by the outer handler.
+
+    Fix: caller normalizes "" to None after reading the file, so the
+    incremental path is skipped entirely and full (local) generation runs.
+    """
+    mock_ctx.obj['local'] = True
+    # Wire the incremental mock so it raises like the real function would.
+    mock_incremental_generator_fixture.side_effect = \
+        _incremental_mock_with_real_validation().side_effect
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_empty.prompt"
+    create_file(prompt_file_path, "Updated prompt content")
+
+    # Create a 0-byte output file (e.g., VS Code auto-save recreated it empty)
+    output_file_path = temp_dir_setup["output_dir"] / "issue_777_empty_output.py"
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    output_file_path.touch()  # 0 bytes
+    assert output_file_path.exists()
+    assert output_file_path.stat().st_size == 0
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_original.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "Updated prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    # On buggy code: the incremental mock is called with existing_code="",
+    # its side_effect raises ValueError, which is re-wrapped as click.UsageError
+    # by the outer exception handler. On the fix, this call completes normally.
+    code, incremental, _, _ = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    # Fix behavior: full generation happens (local generator invoked, not incremental).
+    assert code == DEFAULT_MOCK_GENERATED_CODE, (
+        "Expected output of full (local) generation when existing file is 0 bytes; "
+        f"got: {code!r}"
+    )
+    assert not incremental, (
+        "was_incremental must be False when existing file is 0 bytes"
+    )
+    mock_local_generator_fixture.assert_called_once()
+    # The incremental generator should NOT be called at all when existing_code is empty.
+    mock_incremental_generator_fixture.assert_not_called()
+
+
+def test_issue_777_whitespace_only_output_file_falls_back_to_full_generation(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """Whitespace-only output file should behave the same as a 0-byte file.
+
+    Covers the `.strip()` branch of the suggested fix: content that is
+    technically non-empty but contains no code (just spaces/newlines) must not
+    enter the incremental path — passing it through would still fail the
+    truthiness check downstream ("" evaluates falsy after strip() is applied
+    by any sensible diff/patch pipeline, and whitespace is not meaningful code).
+    """
+    mock_ctx.obj['local'] = True
+    mock_incremental_generator_fixture.side_effect = \
+        _incremental_mock_with_real_validation().side_effect
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_ws.prompt"
+    create_file(prompt_file_path, "Updated prompt")
+
+    # Output file with only whitespace/newlines (not truly empty bytes,
+    # but still no code to patch incrementally).
+    output_file_path = temp_dir_setup["output_dir"] / "issue_777_ws_output.py"
+    create_file(output_file_path, "   \n\t\n  \n")
+    assert output_file_path.stat().st_size > 0
+    assert output_file_path.read_text().strip() == ""
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_ws_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "Updated prompt",
+            "original_prompt_file": "Original prompt",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    code, incremental, _, _ = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    assert code == DEFAULT_MOCK_GENERATED_CODE
+    assert not incremental
+    mock_local_generator_fixture.assert_called_once()
+    mock_incremental_generator_fixture.assert_not_called()
+
+
+def test_issue_777_real_content_output_file_still_uses_incremental(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture, mock_env_vars
+):
+    """Regression guard: the fix must NOT suppress incremental for real content.
+
+    Files with actual code should still enter the incremental path. This
+    ensures we don't accidentally over-normalize in code_generator_main.
+    """
+    mock_ctx.obj['local'] = True
+    # Real validation side_effect: non-empty existing_code returns normally.
+    mock_incremental_generator_fixture.side_effect = \
+        _incremental_mock_with_real_validation().side_effect
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_real.prompt"
+    create_file(prompt_file_path, "Updated prompt for real content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "issue_777_real_output.py"
+    create_file(output_file_path, "def existing():\n    return 42\n")
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_777_real_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt for real content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "Updated prompt for real content",
+            "original_prompt_file": "Original prompt for real content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    code, incremental, _, _ = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    # Real content → incremental path still taken, local generator not called.
+    assert incremental, "Non-empty existing file must still trigger incremental path"
+    assert code == "Updated code", f"Expected incremental output, got: {code!r}"
+    mock_incremental_generator_fixture.assert_called_once()
+    call_kwargs = mock_incremental_generator_fixture.call_args.kwargs
+    assert call_kwargs["existing_code"] == "def existing():\n    return 42\n"
+    mock_local_generator_fixture.assert_not_called()
+
+
+def test_issue_777_empty_output_file_git_derived_prompt_falls_back_to_full(
+    mock_ctx, temp_dir_setup, git_repo_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    mock_subprocess_run_fixture, mock_env_vars
+):
+    """Alternate entry point: 0-byte output file + git-derived original prompt.
+
+    When no explicit --original-prompt-file is passed, the code can still enter
+    the incremental path via the git-history branch (when the prompt has
+    uncommitted changes against HEAD). A 0-byte output file must ALSO fall
+    back to full generation in this alternate entry point — the fix at the
+    single write site (normalization of `existing_code_content`) guards both
+    entry paths.
+    """
+    # Prompt lives inside the git repo; HEAD has the "old" content, on-disk has "new".
+    prompt_filename = "issue_777_git_prompt.prompt"
+    prompt_file_path = git_repo_setup / prompt_filename
+    head_prompt_content = "Original prompt from HEAD"
+    new_prompt_on_disk = "New prompt content on disk"
+    create_file(prompt_file_path, new_prompt_on_disk)
+
+    # Configure subprocess side_effect: git reports this as a tracked, modified file.
+    def git_side_effect(*args, **kwargs):
+        cmd = args[0]
+        if "git" in cmd and "rev-parse" in cmd and "--is-inside-work-tree" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="true", stderr="")
+        if "git" in cmd and "rev-parse" in cmd and "--show-toplevel" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=str(git_repo_setup.resolve()), stderr="")
+        if "git" in cmd and "show" in cmd and any(f"HEAD:{prompt_filename}" in a for a in cmd):
+            return subprocess.CompletedProcess(cmd, 0, stdout=head_prompt_content, stderr="")
+        if "git" in cmd and "status" in cmd and "--porcelain" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=f" M {prompt_filename}", stderr="")
+        if "git" in cmd and "diff" in cmd and "--quiet" in cmd:
+            # Different from HEAD → rc=1
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+        if "git" in cmd and "add" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    mock_subprocess_run_fixture.side_effect = git_side_effect
+
+    mock_incremental_generator_fixture.side_effect = \
+        _incremental_mock_with_real_validation().side_effect
+
+    # 0-byte output file
+    output_file_path = temp_dir_setup["output_dir"] / "issue_777_git_output.py"
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    output_file_path.touch()
+    assert output_file_path.stat().st_size == 0
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": new_prompt_on_disk},  # NO explicit original_prompt_file
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    code, incremental, _, _ = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path), None, False,
+    )
+
+    # Even though git CAN provide an original prompt, the empty existing file
+    # means there's nothing to patch incrementally — full generation must run.
+    assert code == DEFAULT_MOCK_GENERATED_CODE, (
+        "Expected full-generation output for 0-byte file on git-derived path"
+    )
+    assert not incremental, (
+        "was_incremental must be False when existing file is 0 bytes, "
+        "even if git provides an original prompt"
+    )
+    mock_local_generator_fixture.assert_called_once()
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_subprocess_run_fixture.side_effect = None
