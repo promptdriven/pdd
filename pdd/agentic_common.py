@@ -1203,6 +1203,25 @@ def _run_with_provider(
         error_detail = result.stderr or result.stdout[:500]
         return False, f"Exit code {result.returncode}: {error_detail}", 0.0
 
+    # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
+    # This manifested as "All agent providers failed: anthropic: " with a blank
+    # provider error on cloud one-session sync runs and had no log trail.
+    # Stderr tail + prompt size + auth-key presence is usually enough to tell
+    # apart auth failures, rate limits, and genuine empty responses.
+    if not result.stdout.strip():
+        auth_keys_present = sorted(
+            k for k in env
+            if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
+        )
+        stderr_tail = (result.stderr or "")[-500:]
+        console.print(
+            f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
+        )
+        console.print(
+            f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
+            f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
+        )
+
     # Parse JSON Output
     try:
         # Handle JSONL output (Codex sometimes streams)
