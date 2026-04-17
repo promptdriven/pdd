@@ -117,28 +117,29 @@ def mock_path_exists():
 # --- Tests for 'split' command ---
 
 def test_split_success(runner, mock_split_main, mock_path_exists):
-    """Test split command calls split_main with correct arguments."""
+    """Legacy mode: split command with --legacy + 3 positional args.
+
+    The PR #1157 CLI added an agentic mode as the default. The legacy
+    3-arg form now requires the --legacy flag.
+    """
     # Setup mock return
     mock_split_main.return_value = ({"sub": "content"}, 0.05, "gpt-4")
 
     with runner.isolated_filesystem():
-        # Create dummy files to satisfy click.Path(exists=True) if not mocked, 
-        # but we mocked Path.exists inside the command logic. 
-        # However, Click's type=click.Path(exists=True) checks existence BEFORE the function runs. 
-        # So we must create them physically in the isolated fs.
         open('prompt.txt', 'w').close()
         open('code.py', 'w').close()
         open('example.py', 'w').close()
 
         result = runner.invoke(split, [
-            'prompt.txt', 
-            'code.py', 
+            '--legacy',
+            'prompt.txt',
+            'code.py',
             'example.py',
             '--output-sub', 'sub.txt',
             '--output-modified', 'mod.txt'
         ])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     mock_split_main.assert_called_once()
     call_kwargs = mock_split_main.call_args[1]
     assert call_kwargs['input_prompt_file'] == 'prompt.txt'
@@ -148,20 +149,18 @@ def test_split_success(runner, mock_split_main, mock_path_exists):
     assert call_kwargs['output_modified'] == 'mod.txt'
 
 def test_split_exception_handling(runner, mock_split_main, mock_handle_error):
-    """Test that exceptions in split are routed to handle_error."""
+    """Test that exceptions in split are routed to handle_error (legacy mode)."""
     mock_split_main.side_effect = ValueError("Something went wrong")
-    
+
     with runner.isolated_filesystem():
         open('p.txt', 'w').close()
         open('c.py', 'w').close()
         open('e.py', 'w').close()
-        
-        result = runner.invoke(split, ['p.txt', 'c.py', 'e.py'])
-    
+
+        result = runner.invoke(split, ['--legacy', 'p.txt', 'c.py', 'e.py'])
+
     # The command catches exception and returns None (implicit exit code 0 unless handle_error exits)
-    # In the provided code, handle_error is called and then returns None.
-    # Usually handle_error might print and not exit, so exit_code is 0.
-    assert result.exit_code == 0 
+    assert result.exit_code == 0, result.output
     mock_handle_error.assert_called_once()
     assert isinstance(mock_handle_error.call_args[0][0], ValueError)
     assert mock_handle_error.call_args[0][1] == "split"

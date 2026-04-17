@@ -248,17 +248,20 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
   [CommandType.SPLIT]: {
     name: CommandType.SPLIT,
     backendName: 'split',
-    description: "Split a large prompt file into smaller, manageable sub-prompts for better organization and modularity.",
-    shortDescription: "Split Prompt",
+    description: "Agentic 14-step pipeline that diagnoses and splits a large dev unit into smaller, independent PDD dev units. Runs against the selected prompt's code file.",
+    shortDescription: "Split Dev Unit",
     icon: "›",
     requiresPrompt: true,
-    requiresCode: true,  // Uses _code field for INPUT_CODE positional arg
+    requiresCode: true,  // Code file is passed as TARGET_FILE positional arg
     isAdvanced: true,
     options: [
-      // Note: INPUT_PROMPT comes from selected prompt, INPUT_CODE comes from _code field
-      { name: 'example-code', type: 'file', placeholder: 'examples/interface.py', description: 'Example code as interface to sub-module', required: true },
-      { name: 'output-sub', type: 'file', placeholder: 'prompts/sub_module.prompt', description: 'Output path for the sub-prompt file' },
-      { name: 'output-modified', type: 'file', placeholder: 'prompts/modified.prompt', description: 'Output path for the modified prompt file' },
+      // Agentic-mode flags (see pdd/commands/modify.py for the full contract).
+      { name: 'diagnose', type: 'checkbox', placeholder: '', description: 'Run steps 0-2 only and return the diagnosis report' },
+      { name: 'propose-only', type: 'checkbox', placeholder: '', description: 'Run steps 0-4 and show split options with scores (no extraction)' },
+      { name: 'intent', type: 'text', placeholder: 'reduce | parallel | reuse | tests', description: 'Goal of this split (reduce monolith, enable parallel work, reuse layer, reduce test time)' },
+      { name: 'force-split', type: 'checkbox', placeholder: '', description: 'Override LEAVE_ALONE diagnosis and force extraction' },
+      { name: 'no-phase-extraction', type: 'checkbox', placeholder: '', description: 'Skip step 6a phase extraction (only move whole symbols)' },
+      { name: 'strangler', type: 'checkbox', placeholder: '', description: 'Strangler mode: produce N sequential PRs, one child per PR' },
     ]
   },
   [CommandType.CHANGE]: {

@@ -2,98 +2,156 @@
 
 ## Overview
 
-The CI auto-heal workflow automatically detects prompt-code drift and runs `pdd update` (for stale prompts) and `pdd sync` (for stale examples) to fix it. It triggers on pull requests and pushes to `main`, keeping generated code in sync with prompts.
+Automatically detects prompt/code/example drift in PDD modules and runs `pdd update` (for stale prompts) and `pdd sync` (for stale examples) to fix it. Pushes a `chore: auto-heal …` commit back to the triggering branch.
 
-## Workflow File
+Runs on Google Cloud Build against the `prompt-driven-development-stg` project, authenticated as the `pdd-auto-heal-gltanaka` GitHub App so it can push to `gltanaka/pdd` without a PAT.
 
-`.github/workflows/auto-heal-drift.yml`
+## Files
 
-## Triggers
+| Path | Role |
+|---|---|
+| `cloudbuild-auto-heal.yaml` | Build pipeline: loop-guard → mint-token → fetch-history → detect-modules → heal |
+| `scripts/ci_detect_changed_modules.py` | Standalone module-basename extractor (reads `git diff`, returns comma-separated list) |
+| `scripts/mint_github_app_token.py` | Mints installation tokens via RS256 JWT; uses `cryptography` directly (no pyjwt) |
+| `pdd/ci_drift_heal.py` | Orchestrator the `heal` step invokes: classifies drift, runs pdd subprocesses, commits and pushes |
+| `.github/workflows/auto-heal-drift.yml` | **Disabled** (`if: false`). Kept as the rollback path — see below |
 
-### Pull Requests
+## GCB triggers (project: `prompt-driven-development-stg`)
 
-Triggers on `opened`, `synchronize`, and `reopened` events.
+| Name | Event | Build config |
+|---|---|---|
+| `pdd-auto-heal-pr` | Pull request → `main` | `cloudbuild-auto-heal.yaml` |
+| `pdd-auto-heal-push` | Push → `main` | `cloudbuild-auto-heal.yaml` |
 
-- Only heals modules whose `pdd/prompts/*_*.prompt` files changed in the PR (extracted from `git diff --name-only`)
-- Passes `--modules` to limit scope to changed modules
-- Commits fixes to the PR branch
-- Uses concurrency groups keyed on PR number to cancel stale runs on force-pushes
+Both pass `_GITHUB_APP_ID=3404088` as a substitution. The push trigger additionally passes `_HEAD_BRANCH=main`.
 
-### Push to Main
+## Auth
 
-Triggers on pushes to the `main` branch.
+| Layer | Mechanism |
+|---|---|
+| LLM calls | Vertex AI via ADC on the `cloud-build-triggers@` service account (already has `roles/aiplatform.user`) |
+| GitHub push | GitHub App installation token, minted per build from the PEM in Secret Manager (`auto-heal-github-app-pem`) |
 
-- Heals ALL modules (no `--modules` filter)
-- Commits fixes directly to `main`
-- Skips execution if the triggering commit message starts with `chore: auto-heal` (prevents infinite loops)
-- Uses `[skip ci]` in commit messages as an additional safeguard
+The App is installed only on `gltanaka/pdd` with `Contents: RW`, `Pull requests: RW`, `Metadata: R`. Tokens are 1-hour TTL.
 
-## Infinite Loop Prevention
+## Inter-step state (`/ci-state` volume)
 
-Two layers of protection prevent the workflow from triggering itself:
+The pipeline shares four files between steps: `skip` (loop-guard flag), `github_token`, `modules.txt`, and `diff_base.txt`. They live on a Cloud Build `ci-state` volume mounted at `/ci-state` on every step:
 
-1. **PR path:** Commits made with `GITHUB_TOKEN` by GitHub Actions do not re-trigger workflows (built-in GitHub behavior).
-2. **Main path:** The workflow checks if the triggering commit message starts with `chore: auto-heal` and skips if so. The auto-commit also includes `[skip ci]` in the message.
+```yaml
+volumes:
+  - name: ci-state
+    path: /ci-state
+```
 
-## Configuration
+Critical: these files **must not** live under `/workspace` because `/workspace` is the repo working directory. The heal step's `pdd.ci_drift_heal.commit_and_push()` runs `git add -A`; anything under `/workspace` gets staged into the auto-heal commit. Earlier versions of this pipeline wrote `/workspace/github_token` and **leaked four `ghs_*` installation tokens** to PR commit history (#1213). Volume mount eliminates the class entirely — the files literally cannot be staged.
 
-### Budget Cap
+Defense in depth: `.gitignore` (added in #1211) lists `github_token`, `modules.txt`, `diff_base.txt`. If anyone ever moves them back under `/workspace`, gitignore catches it before the commit.
 
-The healing script receives a `--budget-cap` value to limit LLM spend per run.
+## Budget and runtime caps
 
-| Source | Variable | Default |
-|--------|----------|---------|
-| Repository variable | `PDD_BUDGET_CAP` | `5.00` |
+| Cap | Where | Default |
+|---|---|---|
+| LLM spend per build | `_PDD_BUDGET_CAP` substitution on the yaml | `5.00` USD |
+| Per-subprocess wall time (`pdd sync`/`pdd update`) | `_run_pdd_command` in `ci_drift_heal.py` | 1200s |
+| Total build wall time | `timeout:` in the yaml | 1800s (30 min) |
 
-Set via: **Settings → Secrets and variables → Actions → Variables → New repository variable**
+## Loop prevention
 
-### Permissions
+Single in-build check (GCB has no trigger-level commit-message filter):
 
-The workflow requires:
+```bash
+MSG=$(git log -1 --pretty=%s)
+if printf '%s' "$MSG" | grep -qE '^(\[skip ci\] )?chore: auto-heal'; then
+  touch /ci-state/skip  # every downstream step checks this
+fi
+```
 
-| Permission | Purpose |
-|------------|---------|
-| `contents: write` | Push commits to branches |
-| `pull-requests: write` | Push to PR branches |
+Push-to-main heal commits are also prefixed `[skip ci]` so that `pdd-ci` and any other push-triggered builds also skip them.
 
-These are configured in the workflow file itself. No additional repository settings are needed when using `GITHUB_TOKEN`.
+## Emergency disable
 
-## Prerequisites
+Either works. Prefer the first for fast rollback without a commit:
 
-The runner environment must have:
+```bash
+# Option A: pause both triggers (instant, no commit)
+gcloud builds triggers describe pdd-auto-heal-pr --project=prompt-driven-development-stg \
+  --format='value(id)' | xargs -I{} gcloud alpha builds triggers update {} --disabled \
+  --project=prompt-driven-development-stg
+# (repeat for pdd-auto-heal-push)
 
-- Python 3.12+
-- PDD CLI installed (`pip install -e .`)
-- Project dependencies (`pip install -r requirements.txt`)
+# Option B: commit-based disable (survives config regeneration)
+# Change substitutions._PDD_BUDGET_CAP in cloudbuild-auto-heal.yaml to '0' — heal
+# will detect drift but the budget guard stops all heals. Merge via PR.
+```
 
-These are set up automatically by the workflow steps.
+## Rollback to GH Actions
 
-## Troubleshooting
+The old workflow is still in-tree, gated by `if: false`. To re-enable:
 
-### Workflow not triggering
+```yaml
+# .github/workflows/auto-heal-drift.yml
+jobs:
+  auto-heal:
+    ...
+    if: >-                             # <— replace `if: false` with this
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: auto-heal'))
+```
 
-- Verify the workflow file exists on the `main` branch
-- Check that the PR event type is one of: `opened`, `synchronize`, `reopened`
+Also pause or delete the GCB triggers so both don't run concurrently. Billing must be paid on the GH account before the old workflow actually runs.
 
-### Auto-heal commits not appearing
+## Rotating the GitHub App PEM
 
-- Check the workflow logs for `pdd sync` errors
-- Verify the budget cap is sufficient for the modules being healed
-- Ensure `GITHUB_TOKEN` has write permissions (Settings → Actions → General → Workflow permissions)
+Triggers for rotation: PEM was leaked, suspected exposure, or scheduled hygiene.
 
-### Infinite loop on main
+```bash
+# 1. Generate a new private key at:
+#    https://github.com/settings/apps/pdd-auto-heal-gltanaka → Generate a private key
+#    (keeps old key valid until you delete it on GitHub — gives you a window
+#    to roll forward in Secret Manager before any in-flight build breaks)
 
-- If the workflow keeps re-triggering on main, verify the commit message check is working
-- The `[skip ci]` tag in the commit message provides a second layer of protection
-- Check that the `stefanzweifel/git-auto-commit-action` is using the correct commit message format
+# 2. Upload as a new secret version (becomes "latest"; yaml reads versions/latest)
+gcloud secrets versions add auto-heal-github-app-pem \
+  --data-file=/path/to/new-key.pem \
+  --project=prompt-driven-development-stg
 
-### No modules detected on PR
+# 3. Verify a build mints a token via the new key (open a no-op PR or wait for one).
+#    Cannot manually fire a PR trigger; use a real PR or the push trigger:
+gh pr create ...   # or wait for any PR that touches PDD-managed paths
 
-- The workflow extracts changed modules from `git diff --name-only`
-- If no `pdd/prompts/*_*.prompt` files changed, the heal step is skipped
-- This is expected behavior for documentation-only PRs
+# 4. Once confirmed working, delete the OLD key in the App settings page.
+#    This invalidates any in-flight installation tokens minted from the old key.
+
+# 5. Disable the old Secret Manager version (hygiene; not strictly required since
+#    yaml uses versions/latest):
+gcloud secrets versions disable <old-version-number> \
+  --secret=auto-heal-github-app-pem \
+  --project=prompt-driven-development-stg
+```
+
+Already-issued installation tokens (`ghs_*`, 1h TTL) are NOT retroactively revoked when you delete the key. They expire on TTL, but new JWTs cannot be signed against the deleted key, so the App can't mint new tokens against the old key after step 4.
+
+## Reading failures
+
+```bash
+# Recent auto-heal builds only
+gcloud builds list --project=prompt-driven-development-stg \
+  --filter="buildTriggerId=1938d59c-d67e-4aa6-a05b-8f55e9ddf122 OR buildTriggerId=ea9c2b0a-816c-4a19-b66b-e2be1b16e210" \
+  --limit=10 --format='table(id,substitutions.BRANCH_NAME,status,createTime)'
+
+# Build log for a specific ID
+gcloud builds log <build-id> --project=prompt-driven-development-stg
+```
+
+Common failure modes seen during migration:
+- **`git diff` exit 128** → shallow checkout; the `fetch-history` step should deepen first. If it failed, check that the `mint-token` step succeeded (it has to run before `fetch-history` so the authed deep fetch has credentials).
+- **Heal subprocess timeout** → `pdd sync`'s `summarize_directory` routes to Claude Opus via Vertex and can exceed 10 min on large repos. The 1200s timeout covers it; raise further if you hit it.
+- **`git push` fails with "no upstream branch"** → the heal step must set `push.default=current` before invoking `ci_drift_heal`.
+- **`mint-token` step fails with `401 A JSON web token could not be decoded`** → the App private key on GitHub has been deleted but Secret Manager still serves the matching PEM, OR vice versa. Re-run the rotation flow above; ensure the latest Secret Manager version corresponds to a private key that still exists on the App's settings page.
+- **Auto-heal commit contains `github_token` / `modules.txt` / `diff_base.txt`** → someone moved the state files back under `/workspace/` in the yaml. Check `cloudbuild-auto-heal.yaml` — every step that uses inter-step state must declare the `ci-state` volume and reference `/ci-state/<file>` only. See "Inter-step state" section above.
 
 ## Related
 
 - [Public PR Testing](./PUBLIC_PR_TESTING.md) — Testing public PRs against private codebase
-- [Workflow Integration](../README.md#workflow-integration) — PDD workflow patterns
+- Migration PRs: [#1193](https://github.com/gltanaka/pdd/pull/1193) scaffolding, [#1195](https://github.com/gltanaka/pdd/pull/1195) PR detection + authed fetch, [#1196](https://github.com/gltanaka/pdd/pull/1196) gate old workflow + raise timeout, [#1201](https://github.com/gltanaka/pdd/pull/1201) `push.default=current`, [#1211](https://github.com/gltanaka/pdd/pull/1211) `.gitignore` defense for state files, [#1216](https://github.com/gltanaka/pdd/pull/1216) `/ci-state` volume (root-cause fix for [#1213](https://github.com/gltanaka/pdd/issues/1213) token leaks)

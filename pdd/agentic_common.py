@@ -1177,9 +1177,6 @@ def _run_with_provider(
         codex_model = env.get("CODEX_MODEL")
         if codex_model:
             cmd.extend(["--model", codex_model])
-        codex_reasoning_effort = env.get("CODEX_REASONING_EFFORT")
-        if codex_reasoning_effort:
-            cmd.extend(["-c", f'model_reasoning_effort="{codex_reasoning_effort}"'])
     else:
         return False, f"Unknown provider {provider}", 0.0
 
@@ -1653,11 +1650,13 @@ def save_workflow_state(
     """
     local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
     
-    # 1. Save Local
+    # 1. Save Local (atomic: write to tmp then rename)
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
-        with open(local_file, "w") as f:
+        tmp_file = local_file.with_suffix(".json.tmp")
+        with open(tmp_file, "w") as f:
             json.dump(state, f, indent=2)
+        tmp_file.replace(local_file)  # atomic on POSIX
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to save local state: {e}[/yellow]")
 

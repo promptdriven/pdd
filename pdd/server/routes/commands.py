@@ -127,7 +127,7 @@ ALLOWED_COMMANDS = {
     "crash": "Fix code based on crash errors",
     "verify": "Verify code against prompt requirements",
     # Advanced operations
-    "split": "Split large prompt files into smaller ones",
+    "split": "Diagnose and split a large dev unit into smaller PDD dev units (agentic 14-step pipeline)",
     "change": "Modify prompts based on change instructions",
     "detect": "Detect which prompts need changes",
     "auto-deps": "Analyze project dependencies and update prompt",
@@ -465,7 +465,7 @@ POSITIONAL_ARGS = {
     "crash": ["prompt_file", "code_file", "program_file", "error_file"],  # pdd crash PROMPT CODE PROGRAM ERROR
     "verify": ["prompt_file", "code_file", "verification_program"],  # pdd verify PROMPT CODE VERIFICATION_PROGRAM
     # Advanced operations
-    "split": ["input_prompt", "input_code", "example_code"],  # pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
+    "split": ["target_file"],  # pdd split TARGET_FILE (agentic); for legacy: pass legacy=True in options + old 3 args as positional via args=["--legacy","p","c","e"]
     "change": ["change_prompt_file", "input_code", "input_prompt_file"],  # pdd change CHANGE_PROMPT INPUT_CODE [INPUT_PROMPT]
     "detect": ["args"],  # Special: 'args' contains [PROMPT_FILES..., CHANGE_FILE]
     "auto-deps": ["prompt_file", "directory_path"],  # pdd auto-deps PROMPT DIRECTORY

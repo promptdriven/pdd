@@ -294,6 +294,45 @@ def test_llm_invoke_raises_on_missing_key_x():
         )
 
 
+@pytest.mark.parametrize(
+    "kwargs, expected_match",
+    [
+        ({"prompt": None, "input_json": {"topic": "cats"}},
+         r"Either 'messages' or both 'prompt' and 'input_json' must be provided\."),
+        ({"prompt": "Tell me a joke about cats.", "input_json": None},
+         r"Either 'messages' or both 'prompt' and 'input_json' must be provided\."),
+        ({"prompt": "Tell me a joke about {topic}.", "input_json": "not_a_dict"},
+         r"input_json must be a dictionary when use_batch_mode is False\."),
+        ({"prompt": "Tell me a joke about {topic", "input_json": {"topic": "cats"}},
+         r"Error formatting prompt:"),
+        ({"prompt": "Tell me a joke about {animal}.", "input_json": {"topic": "cats"}},
+         r"Prompt formatting error: Missing key 'animal'"),
+        ({"prompt": "Please use the value here: {x}\n", "input_json": {}},
+         r"Missing key 'x' in input_json"),
+    ],
+)
+def test_llm_invoke_validates_inputs_before_cloud_dispatch(monkeypatch, kwargs, expected_match):
+    """Invalid inputs must raise ValueError even when cloud is enabled.
+
+    Guards against regression where cloud dispatch was performed before input
+    validation. If that regression returns, the cloud mock below would return a
+    successful response, llm_invoke would return normally, and pytest.raises
+    would fail with 'DID NOT RAISE'.
+
+    We mock cloud to return success (not raise) so the test failure cannot be
+    silently converted to a skip by the conftest InsufficientCreditsError hook.
+    """
+    monkeypatch.setenv("PDD_JWT_TOKEN", "fake-token-for-is_cloud_enabled")
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+
+    cloud_response = {"result": "should-not-be-returned", "cost": 0.0,
+                      "model_name": "cloud_model", "thinking_output": None}
+    with patch("pdd.llm_invoke._llm_invoke_cloud", return_value=cloud_response) as mock_cloud:
+        with pytest.raises(ValueError, match=expected_match):
+            llm_invoke(**kwargs)
+        mock_cloud.assert_not_called()
+
+
 def test_e2e_include_preprocess_llm_no_missing_key(tmp_path, monkeypatch):
     """End-to-end: include -> preprocess (two-pass) -> llm_invoke without missing-key.
 

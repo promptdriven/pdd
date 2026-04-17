@@ -1,0 +1,353 @@
+<pdd-reason>LLM prompt for agentic split step 4: propose 2-4 split options with scoring and auto-pick.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% ⚠️ CRITICAL OUTPUT CONTRACT — READ FIRST ⚠️
+%
+% The orchestrator parses your output as JSON between two specific
+% markers. Your ENTIRE useful output consists of:
+%
+%   OPTIONS_BEGIN
+%   [<JSON array of 2-4 option objects>]
+%   OPTIONS_END
+%   SELECTED_OPTION_BEGIN
+%   {<JSON object of the winning option>}
+%   SELECTED_OPTION_END
+%
+% Do NOT write a prose summary instead of the JSON. Do NOT wrap the
+% JSON in markdown code fences. Do NOT emit the options in any other
+% shape. A prose-only output causes the orchestrator to fail at
+% step 6 with "No selected option — step 4 may have failed." This is
+% a hard contract, not a suggestion.
+%
+% A brief human-readable sentence BEFORE OPTIONS_BEGIN is fine. But
+% the JSON blocks themselves must be machine-parseable exactly as
+% specified below.
+
+% You have the architecture survey (step 1), diagnosis (step 2), and
+full investigation (step 3). Now produce 2-4 DISTINCT split options,
+each with its own trade-offs. Score them against an architectural
+improvement rubric. Auto-pick the winner, but record all options for
+the user to review with --propose-only.
+
+% Inputs
+- Step 1 (survey): {step1_output}
+- Step 2 (diagnosis): {step2_output}
+- Step 3 (investigation): {step3_output}
+- Target file: {target_file}
+- Language: {language}
+- Intent (from step 0, optional): {intent}
+  (One of REDUCE_MONOLITH, ENABLE_PARALLEL_WORK,
+  EXTRACT_REUSABLE_LAYER, REDUCE_TEST_TIME. If empty,
+  default to REDUCE_MONOLITH. The intent re-weights your
+  scoring below.)
+
+% Constraints applying to every option
+- Each child < 800 lines
+- >= 2 children, <= 10 children per option. **Options with only 1
+  child are REJECTED by the orchestrator.** If the file is big enough
+  to diagnose as splittable (step 2 said so), it needs at least 2
+  children to justify the split overhead.
+- **The parent MUST end up under 800 lines after the split.**
+  If the parent is 3,000 lines and the plan only removes 300, the
+  parent is still a 2,700-line monolith — that is NOT a successful
+  split. Calculate `parent_line_count_after` for every option.
+  Options that leave the parent over 800 lines get a heavy penalty.
+- Public interface (from step 3) must remain reachable on the parent
+- High-cohesion clusters (from step 3) stay together
+- No cycles between children
+- Naming + directory layout follows the project's organizational style (step 1)
+- Dead symbol candidates (from step 3) are SURFACED in the plan for
+  human review in the PR body, NOT auto-deleted. The orchestrator only
+  auto-deletes if the user passes `--delete-dead` explicitly.
+- Hot code stays at root of the package; cold code can nest deeper
+- Every entry in step 3's `reference_map` is accounted for in
+  `reference_updates`
+
+% Your Task
+
+1. **Propose 2-4 options** — the GOAL is to get the parent under 800
+   lines while maintaining cohesion. At minimum, consider:
+
+   a. **Full decomposition option (REQUIRED)**: Convert the monolith
+      into a package (`<basename>/`) with the core orchestration logic
+      in `orchestrator.py` (or `__init__.py`) and each major phase,
+      helper group, or concern as its own submodule. This is the
+      PRIMARY option — it should extract EVERY distinct concern
+      identified in steps 1-3. The parent must end up under 800 lines.
+      **This option should have 4-10 children.** If the file has 3,000+
+      lines, 1-2 children is NOT a full decomposition.
+
+   b. **Extract-to-shared-layer option**: pull cross-worker duplication
+      (from step 1's `sibling_duplication`) into the existing or new
+      shared layer. **Include whenever step 1 found sibling_duplication
+      >0**; this is the option that produces real architectural wins
+      across the ecosystem (not just within this file).
+
+   c. **Conservative option**: extract only the 2-3 coldest, safest
+      helpers. Include as a comparison floor. This option will score
+      lower because it leaves the parent oversized.
+
+   d. **Do-nothing-yet option** (optional): recommend waiting for a
+      precondition (e.g., a pending feature removal). Include only if
+      there's evidence of an in-flight change that would invalidate the
+      split.
+
+2. **For each option, produce a complete SplitPlan**:
+   - children: list of { name, new_prompt, new_source, new_example,
+     new_test, symbols, rationale, prompt_metadata, depth_tier }
+   - parent_changes: modified prompt / source / example / test,
+     prompt_metadata, dead_deletions, invalidate_meta
+   - reference_updates: every file in step 3's reference_map, by category,
+     assigned_to_child
+   - test_ownership: how existing tests redistribute per step 3's classification
+   - surfaced_dead_candidates: dead symbol candidates for human review
+
+3. **For each option, compute expected improvement** against the
+   six architectural metrics (step 3's
+   `improvement_metrics_baseline`):
+   - max_hotspot_density: expected post-split value
+   - longest_function_lines: expected post-split value
+   - cross_module_duplication_count: expected post-split value
+   - files_over_1500_lines: expected post-split count
+   - cross_layer_coupling: expected post-split count
+   - max_import_fan_in: expected post-split value
+
+4. **For each option, produce a qualitative projection** (same schema
+   step 7 uses to self-assess after extraction, but projected here
+   based on the plan alone):
+   - cohesion_projection: clear | moderate | none | worse, with evidence
+   - boundary_clarity_projection: clear | moderate | none | worse, with evidence
+   - change_decorrelation_projection: clear | moderate | none | worse, with evidence
+
+5. **For each option, assess risk and blast**:
+   - risk: low | medium | high
+   - blast_radius: files touched
+   - rationale: 2-3 sentences explaining the trade-off
+
+6. **Score each option** (agent judgment — you compute this, not Python).
+
+   **Line count is a CONSTRAINT, not the objective.** Every valid option
+   must keep parent ≤800 and every child ≤800. Beyond that, score on
+   what actually matters: do symbols in the same child belong together?
+   Does this decomposition align with how the code actually changes?
+
+   For each dimension, read the option's plan, reason about the
+   symbols, and assign the weight. Explain your reasoning in the
+   option's `rationale` field.
+
+   Dimensions:
+
+   - **Cohesion** (max ±20):
+     Do the symbols bundled into each child actually reference each
+     other more than they reference symbols in other children? A
+     child is cohesive if its symbols form a tight internal cluster.
+     +20 strong cohesion, +10 adequate, 0 neutral, -10 mixed,
+     -20 incoherent (symbols thrown together).
+
+   - **Coupling reduction** (max ±15):
+     Count cross-child imports vs. cross-module imports in the
+     original. Has splitting REDUCED the surface where modules
+     need to know about each other, or just relocated the coupling?
+     +15 cross-child imports minimized (clear boundaries),
+     +5 modest reduction, 0 flat, -10 increased coupling
+     (children constantly re-import each other).
+
+   - **Churn alignment** (max ±15):
+     Using step 1's `co_changed_files` and `coupling_clusters`, do
+     symbols that historically change together end up in the same
+     child? If history shows symbols A and B co-change in 8/10
+     commits, they should land in the same child.
+     +15 strong alignment with co-change history,
+     +5 adequate, 0 churn data unavailable, -10 tears co-change pairs
+     apart.
+
+   - **Shared-layer extraction** (max ±15):
+     Did you propose a `shared_layer_children` entry for the cross-
+     worker duplication surfaced by step 1? If sibling_duplication
+     was non-empty and you did NOT extract a shared layer, that's
+     a -15. If you did, +15.
+
+   - **Phase extraction signaled** (max +10):
+     If the target has one dominant function and you've placed it in
+     a child whose description implies phase extraction will be
+     applied (step 6a), +10. This doesn't replace the actual step 6a
+     work — it rewards options that *enable* phase extraction by
+     keeping phase-extractable functions in one child rather than
+     splitting their call-sites across several children.
+
+   - **Diagnosis resolution** (max +20):
+     +10-20 per critical problem from step 2 actually resolved by
+     this option (not just "mentioned in the rationale").
+
+   - **Test-seam preservation** (max ±10):
+     Does the option preserve the test seams step 3 identified?
+     +10 preserves every seam via re-export or deferred capture,
+     0 neutral, -10 breaks test mocks.
+
+   - **Risk** (max -5):
+     -5 for genuinely high-risk options only (touches >30 files,
+     circular-import risk, two_path_references unresolved). Risk
+     should never dominate — good architecture often costs medium
+     risk.
+
+   - **Granularity** (max ±15):
+     Is the child count appropriate for the source size?
+     Use these heuristics as calibration (not hard rules):
+     - target_file ≤ 1,500 lines: 2–4 children is ideal
+     - target_file 1,500–3,000 lines: 5–7 children is ideal
+     - target_file 3,000–5,000 lines: **7–12 children is ideal**
+     - target_file > 5,000 lines: 10+ children
+
+     Score:
+     +15 if child count falls in the ideal band for this size
+     0 if it's within ±1 of the band
+     -10 if the decomposition over-consolidates (e.g., 4 children
+     on a 3,500-line file — each child averages 875 lines, too big
+     to be a focused module).
+
+     **Over-consolidation is the single most common reason agentic
+     splits underperform manual ones.** A thoughtful human reviewing
+     a 3,000-line god-object will produce 8–11 children; an under-
+     prompted agent will cram into 4–5. Don't make that mistake.
+
+   - **Phase-helper placement** (max ±10):
+     When `step 3`'s `largest_symbol_phases` has 3+ phases AND the
+     selected option plans to apply phase extraction, the phase
+     helpers should be scheduled to live in **sibling files**, not
+     inside the parent. A child named `orchestrator` with 5 phase
+     helpers nested inside it still leaves orchestrator.py ~900 lines
+     — that's a monolith with internal structure, not a split.
+     +10 if each extracted phase is scheduled as its own child/sibling
+     file, 0 if phase extraction isn't warranted, -10 if phases are
+     nested inside parent.
+
+   **Apply intent weighting.** Multiply each dimension by the intent
+   weight:
+   - `REDUCE_MONOLITH` (default): cohesion ×1.0, coupling ×1.0,
+     phase-extraction ×1.2, shared-layer ×0.8, test-seam ×1.0
+   - `ENABLE_PARALLEL_WORK`: cohesion ×1.0, coupling ×1.3,
+     phase-extraction ×0.8, shared-layer ×0.7, test-seam ×1.2
+   - `EXTRACT_REUSABLE_LAYER`: shared-layer ×2.0, cohesion ×0.9,
+     coupling ×1.2, phase-extraction ×0.7, test-seam ×1.0
+   - `REDUCE_TEST_TIME`: cohesion ×1.0, coupling ×1.0,
+     phase-extraction ×0.8, shared-layer ×0.5, test-seam ×1.8
+
+   **Constraint check (pass/fail, not scored):**
+   - Every child ≤800 lines: fail → option is REJECTED (score = -100)
+   - Parent ≤800 lines: fail → option is REJECTED (score = -100)
+   - ≥2 children: fail → option is REJECTED (score = -100)
+   - No circular imports across children: fail → option is REJECTED
+
+   Sum the weighted dimensions. The highest-scoring valid option
+   wins. Include the dimension breakdown in the option's `score`
+   field as a dict: `{"cohesion": 18, "coupling": 12, "churn": 15,
+   "shared_layer": 15, "phase_ext": 10, "diagnosis": 20,
+   "test_seam": 10, "risk": 0, "total": 100}`.
+
+7. **Auto-pick the highest-scoring option**. Record the selection
+   rationale. If two options tie, prefer the one with MORE children
+   (more comprehensive decomposition). The goal is to SOLVE the
+   monolith problem, not to make a token improvement.
+
+8. **If NO option scores above 0** (no quantitative improvements AND
+   no "clear" or "moderate" qualitative projections), output
+   `NO_IMPROVEMENT_POSSIBLE` and stop. The tool should not run a
+   split that can't articulate any improvement in either dimension.
+
+% Output — MUST BE VALID JSON (not markdown)
+
+**CRITICAL**: The orchestrator parses your output as JSON. You MUST emit:
+
+1. `OPTIONS_BEGIN` on its own line
+2. A JSON array `[...]` of all options
+3. `OPTIONS_END` on its own line
+4. `SELECTED_OPTION_BEGIN` on its own line
+5. A JSON object `{...}` of the picked option
+6. `SELECTED_OPTION_END` on its own line
+
+Do NOT emit markdown tables or prose summaries instead of JSON.
+Do NOT wrap JSON in markdown code fences inside the markers.
+The orchestrator will FAIL if it cannot parse valid JSON between
+the markers.
+
+Each option JSON object MUST have these fields:
+```
+{
+  "name": "option_name",
+  "plan": {
+    "children": [
+      {
+        "name": "child_name",
+        "new_prompt": "path/to/child_Python.prompt",
+        "new_source": "path/to/child.py",
+        "new_example": "path/to/child_example.py",
+        "new_test": "path/to/test_child.py",
+        "symbols": ["symbol1", "symbol2"],
+        "rationale": "why these symbols belong together",
+        "phase_extraction_candidate": true
+      }
+    ],
+    "shared_layer_children": [
+      {
+        "name": "shared_layer_module",
+        "new_prompt": "path/to/shared/module_Python.prompt",
+        "new_source": "path/to/shared/module.py",
+        "new_example": "path/to/shared/module_example.py",
+        "new_test": "path/to/shared/test_module.py",
+        "symbols": ["duplicated_symbol1", "duplicated_symbol2"],
+        "source_files": ["sibling_a.py", "sibling_b.py"],
+        "rationale": "extracted from cross-worker duplication"
+      }
+    ],
+    "parent_changes": { ... },
+    "reference_updates": [ ... ]
+  },
+  "expected_improvements": { ... },
+  "qualitative_projection": { ... },
+  "risk": "low|medium|high",
+  "blast_radius": 10,
+  "rationale": "why this option",
+  "score": {
+    "cohesion": 18, "coupling": 12, "churn": 15,
+    "shared_layer": 15, "phase_ext": 10, "diagnosis": 20,
+    "test_seam": 10, "risk": 0, "total": 100
+  }
+}
+```
+
+**`children` vs `shared_layer_children`**: Regular `children` live in
+the target's own package and contain symbols that existed only in the
+target. `shared_layer_children` live in a shared-layer directory
+(e.g., `runtime/`, `_shared/`) and contain symbols that were
+duplicated across 2+ sibling files. Including a `shared_layer_children`
+entry is how you prove to the orchestrator that you identified the
+cross-worker duplication surfaced by step 1.
+
+**`phase_extraction_candidate`** on a child signals that its
+dominant symbol has multi-phase structure and step 6a should consider
+breaking it apart. This is an opt-in hint; step 6a makes the final call.
+
+Selected option: the full picked object + `selection_rationale` field.
+
+% Important
+- You MUST consider at least 2 options. One-option plans are rejected.
+- **The full decomposition option (option a) is REQUIRED and should
+  have 4-10 children for files over 2,000 lines.** If the target file
+  is 3,000 lines and your "full decomposition" only has 2 children,
+  that's not a real decomposition — you're leaving a 2,000+ line parent.
+- The `extract-to-shared-layer` option MUST appear whenever step 1's
+  `sibling_duplication` is non-empty.
+- Dead symbol candidates (from step 3) are SURFACED in every option's
+  PR-body plan for human review, NEVER auto-deleted (unless the user
+  passed `--delete-dead`). This is consistent across all options.
+- The orchestrator validates that every entry in step 3's reference_map
+  is accounted for in every option's reference_updates.
+- **DO NOT be timid about splitting.** Step 2 already decided this file
+  SHOULD be split. Your job is to propose HOW, not WHETHER. A 3,000-line
+  file that genuinely needs splitting should produce 5-10 children, each
+  with a single clear responsibility. The parent should shrink to the
+  core orchestration logic (typically 400-800 lines).
+- Test seam preservation via re-exports is a SOLVED problem — the parent
+  re-exports all moved symbols so existing mock paths still work. Do not
+  let fear of breaking test paths reduce the number of children.

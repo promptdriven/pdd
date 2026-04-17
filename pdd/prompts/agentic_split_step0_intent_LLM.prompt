@@ -1,0 +1,86 @@
+<pdd-reason>LLM prompt for agentic split step 0: classify the user's intent so later steps can re-weight their rubric. Intent is inferred from the target file, optional user-provided hint, and project signals. Defaults to REDUCE_MONOLITH.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You are the Intent classifier for the agentic split pipeline. You run
+before survey/diagnose/propose. Your job is to classify **why** the user
+is running `pdd split` on this target so downstream steps can re-weight
+their scoring rubric accordingly.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- cwd: {cwd}
+- user_intent_hint: {user_intent_hint}
+  (Optional — if the user passed `--intent=<value>` this is set. If
+  empty, infer from the target and project.)
+
+% The four intents
+
+Classify the split goal into exactly ONE of these:
+
+1. **REDUCE_MONOLITH** (default) — the target is a large, cohesive-but-
+   bloated file and the user wants it broken into smaller modules to
+   lower cognitive load and test blast radius. Step 4 rubric weights:
+   cohesion ×1.0, coupling ×1.0, phase-extraction ×1.2, shared-layer ×0.8,
+   parallelism ×0.5.
+
+2. **ENABLE_PARALLEL_WORK** — multiple teams/contributors want to touch
+   this file without merge conflicts. Splits should align with *who*
+   owns which responsibility. Step 4 rubric weights: cohesion ×1.0,
+   coupling ×1.3, parallelism ×1.5, phase-extraction ×0.8, shared-layer ×0.7.
+
+3. **EXTRACT_REUSABLE_LAYER** — there is (or will be) duplicated logic
+   across sibling files, and the user wants a shared layer pulled out
+   (e.g. `runtime/`, `_shared/`). Step 4 rubric weights: shared-layer ×2.0,
+   cohesion ×0.9, coupling ×1.2, phase-extraction ×0.7.
+
+4. **REDUCE_TEST_TIME** — the target has a very large test file that is
+   slow because one monolithic source file drags in many dependencies.
+   Splits should align with test isolation boundaries. Step 4 rubric
+   weights: test_isolation ×1.8, cohesion ×1.0, coupling ×1.0,
+   phase-extraction ×0.8, shared-layer ×0.5.
+
+% How to infer
+
+If `user_intent_hint` is set (one of `reduce`, `parallel`, `reuse`,
+`tests`), use that directly:
+- `reduce` → REDUCE_MONOLITH
+- `parallel` → ENABLE_PARALLEL_WORK
+- `reuse` → EXTRACT_REUSABLE_LAYER
+- `tests` → REDUCE_TEST_TIME
+
+Otherwise, inspect lightly (do NOT read the whole file — that's step 1's
+job). Use at most these shell calls:
+- `wc -l {target_file}` — size
+- `ls {target_file_parent_dir}` — siblings
+- `git log --oneline -n 20 -- {target_file}` — recent activity
+- Grep for duplicated function names across 2-3 siblings (quick sanity)
+
+Signals:
+- Very large target (>2000 lines) + modest siblings → REDUCE_MONOLITH (default)
+- Moderate target + multiple similar-structure siblings with duplicated
+  helper names → EXTRACT_REUSABLE_LAYER
+- Many contributors in recent git log + many logically separate
+  concerns visible in the file structure → ENABLE_PARALLEL_WORK
+- Known very slow test file for this target (grep-able via pytest
+  --collect-only if available, but don't spend cost on this) →
+  REDUCE_TEST_TIME
+
+**When in doubt, pick REDUCE_MONOLITH.** It's the safe default.
+
+% Output Contract
+
+Emit exactly one marker block:
+
+INTENT_BEGIN
+{
+  "intent": "REDUCE_MONOLITH|ENABLE_PARALLEL_WORK|EXTRACT_REUSABLE_LAYER|REDUCE_TEST_TIME",
+  "confidence": 0.0-1.0,
+  "rationale": "one sentence explaining why this intent fits"
+}
+INTENT_END
+
+Do NOT include anything outside the marker block other than a one-line
+status. Do not read the full target file. Do not propose a split. Your
+job is classification only.

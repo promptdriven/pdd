@@ -448,6 +448,103 @@ def test_step16_runs_when_step15_creates_files(mock_deps, default_args):
 
 
 # ---------------------------------------------------------------------------
+# likely_ci_cwd detection — resume and cross-subproject (#1174)
+# ---------------------------------------------------------------------------
+
+def test_resume_populates_likely_ci_cwd_from_cached_step12(mock_deps, default_args, tmp_path):
+    """Resume from step 13: likely_ci_cwd must be populated from cached Step 12 output.
+
+    Greg's bug #1: on resume, context['likely_ci_cwd'] was reset to '' and the
+    Step 12 detection block was skipped, so Step 13 received an empty cwd.
+    """
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    subproject = worktree / "extensions" / "app"
+    subproject.mkdir(parents=True)
+    (subproject / ".pddrc").write_text("")
+    (subproject / "tests").mkdir()
+    (subproject / "tests" / "test_smoke.py").write_text("")
+
+    mocks = mock_deps
+    mocks["wt"].return_value = (worktree, None)
+
+    state = {
+        "last_completed_step": 12,
+        "step_outputs": {
+            "12": "FILES_CREATED: extensions/app/tests/test_smoke.py",
+        },
+        "total_cost": 0.5,
+        "model_used": "anthropic",
+        "worktree_path": str(worktree),
+    }
+    mocks["load"].return_value = (state, None)
+
+    rendered: dict = {}
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        rendered[label] = instruction
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+    mocks["template"].return_value = "LCWD={likely_ci_cwd}"
+
+    run_agentic_test_orchestrator(**default_args)
+
+    assert "step13" in rendered, "Step 13 should have run on resume from step 12"
+    assert str(subproject) in rendered["step13"], (
+        f"likely_ci_cwd blank on resume — Step 13 got: {rendered['step13']!r}"
+    )
+
+
+def test_step16_uses_step15_subproject_not_step12(mock_deps, default_args, tmp_path):
+    """Step 16 must validate from Step 15's subproject, not Step 12's.
+
+    Greg's bug #2: when Step 15 creates tests in extensions/b/ and Step 12 created
+    tests in extensions/a/, Step 16 kept the stale likely_ci_cwd from extensions/a/.
+    """
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    # Two separate subprojects with .pddrc
+    for sub in ("extensions/a", "extensions/b"):
+        p = worktree / sub
+        p.mkdir(parents=True)
+        (p / ".pddrc").write_text("")
+        (p / "tests").mkdir()
+        (p / "tests" / "test_x.py").write_text("")
+
+    mocks = mock_deps
+    mocks["wt"].return_value = (worktree, None)
+
+    rendered: dict = {}
+
+    def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                    timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                    use_playwright=False):
+        rendered[label] = instruction
+        if label == "step12":
+            return (True, "FILES_CREATED: extensions/a/tests/test_x.py", 0.1, "anthropic")
+        if label == "step15":
+            return (True, "FILES_CREATED: extensions/b/tests/test_x.py", 0.1, "anthropic")
+        if label == "step17":
+            return (True, "PR Created: https://github.com/o/r/pull/9", 0.1, "anthropic")
+        return (True, "ok", 0.1, "anthropic")
+
+    mocks["run"].side_effect = side_effect
+    mocks["template"].return_value = "LCWD={likely_ci_cwd}"
+
+    run_agentic_test_orchestrator(**default_args)
+
+    subproject_b = str(worktree / "extensions" / "b")
+    assert "step13" in rendered
+    assert "step16" in rendered, "Step 16 should have run"
+    assert subproject_b in rendered["step16"], (
+        f"Step 16 should use extensions/b cwd (Step 15's subproject), got: {rendered['step16']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Context accumulation
 # ---------------------------------------------------------------------------
 

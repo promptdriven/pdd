@@ -1,0 +1,184 @@
+<pdd-reason>LLM prompt for agentic split step 3: extend with test-seam data and cross-module analysis.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You have the full neighborhood survey and intra-module scan from
+step 1, plus a diagnosis naming the top architectural problem from
+step 2. Extend the picture with cross-module and test-seam data that
+step 1 did not cover.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- repo_root: {cwd}
+- step1_output: {step1_output}
+  (ARCHITECTURE_SURVEY + DEV_UNIT_DETAILS blocks)
+- step2_output: {step2_output}
+  (DIAGNOSIS block with top_problem and recommended_action)
+
+% What step 1 already captured (DO NOT re-derive)
+- top_level_symbols with line ranges and is_private flags
+- module_constants
+- churn_per_symbol (commits, density)
+- coupling_clusters (symbols with shared commit SHAs)
+- importers (files importing this target)
+- external_refs (symbol -> list of (file, line) uses)
+- dead_symbol_candidates
+- test_coverage_ratio
+- constants_patched_by_tests
+- closure_density
+
+% Your Task (extend, don't re-derive)
+
+1. **Classify symbols into Hot / Hot-helper / Cold tiers** using
+   step1.DEV_UNIT_DETAILS.churn_per_symbol (density and line_count
+   are already there). No re-running git log needed.
+
+2. **Extract the largest symbol's documentation phase structure**
+   - Identify the largest symbol from
+     step1.DEV_UNIT_DETAILS.top_level_symbols (by line_count).
+   - Read the source file's lines [start_line, end_line] for just
+     that symbol.
+   - Scan the symbol's documentation — whatever form the language
+     uses: Python docstrings, Rust `///` doc comments, TypeScript
+     JSDoc, Go `//` comments above the function, Java Javadoc,
+     etc. — for a numbered list, explicit phase labels, or step
+     headers ("1. X... 2. Y... 3. Z...", "Step 1:", "Phase A:", "// ---
+     credential handling ---", etc.).
+   - If present, those phases ARE the extraction boundaries. This
+     pattern works in any language because it's about how humans
+     document multi-phase code, not about a specific syntax.
+
+3. **Apply the four "STAYS PUT" rules** using step 1's data and
+   language-appropriate judgment:
+   a. **References a module-level value that tests substitute at
+      runtime** — cross step1.constants_patched_by_tests against
+      the functions that reference them. The specific substitution
+      mechanism varies (pytest monkeypatch, jest.doMock, gomock
+      interface swaps, stub_const, etc.) but the signal is the same:
+      if the test file rewrites a value on the target module, the
+      functions that reference it can't move.
+   b. **Captured by reference at import time by any long-lived task**
+      — identify spawned-on-load patterns: Python `asyncio.create_task`
+      at module import, JavaScript `setInterval` at load time, Go
+      `init()` goroutines, Rust `once_cell::Lazy`, Ruby `Thread.new`
+      at class-body level. Read the target file and flag functions
+      that would have their reference frozen at load time.
+   c. **Owns lifecycle cleanup that must survive the function's
+      scope** — identify RAII-like ownership: Python `try/finally`,
+      Go `defer`, Rust `Drop` impls, C++ destructors, Java
+      `try-with-resources`, C# `using` blocks. The function that
+      owns the cleanup can't be split from the code that depends
+      on the cleanup.
+   d. **Captures significant state from an enclosing scope** —
+      identify closures over parent-function locals, method bindings
+      to `this`/`self`, lambda captures. Nested defs / inner classes /
+      closures that depend on 5+ enclosing bindings can't move out
+      of their parent.
+
+4. **Enumerate test-file references to target symbols** — this is
+   framework-agnostic test-seam enumeration. Read the target's test
+   file directly and identify every reference it makes to symbols in
+   the target, whatever the mechanism:
+   - Direct imports (any language)
+   - String-based runtime patching (pytest `patch("module.X")`,
+     jest `jest.mock('./module')`, etc.)
+   - Mock framework constructors (gomock `NewMockX`, mockall `mock!`,
+     sinon `sinon.stub`, etc.)
+   - Dependency injection bindings (test fixtures that wire the
+     target's classes)
+   - Interface-based test doubles
+   - Monkey-patching via language-specific runtime APIs
+   - Test-helper modules that alias or re-export target symbols
+   Record each reference with its TYPE (direct import / string path /
+   mock constructor / DI binding / etc.), its PATH (how the test
+   refers to the target symbol), and the target SYMBOL it refers to.
+   Do NOT grep for specific framework patterns — read the test file
+   and enumerate all references using code comprehension, same as
+   step 1's target-file read. Count the total: >200 is high-risk
+   (splitting MUST preserve every reference's resolution path);
+   0-50 is straightforward.
+   Note any **two-path references**: the same symbol referenced at
+   two different paths (e.g., once as `module.X` and once as
+   `module.submodule.X`) requires both paths to remain valid after
+   extraction.
+
+5. **Build the 5-category reference map** (extends step1.importers +
+   step1.external_refs which only covered code files):
+   a. Code imports (already in step1.importers)
+   b. Documentation files (`*.md`, `*.rst`, `*.txt`)
+   c. Configuration files (`*.yaml`, `*.toml`, `*.json`)
+   d. Example / demo / script files (`examples/`, `scripts/`, `demos/`)
+   e. Build / CI / type stubs (`*.pyi`, `Dockerfile`, CI workflows)
+
+6. **Confirm dead symbols** from step1.dead_symbol_candidates. Step 1
+   flagged candidates based on 0 external refs in code + no commits
+   in 730 days; verify them by re-checking for usage in non-code
+   files (docs, examples, configs, CI). Remove false positives.
+
+7. **Classify test ownership** — for every test in the target's test
+   file, classify as one of:
+   - `child_unit` — exercises symbols exclusive to one child's
+     internals; will move with that child.
+   - `parent_integration` — exercises parent public API or
+     cross-child integration; stays with parent.
+   - `shared_public` — guards behavior that is both child-internal
+     AND parent-public; duplicated on both sides.
+   Record the classification with the child name (for child_unit)
+   and a brief rationale for each test function.
+
+8. **Capture the improvement metrics baseline** using step 1's
+   signals + your findings:
+   a. max_hotspot_density = step1.DEV_UNIT_DETAILS.health.max_hotspot_density
+   b. longest_function_lines = step1.DEV_UNIT_DETAILS.health.longest_function_lines
+   c. cross_module_duplication_count = len(step1.ARCHITECTURE_SURVEY.sibling_duplication)
+   d. files_over_1500_lines = count of sibling files >1500 lines
+      (orchestrator pre-computes in step 1's project_scale)
+   e. cross_layer_coupling = count of domain->infra and infra->domain
+      edges touching target_file in architecture.json dependencies
+   f. max_import_fan_in = len(step1.DEV_UNIT_DETAILS.importers)
+
+9. **Propose shared-layer candidates** (PRIMARY output for U2).
+   - Cross step1.ARCHITECTURE_SURVEY.sibling_duplication with
+     step1.DEV_UNIT_DETAILS.sibling_deep_scan and
+     step1.DEV_UNIT_DETAILS.co_changed_files.
+   - For each duplicated helper name that appears in ≥2 siblings OR
+     that co-changes with the target across ≥30% of commits, propose
+     a `shared_layer_candidate`:
+     - `helper_name` — the function/class name being extracted
+     - `source_files` — list of files it currently lives in
+     - `extract_to` — proposed new location (e.g.
+       `{target_parent_dir}/runtime/{helper_name_snake_case}.py` or
+       `{target_parent_dir}/_shared/{helper_name_snake_case}.py`).
+       Use step 1's `existing_shared_layer` path if one already
+       exists; otherwise propose a new one using the project's
+       conventional style.
+     - `callers` — list of files that would need their import paths
+       updated after extraction
+     - `rationale` — one sentence: why this belongs in a shared layer
+   - If NO candidates (no sibling_duplication AND no high-ratio
+     co-change), emit `shared_layer_candidates: []` and note the
+     negative finding in the output.
+   - The downstream step 4 uses this list to build its `extract-to-
+     shared-layer` option. Step 4 will REJECT its own output if step
+     3 surfaced candidates and step 4's option set doesn't include
+     at least one shared-layer child.
+
+% Output
+
+Wrap in `INVESTIGATION_BEGIN / INVESTIGATION_END` markers with:
+tiered_symbols, largest_symbol_phases, stays_put (with triggers and
+evidence), reference_map (5 categories), test_seam_references (the
+full list from task 4, regardless of framework), test_seam_reference_count,
+test_seam_risk_level (low | medium | high), two_path_references,
+confirmed_dead_symbols, test_ownership (child_unit_tests, parent_integration_tests,
+shared_public_tests, shrinkage_rationale), improvement_metrics_baseline,
+shared_layer_candidates (from task 9 — the list of helpers that
+belong in a shared layer based on cross-file duplication and
+co-change).
+
+% Hard stops
+- If step1.DEV_UNIT_DETAILS.top_level_symbols drifts from
+  architecture.json arch_entry.interface.module.functions by >20%,
+  emit `ARCHITECTURE_STALE` and stop.
+- If step1.DEV_UNIT_DETAILS.test_file is null, emit `NO_TEST_FILE` and stop.

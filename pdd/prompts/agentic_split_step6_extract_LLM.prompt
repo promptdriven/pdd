@@ -1,0 +1,312 @@
+<pdd-reason>LLM prompt for agentic split step 6: extract one child as a full PDD dev unit.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You are extracting ONE child from the selected SplitPlan. You will
+be invoked once per child. Do not try to extract multiple children
+in a single call — that blows context. This call produces the complete
+artifact set for child[{current_child_index}] only.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- worktree_path: {worktree_path}
+- selected_option: {selected_option}
+  (From step 4. Full SplitPlan with children, parent_changes,
+  reference_updates.)
+- current_child_index: {current_child_index}
+- children_already_extracted: {children_extracted}
+  (Accumulates across prior step 6 calls. Prior children's extractions
+  have already modified the parent prompt and source; you work from the
+  current state, not the original.)
+- investigation: {step3_output}
+  (For stays_put rules, test_seams, two_namespace_patches,
+  reference_map.)
+- phase_plan: {phase_plan}
+  (Optional, from step 6a. If present and `should_extract: true`, you
+  must apply the phase extraction AFTER moving the child's symbols to
+  the new file. Break the target_symbol into the proposed phases and
+  rewrite it as the parent_shell. If `should_extract: false` or the
+  field is empty, skip phase extraction for this child.)
+
+% Your Task
+
+You are producing the **full PDD dev unit** for this child (prompt + code
++ example + tests), plus the corresponding updates to the parent dev
+unit. Examples are first-class artifacts, not afterthoughts. Every new
+or modified prompt file MUST carry correct PDD metadata tags —
+`architecture.json` is NOT written by this step; it is derived in step
+7c from the `<pdd-*>` tags on your prompt files.
+
+For the assigned child, produce ALL of the following in a single call:
+
+1. **New child prompt file (HARD RULE: use `pdd/split.py:split()` AND write `<pdd-*>` metadata tags)**
+   - You MUST call the existing `pdd split --legacy` code path as the
+     prompt-splitting primitive. Pass:
+     - the parent's CURRENT prompt (as updated by prior children's
+       extractions, not the original)
+     - the parent's CURRENT source (likewise)
+     - an `example_code` stub describing THIS child's symbols
+   - `split()` returns `(child_prompt, modified_parent_prompt)`.
+   - Write `child_prompt` to `child.new_prompt`.
+   - **The child prompt MUST include the three PDD metadata tags**,
+     because step 7c will derive `architecture.json` from them via
+     `architecture_sync.sync_all_prompts_to_architecture()`. Missing
+     or empty tags will fail the 7c gate with `REGEN_METADATA_MISSING`:
+     - `<pdd-reason>...</pdd-reason>` — 1-3 sentences describing why
+       this child dev unit exists (its purpose, what cohesive
+       responsibility it owns after the split).
+     - `<pdd-interface>...</pdd-interface>` — a JSON block listing
+       every public function/class the child exposes, with signature
+       and short description. Match the shape of the existing entries
+       in the parent's current `architecture.json` record under
+       `interface.module.functions[]` — the 7c sync step parses this
+       and writes it back to `architecture.json`.
+     - `<pdd-dependency>...</pdd-dependency>` — list the `_<language>.prompt`
+       filenames of every other prompt this child depends on (typically
+       at least the parent's prompt, plus any runtime/ shared-layer
+       prompts if the split introduces one).
+   - Do NOT synthesize a greenfield child prompt. Do NOT copy-paste the
+     parent prompt verbatim. Use the primitive.
+   - `split_validation.validate_extraction()` computes token overlap
+     between `child_prompt` and the parent prompt. Must be >=30%. Below
+     30% = greenfield synthesis detected = retry with stricter
+     instruction.
+
+2. **Modified parent prompt (WITH UPDATED `<pdd-*>` METADATA TAGS)**
+   - Write the returned `modified_parent_prompt` to
+     `parent_changes.modified_prompt`.
+   - **Update the parent's metadata tags to reflect the reduced public
+     surface after the split**:
+     - `<pdd-reason>` — update if the parent's purpose narrowed (e.g.,
+       it was "full credentials workflow" and is now "credentials
+       orchestrator delegating to child workers").
+     - `<pdd-interface>` — remove the moved symbols from the interface
+       block. Any public symbol that stays on the parent (including
+       via re-export) remains.
+     - `<pdd-dependency>` — add the new child prompt's filename to the
+       parent's dependency list (the parent now depends on the child).
+   - These updates are what lets step 7c's
+     `sync_all_prompts_to_architecture()` correctly derive the new
+     `architecture.json`.
+
+3. **New child source file**
+   - Move `child.symbols` from the parent source to `child.new_source`.
+   - **Apply the language's idiomatic re-export / visibility pattern
+     so that every test-seam reference from step 3's
+     `test_seam_references` still resolves at its original path.** The
+     specific mechanism depends on the language:
+     - Python: add `from .submodule import X` in the parent package's
+       `__init__.py` plus a brute-force `dir()` walk for dynamic access
+     - TypeScript/JavaScript: update the barrel file (`index.ts` /
+       `index.js`) with `export * from './submodule'` or explicit
+       named re-exports
+     - Go: if the extraction stays within one package, no re-export
+       needed (Go package visibility covers it); if it crosses package
+       boundaries, update the import paths in all importing files
+     - Rust: add `pub use self::submodule::X` in `mod.rs` (or
+       `lib.rs` / parent `mod`)
+     - Ruby: update the parent file's `require_relative` + `include`
+       / `extend` declarations
+     - Other languages: use whatever the language's idiomatic
+       re-export mechanism is
+   - For any module-level value that step 3's
+     `test_seam_references` identified as "substituted at runtime by
+     tests" (pytest monkeypatch, jest.doMock, Go test-time package
+     var assignment, etc.), apply the language-appropriate
+     deferred-capture pattern so the test's substitution still takes
+     effect after extraction.
+
+4. **Modified parent source file**
+   - Remove the moved symbols from `parent_changes.modified_source`.
+   - Add re-exports / visibility declarations as needed so that every
+     reference in step 3's `test_seam_references` still resolves.
+     Verify explicitly — don't assume.
+
+5. **New child example file (first-class dev-unit artifact)**
+   - Write a minimal runnable example at `child.new_example` that
+     exercises the child's public interface (the symbols listed in
+     your `<pdd-interface>` tag above).
+   - Follow the repo's existing example convention — check the parent's
+     current example file at `parent_changes.modified_example`'s prior
+     location for the pattern, idioms, imports, output format.
+   - The example must be runnable end-to-end against the newly-created
+     child source. Step 7b's regen gate will re-create the example from
+     the child prompt via `pdd example` (or `pdd sync`) and run it; if
+     your hand-written example diverges significantly from what the
+     prompt can regenerate, that's a signal the prompt is under-specified.
+   - If the language doesn't have a natural "runnable example" pattern
+     (e.g., a pure-library Rust crate), write the smallest possible
+     `main.rs` / `example.ts` / equivalent that calls the child's API.
+
+6. **Modified parent example file (first-class dev-unit artifact)**
+   - Update the parent's example at `parent_changes.modified_example`
+     to reflect the reduced public surface. Any example lines that
+     exercised now-moved symbols should either be removed (if the
+     behavior is fully owned by the child now) or updated to call
+     through the parent's re-export path (if the behavior remains
+     accessible via the parent's public API).
+   - If the parent example was importing symbols directly that have
+     moved, update the imports. Prefer the re-export path over the
+     new child path so the example documents the parent's stable
+     public surface.
+
+7. **New child test file (honor step 3's test ownership classification)**
+   - Consult `investigation.test_ownership` from step 3. It classifies
+     every test in the parent's test file as one of:
+     - `child_unit` — exercises symbols exclusive to this child's
+       internals; move to `child.new_test`.
+     - `parent_integration` — exercises parent public API or
+       cross-child integration; DO NOT move, stays with parent.
+     - `shared_public` — guards behavior that is BOTH child-internal
+       AND parent-public; **duplicate** — write a copy into
+       `child.new_test` AND keep the original in the parent test file.
+   - For this child, write the `child_unit` tests assigned to it plus
+     copies of any `shared_public` tests that affect its symbols.
+   - Update the references inside those tests to match the new
+     location if the test framework requires path updates (e.g.,
+     jest `jest.mock('./child')`, pytest `patch("child.X")`, etc.).
+     If the language's re-export mechanism from item 3 makes the
+     update unnecessary, skip it.
+   - Write to `child.new_test`.
+
+8. **Modified parent test file (honor step 3's test ownership classification)**
+   - Remove tests classified as `child_unit` for any already-extracted
+     child or the current child.
+   - Keep tests classified as `parent_integration`.
+   - Keep tests classified as `shared_public` (these are duplicated,
+     not moved — the parent copy stays).
+   - Step 7a has a shrinkage guard: if the parent test count drops by
+     >40% without `investigation.test_ownership.shrinkage_rationale`
+     being set, it'll raise a warning. That's informational, not
+     blocking — the classification is the source of truth.
+
+9. **Do NOT write `architecture.json` directly**
+   - Step 7c is responsible for deriving `architecture.json` from the
+     `<pdd-*>` metadata tags on your prompt files. The split
+     orchestrator calls
+     `pdd.architecture_sync.sync_all_prompts_to_architecture()` after
+     all children are extracted and local verification (7a) passes.
+   - Your job is to make sure the tags on your new child prompt
+     (item 1) and the updated parent prompt (item 2) are correct.
+     The `architecture.json` update is a *consequence* of those tags,
+     not an additional file you write.
+
+10. **Reference updates assigned to this child**
+    - For every entry in `split_plan.reference_updates` where
+      `assigned_to_child == child.name`, apply the change.
+    - Categories: code imports, docs, configs, examples (of OTHER
+      modules that imported the moved symbols), build/CI.
+
+11. **Self-verify test-seam resolution before emitting markers**
+    - For every entry in step 3's `test_seam_references` that affects
+      any symbol you just moved, check that the reference still
+      resolves to a valid target symbol after your changes. Read the
+      test file and the new source state to verify.
+    - If any reference would break, fix it (add the missing re-export,
+      update the test's path, apply the deferred-capture pattern) and
+      re-verify. Do not emit FILES_CREATED/FILES_MODIFIED until every
+      affected test-seam reference resolves.
+
+12. **Apply phase extraction — BINDING CONTRACT (only if step 6a emitted a plan)**
+
+    ⚠️ CRITICAL: When `phase_plan.should_extract == true`, the plan from
+    step 6a is **BINDING**. You MUST extract the exact helpers it named,
+    from the exact target symbol, with the exact line ranges. You may
+    NOT silently substitute your own judgment and extract different
+    helpers.
+
+    Why: step 6a evaluated the whole child holistically and produced a
+    plan calibrated against the whole decomposition. If you substitute
+    helpers based on local reading, you're defeating the design — and
+    breaking the invariant that step 7 assess uses when judging
+    phase_extraction quality.
+
+    If `phase_plan.should_extract == true` AND `phase_plan.target_symbol`
+    is a symbol that lives in THIS child (already moved in step 3 or
+    still-in-parent if this child IS the parent coordinator), apply
+    the phase extraction EXACTLY AS PLANNED:
+
+    1. **Extract ONLY the phases in `phase_plan.phases`.** Do not add
+       extra helpers. Do not merge or split phases. If you believe
+       the plan is wrong for some reason (e.g., target symbol not
+       found, line ranges stale, language-specific blocker), emit
+       `EXTRACTION_BLOCKED` on its own line at the START of your
+       response with reason `phase_plan_mismatch: <one sentence>`.
+       DO NOT proceed with a substitute plan.
+    2. For each phase in `phase_plan.phases`:
+       - Create a helper function named exactly `phase.name`
+       - Signature derived from `phase.inputs` (params) + `phase.outputs` (return type)
+       - Body: verbatim copy of `target_symbol`'s lines `phase.line_range`
+         (with indentation adjusted for function scope)
+       - Side effects preserved per `phase.side_effects`
+    3. Replace `target_symbol`'s body with `phase_plan.parent_shell`.
+       The shell calls the helpers in sequence, passes outputs to
+       downstream phases as inputs, and returns the final result.
+    4. **Self-verify behavior equivalence before emitting markers.**
+       Walk through the rewritten target_symbol and confirm every
+       original statement's effect is preserved — same order,
+       same side effects, same cleanup/finally/defer blocks.
+    5. Update test files only if step 3's test_seam_references
+       identified patching of `target_symbol`'s internals. New helper
+       names become new patch paths (e.g., `patch("module._phase_name")`).
+
+    If `phase_plan.should_extract == false` or `phase_plan` is empty,
+    skip this entire step — move ONLY the symbols in `child.symbols`
+    without any internal refactoring.
+
+    Phase extraction is REFACTORING — byte-equivalence of the
+    target_symbol's source is NOT preserved (by design). Behavior
+    equivalence IS required, and step 7a verifies it via the test
+    suite. Test-seam preservation is NON-NEGOTIABLE.
+
+13. **Dead symbol deletion — ONLY on the LAST child, ONLY if user opted in**
+    - If `current_child_index == len(plan.children) - 1` AND the user
+      passed `--delete-dead`, execute the dead-symbol deletion from
+      `parent_changes.dead_deletions`.
+    - For each dead symbol: remove its definition from the parent
+      source, remove its tests from the parent test file, remove its
+      prompt file if it had one. (`architecture.json` will pick up
+      the removal automatically via 7c's prompt-driven derivation —
+      no direct edit needed.)
+    - If `--delete-dead` was NOT passed (the default), surface the
+      candidates in the PR body under "Dead code candidates for human
+      review" and do not delete anything.
+
+14. **HARD REQUIREMENT — YOU MUST ACTUALLY WRITE EVERY FILE**
+    Before emitting FILES_CREATED / FILES_MODIFIED markers, you MUST:
+    - Use the **Write tool** to create every new file you claim. Do NOT
+      only describe the intended content — the orchestrator verifies
+      that each listed file exists on disk.
+    - Use the **Edit tool** (or Write) to modify every file you claim
+      changed. Again, the orchestrator diffs vs HEAD to confirm.
+    - After writing, verify with a **Read tool** call or **bash ls**
+      that every new file exists and has non-zero size.
+    - Only AFTER the files are verified on disk should you emit the
+      FILES_CREATED / FILES_MODIFIED markers.
+
+    If you emit markers without actually creating the files, the
+    orchestrator will retry this extraction and the retry prompt will
+    explicitly list the missing files for you to create.
+
+15. **Emit markers (ONLY after writing files)**
+    - `FILES_CREATED: <comma-separated list of new files — include child prompt, source, example, test>`
+    - `FILES_MODIFIED: <comma-separated list of modified files — include modified parent prompt, source, example, test>`
+
+After your output, the orchestrator verifies every file in FILES_CREATED
+exists on disk. If any are missing, you will be invoked again with the
+missing-file list appended to this prompt. Per-child retry budget is 2.
+After that, `split_validation.validate_extraction()` runs and any
+remaining failures route to step 8 repair (max 5 iterations/child).
+
+% Important
+- Do NOT modify symbols you aren't assigned. Do NOT rename anything.
+- Do NOT change function signatures. Signature drift is a HARD FAIL.
+- **DO NOT EMIT FILES_CREATED FOR FILES YOU DID NOT ACTUALLY WRITE.**
+- If you encounter a symbol that step 3's stays_put list forbids
+  moving, leave it in the parent and note it in your output. The
+  propose_options step should already have excluded it, but defend
+  in depth.
+- If the child's symbols reference module-level state that the
+  four "stays put" rules forbid moving, emit `EXTRACTION_BLOCKED`
+  and stop. Do not partially extract.

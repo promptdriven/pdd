@@ -1,0 +1,111 @@
+<pdd-reason>LLM prompt for agentic split step 8: repair verification failures with accumulator.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% Step 7 verification failed. You're being asked to fix the issues so
+the verify step passes on the next iteration. This is repair iteration
+{repair_iteration} of {max_repair_iterations} for child {child_name}.
+
+% Inputs
+- target_file: {target_file}
+- child: {child}
+- verification_failures: {verify_failures}
+  (Structured list of failed gates with their error messages.)
+- previous_fixes_for_this_child: {previous_fixes}
+  (What earlier repair iterations already tried, so you don't repeat
+  the same fix and get the same failure.)
+
+% Your Task
+
+Read the verification failures carefully. They will be one or more of:
+
+- **Patch preservation failure (Python)**: a name in the test seam
+  inventory is no longer reachable on the parent namespace after the
+  extraction. Fix: add the missing re-export in `__init__.py`, both
+  explicitly (`from .submodule import X`) AND via the brute-force
+  `dir()` walk that pulls in every public name.
+- **Constant rebinding failure (Python)**: a constant in
+  `investigation.constants_patched_by_tests` is bound at import time
+  in the child module but patched at runtime on the parent. Fix: add
+  a deferred-capture rebind inside the function that reads the
+  constant (`X = _parent_module.X` inside the function body), not at
+  the top of the child module.
+- **Moved-code byte-equivalence failure**: `git diff` reports that a
+  moved region is not byte-equivalent (modulo whitespace) to the
+  pre-split source — i.e., someone modified the function body beyond
+  the minimal rebinding/re-export mechanics required by the move. Fix:
+  revert the function body to match the pre-extraction version exactly.
+  Do not "improve" the function while moving it. (Validation is
+  deterministic via `git diff`, not AST-based — see split_validation.)
+- **Function signature failure (HARD)**: a moved function's signature
+  changed. This means a separate PR is needed; you cannot fix it here.
+  Emit `REPAIR_EXHAUSTED` with the offending function name.
+- **Test failure**: pytest / go test / jest reported a test failure.
+  Read the error message, apply the minimum fix, do not restructure.
+- **Per-test duration drift**: a test took >2x its baseline. This is
+  almost always a missed deferred-capture (the test hung waiting for
+  a patched constant that wasn't actually patched). Apply the
+  deferred-capture fix for the relevant constant.
+- **Lint / type failure**: mypy / ruff / tsc / go vet / cargo clippy
+  reported an error. Apply the minimum fix.
+- **Architecture validation failure**: `architecture.json` drift or
+  phantom prompt files. Fix: either create the missing prompt file
+  at the path the arch entry claims, or remove the phantom entry.
+- **Regen gate failure (REGEN_FAILED)**: `pdd sync` failed to
+  regenerate the dev unit from its prompt. This means the prompt is
+  insufficient. Fix: strengthen the prompt with additional requirements
+  or constraints that were missing.
+- **Regen test mismatch (REGEN_TEST_MISMATCH)**: `pdd sync` regenerated
+  code that doesn't pass the test suite. Fix: either adjust the prompt
+  to produce code that passes, or fix the tests if they were incorrectly
+  migrated.
+- **Metadata missing (REGEN_METADATA_MISSING)**: `architecture_sync`
+  couldn't derive an arch entry for a child prompt because `<pdd-reason>`,
+  `<pdd-interface>`, or `<pdd-dependency>` tags are missing or empty.
+  Fix: add the missing tags to the prompt file.
+- **Architectural regression**: one of the 6 metrics got worse. This
+  means the extraction was architecturally wrong, not just buggy.
+  Emit `REPAIR_EXHAUSTED` — this child's extraction should be reverted
+  and a different option chosen.
+
+Apply the MINIMUM fix that resolves the failure. Do NOT reshuffle
+code, do NOT change signatures, do NOT introduce new abstractions.
+
+**When to CREATE new files**: If the verification failure is
+`children_completeness` or mentions "Expected N children but found M"
+or "Missing prompt files" or "Example file not found", you MUST create
+the missing files. In that case:
+- Read the investigation output to identify which symbols belong in
+  the missing child (see step 3's `tiered_symbols` and
+  step 4's selected_option's `children[N].symbols`)
+- Use the **Write tool** to actually create the file on disk
+- Use the **Read tool** afterwards to verify the file exists
+- Include the created paths in FILES_CREATED, not FILES_MODIFIED
+
+**When NOT to create new files**: For any other failure (re-exports,
+signatures, deferred capture, metadata tags), do NOT create new files.
+
+Common fixes:
+- Add missing re-export in `__init__.py`
+- Add deferred-capture rebind: `<NAME> = _p.<NAME>` inside a function
+- If `__all__` grew too large, trim docstrings, do NOT reshuffle code
+- Update a missed entry in `reference_updates`
+- Add missing `<pdd-*>` metadata tags to prompt files
+- Strengthen prompt requirements for regen gate failures
+- Create missing child files (when failure is children_completeness)
+
+% Output
+
+- `FILES_CREATED: <comma-separated list of NEW files created>` (if any)
+- `FILES_MODIFIED: <comma-separated list>`
+- Brief explanation of what each change addresses.
+
+**The orchestrator verifies every listed file exists on disk.** Emitting
+markers without actually writing the files will trigger another repair
+iteration.
+
+If you genuinely cannot fix the failure (e.g., a fundamental
+architectural issue surfaced by the verification, or a signature drift
+that requires a separate PR), emit `REPAIR_EXHAUSTED` as the last line
+and let the orchestrator ship the partial split with a warning or
+abort this child's extraction.

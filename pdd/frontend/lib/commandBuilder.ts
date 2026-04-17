@@ -107,13 +107,15 @@ export function buildCommandArgs(
       break;
 
     case CommandType.SPLIT:
-      // pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE [--output-sub] [--output-modified]
-      args.input_prompt = prompt.prompt;
-      args.input_code = codeFile;
-      if (options['example-code']) {
-        args.example_code = options['example-code'];
-        delete options['example-code'];
-      }
+      // pdd split TARGET_FILE — agentic 14-step pipeline against the code file.
+      // Legacy 3-arg split (--legacy INPUT_PROMPT INPUT_CODE EXAMPLE_CODE) is
+      // CLI-only; the web UI always drives the agentic default.
+      args.target_file = codeFile;
+      // Drop any legacy-mode options the UI may still be carrying so they don't
+      // leak through as unknown CLI flags.
+      delete options['example-code'];
+      delete options['output-sub'];
+      delete options['output-modified'];
       break;
 
     case CommandType.CHANGE:

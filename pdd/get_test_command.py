@@ -81,8 +81,8 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     1. For TS/TSX: smart runner detection via _detect_ts_test_runner() which returns
        both the command and the config directory (cwd). Critical for monorepos where
        test runner configs live in subdirectories (e.g., frontend/jest.config.js).
-    2. CSV run_test_command (if non-empty). cwd=None (caller decides).
-    3. Smart detection via default_verify_cmd_for(). cwd=None.
+    2. CSV run_test_command (if non-empty).
+    3. Smart detection via default_verify_cmd_for().
     4. None (triggers agentic fallback)
 
     Args:
@@ -111,13 +111,13 @@ def get_test_command_for_file(test_file: str, language: Optional[str] = None) ->
     if ext in lang_formats:
         csv_cmd = lang_formats[ext].get('run_test_command', '').strip()
         if csv_cmd:
-            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)), cwd=None)
+            return TestCommand(command=csv_cmd.replace('{file}', str(test_file)))
 
     # 3. Smart detection
     if resolved_language:
         smart_cmd = default_verify_cmd_for(resolved_language.lower(), str(test_file))
         if smart_cmd:
-            return TestCommand(command=smart_cmd, cwd=None)
+            return TestCommand(command=smart_cmd)
 
     # 4. No command available
     return None

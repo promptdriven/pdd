@@ -60,3 +60,9 @@ from .agentic_update import run_agentic_update
 from .update_main import resolve_prompt_code_pair, find_and_resolve_all_pairs, get_git_changed_files, derive_basename_and_language, is_code_changed, update_file_pair, update_main
 from .ci_drift_heal import DriftInfo, HealResult, detect_drift, heal_module, commit_and_push, main
 from .agentic_change_orchestrator import run_agentic_change_orchestrator
+from .agentic_common_worktree import get_git_root, worktree_exists, branch_exists, remove_worktree, delete_branch, resolve_main_ref, setup_worktree, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker
+from .get_lint_commands import LintCommand, get_lint_commands
+from .split_main import split_main
+from .split_validation import ValidationFailure, ValidationResult, validate_extraction
+from .agentic_split_orchestrator import run_agentic_split_orchestrator
+from .agentic_split import run_agentic_split

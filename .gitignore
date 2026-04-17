@@ -5,7 +5,9 @@ __pycache__/
 *.vsix
 .tmp/
 .agentic_prompt*
+.agentic_output_*.txt
 .cloud-image-hash
+examples/temp_split_dir/
 sync_order.sh
 
 staging_data_dump.json
@@ -250,3 +252,11 @@ fake_test_output.py
 
 # Solver infrastructure artifacts
 .gh-wrapper/
+
+# Auto-heal CI workspace artifacts — must never be committed.
+# pdd-auto-heal[bot] writes these to its working directory and a workflow
+# accidentally staged them, leaking a GitHub installation token to PR #1211
+# (commit bebf874a4, since dropped). Keep these ignored repo-wide.
+github_token
+diff_base.txt
+modules.txt

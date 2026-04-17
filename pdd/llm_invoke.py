@@ -1837,7 +1837,30 @@ def llm_invoke(
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
         logger.debug(f"  use_cloud: {use_cloud}")
 
-    # --- 0. Cloud Execution Path ---
+    # --- 0. Validate Inputs (before any dispatch) ---
+    # Validation runs before cloud dispatch so the ValueError contract holds
+    # even when cloud returns a non-fallback error (e.g. InsufficientCreditsError).
+    if messages:
+        if verbose:
+            logger.info("Using provided 'messages' input.")
+        # Basic validation of messages format
+        if use_batch_mode:
+            if not isinstance(messages, list) or not all(isinstance(m_list, list) for m_list in messages):
+                 raise ValueError("'messages' must be a list of lists when use_batch_mode is True.")
+            if not all(isinstance(msg, dict) and 'role' in msg and 'content' in msg for m_list in messages for msg in m_list):
+                 raise ValueError("Each message in the lists within 'messages' must be a dictionary with 'role' and 'content'.")
+        else:
+            if not isinstance(messages, list) or not all(isinstance(msg, dict) and 'role' in msg and 'content' in msg for msg in messages):
+                 raise ValueError("'messages' must be a list of dictionaries with 'role' and 'content'.")
+        formatted_messages = messages
+    elif prompt and input_json is not None:
+         if not isinstance(prompt, str) or not prompt:
+             raise ValueError("'prompt' must be a non-empty string when 'messages' is not provided.")
+         formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
+    else:
+        raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    # --- 1. Cloud Execution Path ---
     # Determine cloud usage: explicit param > environment > default (local)
     if use_cloud is None:
         # Check environment for cloud preference
@@ -1888,28 +1911,7 @@ def llm_invoke(
             logger.warning(f"Cloud invocation error: {e}")
             # Continue to local execution below
 
-    # --- 1. Load Environment & Validate Inputs ---
-    # .env loading happens at module level
-
-    if messages:
-        if verbose:
-            logger.info("Using provided 'messages' input.")
-        # Basic validation of messages format
-        if use_batch_mode:
-            if not isinstance(messages, list) or not all(isinstance(m_list, list) for m_list in messages):
-                 raise ValueError("'messages' must be a list of lists when use_batch_mode is True.")
-            if not all(isinstance(msg, dict) and 'role' in msg and 'content' in msg for m_list in messages for msg in m_list):
-                 raise ValueError("Each message in the lists within 'messages' must be a dictionary with 'role' and 'content'.")
-        else:
-            if not isinstance(messages, list) or not all(isinstance(msg, dict) and 'role' in msg and 'content' in msg for msg in messages):
-                 raise ValueError("'messages' must be a list of dictionaries with 'role' and 'content'.")
-        formatted_messages = messages
-    elif prompt and input_json is not None:
-         if not isinstance(prompt, str) or not prompt:
-             raise ValueError("'prompt' must be a non-empty string when 'messages' is not provided.")
-         formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
-    else:
-        raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+    # --- 2. Local execution uses already-validated formatted_messages ---
 
     # Best-effort: precompute a compact representation of the final messages.
     # We'll record (messages, raw_response) after we receive the response.
