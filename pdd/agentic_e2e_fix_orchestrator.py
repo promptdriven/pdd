@@ -974,6 +974,43 @@ def _detect_changed_files(cwd: Path, initial_file_hashes: Dict[str, Optional[str
     return changed
 
 
+# Build/cache/log artifacts that should not count as "fixes applied" when deciding
+# whether NOT_A_BUG classifications are legitimate. Matched as path components or
+# suffixes against the forward-slash-normalized relative path.
+_NOISE_PATH_COMPONENTS = frozenset({
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    "node_modules",
+    ".coverage",
+    "htmlcov",
+    ".DS_Store",
+})
+_NOISE_SUFFIXES = (".pyc", ".pyo", ".log", ".swp", ".swo")
+
+
+def _is_noise_path(path: str) -> bool:
+    """Return True if path is a build/cache/log artifact that should not count
+    as a fix for NOT_A_BUG suppression purposes."""
+    normalized = path.replace("\\", "/")
+    if any(normalized.endswith(suffix) for suffix in _NOISE_SUFFIXES):
+        return True
+    parts = normalized.split("/")
+    return any(part in _NOISE_PATH_COMPONENTS for part in parts)
+
+
+def _detect_meaningful_changes(cwd: Path, initial_file_hashes: Dict[str, Optional[str]]) -> List[str]:
+    """Like _detect_changed_files but filters out build/cache/log noise.
+
+    Used by the Step 3 NOT_A_BUG guards: a fix must be a *meaningful* edit
+    (not a stray `__pycache__/*.pyc` or `.pytest_cache` write) to suppress
+    a legitimate NOT_A_BUG classification.
+    """
+    return [p for p in _detect_changed_files(cwd, initial_file_hashes) if not _is_noise_path(p)]
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -1868,8 +1905,22 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
-                    has_direct_edits = bool(_detect_changed_files(cwd, initial_file_hashes))
+                    has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
                     if has_fixed_units or has_direct_edits:
+                        # Cycle-waste safeguard: if only direct edits (no PDD fix) and
+                        # this cycle made no meaningful progress, treat the prior fix as
+                        # terminal and exit successfully instead of looping.
+                        has_cycle_progress = bool(
+                            _detect_meaningful_changes(cwd, cycle_start_hashes)
+                        )
+                        if has_direct_edits and not has_fixed_units and not has_cycle_progress and current_cycle > 1:
+                            console.print(
+                                "[yellow]NOT_A_BUG with prior direct edits and no new progress "
+                                "this cycle — treating prior fix as terminal.[/yellow]"
+                            )
+                            success = True
+                            final_message = "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining state as not a bug."
+                            break
                         console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
                     else:
                         console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
@@ -2009,7 +2060,7 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Check if NOT_A_BUG was detected (exit outer loop too)
             has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
-            has_direct_edits = bool(_detect_changed_files(cwd, initial_file_hashes))
+            has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
             if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG" and not has_fixed_units and not has_direct_edits:
                 break
 
