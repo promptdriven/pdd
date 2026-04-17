@@ -202,6 +202,49 @@ class TestNoFixMode:
 
         mock_worktree.assert_not_called()
 
+    def test_provider_failure_on_step_5_aborts_no_fix_before_step_7(
+        self, mock_dependencies, default_args, tmp_path
+    ):
+        """A provider failure in step 5 should stop --no-fix before step 7."""
+        mock_run, _, _, _ = mock_dependencies
+        default_args["no_fix"] = True
+        default_args["cwd"] = tmp_path
+
+        saved_states = []
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (False, "All agent providers failed: openai: Timeout expired", 0.0, "")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        def capture_state(cwd, issue_number, workflow_type, state, state_dir,
+                          repo_owner, repo_name, use_github_state=True,
+                          github_comment_id=None):
+            saved_states.append(state.copy())
+            return None
+
+        mock_run.side_effect = side_effect
+
+        with patch("pdd.agentic_checkup_orchestrator.save_workflow_state",
+                   side_effect=capture_state):
+            success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "agent providers unavailable" in msg
+        assert "Step 5" in msg
+        assert mock_run.call_count == 5
+
+        called_labels = [c.kwargs["label"] for c in mock_run.call_args_list]
+        assert "step7" not in called_labels
+
+        final_state = saved_states[-1]
+        assert final_state["last_completed_step"] == 4
+        assert final_state["step_outputs"]["5"] == (
+            "FAILED: All agent providers failed: openai: Timeout expired"
+        )
+        assert "6_1" not in final_state["step_outputs"]
+
 
 # ---------------------------------------------------------------------------
 # Worktree Handling
