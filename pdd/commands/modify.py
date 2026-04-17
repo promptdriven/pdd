@@ -9,6 +9,7 @@ from rich.console import Console
 
 # Relative imports from parent package
 from ..split_main import split_main
+from ..agentic_split import run_agentic_split
 from ..change_main import change_main
 from ..agentic_change import run_agentic_change
 from ..update_main import update_main
@@ -19,38 +20,139 @@ from ..operation_log import log_operation
 console = Console()
 
 @click.command()
-@click.argument("input_prompt", type=click.Path(exists=True))
-@click.argument("input_code", type=click.Path(exists=True))
-@click.argument("example_code", type=click.Path(exists=True))
-@click.option("--output-sub", help="Optional path for saving the sub-prompt.")
-@click.option("--output-modified", help="Optional path for saving the modified prompt.")
+@click.argument("args", nargs=-1)
+@click.option("--legacy", is_flag=True, default=False, help="Use the legacy 2-LLM-call splitting path.")
+@click.option("--output-sub", help="Optional path for saving the sub-prompt (legacy mode).")
+@click.option("--output-modified", help="Optional path for saving the modified prompt (legacy mode).")
+@click.option("--diagnose", is_flag=True, default=False, help="Run steps 1-2 only, return diagnosis report.")
+@click.option("--propose-only", is_flag=True, default=False, help="Run steps 1-4 only, show all options with scores.")
+@click.option("--delete-dead", is_flag=True, default=False, help="Opt-in dead symbol deletion in extraction.")
+@click.option("--force-split", is_flag=True, default=False, help="Override LEAVE_ALONE diagnosis.")
+@click.option("--no-verify", is_flag=True, default=False, help="Skip verification gate (dev only).")
+@click.option("--skip-regen-gate", is_flag=True, default=False, help="Skip regen gate (dev only).")
+@click.option("--experimental-language", is_flag=True, default=False, help="Enable non-Python language support.")
+@click.option("--timeout-adder", type=float, default=0.0, help="Additional seconds per step timeout.")
+@click.option("--no-github-state", is_flag=True, default=False, help="Disable GitHub state persistence.")
+@click.option(
+    "--intent",
+    type=click.Choice(
+        ["reduce", "parallel", "reuse", "tests"], case_sensitive=False,
+    ),
+    default=None,
+    help="Goal of this split (reduce=monolith, parallel=team work, reuse=shared layer, tests=test speed).",
+)
+@click.option(
+    "--no-phase-extraction",
+    is_flag=True,
+    default=False,
+    help="Skip step 6a phase extraction (only move whole symbols).",
+)
+@click.option(
+    "--strangler",
+    is_flag=True,
+    default=False,
+    help="Strangler mode: one child per PR, sequentially.",
+)
 @click.pass_context
 @track_cost
 def split(
     ctx: click.Context,
-    input_prompt: str,
-    input_code: str,
-    example_code: str,
+    args: Tuple[str, ...],
+    legacy: bool,
     output_sub: Optional[str],
     output_modified: Optional[str],
+    diagnose: bool,
+    propose_only: bool,
+    delete_dead: bool,
+    force_split: bool,
+    no_verify: bool,
+    skip_regen_gate: bool,
+    experimental_language: bool,
+    timeout_adder: float,
+    no_github_state: bool,
+    intent: Optional[str],
+    no_phase_extraction: bool,
+    strangler: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
-    Split large complex prompt files into smaller, more manageable prompt files.
+    Split large dev units into smaller, more manageable ones.
+
+    \b
+    Agentic Mode (default):
+        pdd split TARGET_FILE
+
+    \b
+    Legacy Mode (--legacy):
+        pdd split --legacy INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
     """
     ctx.ensure_object(dict)
-    try:
-        # Call split_main with required arguments
-        result_data, total_cost, model_name = split_main(
-            ctx,
-            input_prompt_file=input_prompt,
-            input_code_file=input_code,
-            example_code_file=example_code,
-            output_sub=output_sub,
-            output_modified=output_modified,
-        )
-        return result_data, total_cost, model_name
 
-    except (click.Abort, click.UsageError):
+    try:
+        quiet = ctx.obj.get("quiet", False)
+        verbose = ctx.obj.get("verbose", False)
+
+        if legacy:
+            # Legacy mode: 3 positional args required
+            if len(args) != 3:
+                raise click.UsageError(
+                    "Legacy mode requires 3 arguments: INPUT_PROMPT INPUT_CODE EXAMPLE_CODE"
+                )
+            for arg in args:
+                if not Path(arg).exists():
+                    raise click.UsageError(f"File not found: {arg}")
+
+            result_data, total_cost, model_name = split_main(
+                ctx,
+                input_prompt_file=args[0],
+                input_code_file=args[1],
+                example_code_file=args[2],
+                output_sub=output_sub,
+                output_modified=output_modified,
+            )
+            return result_data, total_cost, model_name
+        else:
+            # Agentic mode: 1 positional arg required
+            if len(args) != 1:
+                raise click.UsageError(
+                    "Agentic mode requires exactly 1 argument: TARGET_FILE"
+                )
+
+            target_file = args[0]
+            success, message, cost, model, changed_files = run_agentic_split(
+                target_file=target_file,
+                verbose=verbose,
+                quiet=quiet,
+                timeout_adder=timeout_adder,
+                use_github_state=not no_github_state,
+                diagnose_only=diagnose,
+                propose_only=propose_only,
+                delete_dead=delete_dead,
+                force_split=force_split,
+                no_verify=no_verify,
+                skip_regen_gate=skip_regen_gate,
+                experimental_language=experimental_language,
+                intent=intent,
+                no_phase_extraction=no_phase_extraction,
+                strangler=strangler,
+            )
+
+            if not quiet:
+                status = "Success" if success else "Failed"
+                click.echo(f"Status: {status}")
+                click.echo(f"Message: {message}")
+                click.echo(f"Cost: ${cost:.4f}")
+                click.echo(f"Model: {model}")
+                if changed_files:
+                    click.echo("Changed files:")
+                    for f in changed_files:
+                        click.echo(f"  - {f}")
+
+            if not success:
+                raise click.exceptions.Exit(1)
+
+            return message, cost, model
+
+    except (click.Abort, click.exceptions.Exit, click.UsageError):
         raise
     except Exception as e:
         handle_error(e, "split", ctx.obj.get("quiet", False))

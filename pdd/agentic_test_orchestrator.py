@@ -25,6 +25,7 @@ from .agentic_common import (
     set_agentic_progress,
     clear_agentic_progress,
 )
+from .pytest_output import _find_project_root
 from .load_prompt_template import load_prompt_template
 
 
@@ -57,6 +58,15 @@ def _get_console():
 
 
 console = _get_console()
+
+
+def _detect_ci_cwd(files: List[str], worktree_path: Path) -> str:
+    """Return the likely CI cwd for the first file with a nested .pddrc, or ''."""
+    for test_ref in files:
+        detected = _find_project_root(worktree_path / test_ref)
+        if detected and str(detected) != str(worktree_path):
+            return str(detected)
+    return ""
 
 
 def _get_git_root(cwd: Path) -> Optional[Path]:
@@ -369,6 +379,13 @@ def run_agentic_test_orchestrator(
     if changed_files:
         context["files_to_stage"] = ", ".join(changed_files)
         context["test_files"] = "\n".join(f"- {f}" for f in changed_files)
+
+    # Resume: precompute likely_ci_cwd from cached Step 12 files so Steps 13/16
+    # get the correct subproject root even when Step 12 is skipped on resume.
+    if worktree_path:
+        _s12_files = _parse_changed_files(context.get("step12_output", ""))
+        if _s12_files:
+            context["likely_ci_cwd"] = _detect_ci_cwd(_s12_files, worktree_path)
 
     step_order: List[Union[int, float]] = [
         1,
@@ -713,6 +730,9 @@ def run_agentic_test_orchestrator(
         state["worktree_path"] = str(worktree_path)
         context["worktree_path"] = str(worktree_path)
 
+    if "likely_ci_cwd" not in context:
+        context["likely_ci_cwd"] = ""
+
     # Steps 12-17
     steps_tail = [
         (12, "agentic_test_step6_generate_tests_LLM", "Generate tests"),
@@ -751,6 +771,16 @@ def run_agentic_test_orchestrator(
             if changed_files:
                 context["files_to_stage"] = ", ".join(changed_files)
                 context["test_files"] = "\n".join(f"- {f}" for f in changed_files)
+            if new_files and worktree_path:
+                if step_num == 12 and not context.get("likely_ci_cwd"):
+                    # Fresh run: detect CI cwd from Step 12 files for Step 13.
+                    context["likely_ci_cwd"] = _detect_ci_cwd(new_files, worktree_path)
+                elif step_num == 15:
+                    # Step 15 may create tests in a different subproject than Step 12;
+                    # recompute so Step 16 validates from the correct cwd.
+                    _detected = _detect_ci_cwd(new_files, worktree_path)
+                    if _detected:
+                        context["likely_ci_cwd"] = _detected
 
         if step_num == 13:
             context["test_results"] = step_output

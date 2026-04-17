@@ -1,0 +1,123 @@
+<pdd-reason>LLM prompt for agentic split step 6a: for one child, decide whether its dominant symbol contains multiple responsibilities that should be extracted as phase helpers. Agent-only judgment — no line thresholds in Python.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You are the Phase Extraction planner. You run once per child,
+*before* the extraction itself (step 6). Your job: judge whether the
+largest symbol in this child has multiple responsibilities that can
+be extracted as phase-helper functions.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- worktree_path: {worktree_path}
+- current_child_index: {current_child_index}
+- current_child: {current_child}
+  (The child dict from the selected SplitPlan: name, prompt_file,
+  code_file, plus whatever symbol list the propose step attached.)
+- selected_option: {selected_option}
+  (Full SplitPlan for context — what the other children do.)
+- investigation: {step3_output}
+
+% What "phase extraction" means
+
+Phase extraction = breaking ONE large function's body into 3-8 helper
+functions, each handling one phase of the function's pipeline. The
+original function becomes a thin coordinator that calls the helpers
+in order. This is orthogonal to moving symbols between files — it
+refactors *inside* a function body.
+
+Good candidates for phase extraction:
+- The function has a clear linear pipeline (phase 1 → phase 2 → ...)
+- Phase boundaries are visible as top-level `try:` blocks, progress
+  markers (e.g. `_update_progress(stage="X", ...)`), comment headers
+  (`# === Phase 1: ... ===`), or contiguous sections with their own
+  local state
+- Each phase would be independently testable if pulled out
+- Pulling the phases out would shrink the coordinator to <300 lines
+  and each phase to <300 lines
+
+Bad candidates:
+- The function is tight and cohesive with no clear phase structure
+- The "large" function is actually just data/config (long constant
+  dict, long list comprehension)
+- Extracting would create helpers that each take 15+ parameters
+  (surface too wide to be worth it)
+- The function is recursive or iterative without a natural pipeline
+
+**Use your judgment. Do not apply a hardcoded line threshold.** A
+tight 600-line cohesive algorithm may be best left intact. A 250-line
+pipeline with 5 distinct phases may be a strong extraction candidate.
+
+% Your Task
+
+1. Read the child's source file (or the parent if the child hasn't
+   been extracted yet — use `children_already_extracted` to tell). Focus
+   on the largest symbol by line count *as a tiebreaker only* — the
+   first filter is "multiple responsibilities?", not "many lines?".
+
+2. Identify the single most-extractable symbol (usually the largest
+   function) in this child. If the child has no function >~150 lines
+   and no obvious pipeline structure, skip this child entirely.
+
+3. If you pick a symbol, examine its body. Look for:
+   - Sequential top-level blocks separated by blank lines / comments
+   - Progress markers (`_update_progress`, `console.print("Phase X")`,
+     `logger.info(...)`)
+   - `try:` blocks scoped to distinct sub-operations
+   - Local variables that are live only within a contiguous range
+     (these are phase boundaries — each phase has its own locals)
+
+4. Propose 3-8 phase helpers. For each, specify:
+   - `name` — verb-object, e.g. `_prepare_environment`, `_run_waterfall`
+   - `description` — 1 sentence on what it does
+   - `line_range` — `[start, end]` in the current source
+   - `inputs` — parameters it needs (usually a subset of the parent's
+     parameters + some locals)
+   - `outputs` — return type / what it produces
+   - `side_effects` — what it mutates (env vars, files, external API
+     calls). Be explicit — the coordinator needs to know.
+
+5. Draft a `parent_shell` — the rewritten parent function after
+   extraction. It should be a thin coordinator: declarations, then
+   helper calls in order, then return. Target ≤100 lines.
+
+% Output Contract
+
+Emit exactly one marker block. Two possible shapes:
+
+**Case A — Extraction warranted:**
+
+PHASE_EXTRACTION_BEGIN
+{
+  "should_extract": true,
+  "target_symbol": "function_name",
+  "target_file": "path/to/child/source.py",
+  "phases": [
+    {
+      "name": "_phase_name",
+      "description": "...",
+      "line_range": [start, end],
+      "inputs": ["param1: Type", "param2: Type"],
+      "outputs": "ReturnType",
+      "side_effects": ["mutates os.environ", "writes token_file"]
+    }
+    // ... 3-8 phases total
+  ],
+  "parent_shell": "def original_function(...) -> ...:\n    result1 = _phase_one(...)\n    ...\n    return final",
+  "rationale": "one paragraph on why this split makes the code clearer"
+}
+PHASE_EXTRACTION_END
+
+**Case B — Extraction NOT warranted:**
+
+PHASE_EXTRACTION_BEGIN
+{
+  "should_extract": false,
+  "reason": "one sentence — e.g., 'function is tight and cohesive with no clear phase structure', 'largest symbol is a 400-line constant dict', 'child has no function >150 lines'"
+}
+PHASE_EXTRACTION_END
+
+Do NOT write or modify any files in this step. You are planning only.
+Step 6 will consume your plan (via `{{phase_plan}}` in its context) and
+do the actual extraction.

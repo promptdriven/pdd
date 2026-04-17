@@ -62,7 +62,10 @@ POSITIONAL_ARGS = {
     "update": ["args"],
     "crash": ["prompt_file", "code_file", "program_file", "error_file"],
     "verify": ["prompt_file", "code_file", "verification_program"],
-    "split": ["input_prompt", "input_code", "example_code"],
+    # pdd split TARGET_FILE (agentic default, matches routes/commands.py).
+    # Legacy mode (--legacy with 3 positional args) is not exposed through the
+    # frontend/job queue; it must be invoked directly via the CLI.
+    "split": ["target_file"],
     "change": ["args"],  # Always uses variadic "args" (both agentic and manual modes)
     "detect": ["args"],
     "auto-deps": ["prompt_file", "directory_path"],

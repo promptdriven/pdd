@@ -1,3 +1,22 @@
+## v0.0.210 (2026-04-16)
+
+### Feat
+
+- add multi-cwd validation for agentic test workflow (#1174)
+- pdd split v2 — fully-agentic 14-step split with phase extraction, shared-layer gate, and deterministic safety nets (#1136)
+
+### Fix
+
+- **llm_invoke**: validate inputs before cloud dispatch
+- abort no-fix checkup after provider failure
+- **arch-validate**: declare agentic_common dep + gitignore CI workspace artifacts (#1211)
+- migrate frontend, server, MCP, zsh callers to agentic `pdd split` (#1157)
+- address 7 bugs found by ultrareview
+- xfail TestLeaveAlone — cloud VM has claude binary but it is unauthenticated
+- skip TestLeaveAlone when no agentic provider is installed; revert step-0 non-blocking
+- make step 0_intent failure non-blocking — fall back to REDUCE_MONOLITH
+- address Greg's three review blockers for pdd split PR (#1157)
+
 ## v0.0.209 (2026-04-15)
 
 ### Feat

@@ -622,7 +622,7 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "7" ]; then
     # Create split instruction prompt
     echo "Extract the 'add' function into a separate sub-prompt." > "$SPLIT_PROMPT"
 
-    run_pdd_command split --output-sub "$SPLIT_SUB_PROMPT" --output-modified "$SPLIT_MODIFIED_PROMPT" \
+    run_pdd_command split --legacy --output-sub "$SPLIT_SUB_PROMPT" --output-modified "$SPLIT_MODIFIED_PROMPT" \
                           "$SPLIT_PROMPT" \
                           "$MATH_SCRIPT" \
                           "$MATH_VERIFICATION_PROGRAM"

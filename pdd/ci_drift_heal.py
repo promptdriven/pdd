@@ -374,12 +374,16 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
     console.print(f"[blue]⟳ {label}: {' '.join(cmd)}[/blue]")
     rollback_state = _capture_rollback_state(cmd, env)
     try:
+        # pdd sync summarizes every context file before healing and can route
+        # to slow-path models (e.g. Claude Opus via Vertex) on large repos.
+        # 20 min covers Opus summarization; GCB step-level timeout still caps
+        # total runaway at 30 min.
         result = subprocess.run(
             cmd,
             env=env,
             capture_output=True,
             text=True,
-            timeout=600,
+            timeout=1200,
         )
         if result.returncode == 0:
             console.print(f"[green]✓ {label} succeeded[/green]")

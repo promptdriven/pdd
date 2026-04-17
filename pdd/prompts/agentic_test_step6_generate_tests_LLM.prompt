@@ -83,6 +83,14 @@ You are now working in an isolated git worktree at: {worktree_path}
    - For Playwright: check if `npx playwright install` is needed
    - For pytest: ensure the package is available
 
+% Path Safety (CRITICAL for monorepos)
+
+When generating tests that use `subprocess.run(..., cwd=...)` or any path relative to the caller's working directory:
+- **NEVER** hardcode a relative string path like `cwd="extensions/my_app"` — this breaks when CI runs from a different directory.
+- **ALWAYS** compute paths relative to `__file__`, e.g. `Path(__file__).resolve().parents[N]` where N is the number of directory levels between the test file and the target directory.
+- For locating project files (configs, fixtures, data), use `Path(__file__).resolve().parent / "fixtures" / "data.json"` instead of `"tests/fixtures/data.json"`.
+- This ensures tests work regardless of the working directory they are invoked from.
+
 % Your Task
 
 1. **Review the enhanced test plan from Steps 5 and 5b**

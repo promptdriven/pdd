@@ -1,0 +1,134 @@
+<pdd-reason>LLM prompt for agentic split step 2: classify architectural problem or declare LEAVE_ALONE.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You are an architecture diagnostician. Given the survey from step 1,
+you must decide whether splitting the target file would actually improve
+the architecture — or whether "leave it alone" is the right answer.
+%
+% Splitting is a COSTLY operation: 40+ hours human time, risk of
+% regressions, test seam preservation, architecture.json updates,
+% worktree + PR cycle. It must be justified by a real architectural
+% problem. Your job is to name the problem or declare there isn't one.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- repo_root: {cwd}
+- step1_output: {step1_output}
+  (Contains BOTH blocks from step 1: ARCHITECTURE_SURVEY — sibling_
+  duplication, existing_shared_layer, project_scale, organizational_
+  style — and DEV_UNIT_DETAILS — top_level_symbols, module_constants,
+  churn_per_symbol, coupling_clusters, importers, external_refs, and
+  derived health signals max_hotspot_density / longest_function_lines
+  / dead_symbol_candidates / test_coverage_ratio / closure_density.
+  You do NOT need to re-run wc/grep/git; step 1 already did.)
+
+% Your Task
+
+1. **Read step 1's health signals directly from `DEV_UNIT_DETAILS`** — no
+   need to open the file or re-run commands. Step 1 already computed:
+   - max_hotspot_density (highest churn density across all symbols)
+   - longest_function_lines (biggest function in the file)
+   - dead_symbol_candidates (symbols with 0 refs and no commits in 730d)
+   - test_coverage_ratio (test_file_lines / source_lines)
+   - churn_per_symbol (per-symbol commits + density + tier)
+   - coupling_clusters (symbols that historically change together)
+   - closure_density (tangle proxy)
+
+2. **Cross-reference with step 1's `ARCHITECTURE_SURVEY`**:
+   - `sibling_duplication` list from step 1 — how many of the target's
+     top_level_symbols appear in sibling files? (Already computed in
+     step 1 Part A #6.)
+   - `existing_shared_layer` from step 1 — do any of the target's
+     symbols already have equivalents there (signal for SYMPTOM_OF_
+     ELSEWHERE)?
+
+3. **Classify the architectural problem(s)** — every problem found, with
+   severity and evidence.
+
+   Categories:
+   - `hotspot` — function(s) with >30% churn density
+   - `missing_shared_layer` — sibling_duplication count >3
+   - `dead_code` — dead-code ratio >20%
+   - `cohesive_but_huge` — one workflow, high size, LOW hotspot
+     density — this is NOT a problem, it's a valid pattern
+   - `tangle` — closure density >30/1000 lines
+   - `testing_gap` — test coverage ratio <0.4
+
+4. **Rank the problems by severity** (critical > high > medium > low).
+
+5. **Decide the recommended action** based on the top problem:
+
+   | Top problem | Recommended action |
+   |---|---|
+   | hotspot (severity high+) | `split_this_file` |
+   | missing_shared_layer | `split_shared_layer` — split this file as
+     part of extracting the shared layer |
+   | dead_code (severity high) | `delete_dead_first` — clean up before
+     splitting |
+   | cohesive_but_huge | `leave_alone` with rationale
+     `COHESIVE_WORKFLOW` |
+   | tangle (severity critical) | `leave_alone` with rationale
+     `TOO_TANGLED_TO_SPLIT` — recommend a separate redesign issue |
+   | testing_gap | `leave_alone` with rationale `TESTING_GAP` |
+   | no problems of any significance | `leave_alone` with rationale
+     `ACCIDENTAL_BLOAT` or `SYMPTOM_OF_ELSEWHERE` |
+
+6. **If recommended action is `leave_alone`**, output `DIAGNOSIS: LEAVE_ALONE`
+   as the LAST line of your response. The orchestrator will stop here
+   and return the diagnosis to the user. Do NOT continue to further
+   steps. Include the rationale in the DIAGNOSIS_BEGIN/END block.
+
+7. **If recommended action is any other value**, continue to step 3
+   (investigate).
+
+% Output
+
+Wrap in `DIAGNOSIS_BEGIN / DIAGNOSIS_END` markers with these fields:
+
+- target_file
+- target_file_lines
+- problems: list of { category, severity, evidence, affected_symbols }
+- top_problem: single problem or null
+- recommended_action: `split_this_file` | `split_shared_layer` | `delete_dead_first` | `leave_alone`
+- leave_alone_rationale: one of COHESIVE_WORKFLOW | ACCIDENTAL_BLOAT |
+  SYMPTOM_OF_ELSEWHERE | TOO_TANGLED_TO_SPLIT | TESTING_GAP (if applicable)
+- confidence: 0.0-1.0 — how sure you are of the diagnosis
+- reasoning: 2-3 sentence narrative explaining the top problem and the
+  recommended action
+
+% Important
+- If you're unsure, prefer `leave_alone` over `split_this_file`. The
+  cost of a wrong split is much higher than the cost of a missed split.
+- Do NOT open the full target file in this step. You only need enough
+  context to classify the problem.
+- `cohesive_but_huge` is a VALID architectural pattern. A 1,800-line
+  file that implements one workflow (like PDD CLI's `agentic_common.py`)
+  is correct. Don't punish size alone.
+
+% Treat missing git signals as INCONCLUSIVE, not as evidence against splitting
+
+When step 1's `churn_per_symbol`, `coupling_clusters`, or
+`max_hotspot_density` are empty, zero, or marked "N/A", that typically
+means one of:
+  - single-commit test repo (no history to mine)
+  - brand-new file (inserted recently, no churn yet)
+  - history lost to a squash/rewrite
+
+In any of those cases you have NO INFORMATION, not evidence that the
+file is a cohesive-but-huge valid pattern. Do NOT return `leave_alone`
+with rationale `COHESIVE_WORKFLOW` on the basis of empty churn signals
+alone. Instead, fall back to size + `sibling_duplication` + symbol-count
++ `longest_function_lines` as your primary signals:
+
+  - If `target_file_lines` >= 2000 AND `longest_function_lines` >= 500
+    AND the file has >= 6 top-level symbols, **recommend `split_this_file`**
+    even with empty churn — the size + structural complexity is enough
+    signal on its own.
+  - If `sibling_duplication` is non-empty, prefer `split_shared_layer`.
+  - Only return `leave_alone` with rationale `COHESIVE_WORKFLOW` when
+    the file is genuinely implementing one workflow end-to-end AND the
+    largest function is <300 lines AND there's no sibling duplication.
+    A 3,000-line file with one 1,200-line function is NOT
+    `COHESIVE_WORKFLOW` — it's an unextracted multi-phase pipeline.

@@ -1268,7 +1268,7 @@ fi
 # 10. Split
 if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "10" ]; then
   log "10. Testing 'split' command"
-  run_pdd_command split --output-sub "$SPLIT_SUB_PROMPT" --output-modified "$SPLIT_MODIFIED_PROMPT" \
+  run_pdd_command split --legacy --output-sub "$SPLIT_SUB_PROMPT" --output-modified "$SPLIT_MODIFIED_PROMPT" \
                         "$SPLIT_PROMPT" \
                         "$MATH_SCRIPT" \
                         "$MATH_VERIFICATION_PROGRAM"

@@ -1,0 +1,144 @@
+<pdd-reason>LLM prompt for agentic split step 7: qualitative assessment of split improvement.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% Phase A's deterministic gates have passed: tests are green, lint is
+clean, all children were extracted, architecture.json is consistent,
+and the six quantitative metrics have been measured before and after.
+Your job is to assess whether the resulting split is architecturally
+BETTER than the pre-split state — not just "correct" but "an
+improvement." Numeric metrics only tell half the story; this is where
+the agent's judgment counts.
+
+% Inputs
+- target_file: {target_file}
+- language: {language}
+- pre_split_state: {step1_output}
+  (The intra-module view from before extraction: symbols, churn,
+  coupling, external refs.)
+- selected_plan: {selected_option}
+  (The plan that was executed, including the qualitative PROJECTION
+  the agent made in step 4 before extraction.)
+- post_split_state: {post_split_state}
+  (List of newly created files, modified parent file, git diff output.)
+- quantitative_metrics: {quantitative_metrics}
+  (Pre and post values for all 6 metrics, plus deltas.)
+
+% Your Task
+
+Read the post-split file(s) and compare them to the pre-split state.
+Use code-reading intelligence — the same skill you used in step 1 to
+understand the target. Then evaluate the split along three qualitative
+dimensions:
+
+1. **Cohesion**: does each new module / child correspond to a coherent
+   concept? Do the symbols inside each child belong together? Can you
+   describe each child's purpose in one short sentence?
+   - "clear" = each child has one obvious purpose; the grouping is
+     natural and would be the same decision anyone else made
+   - "moderate" = the grouping is reasonable but some choices are
+     judgment calls; alternative groupings would also be defensible
+   - "none" = the grouping doesn't reflect any clear principle; it
+     looks mechanical (by line count, alphabetical, etc.)
+   - "worse" = the grouping actively fragments a coherent concept
+     across multiple children
+
+2. **Boundary clarity**: are the boundaries between children sharp?
+   Can you tell, looking at a new function, which child it should
+   belong to without thinking? Or does the decision require reading
+   multiple children to figure out?
+   - "clear" = boundaries are obvious; any new symbol's home is
+     unambiguous
+   - "moderate" = boundaries are mostly clear; edge cases exist but
+     are few
+   - "none" = boundaries are fuzzy; similar-looking symbols live in
+     different children for no obvious reason
+   - "worse" = boundaries introduce arbitrary coupling (child A
+     imports from child B which imports from child C where the
+     original file had direct calls)
+
+3. **Change decorrelation** (also called "churn alignment"): do the
+   coupling clusters AND co_changed_files from step 1 (symbols/files
+   that historically changed together) now live in the same children?
+   Or did the split separate things that should have stayed together?
+   - "clear" = the coupling clusters + co_changed_files from step 1
+     map 1:1 (or close) to the new children; future changes will
+     touch fewer files than before
+   - "moderate" = mostly aligned, some cross-cluster splits
+   - "none" = the split ignored the historical coupling signals
+   - "worse" = the split actively separates tightly-coupled symbols
+
+4. **Coupling reduction**: how do cross-child imports compare to the
+   original file's internal cross-symbol references?
+   - Count the cross-child imports in the post-split state (every
+     `from .sibling import X` or equivalent between children).
+   - Compare against the number of cross-symbol references that would
+     have existed in the original (step 1's `external_refs` gives you
+     a proxy — but what matters is references *between symbols you've
+     now separated*).
+   - "clear" = cross-child imports are minimal; children communicate
+     through a thin public interface
+   - "moderate" = some cross-child imports but bounded; no child
+     imports from 3+ others
+   - "none" = cross-child imports mirror the original cross-symbol
+     references (coupling was moved, not reduced)
+   - "worse" = cross-child imports introduce NEW coupling that wasn't
+     in the original (e.g. children import each other in a cycle)
+
+5. **Phase extraction quality** (only when step 6a ran and produced
+   extractions):
+   - Did phase extraction produce helpers with clear single
+     responsibilities, or did it mechanically slice the function at
+     arbitrary boundaries?
+   - Is the rewritten parent_shell a readable thin coordinator, or
+     does it still carry significant logic?
+   - "clear" = helpers are named by responsibility, each ≤300 lines;
+     coordinator ≤100 lines
+   - "moderate" = helpers adequate but some are thin/redundant
+   - "none" = no phase extraction ran (not penalized — agent
+     judgment)
+   - "worse" = helpers are arbitrary slices; coordinator still
+     >300 lines
+
+% Output
+
+Emit a `QUALITATIVE_ASSESSMENT_BEGIN / QUALITATIVE_ASSESSMENT_END`
+JSON block with these fields:
+
+```json
+{
+  "cohesion": {
+    "rating": "clear" | "moderate" | "none" | "worse",
+    "evidence": "2-3 sentences citing specific children and their symbols"
+  },
+  "boundary_clarity": {
+    "rating": "clear" | "moderate" | "none" | "worse",
+    "evidence": "2-3 sentences with specific examples"
+  },
+  "change_decorrelation": {
+    "rating": "clear" | "moderate" | "none" | "worse",
+    "evidence": "2-3 sentences referencing step 1's coupling clusters and co_changed_files"
+  },
+  "coupling_reduction": {
+    "rating": "clear" | "moderate" | "none" | "worse",
+    "evidence": "count cross-child imports and compare to original"
+  },
+  "phase_extraction": {
+    "rating": "clear" | "moderate" | "none" | "worse",
+    "evidence": "identify any helpers that came from phase extraction and assess their single-responsibility clarity; 'none' is the correct rating if step 6a decided not to extract"
+  },
+  "overall_verdict": "clear_improvement" | "marginal" | "not_an_improvement" | "regression",
+  "projection_vs_reality": "brief note on whether the actual outcome matched the projection you made in step 4 (included in your inputs)"
+}
+```
+
+% Important
+- Be honest. If the split doesn't improve cohesion, say so. A false
+  "clear" rating here will ship bad splits; a false "none" rating
+  will reject good ones. The decision matrix relies on your honesty.
+- Compare the projection you made in step 4 to what actually
+  happened. If they diverge significantly, note it — this is useful
+  feedback for future extractions.
+- Read the actual post-split files. Do NOT judge based on the plan
+  alone — the plan's intent and the extraction's execution can
+  differ, especially after repair iterations.

@@ -1,0 +1,85 @@
+<pdd-reason>LLM prompt for agentic split step 9: after the main pipeline and repair have completed, decide whether any child remains too monolithic for its responsibility and should trigger a second refinement pass. Agent-only judgment — no line thresholds in Python.</pdd-reason>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% You are the Refine Check. You run after step 8 repair. Your job: look
+at the current state of the split and decide whether a second pass
+would materially improve the architecture, or whether shipping now is
+the right call.
+
+% Inputs
+- target_file: {target_file}
+- worktree_path: {worktree_path}
+- changed_files: {changed_files}
+- selected_option: {selected_option}
+- quantitative_metrics: {quantitative_metrics}
+- qualitative_assessment: {step7_output}
+- repair_outcome: {step8_output}
+- iteration_count: {iteration_count}
+  (How many times the main pipeline has run on this target. Cap is 3.)
+
+% Your task
+
+1. Inspect every child source file in `changed_files`. Note sizes
+   (`wc -l`) and — more importantly — whether any one child still
+   contains a dominant function that owns multiple responsibilities.
+
+2. Assess three questions:
+   a. **Is any child still a mini-monolith?** A child whose main
+      function is >600 lines AND has obvious phase structure is a
+      refinement candidate. A child whose main function is large but
+      tight/cohesive is NOT.
+   b. **Is coupling acceptable?** Re-check cross-child imports. If
+      one child imports heavily from 3+ others, it may be in the
+      wrong place or need splitting.
+   c. **Would a second pass actually help?** If iteration_count is
+      already 2 or 3, the agent has tried — stop.
+
+3. If you recommend refinement, pick the SINGLE worst child whose
+   dominant function has extractable phase structure. Refinement is
+   scoped: the next pass runs **step 6a (phase_extract) + step 6
+   (extract) only** on that file — NOT a full re-plan. Refinement
+   is therefore useful only when the flagged child has a function
+   that can be broken into phases; it is useless when the child
+   needs a different *decomposition* (which would require re-running
+   step 4 on the child, something this pipeline intentionally does
+   not do). If the child's problem is "wrong boundary" rather than
+   "un-extracted phases", emit should_refine=false with a note that
+   the user should re-run `pdd split` on that child directly.
+
+% Output Contract
+
+Emit exactly one marker block:
+
+**Case A — Refine:**
+
+REFINE_CHECK_BEGIN
+{
+  "should_refine": true,
+  "target_child_file": "path/to/child/source.py",
+  "reason": "one paragraph — what's wrong, what a second pass would fix",
+  "suggested_intent": "REDUCE_MONOLITH|EXTRACT_REUSABLE_LAYER"
+}
+REFINE_CHECK_END
+
+**Case B — Ship as-is:**
+
+REFINE_CHECK_BEGIN
+{
+  "should_refine": false,
+  "reason": "one sentence — what's good enough, and why further work would be diminishing returns"
+}
+REFINE_CHECK_END
+
+% Stopping rules (guard against runaway)
+
+- If `iteration_count >= 3`, always emit `should_refine: false`
+- If the previous iteration's repair emitted `REPAIR_EXHAUSTED`, do
+  not refine — that means the agent couldn't fix what it created;
+  another pass would likely make it worse
+- If `qualitative_assessment.overall_verdict` is `"clear_improvement"`
+  AND every child is under 800 lines, refinement is probably
+  unnecessary — emit `should_refine: false` unless something stands
+  out strongly
+
+Do NOT modify any files in this step. You are judging only.

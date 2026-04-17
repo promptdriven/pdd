@@ -758,6 +758,10 @@ def code_generator_main(
             console.print(f"[yellow]Warning: Could not read existing output file {output_path}: {e}[/yellow]")
             existing_code_content = None
 
+        # Treat empty/whitespace-only files as absent — no code to incrementally patch
+        if existing_code_content is not None and not existing_code_content.strip():
+            existing_code_content = None
+
         if existing_code_content is not None:
             if "original_prompt_file" in input_strings:
                 original_prompt_content_for_incremental = input_strings["original_prompt_file"]

@@ -28,6 +28,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (12-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
+- `pdd split <target-file>` - Diagnose and split large dev units (14-step workflow with intent classification, diagnosis, phase extraction, verification, and repair)
 - `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (18-step workflow with exploratory testing, contract validation, accessibility audits)
 
@@ -2048,10 +2049,69 @@ This feature works seamlessly with issues processed by `pdd bug`. The typical wo
 
 ### 7. split
 
-Split large complex prompt files into smaller, more manageable prompt files.
+Diagnose whether a PDD dev unit has an architectural problem, and if so, split the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. The 14-step agentic workflow classifies intent, surveys the codebase, diagnoses the problem, proposes options with a responsibility-based rubric, extracts children with phase decomposition, runs deterministic verification gates (including test-seam resolution and parent-wiring checks), proves the new prompts can regenerate via `pdd sync`, and derives `architecture.json` from prompt metadata tags.
 
+**Agentic Mode (default):**
 ```
-pdd [GLOBAL OPTIONS] split [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
+pdd [GLOBAL OPTIONS] split [OPTIONS] TARGET_FILE
+```
+
+Arguments:
+- `TARGET_FILE`: The source file to diagnose and potentially split (e.g., `pdd/large_module.py`).
+
+The 14-step workflow:
+0. **Intent**: Classify the goal (REDUCE_MONOLITH / ENABLE_PARALLEL_WORK / EXTRACT_REUSABLE_LAYER / REDUCE_TEST_TIME); re-weights step 4's rubric
+1. **Survey**: Neighborhood survey + target-file scan (architecture, siblings, churn, health signals, co-change)
+2. **Diagnose**: Classify architectural problem; can return `LEAVE_ALONE` (stops here)
+3. **Investigate**: Extend with test-seam data, test ownership classification, "stays put" rules, shared-layer candidates
+4. **Propose Options**: 2-4 SplitPlan options with responsibility-based scoring; auto-pick winner
+5. **Setup Worktree**: Create isolated git worktree for extraction
+6a. **Phase Extract (planning)**: For each child, judge whether its dominant symbol has multi-phase structure worth extracting as sibling-file helpers
+6. **Extract**: One child per call, full dev unit (prompt + code + example + tests); applies phase plan from 6a when present
+7a. **Verify Local**: Deterministic — tests, lint, parent line reduction, test-seam resolution
+7b. **Regen Gate**: Deterministic — `pdd sync` must regenerate each new prompt
+7c. **Arch Sync**: Deterministic — derive `architecture.json` from `<pdd-*>` prompt metadata tags
+7. **Assess**: LLM qualitative verdict; feeds improvement gate alongside 7a metrics
+8. **Repair**: Fix verification failures with per-child accumulator (max 5 iterations per child)
+9. **Refine Check**: Ask the agent whether any child is still too monolithic; if yes, run one focused phase-extraction pass
+
+Options:
+- `--diagnose`: Run steps 0-2 only, return diagnosis report
+- `--propose-only`: Run steps 0-4 only, show all options with scores (cheap plan preview)
+- `--intent [reduce|parallel|reuse|tests]`: Skip step 0 and set intent explicitly (reduce = REDUCE_MONOLITH, etc.)
+- `--no-phase-extraction`: Skip step 6a (only move whole symbols, no refactoring inside functions)
+- `--strangler`: Produce N sequential PRs, one child per PR (reviewable, reversible)
+- `--delete-dead`: Opt-in dead symbol deletion (default: surface candidates for human review)
+- `--force-split`: Override `LEAVE_ALONE` diagnosis
+- `--no-verify`: Skip step 7a test gate (dev only)
+- `--skip-regen-gate`: Skip step 7b regen gate (dev only, logged loudly)
+- `--experimental-language`: Opt-in for non-Python languages (Python is the only `supported` tier in this release)
+- `--no-github-state`: Disable GitHub state persistence (local-only)
+- `--timeout-adder FLOAT`: Add seconds to each step timeout (default: 0.0)
+
+Example (agentic mode — full pipeline):
+```bash
+pdd split pdd/large_module.py
+```
+
+Example (diagnosis only):
+```bash
+pdd split --diagnose pdd/large_module.py
+```
+
+Example (compare options without extracting):
+```bash
+pdd split --propose-only pdd/large_module.py
+```
+
+Example (extract reusable shared layer across sibling workers):
+```bash
+pdd split pdd/big_worker.py --intent=reuse
+```
+
+**Legacy Mode:**
+```
+pdd [GLOBAL OPTIONS] split --legacy [OPTIONS] INPUT_PROMPT INPUT_CODE EXAMPLE_CODE
 ```
 
 Arguments:
@@ -2062,10 +2122,11 @@ Arguments:
 Options:
 - `--output-sub LOCATION`: Specify where to save the generated sub-prompt file. The default file name is `sub_<basename>.prompt`. If an environment variable `PDD_SPLIT_SUB_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--output-modified LOCATION`: Specify where to save the modified prompt file. The default file name is `modified_<basename>.prompt`. If an environment variable `PDD_SPLIT_MODIFIED_PROMPT_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
+- `--legacy`: Use the legacy 2-LLM-call splitting path. When omitted, `split()` acts as the prompt-splitting primitive for the agentic split orchestrator. This flag is kept for one release for backward compatibility.
 
-Example:
+Example (legacy mode):
 ```
-pdd [GLOBAL OPTIONS] split --output-sub prompts/sub_data_processing.prompt --output-modified prompts/modified_main_pipeline.prompt data_processing_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py 
+pdd [GLOBAL OPTIONS] split --legacy --output-sub prompts/sub_data_processing.prompt --output-modified prompts/modified_main_pipeline.prompt data_processing_pipeline_python.prompt src/data_pipeline.py examples/pipeline_interface.py
 ```
 
 ### 8. change
@@ -2100,7 +2161,7 @@ The 12-step workflow:
 
 **Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
-**Worktree Branching Behavior**: When running `pdd change` or `pdd bug`, a new git worktree is created based on your current HEAD:
+**Worktree Branching Behavior**: When running `pdd change`, `pdd bug`, or `pdd split`, a new git worktree is created based on your current HEAD:
 - **From main/master**: Branch is based on latest main - creates independent PR
 - **From feature branch**: Branch inherits commits from that branch - useful for stacked/dependent PRs
 
