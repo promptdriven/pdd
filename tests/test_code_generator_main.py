@@ -3904,6 +3904,7 @@ def test_issue_777_empty_output_file_git_derived_prompt_falls_back_to_full(
     single write site (normalization of `existing_code_content`) guards both
     entry paths.
     """
+    mock_ctx.obj['local'] = True
     # Prompt lives inside the git repo; HEAD has the "old" content, on-disk has "new".
     prompt_filename = "issue_777_git_prompt.prompt"
     prompt_file_path = git_repo_setup / prompt_filename
