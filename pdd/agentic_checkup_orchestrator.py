@@ -542,6 +542,9 @@ def run_agentic_checkup_orchestrator(
             github_comment_id=github_comment_id,
         )
 
+    def _is_provider_failure(output: str) -> bool:
+        return "All agent providers failed" in output
+
     def _handle_step_result(
         step_num: Union[int, float],
         success: bool,
@@ -586,7 +589,7 @@ def run_agentic_checkup_orchestrator(
             consecutive_provider_failures = 0
         else:
             step_outputs[step_key] = f"FAILED: {output}"
-            if "All agent providers failed" in output:
+            if _is_provider_failure(output):
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
                     _save_state()
@@ -672,6 +675,13 @@ def run_agentic_checkup_orchestrator(
             abort = _handle_step_result(step_num, success, output, cost, model)
             if abort is not None:
                 return abort
+            if not success and _is_provider_failure(output):
+                return (
+                    False,
+                    f"Aborting after Step {step_num}: agent providers unavailable",
+                    total_cost,
+                    last_model_used,
+                )
 
         # Skip step 6 sub-steps.
         for sub_step in (6.1, 6.2, 6.3):
