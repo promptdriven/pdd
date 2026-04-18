@@ -1,8 +1,10 @@
 """
-Detect consecutive duplicate expensive CLI invocations.
+Detect duplicate expensive CLI invocations within a recent time window.
 
-Warns or blocks when the same command is re-run within a time window with the
-same argv, project root, and input fingerprint (git HEAD plus ``git status
+Persists a keyed store of recent invocations (``.pdd/last_run.json``) so that
+interleaved commands across different modules each have their own entry. Warns
+or blocks when a guarded subcommand is re-run within the window with the same
+argv, project root, and input fingerprint (git HEAD plus ``git status
 --porcelain``), so uncommitted prompt edits are not treated as duplicates.
 """
 
@@ -129,7 +131,54 @@ def _allow_duplicate(ctx: click.Context) -> bool:
     return False
 
 
+def _signature_key(project_root: Path, argv_tail: List[str]) -> str:
+    """Stable key identifying a distinct invocation (argv + project root, not content)."""
+    raw = (str(project_root.resolve()) + "\n" + json.dumps(argv_tail)).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _is_legacy_single_record(data: Dict[str, Any]) -> bool:
+    """True if the file contains the old single-record format (has 'argv' at top level)."""
+    return "argv" in data
+
+
+def _entry_timestamp(entry: Any) -> Optional[float]:
+    """Return the entry's timestamp as float, or None if malformed/missing.
+
+    Callers treat None like an expired entry (skip / don't compare), so a
+    corrupt ``.pdd/last_run.json`` never makes the guard raise.
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        return float(entry.get("timestamp", 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_store(path: Path) -> Dict[str, Any]:
+    """Load the keyed store from disk, returning {} on missing/corrupt file."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        # Migrate legacy single-record format into a keyed store on load.
+        if _is_legacy_single_record(data):
+            argv = data.get("argv") or []
+            root = data.get("project_root") or data.get("cwd") or ""
+            key = hashlib.sha256(
+                (root + "\n" + json.dumps(argv, sort_keys=True)).encode()
+            ).hexdigest()[:16]
+            return {key: data}
+        return data
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 def load_last_run(project_root: Path) -> Optional[Dict[str, Any]]:
+    """Return the raw on-disk dict exactly as written; does not migrate legacy format."""
     path = _last_run_path(project_root)
     if not path.is_file():
         return None
@@ -140,6 +189,27 @@ def load_last_run(project_root: Path) -> Optional[Dict[str, Any]]:
         return data
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _lookup_matching_record(
+    project_root: Path,
+    argv_tail: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Return the stored record for this exact invocation signature, or None.
+
+    Routes through load_last_run so test mocks that patch load_last_run keep working.
+    Legacy single-record files are returned as-is; keyed stores are looked up by key.
+    """
+    # Note: must call load_last_run (not _load_store) so existing tests that mock
+    # load_last_run to return a single-record dict continue to match. Inlining
+    # _load_store here would silently break ~20 pre-existing mocked tests.
+    raw = load_last_run(project_root)
+    if raw is None:
+        return None
+    if _is_legacy_single_record(raw):
+        return raw
+    key = _signature_key(project_root, argv_tail)
+    return raw.get(key)
 
 
 def save_last_run(
@@ -159,7 +229,18 @@ def save_last_run(
             "subcommand": subcommand,
             "timestamp": time.time(),
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        store = _load_store(path)
+        key = _signature_key(project_root, argv_tail)
+        cutoff = time.time() - _duplicate_window_seconds()
+        # Prune expired/malformed entries, then upsert. A bad timestamp (non-numeric,
+        # missing, or non-dict value) is treated as expired so save_last_run cannot
+        # crash on corrupt persisted state. payload.timestamp is now, so it survives.
+        store = {
+            k: v for k, v in store.items()
+            if (ts := _entry_timestamp(v)) is not None and ts > cutoff
+        }
+        store[key] = payload
+        path.write_text(json.dumps(store, indent=2), encoding="utf-8")
     except OSError:
         pass
 
@@ -181,8 +262,13 @@ def _duplicate_inputs_match(prev: Dict[str, Any], project_root: Path, argv_tail:
 
 def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     """
-    If the next subcommand is guarded and matches the last run (argv, project root,
-    fingerprint) within the time window, warn / block / prompt per policy.
+    If the next subcommand is guarded and matches any recent recorded invocation
+    (same argv, project root, fingerprint) within the time window, warn / block /
+    prompt per policy.
+
+    Unlike the earlier single-record implementation, multiple distinct invocation
+    signatures are tracked concurrently — interleaved re-runs across different
+    modules all match their own prior entry.
 
     Call from the root group callback after ``ctx.invoked_subcommand`` is set.
     """
@@ -198,7 +284,7 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
 
     project_root = find_project_root()
     argv_tail = normalized_argv()
-    prev = load_last_run(project_root)
+    prev = _lookup_matching_record(project_root, argv_tail)
     if prev is None:
         return
 
@@ -247,7 +333,7 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
 
 
 def record_after_guarded_command(ctx: click.Context) -> None:
-    """Persist this invocation as the last run for duplicate detection."""
+    """Persist this invocation into the keyed recent-runs store for duplicate detection."""
     if not _guard_enabled():
         return
 

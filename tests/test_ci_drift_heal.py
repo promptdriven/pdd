@@ -890,3 +890,371 @@ class TestParseArgs:
         assert args.budget_cap == pytest.approx(3.0)
         assert args.skip_ci is True
         assert args.diff_base == "HEAD~1"
+
+
+# ---------------------------------------------------------------------------
+# Change-magnitude gate tests (PR gltanaka/pdd#1187 regression)
+# ---------------------------------------------------------------------------
+
+class TestPromptChurnGate:
+    """Verify that _enforce_prompt_churn_gate reverts rewrites whose
+    prompt churn is wildly out of proportion to the code change."""
+
+    def _make_drift(self):
+        return DriftInfo(
+            basename="mod",
+            language="python",
+            operation="update",
+            reason="code changed",
+            code_path="pdd/mod.py",
+            prompt_path="prompts/mod_python.prompt",
+            diff_base="HEAD~1",
+        )
+
+    def test_gate_passes_when_ratio_under_cap(self, monkeypatch):
+        from pdd.ci_drift_heal import _enforce_prompt_churn_gate
+
+        def fake_numstat(args):
+            if "prompts/mod_python.prompt" in args:
+                return (2, 1)  # prompt churn 3
+            return (1, 0)  # code churn 1; ratio = 3
+
+        monkeypatch.setattr("pdd.ci_drift_heal._numstat_line_counts", fake_numstat)
+        assert _enforce_prompt_churn_gate(self._make_drift()) is True
+
+    def test_gate_trips_and_reverts_when_ratio_exceeds_cap(self, monkeypatch):
+        from pdd.ci_drift_heal import _enforce_prompt_churn_gate
+
+        def fake_numstat(args):
+            if "prompts/mod_python.prompt" in args:
+                return (41, 176)  # exact PR #1187 shape: 217 lines
+            return (12, 1)  # code churn 13; ratio ~16.7
+
+        monkeypatch.setattr("pdd.ci_drift_heal._numstat_line_counts", fake_numstat)
+
+        captured_cmds = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("pdd.ci_drift_heal.subprocess.run", fake_run)
+
+        result = _enforce_prompt_churn_gate(self._make_drift())
+        assert result is False
+        assert any(
+            "checkout" in cmd and "prompts/mod_python.prompt" in cmd
+            for cmd in captured_cmds
+        )
+
+    def test_gate_passes_when_inputs_missing(self, monkeypatch):
+        from pdd.ci_drift_heal import _enforce_prompt_churn_gate
+
+        drift = DriftInfo(
+            basename="mod",
+            language="python",
+            operation="update",
+            reason="x",
+            code_path="pdd/mod.py",
+            prompt_path=None,  # no prompt path → cannot measure
+            diff_base="HEAD~1",
+        )
+        # Should not even call numstat when prompt_path is None
+        called = {"count": 0}
+
+        def fake_numstat(args):
+            called["count"] += 1
+            return (100, 100)
+
+        monkeypatch.setattr("pdd.ci_drift_heal._numstat_line_counts", fake_numstat)
+        assert _enforce_prompt_churn_gate(drift) is True
+        assert called["count"] == 0
+
+    def test_gate_passes_when_numstat_fails(self, monkeypatch):
+        """If numstat returns None (git error), the gate is permissive so
+        the structural-invariant validator can still run as primary guard."""
+        from pdd.ci_drift_heal import _enforce_prompt_churn_gate
+
+        monkeypatch.setattr(
+            "pdd.ci_drift_heal._numstat_line_counts", lambda args: None
+        )
+        assert _enforce_prompt_churn_gate(self._make_drift()) is True
+
+    def test_gate_cap_overridable_via_env(self, monkeypatch):
+        from pdd.ci_drift_heal import _enforce_prompt_churn_gate
+
+        def fake_numstat(args):
+            if "prompts/mod_python.prompt" in args:
+                return (3, 3)  # prompt churn 6
+            return (1, 0)  # code churn 1; ratio 6
+
+        monkeypatch.setattr("pdd.ci_drift_heal._numstat_line_counts", fake_numstat)
+        monkeypatch.setenv("PDD_HEAL_PROMPT_CHURN_MAX_RATIO", "10.0")
+        # cap is 10, ratio is 6 → passes
+        assert _enforce_prompt_churn_gate(self._make_drift()) is True
+
+        monkeypatch.setenv("PDD_HEAL_PROMPT_CHURN_MAX_RATIO", "3.0")
+        # cap 3, ratio 6 → revert path triggers subprocess
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_prompt_churn_gate(self._make_drift()) is False
+
+
+# ---------------------------------------------------------------------------
+# Structural-invariants gate tests (PR gltanaka/pdd#1187 regression)
+# ---------------------------------------------------------------------------
+
+_FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+
+class TestStructuralInvariants:
+    """Verify that _enforce_structural_invariants rejects rewrites that
+    strip <include> tags, <pdd.*> prefixed tags, % section markers, or
+    fenced code blocks from the pre-heal prompt content. Gate is path-
+    agnostic so it applies regardless of whether the legacy or agentic
+    path produced the rewrite."""
+
+    def _make_drift(self, prompt_path="/repo/prompts/mod_python.prompt"):
+        return DriftInfo(
+            basename="mod",
+            language="python",
+            operation="update",
+            reason="code changed",
+            code_path="/repo/pdd/mod.py",
+            prompt_path=prompt_path,
+            diff_base="HEAD~1",
+        )
+
+    def _patch_git_show(self, pre_content):
+        """Patch _git_show_prompt_at_head to return pre_content."""
+        return patch(
+            "pdd.ci_drift_heal._git_show_prompt_at_head",
+            return_value=pre_content,
+        )
+
+    def _patch_read(self, post_content):
+        """Patch Path.read_text on the prompt path to return post_content."""
+        return patch(
+            "pdd.ci_drift_heal.Path.read_text",
+            return_value=post_content,
+        )
+
+    def test_invariants_pass_on_identical_content(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        content = (
+            "<include>context/preamble.prompt</include>\n"
+            "% Goal\n"
+            "do the thing\n"
+            "<pdd.foo_bar>\n"
+            "stuff\n"
+            "</pdd.foo_bar>\n"
+            "```python\nprint('x')\n```\n"
+        )
+        with self._patch_git_show(content), self._patch_read(content):
+            assert _enforce_structural_invariants(self._make_drift()) is True
+
+    def test_invariants_pass_on_trivial_edit_preserving_structure(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = (
+            "<include>ctx.prompt</include>\n"
+            "% Goal\ndo x\n"
+            "<pdd.helper>\n"
+            "```python\nprint('x')\n```\n"
+        )
+        post = pre + "\n% Notes\nnew note added\n"
+        with self._patch_git_show(pre), self._patch_read(post):
+            assert _enforce_structural_invariants(self._make_drift()) is True
+
+    def test_invariants_reject_stripped_pdd_prefix(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = "% Deps\n<pdd.agentic_common>\n<pdd.load_prompt_template>\n"
+        post = "% Deps\n<agentic_common>\n<load_prompt_template>\n"
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_structural_invariants(self._make_drift()) is False
+
+    def test_invariants_reject_dropped_include(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = (
+            "<include>context/preamble.prompt</include>\n"
+            "<include-many>tests/*</include-many>\n"
+            "% Goal\n"
+        )
+        post = "% Goal\n"
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_structural_invariants(self._make_drift()) is False
+
+    def test_invariants_reject_stripped_percent_markers(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = (
+            "% Goal\ng\n% Inputs\ni\n% Steps\ns\n"
+            "% Outputs\no\n% Notes\nn\n% Deps\nd\n"
+        )
+        # Six markers → threshold is ceil(6/2) = 3. Drop to 2 to violate.
+        post = "% Goal\ng\n% Inputs\ni\n"
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_structural_invariants(self._make_drift()) is False
+
+    def test_invariants_reject_dropped_fenced_code_block(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = (
+            "% Goal\ng\n"
+            "```python\n"
+            "SPEC_LITERAL = {'x': 1, 'y': 2}\n"
+            "```\n"
+        )
+        post = "% Goal\ng\nno more fenced block — prose only.\n"
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_structural_invariants(self._make_drift()) is False
+
+    def test_invariants_reverts_prompt_file_on_violation(self):
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = "<pdd.needed>\n% Goal\n"
+        post = "<needed>\n% Goal\n"
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_structural_invariants(self._make_drift()) is False
+
+        # Exactly one git checkout issued to revert the prompt file.
+        checkout_calls = [
+            c for c in mock_run.call_args_list
+            if c[0][0][:3] == ["git", "checkout", "HEAD"]
+        ]
+        assert len(checkout_calls) == 1
+        assert "/repo/prompts/mod_python.prompt" in checkout_calls[0][0][0]
+
+    def test_invariants_pass_when_inputs_missing(self):
+        """Mirrors churn gate permissive-on-missing behavior."""
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        # No prompt_path → skip.
+        drift = DriftInfo(
+            basename="mod", language="python", operation="update",
+            reason="x", code_path="/repo/pdd/mod.py",
+            prompt_path=None, diff_base="HEAD~1",
+        )
+        assert _enforce_structural_invariants(drift) is True
+
+        # git show fails → skip.
+        with patch(
+            "pdd.ci_drift_heal._git_show_prompt_at_head",
+            return_value=None,
+        ):
+            assert _enforce_structural_invariants(self._make_drift()) is True
+
+    def test_invariants_reject_actual_1187_regression(self):
+        """End-to-end: real pre/post #1187 fixture content must be rejected."""
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre_path = _FIXTURE_DIR / "autoheal_1187_pre.prompt"
+        post_path = _FIXTURE_DIR / "autoheal_1187_post.prompt"
+        assert pre_path.exists(), f"fixture missing: {pre_path}"
+        assert post_path.exists(), f"fixture missing: {post_path}"
+
+        pre_content = pre_path.read_text()
+        post_content = post_path.read_text()
+
+        with patch(
+            "pdd.ci_drift_heal._git_show_prompt_at_head",
+            return_value=pre_content,
+        ), patch(
+            "pdd.ci_drift_heal.Path.read_text",
+            return_value=post_content,
+        ), patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            result = _enforce_structural_invariants(self._make_drift())
+
+        assert result is False, (
+            "Structural invariants must reject the real pre→post #1187 "
+            "rewrite (41 lines replacing 176): <pdd.*> tags stripped, "
+            "<include> preamble dropped, % markers eliminated."
+        )
+
+    def test_invariants_skip_fenced_blocks_via_env(self, monkeypatch):
+        """PDD_HEAL_INVARIANTS_SKIP=fenced_blocks bypasses invariant #4.
+
+        Motivation (per PR #1221 review): invariant #4 is the strictest —
+        fenced blocks must be byte-identical — which would lock legitimate
+        example-code refactors out of prompts. The env var provides an
+        escape hatch so operators can unblock without a code change."""
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = (
+            "<include>ctx.prompt</include>\n"
+            "% Goal\n"
+            "<pdd.helper>\n"
+            "```python\ndef old_signature(x): ...\n```\n"
+        )
+        post = (
+            "<include>ctx.prompt</include>\n"
+            "% Goal\n"
+            "<pdd.helper>\n"
+            "```python\ndef new_signature(x, y): ...\n```\n"
+        )
+        monkeypatch.setenv("PDD_HEAL_INVARIANTS_SKIP", "fenced_blocks")
+        with self._patch_git_show(pre), self._patch_read(post):
+            assert _enforce_structural_invariants(self._make_drift()) is True, (
+                "With fenced_blocks skipped, a legitimate signature change "
+                "inside a fenced block must pass the validator."
+            )
+
+    def test_invariants_skip_multiple_via_comma_separated_env(self, monkeypatch):
+        """Comma-separated env list skips multiple invariants at once."""
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = (
+            "<include>ctx.prompt</include>\n"
+            "% Goal\ndo\n"
+            "<pdd.helper>\n"
+            "```python\nprint('x')\n```\n"
+        )
+        # Strip both <pdd.*> and fenced block
+        post = "<include>ctx.prompt</include>\n% Goal\ndo\n<helper>\n"
+        monkeypatch.setenv(
+            "PDD_HEAL_INVARIANTS_SKIP", "pdd_tags,fenced_blocks"
+        )
+        with self._patch_git_show(pre), self._patch_read(post):
+            assert _enforce_structural_invariants(self._make_drift()) is True
+
+    def test_invariants_skip_unknown_names_logged_but_ignored(self, monkeypatch):
+        """Typo in env var name should not break the heal — log warning,
+        drop unknown names, enforce the rest normally."""
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = "<pdd.helper>\n% Goal\ndo\n"
+        post = "<helper>\n% Goal\ndo\n"  # pdd prefix stripped
+        # "fenced_block" (singular) is a common typo
+        monkeypatch.setenv("PDD_HEAL_INVARIANTS_SKIP", "fenced_block,foo_bar")
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            # Unknown names dropped → pdd_tags invariant still runs → rejects
+            assert _enforce_structural_invariants(self._make_drift()) is False
+
+    def test_invariants_skip_empty_env_enforces_all(self, monkeypatch):
+        """Empty / whitespace-only env var enforces all invariants
+        (equivalent to unset)."""
+        from pdd.ci_drift_heal import _enforce_structural_invariants
+
+        pre = "<pdd.helper>\ntext\n"
+        post = "<helper>\ntext\n"
+        monkeypatch.setenv("PDD_HEAL_INVARIANTS_SKIP", "   ")
+        with self._patch_git_show(pre), self._patch_read(post), \
+             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            assert _enforce_structural_invariants(self._make_drift()) is False

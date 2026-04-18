@@ -974,6 +974,56 @@ def _detect_changed_files(cwd: Path, initial_file_hashes: Dict[str, Optional[str
     return changed
 
 
+# Build/cache/log artifacts that should not count as "fixes applied" when deciding
+# whether NOT_A_BUG classifications are legitimate. Matched as path components or
+# suffixes against the forward-slash-normalized relative path.
+_NOISE_PATH_COMPONENTS = frozenset({
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    "node_modules",
+    ".coverage",
+    "htmlcov",
+    ".DS_Store",
+    ".eggs",
+    ".next",
+    ".turbo",
+    ".parcel-cache",
+})
+_NOISE_SUFFIXES = (".pyc", ".pyo", ".log", ".swp", ".swo")
+_NOISE_BASENAMES = frozenset({"coverage.xml"})
+
+
+def _is_noise_path(path: str) -> bool:
+    """Return True if path is a build/cache/log artifact that should not count
+    as a fix for NOT_A_BUG suppression purposes."""
+    normalized = path.replace("\\", "/")
+    if any(normalized.endswith(suffix) for suffix in _NOISE_SUFFIXES):
+        return True
+    parts = normalized.split("/")
+    if any(part in _NOISE_PATH_COMPONENTS for part in parts):
+        return True
+    if parts and parts[-1] in _NOISE_BASENAMES:
+        return True
+    # parallel coverage files (.coverage.<host>.<pid>.<rand>) and *.egg-info dirs
+    return any(
+        part.startswith(".coverage.") or part.endswith(".egg-info")
+        for part in parts
+    )
+
+
+def _detect_meaningful_changes(cwd: Path, initial_file_hashes: Dict[str, Optional[str]]) -> List[str]:
+    """Like _detect_changed_files but filters out build/cache/log noise.
+
+    Used by the Step 3 NOT_A_BUG guards: a fix must be a *meaningful* edit
+    (not a stray `__pycache__/*.pyc` or `.pytest_cache` write) to suppress
+    a legitimate NOT_A_BUG classification.
+    """
+    return [p for p in _detect_changed_files(cwd, initial_file_hashes) if not _is_noise_path(p)]
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -1434,7 +1484,11 @@ def run_agentic_e2e_fix_orchestrator(
     dev_unit_states: Dict[str, Any] = {}
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
-    
+    # On resume, restore the workflow-start file snapshot so guards that diff
+    # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
+    resumed_initial_file_hashes: Optional[Dict[str, Optional[str]]] = None
+    resumed_initial_sha: Optional[str] = None
+
     # Resume Logic
     if resume:
         loaded_state, gh_id = load_workflow_state(
@@ -1453,6 +1507,14 @@ def run_agentic_e2e_fix_orchestrator(
             skipped_steps_raw = loaded_state.get("skipped_steps", {})
             skipped_steps = {int(k): v for k, v in skipped_steps_raw.items()}
             github_comment_id = gh_id
+            # Restore the workflow-start file snapshot so direct-edit detection
+            # still sees prior-cycle changes after a resume.
+            saved_hashes = loaded_state.get("initial_file_hashes")
+            if isinstance(saved_hashes, dict):
+                resumed_initial_file_hashes = saved_hashes
+            saved_sha = loaded_state.get("initial_sha")
+            if isinstance(saved_sha, str) and saved_sha:
+                resumed_initial_sha = saved_sha
 
             # Issue #467: Validate cached state — correct last_completed_step
             # if any cached step outputs have "FAILED:" prefix.
@@ -1505,15 +1567,23 @@ def run_agentic_e2e_fix_orchestrator(
                 console.print(f"[dim]Warning: Could not load bug state from {bug_state_file}: {e}[/dim]")
                 continue  # Try next candidate
 
-    # Snapshot file state before workflow (for hash-based commit detection)
-    initial_file_hashes = _get_file_hashes(cwd)
+    # Snapshot file state before workflow (for hash-based commit detection).
+    # On resume, prefer the snapshot saved with the workflow state — recapturing
+    # here would include prior cycles' edits and break direct-edit detection.
+    if resumed_initial_file_hashes is not None:
+        initial_file_hashes = resumed_initial_file_hashes
+    else:
+        initial_file_hashes = _get_file_hashes(cwd)
 
     # Capture initial commit SHA for full diff in Step 11
-    _initial_sha_result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=cwd, capture_output=True, text=True,
-    )
-    initial_sha = _initial_sha_result.stdout.strip() if _initial_sha_result.returncode == 0 else ""
+    if resumed_initial_sha:
+        initial_sha = resumed_initial_sha
+    else:
+        _initial_sha_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd, capture_output=True, text=True,
+        )
+        initial_sha = _initial_sha_result.stdout.strip() if _initial_sha_result.returncode == 0 else ""
 
     success = False
     final_message = ""
@@ -1808,7 +1878,11 @@ def run_agentic_e2e_fix_orchestrator(
                     "changed_files": changed_files.copy(),  # Copy to avoid shared reference
                     "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
                     "last_saved_at": datetime.now().isoformat(),
-                    "github_comment_id": github_comment_id
+                    "github_comment_id": github_comment_id,
+                    # Workflow-start snapshot — restored on resume so direct-edit
+                    # detection survives interruption.
+                    "initial_file_hashes": dict(initial_file_hashes),
+                    "initial_sha": initial_sha,
                 }
                 
                 new_gh_id = save_workflow_state(
@@ -1868,7 +1942,22 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_num == 3 and _step3_token == "NOT_A_BUG":
                     # Block NOT_A_BUG if fixes were already applied in prior cycles
                     has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
-                    if has_fixed_units:
+                    has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
+                    if has_fixed_units or has_direct_edits:
+                        # Cycle-waste safeguard: if only direct edits (no PDD fix) and
+                        # this cycle made no meaningful progress, treat the prior fix as
+                        # terminal and exit successfully instead of looping.
+                        has_cycle_progress = bool(
+                            _detect_meaningful_changes(cwd, cycle_start_hashes)
+                        )
+                        if has_direct_edits and not has_fixed_units and not has_cycle_progress and current_cycle > 1:
+                            console.print(
+                                "[yellow]NOT_A_BUG with prior direct edits and no new progress "
+                                "this cycle — treating prior fix as terminal.[/yellow]"
+                            )
+                            success = True
+                            final_message = "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining state as not a bug."
+                            break
                         console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
                     else:
                         console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
@@ -2008,7 +2097,8 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Check if NOT_A_BUG was detected (exit outer loop too)
             has_fixed_units = any(s.get("fixed") for s in dev_unit_states.values())
-            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG" and not has_fixed_units:
+            has_direct_edits = bool(_detect_meaningful_changes(cwd, initial_file_hashes))
+            if step_num == 3 and _classify_step_output(step_outputs.get("3", ""), step_num=3) == "NOT_A_BUG" and not has_fixed_units and not has_direct_edits:
                 break
 
             # Check if workflow was stopped due to missing loop control token or max cycles

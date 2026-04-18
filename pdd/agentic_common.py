@@ -885,9 +885,23 @@ def run_agentic_task(
 
                     if is_false_positive:
                         if not quiet:
-                            console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt})[/yellow]")
-                        # False positives are provider-side bad outputs. Fall through to
-                        # the next provider instead of burning retries on the same one.
+                            console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt}/{max_retries})[/yellow]")
+                        # Multi-provider configs (default): fall through to the
+                        # next provider instead of burning retries on the same
+                        # known-broken one.
+                        # Single-provider configs (cloud one-session sync runs
+                        # anthropic-only) have nowhere to fall through to —
+                        # an immediate `break` means zero retries and one
+                        # transient empty response fails the whole sync. Retry
+                        # on the same provider with backoff up to max_retries.
+                        if len(candidates) == 1 and attempt < max_retries:
+                            base_backoff = retry_delay * (2 ** (attempt - 1))
+                            jitter = random.uniform(0, retry_delay)
+                            backoff = min(base_backoff + jitter, MAX_RETRY_DELAY)
+                            if not quiet:
+                                console.print(f"[dim]Single-provider config: retrying in {backoff:.0f}s...[/dim]")
+                            time.sleep(backoff)
+                            continue
                         break
                     else:
                         # Check for suspicious files (C, E, T)
@@ -1203,6 +1217,25 @@ def _run_with_provider(
         error_detail = result.stderr or result.stdout[:500]
         return False, f"Exit code {result.returncode}: {error_detail}", 0.0
 
+    # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
+    # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
+    # with a blank provider error and no log trail. Stderr tail + prompt size
+    # + auth-key presence is usually enough to tell apart auth failures, rate
+    # limits, and genuine empty responses.
+    if not result.stdout.strip():
+        auth_keys_present = sorted(
+            k for k in env
+            if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
+        )
+        stderr_tail = (result.stderr or "")[-500:]
+        console.print(
+            f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
+        )
+        console.print(
+            f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
+            f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
+        )
+
     # Parse JSON Output
     try:
         # Handle JSONL output (Codex sometimes streams)
@@ -1340,7 +1373,12 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
                 cost = _calculate_anthropic_cost(data)
             # Result might be in 'result' or 'response'
             output_text = data.get("result") or data.get("response") or ""
-            
+            # Claude Code JSON includes is_error when the session failed
+            # (auth, refusal, crash). Propagate as failure so callers can
+            # retry or fall through instead of treating it as success.
+            if data.get("is_error"):
+                return False, str(output_text) or "CLI reported is_error with no message", cost
+
         elif provider == "google":
             stats = data.get("stats", {})
             cost = _calculate_gemini_cost(stats)

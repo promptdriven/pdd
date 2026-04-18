@@ -1,21 +1,46 @@
+## v0.0.211 (2026-04-17)
+
+### Feat
+
+- implement 14-step agentic split pipeline, migrate CI auto-heal to Cloud Build, and update CLI/orchestrator interfaces.
+
+### Fix
+
+- **#1206**: persist initial snapshot across resume + extend noise filter
+- **#1206**: check direct edits in NOT_A_BUG guard, update broken tests
+- scoped empty-CLI-response handling for cloud one-session sync
+- duplicate guard keyed store for interleaved module re-runs (#1178) (#1180)
+- resolve #1220 autoheal destructive rewrite (3-layer fix) (#1221)
+
 ## v0.0.210 (2026-04-16)
 
 ### Feat
 
-- add multi-cwd validation for agentic test workflow (#1174)
-- pdd split v2 — fully-agentic 14-step split with phase extraction, shared-layer gate, and deterministic safety nets (#1136)
+- **pdd split v2 — fully-agentic 14-step diagnose-and-split pipeline**: new `agentic_split.py`, `agentic_split_orchestrator.py` (2,037 lines), and `split_validation.py` (805 lines) replace the v1 top-level-symbol-only split with a pipeline that decomposes monoliths into phase helpers, identifies shared runtime layers via cross-file co-change analysis, and scores options with a responsibility-based cohesion/coupling/churn rubric instead of line counts. Steps: 0_intent → 1_survey → 2_diagnose → 3_investigate → 4_propose_options → 5_setup_worktree → 6a_phase_extract → 6_extract → 7a_verify_local → 7b_regen_gate → 7c_arch_sync → 7_assess → 8_repair → 9_refine_check. New step prompts (`agentic_split_step0_intent_LLM` … `step9_refine_check_LLM`), `--diagnose`/`--propose-only`/`--intent`/`--strangler`/`--no-phase-extraction`/`--force-split`/`--delete-dead`/`--experimental-language` flags, and an intent classifier (REDUCE_MONOLITH / ENABLE_PARALLEL_WORK / EXTRACT_REUSABLE_LAYER / REDUCE_TEST_TIME) that re-weights scoring. Shared-layer hard gate retries step 4 when step 3 surfaces cross-file duplication but the winner drops `shared_layer_children`. Focused refinement in step 9 re-runs 6a+6 on a single child (~40% cost reduction vs. full pipeline)
+- **multi-cwd validation for agentic test workflow**: `agentic_test_orchestrator` now restores `likely_ci_cwd` on resume and recomputes it before Step 16, so generated tests are validated from both the worktree root and the likely CI working directory for nested `.pddrc` subprojects; step 6/7/16 prompts gain path-safety guidance
+- **agentic worktree common layer**: new `pdd/agentic_common_worktree.py` (505 lines) with matching `agentic_common_worktree_python.prompt` — shared worktree setup, branch/state persistence, and cleanup helpers reused by agentic split and other orchestrators
+- **`get_lint_commands` module**: new `pdd/get_lint_commands.py` + `get_lint_commands_python.prompt` + example + tests; returns the lint command(s) for a target file/language, mirroring `get_test_command`
+- **`pdd split` CLI reshaped as 1-arg agentic command**: `pdd split TARGET_FILE` now drives the 14-step pipeline by default; `--legacy` preserves the old 3-positional-arg 2-LLM-call path for one release; agentic flags (`--diagnose`, `--propose-only`, `--intent`, `--force-split`, `--no-phase-extraction`, `--strangler`, etc.) are surfaced through the CLI, server, frontend, MCP, and zsh completion
+- **CI auto-heal drift ported from GitHub Actions to Cloud Build**: new `cloudbuild-auto-heal.yaml` (+214 lines), `scripts/ci_detect_changed_modules.py` (standalone port of the inline bash+python from `auto-heal-drift.yml`), and `scripts/mint_github_app_token.py` for short-lived installation tokens; GH Actions auto-heal disabled, heal subprocess timeout raised to 20 min
 
 ### Fix
 
-- **llm_invoke**: validate inputs before cloud dispatch
-- abort no-fix checkup after provider failure
-- **arch-validate**: declare agentic_common dep + gitignore CI workspace artifacts (#1211)
-- migrate frontend, server, MCP, zsh callers to agentic `pdd split` (#1157)
-- address 7 bugs found by ultrareview
-- xfail TestLeaveAlone — cloud VM has claude binary but it is unauthenticated
-- skip TestLeaveAlone when no agentic provider is installed; revert step-0 non-blocking
-- make step 0_intent failure non-blocking — fall back to REDUCE_MONOLITH
-- address Greg's three review blockers for pdd split PR (#1157)
+- **llm_invoke**: validate `prompt_name`/`input_json`/`messages` inputs **before** cloud dispatch. Cloud errors that don't fall back to local (e.g. `InsufficientCreditsError`) were shadowing the `ValueError` contract, so callers saw cloud errors instead of the intended validation failure
+- **checkup**: abort a no-fix agentic checkup run after a provider failure instead of continuing with degraded state
+- **code_generator_main (#1205)**: treat an empty or whitespace-only output file as absent — normalize `existing_code_content` to `None` after reading so the incremental path is skipped and full generation runs, resolving the `ValueError: All required inputs … must be provided` mismatch between the caller's `is not None` gate and `incremental_code_generator`'s truthiness check
+- **arch-validate**: declare `agentic_common_python.prompt` as a dependency of `agentic_test_orchestrator_python.prompt` (closed a validator drift); gitignore CI workspace artifacts so they don't pollute reviews
+- **`pdd split` callers**: migrate `pdd/server/jobs.py` (`POSITIONAL_ARGS["split"]` → `["target_file"]`), `pdd/frontend/lib/commandBuilder.ts`, `pdd/frontend/constants.ts` (SPLIT descriptor — drop required `example-code`, surface agentic flags), MCP tool definitions/handlers, and `pdd/pdd_completion.zsh` to the 1-arg agentic shape; legacy mode is now CLI-only
+- **agentic split robustness**: step 0 intent failure is non-blocking and falls back to `REDUCE_MONOLITH`; `TestLeaveAlone` is skipped when no agentic provider is installed and xfail'd on cloud VMs where the `claude` binary is present but unauthenticated; address seven bugs surfaced by the ultrareview pass (review-block fixes for the split PR)
+- **CI auto-heal on Cloud Build**: move state files off `/workspace` onto a dedicated `/ci-state` volume to stop `ghs_*` installation tokens from being staged by `git add -A` and leaked into PR commit history; fix PR-detection and authenticated fetch on GCB; set `push.default=current` so the heal commit pushes back to the PR branch
+
+### Docs
+
+- **README**: document the new `pdd split <target-file>` agentic command alongside `bug`/`fix`/`change`/`generate`/`test`; expand the `split` section with the full 14-step workflow, all new flags, and usage examples; keep the legacy invocation under `--legacy`
+- **ci-auto-heal runbook**: rewrite for the GCB migration; add "Inter-step state (`/ci-state` volume)" section and GitHub App PEM rotation steps after the #1213 token-leak incident
+
+### Build
+
+- refresh `.cloud-image-hash` and `ci/cloud-batch/test-durations.json`; auto-healed prompt/example drift for `agentic_checkup_orchestrator`, `agentic_test_orchestrator`, `get_test_command`, `code_generator_main`, and `context_generator_main`
 
 ## v0.0.209 (2026-04-15)
 

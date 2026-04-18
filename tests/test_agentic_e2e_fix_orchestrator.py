@@ -547,9 +547,12 @@ class TestNotABugEarlyExit:
 
         mock_run.side_effect = side_effect
 
-        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
-            **e2e_fix_default_args
-        )
+        # Patch _detect_changed_files to [] — genuine not-a-bug, no direct edits
+        # (fix #779: guard now also checks direct edits, so we must ensure none here).
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
 
         # The orchestrator should have stopped after Step 3
         # Only 3 calls: Step 1, Step 2, Step 3
@@ -580,9 +583,11 @@ class TestNotABugEarlyExit:
 
         mock_run.side_effect = side_effect
 
-        success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
-            **e2e_fix_default_args
-        )
+        # Patch _detect_changed_files to [] — genuine not-a-bug, no direct edits.
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
 
         # Should still detect NOT_A_BUG and stop after 3 steps
         assert mock_run.call_count == 3, (
@@ -725,6 +730,64 @@ class TestPromptNotABugCategory:
             "This ensures the generated code includes the NOT_A_BUG check."
         )
 
+    def test_orchestrator_prompt_documents_direct_edit_guard(self):
+        """Issue #1206: orchestrator prompt must document that the NOT_A_BUG
+        guard honors direct edits via `_detect_meaningful_changes`.
+
+        Without this, a future regeneration could drop the direct-edit check
+        and re-introduce the false "not a bug" exit for non-PDD-managed
+        module fixes.
+        """
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        if not prompt_path.exists():
+            pytest.skip("Prompt file not available in public repo")
+        template = prompt_path.read_text()
+        assert "_detect_meaningful_changes" in template, (
+            "Orchestrator prompt must reference `_detect_meaningful_changes` "
+            "so the NOT_A_BUG direct-edit guard can't be silently dropped."
+        )
+        assert "has_direct_edits" in template, (
+            "Orchestrator prompt must describe `has_direct_edits` as the "
+            "NOT_A_BUG suppression signal for non-PDD-managed module edits."
+        )
+
+    def test_orchestrator_prompt_documents_noise_filter(self):
+        """Issue #1206: orchestrator prompt must document the noise filter so
+        build/cache artifacts never silently suppress a legitimate NOT_A_BUG
+        exit (e.g. a stray `__pycache__/*.pyc` write during the workflow).
+        """
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        if not prompt_path.exists():
+            pytest.skip("Prompt file not available in public repo")
+        template = prompt_path.read_text()
+        assert "_is_noise_path" in template, (
+            "Orchestrator prompt must reference `_is_noise_path` so the "
+            "noise filter can't be silently dropped from future regenerations."
+        )
+        for token in ("__pycache__", ".pytest_cache", "node_modules"):
+            assert token in template, (
+                f"Orchestrator prompt must list `{token}` in the noise filter "
+                "so build/cache artifacts cannot silently suppress NOT_A_BUG."
+            )
+
+    def test_orchestrator_prompt_documents_cycle_waste_breaker(self):
+        """Issue #1206: orchestrator prompt must document the cycle-waste
+        breaker so a prior-cycle direct edit plus no current progress exits
+        cleanly instead of looping to max_cycles.
+        """
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        if not prompt_path.exists():
+            pytest.skip("Prompt file not available in public repo")
+        template = prompt_path.read_text()
+        assert "cycle_start_hashes" in template, (
+            "Orchestrator prompt must reference `cycle_start_hashes` so the "
+            "cycle-waste breaker's cycle-local progress check is preserved."
+        )
+        assert "current_cycle > 1" in template, (
+            "Orchestrator prompt must document `current_cycle > 1` as a "
+            "precondition of the cycle-waste breaker (cycle 1 must not trigger it)."
+        )
+
 
 class TestDetectChangedFiles:
     """Tests for issue #355: Summary should report actual file changes.
@@ -856,13 +919,15 @@ class TestIssue467BlindResume:
              patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
              patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
              patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
-             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit:
+             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output") as mock_classify:
             mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
             mock_load.return_value = (None, None)
             mock_save.return_value = None
             mock_template.return_value = "Prompt for {issue_number}"
             mock_hashes.return_value = {}
             mock_commit.return_value = (True, "No changes")
+            mock_classify.return_value = None
 
             yield {
                 "run": mock_run,
@@ -3869,7 +3934,11 @@ class TestClassifyStepOutputWiring:
             return (True, "Step output", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
-        success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+        # Patch _detect_changed_files to [] so NOT_A_BUG actually stops the workflow
+        # (fix #779: guard now checks direct edits; without this patch the workflow
+        # would loop and call classify multiple times).
+        with patch("pdd.agentic_e2e_fix_orchestrator._detect_changed_files", return_value=[]):
+            success, msg, _, _, _ = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         mock_classify.assert_called_once()
 
@@ -5514,3 +5583,567 @@ class TestGetModifiedAndUntrackedSubprocessTimeout:
             files = _get_modified_and_untracked(tmp_path)
 
         assert "changed.py" in files
+
+
+# ============================================================================
+# Issue #779: NOT_A_BUG early exit fires incorrectly when direct-edit fix
+# was applied to a non-PDD-managed module (no .prompt file).
+#
+# Bug: the Step 3 NOT_A_BUG guard only inspects dev_unit_states (populated
+# for PDD-managed modules at Step 8). When Step 1 applies a direct edit to
+# a module with no .prompt file, dev_unit_states stays empty and the guard
+# wrongly treats NOT_A_BUG as a false failure even though files changed.
+#
+# Fix (issue suggestion + Step 6 scope expansion): also consult
+# _detect_changed_files so direct edits count as "fixes already applied"
+# at BOTH the inner-loop guard (:1868-1877) and the outer-loop guard
+# (:2010-2012).
+# ============================================================================
+
+
+class TestIssue779NotABugDirectEditGuard:
+    """Regression tests for issue #779: NOT_A_BUG guard must honor direct
+    edits to non-PDD-managed modules, not just PDD-tracked dev_unit_states.
+    """
+
+    def test_not_a_bug_ignored_when_direct_edits_present(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Inner-loop guard (pdd/agentic_e2e_fix_orchestrator.py:1868-1877):
+        NOT_A_BUG should be ignored when files changed via direct edit,
+        even though dev_unit_states is empty.
+
+        Scenario from issue #779 (observed on issue #777 with
+        code_generator_main.py which has no .prompt file):
+          - Step 1 applies a direct edit (no PDD dev unit to track).
+          - Step 3 correctly classifies "bug already fixed" → NOT_A_BUG.
+          - dev_unit_states is empty (no PDD-managed modules).
+          - _detect_changed_files reports non-empty change list.
+
+        Expected behavior after the fix: the guard recognizes the direct
+        edit and does NOT halt the workflow with "Issue determined to be
+        not a bug."
+
+        On buggy code: the guard only checks has_fixed_units (False) and
+        exits with final_message == "Issue determined to be not a bug."
+        so this test FAILS.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        # Default fixture already sets _detect_changed_files to ["module.py"],
+        # which represents direct edits to a non-PDD-managed module.
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "All issue tests pass — the reported behavior has already been fixed.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # The workflow must NOT terminate with the "not a bug" failure message
+        # when direct edits were applied (has_direct_edits == True).
+        assert msg != "Issue determined to be not a bug.", (
+            "Issue #779: NOT_A_BUG guard at pdd/agentic_e2e_fix_orchestrator.py:1868-1877 "
+            "fired a false failure. Direct edits to a non-PDD-managed module were "
+            "present (default _detect_changed_files returns ['module.py']) but the "
+            "guard only checked has_fixed_units. Expected the guard to also honor "
+            f"has_direct_edits via _detect_changed_files. Got msg={msg!r}."
+        )
+        assert "not a bug" not in (msg or "").lower(), (
+            f"Issue #779: workflow halted with a 'not a bug' message ({msg!r}) "
+            "despite direct edits being present."
+        )
+
+    # Scope addition: covers expansion item "outer-loop NOT_A_BUG guard at
+    # pdd/agentic_e2e_fix_orchestrator.py:2010-2012 uses the same
+    # has_fixed_units-only check and must also OR in has_direct_edits via
+    # _detect_changed_files" identified by Step 6 but absent from Step 8's plan.
+    def test_not_a_bug_outer_loop_guard_honors_direct_edits(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Outer-loop guard (pdd/agentic_e2e_fix_orchestrator.py:2010-2012):
+        the post-inner-loop NOT_A_BUG break must also recognize direct
+        edits. Without the fix, even if somebody repaired the inner guard,
+        the outer guard would still exit the multi-cycle loop at
+        step_num == 3 because it only inspects has_fixed_units.
+
+        This test asserts the observable end-to-end behavior: with direct
+        edits present, the workflow must progress past Step 3 (i.e., the
+        inner loop must not break there) and must not have its outer loop
+        cut short by the sibling guard. We verify by counting step calls:
+        if either guard still short-circuits, the workflow stops at 3
+        step calls; after the fix, the workflow advances to Step 4+.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        # Override max_cycles to 1 so we are only measuring a single cycle's
+        # step progression — this isolates the guard behavior from cycle
+        # advancement logic.
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause analysis: NOT_A_BUG — the bug has already been fixed.",
+                    0.1,
+                    "gpt-4",
+                )
+            # Step 9 gets CONTINUE_CYCLE so the loop exits cleanly without
+            # exercising unrelated break paths.
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        labels_called = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+
+        # On buggy code, the inner guard breaks at Step 3 → exactly 3 step
+        # calls (step1, step2, step3) and then the outer guard also breaks
+        # the outer loop. After the fix, both guards honor has_direct_edits
+        # and the workflow continues to Step 4+ (we expect steps 4, 5, ...
+        # to be invoked before the cycle ends).
+        assert mock_run.call_count > 3, (
+            f"Issue #779 (scope expansion): expected the workflow to proceed "
+            f"past Step 3 when direct edits exist, but only {mock_run.call_count} "
+            f"step call(s) were made. Labels: {labels_called}. The guards at "
+            f"pdd/agentic_e2e_fix_orchestrator.py:1868-1877 and :2010-2012 "
+            f"must OR has_direct_edits (via _detect_changed_files) into their "
+            f"'fixes already applied' check."
+        )
+        # And must not halt with the false-failure message.
+        assert msg != "Issue determined to be not a bug.", (
+            f"Issue #779 (scope expansion): outer-loop guard fired despite "
+            f"direct edits. msg={msg!r}"
+        )
+
+    def test_legitimate_not_a_bug_still_fails_when_no_changes(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Regression: the fix must not break the legitimate NOT_A_BUG
+        failure path. If Step 3 classifies NOT_A_BUG AND no fixes were
+        applied (no PDD dev units fixed AND no direct edits), the workflow
+        should still exit with the 'Issue determined to be not a bug.'
+        failure — that is the original correct behavior preserved by
+        TestNotABugEarlyExit::test_not_a_bug_early_exit_step3.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause: NOT_A_BUG - This is expected behavior, not a bug.",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Override the default _detect_changed_files so NO direct edits
+        # are reported. This is the "genuine not-a-bug" scenario where
+        # nothing was fixed — guard must still fail.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        # Workflow should still correctly identify this as not-a-bug.
+        assert success is False, (
+            "Issue #779 regression: legitimate NOT_A_BUG (no fixes applied, "
+            "no direct edits) must still exit with success=False, got "
+            f"success={success}, msg={msg!r}"
+        )
+        assert "not a bug" in (msg or "").lower(), (
+            "Issue #779 regression: legitimate NOT_A_BUG (no fixes applied, "
+            f"no direct edits) must still exit with 'not a bug' message, got msg={msg!r}"
+        )
+        # And it must have stopped early — only 3 step calls.
+        assert mock_run.call_count == 3, (
+            f"Issue #779 regression: expected 3 step calls (Steps 1-3) for "
+            f"legitimate NOT_A_BUG path, got {mock_run.call_count}."
+        )
+
+
+# ============================================================================
+# Hardening (follow-up to #779 review): defensive filters for the NOT_A_BUG
+# direct-edit guard. Two edge cases flagged during review:
+#   (a) cwd noise: if any file outside .pdd/ (e.g. __pycache__, .log) shows up
+#       in _detect_changed_files, it would falsely suppress legitimate NOT_A_BUG.
+#   (b) cycle waste: if direct edits exist from a prior cycle but the current
+#       cycle makes no new progress, the guard would keep ignoring NOT_A_BUG
+#       until max_cycles.
+# ============================================================================
+
+
+class TestNotABugGuardNoiseFilter:
+    """The NOT_A_BUG direct-edit guard must ignore build/cache/log artifacts
+    so random Python/test noise in cwd can't silently suppress a legitimate
+    'not a bug' exit.
+    """
+
+    def test_is_noise_path_detects_pycache(self):
+        from pdd.agentic_e2e_fix_orchestrator import _is_noise_path
+
+        assert _is_noise_path("__pycache__/foo.cpython-312.pyc")
+        assert _is_noise_path("src/__pycache__/foo.pyc")
+        assert _is_noise_path("foo.pyc")
+        assert _is_noise_path("bar.pyo")
+
+    def test_is_noise_path_detects_caches_and_logs(self):
+        from pdd.agentic_e2e_fix_orchestrator import _is_noise_path
+
+        assert _is_noise_path(".pytest_cache/v/cache/lastfailed")
+        assert _is_noise_path(".mypy_cache/3.12/foo.json")
+        assert _is_noise_path(".ruff_cache/0.4.10/x")
+        assert _is_noise_path(".coverage")
+        assert _is_noise_path("htmlcov/index.html")
+        assert _is_noise_path("node_modules/react/package.json")
+        assert _is_noise_path("pytest.log")
+        assert _is_noise_path(".DS_Store")
+        assert _is_noise_path("build.swp")
+
+    def test_is_noise_path_rejects_real_code(self):
+        from pdd.agentic_e2e_fix_orchestrator import _is_noise_path
+
+        assert not _is_noise_path("pdd/code_generator_main.py")
+        assert not _is_noise_path("tests/test_foo.py")
+        assert not _is_noise_path("src/nested/module.py")
+        assert not _is_noise_path("notes.md")
+
+    def test_is_noise_path_detects_extended_artifacts(self):
+        from pdd.agentic_e2e_fix_orchestrator import _is_noise_path
+
+        # Coverage in parallel mode and XML report
+        assert _is_noise_path(".coverage.host.123.456789")
+        assert _is_noise_path("coverage.xml")
+        assert _is_noise_path("nested/coverage.xml")
+        # Python build artifacts
+        assert _is_noise_path("mypackage.egg-info/PKG-INFO")
+        assert _is_noise_path(".eggs/some-pkg.egg/x.py")
+        # JS/web tooling caches
+        assert _is_noise_path(".next/static/chunk.js")
+        assert _is_noise_path(".turbo/cache/x")
+        assert _is_noise_path(".parcel-cache/data")
+        # Real coverage-named source files should NOT be filtered
+        assert not _is_noise_path("coverage_helper.py")
+        assert not _is_noise_path("src/.coverage_utils.py")
+
+    def test_detect_meaningful_changes_filters_noise(self, monkeypatch, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _detect_meaningful_changes
+
+        monkeypatch.setattr(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            lambda cwd, hashes: [
+                "src/real_fix.py",
+                "__pycache__/stale.pyc",
+                ".pytest_cache/v/cache/nodeids",
+                "tests/test_real.py",
+                "coverage.log",
+            ],
+        )
+        result = _detect_meaningful_changes(tmp_path, {})
+        assert result == ["src/real_fix.py", "tests/test_real.py"]
+
+    def test_not_a_bug_exits_when_only_noise_files_present(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, monkeypatch
+    ):
+        """Only noise files in _detect_changed_files must NOT suppress NOT_A_BUG."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        monkeypatch.setattr(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            lambda cwd, hashes: ["__pycache__/foo.pyc", ".pytest_cache/v/x"],
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause: NOT_A_BUG - expected behavior.",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert success is False, (
+            f"Noise-only changes must not suppress legitimate NOT_A_BUG. success={success}, msg={msg!r}"
+        )
+        assert "not a bug" in (msg or "").lower(), (
+            f"Expected 'not a bug' exit, got msg={msg!r}"
+        )
+
+    def test_not_a_bug_still_suppressed_when_real_file_plus_noise(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, monkeypatch
+    ):
+        """At least one meaningful (non-noise) file change must keep suppressing NOT_A_BUG."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        monkeypatch.setattr(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            lambda cwd, hashes: ["__pycache__/foo.pyc", "src/real_fix.py"],
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause: NOT_A_BUG - already fixed.",
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        assert msg != "Issue determined to be not a bug.", (
+            f"Real file change should still suppress NOT_A_BUG even when noise is present. msg={msg!r}"
+        )
+
+
+class TestNotABugGuardCycleWasteBreaker:
+    """If prior-cycle direct edits are the only reason to suppress NOT_A_BUG,
+    and the current cycle makes no new meaningful progress, treat the prior
+    fix as terminal and exit instead of looping to max_cycles.
+    """
+
+    def test_no_cycle_waste_with_prior_direct_edits_and_no_new_progress(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, monkeypatch
+    ):
+        """Simulate cycle 2 with: workflow-wide direct edits present, no cycle progress.
+
+        Guard should treat prior fix as terminal (success=True) rather than
+        continuing to loop through Steps 4-9 and potentially running more cycles.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 5
+
+        # Simulate: cycle 1 applied direct edits → workflow-wide "has_direct_edits"
+        # stays True, but cycle 2 adds no new meaningful progress.
+        # We mock _detect_meaningful_changes with a call-count-driven side effect.
+        # Each cycle's guard makes two calls: (1) workflow-wide via initial_file_hashes,
+        # (2) cycle-local via cycle_start_hashes. We return a real file for the
+        # workflow-wide call and [] for the cycle-local call on cycle 2.
+        call_count = {"n": 0}
+
+        def _meaningful_side_effect(cwd, hashes):
+            # Call sequence across the workflow:
+            #   cycle 1 inner guard: call 1 (initial) + call 2 (cycle_start)
+            #   cycle 1 outer guard: call 3 (initial)
+            #   cycle 2 inner guard: call 4 (initial) + call 5 (cycle_start)
+            # Only call 5 (cycle 2's cycle-local check) returns [] — simulating
+            # that cycle 2 added no new meaningful changes on top of cycle 1.
+            call_count["n"] += 1
+            if call_count["n"] == 5:
+                return []
+            return ["prior_fix.py"]
+
+        monkeypatch.setattr(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            _meaningful_side_effect,
+        )
+
+        # Step responses: cycle 1 Step 3 = NOT_A_BUG → suppress via has_direct_edits →
+        # Steps 4-9 run → Step 9 CONTINUE_CYCLE → cycle 2 starts.
+        # Cycle 2 Step 3 = NOT_A_BUG → cycle-waste breaker fires (direct edits + no progress).
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: NOT_A_BUG - already fixed.", 0.1, "gpt-4")
+            if "step9" in label:
+                return (True, "Some tests failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Breaker must fire on cycle 2: treat prior fix as terminal → success=True,
+        # message references the direct-edit scenario.
+        assert success is True, (
+            f"Cycle-waste breaker must exit with success=True (prior fix was applied). "
+            f"Got success={success}, msg={msg!r}"
+        )
+        assert "direct-edit" in (msg or "").lower() or "terminal" in (msg or "").lower(), (
+            f"Expected breaker message referencing direct-edit fix; got msg={msg!r}"
+        )
+        # Cycle 1 runs all 9 steps (~9 calls). Cycle 2 breaker fires at Step 3
+        # (~3 more calls). Total well under 15; max_cycles=5 would be ~45.
+        assert mock_run.call_count < 15, (
+            f"Expected breaker to stop at cycle 2 Step 3, got {mock_run.call_count} calls."
+        )
+
+    def test_cycle_one_with_direct_edits_does_not_trigger_breaker(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, monkeypatch
+    ):
+        """In cycle 1, direct edits just made by Step 1 should still suppress
+        NOT_A_BUG (the breaker only fires for cycle > 1).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        # Default fixture returns ["module.py"] for _detect_changed_files →
+        # this simulates cycle 1 Step 1 having made a direct edit.
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    "Root cause: NOT_A_BUG - already fixed.",
+                    0.1,
+                    "gpt-4",
+                )
+            if "step9" in label:
+                return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["max_cycles"] = 3
+
+        # Breaker is current_cycle > 1, so cycle 1 should NOT fire it.
+        # Workflow should proceed through Steps 4-9 in cycle 1.
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # We expect to reach Step 9 at least once (so > 3 step calls).
+        assert mock_run.call_count > 3, (
+            f"Cycle-1 direct edits must not trigger cycle-waste breaker; "
+            f"workflow should have progressed past Step 3. Got {mock_run.call_count} calls."
+        )
+
+
+class TestNotABugGuardResumeSnapshot:
+    """The NOT_A_BUG direct-edit guard must keep working across workflow
+    resumes. The workflow-start file snapshot has to survive interruption,
+    otherwise the original false-failure exit recurs on resume.
+    """
+
+    def test_resume_restores_initial_file_hashes(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, monkeypatch
+    ):
+        """On resume, the saved initial_file_hashes must be used so direct
+        edits made by prior cycles still register.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+
+        saved_snapshot = {"src/before.py": "abc123"}
+        loaded_state = {
+            "current_cycle": 2,
+            "last_completed_step": 0,
+            "step_outputs": {},
+            "total_cost": 0.05,
+            "model_used": "gpt-4",
+            "changed_files": ["src/direct_fix.py"],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": saved_snapshot,
+            "initial_sha": "deadbeef",
+        }
+        monkeypatch.setattr(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            lambda *a, **kw: (loaded_state, None),
+        )
+
+        # _detect_changed_files returns prior-cycle edits ONLY when called with
+        # the saved snapshot. If the workflow recaptures fresh (the bug), it
+        # would be called with {} and return [], and the original failure recurs.
+        def detect_with_snapshot_check(cwd, hashes):
+            if hashes == saved_snapshot:
+                return ["src/direct_fix.py"]
+            return []
+
+        monkeypatch.setattr(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            detect_with_snapshot_check,
+        )
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: NOT_A_BUG - already fixed.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+            **e2e_fix_default_args
+        )
+
+        # Without the resume fix, has_direct_edits would be False and the workflow
+        # would exit with success=False, msg="Issue determined to be not a bug."
+        assert msg != "Issue determined to be not a bug.", (
+            f"Resume must restore initial_file_hashes so direct-edit detection "
+            f"survives interruption. Got msg={msg!r}"
+        )
+
+    def test_state_data_persists_initial_snapshot(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """save_workflow_state must receive initial_file_hashes + initial_sha
+        so a future resume can restore them.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (True, "Root cause: NOT_A_BUG - expected behavior.", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as save:
+            save.return_value = None
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+            assert save.called, "save_workflow_state should have been called"
+            saved_state = None
+            for call in save.call_args_list:
+                args = call.args
+                kwargs = call.kwargs
+                state_arg = args[3] if len(args) > 3 else kwargs.get("state_data")
+                if isinstance(state_arg, dict):
+                    saved_state = state_arg
+            assert saved_state is not None, "Expected dict state_data in save call"
+            assert "initial_file_hashes" in saved_state, (
+                "state_data must include initial_file_hashes for resume to restore it"
+            )
+            assert "initial_sha" in saved_state, (
+                "state_data must include initial_sha for resume to restore it"
+            )
+            assert isinstance(saved_state["initial_file_hashes"], dict)
