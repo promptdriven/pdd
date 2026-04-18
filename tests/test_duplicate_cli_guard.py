@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -279,3 +280,221 @@ def test_new_guarded_subcommand_records_after_run(enable_guard, monkeypatch, sub
     dg.record_after_guarded_command(ctx)
 
     assert calls == [(Path("/w"), [sub, "a"], sub)]
+
+
+# ============================================================================
+# Regression tests for GitHub issue #1178:
+#   Duplicate guard: single-record last_run.json misses interleaved module re-runs.
+#
+# These tests exercise the REAL save_last_run -> load_last_run file round-trip
+# against a real last_run.json under tmp_path, unlike the mocked tests above.
+# On current buggy code, save_last_run overwrites the only record, so interleaved
+# invocations across different modules silently defeat the guard. After the fix
+# (keyed store), each distinct argv has its own timestamp and the guard fires
+# on any matching re-run within the window.
+# ============================================================================
+
+
+@pytest.fixture
+def isolated_project(enable_guard, monkeypatch, tmp_path):
+    """Real, writable project root under tmp_path with deterministic fingerprint/HEAD."""
+    monkeypatch.setattr(dg.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(dg.sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(dg, "find_project_root", lambda: tmp_path)
+    monkeypatch.setattr(dg, "_run_fingerprint", lambda _p: "samefp")
+    monkeypatch.setattr(dg, "_git_head", lambda _p: "samehead")
+    return tmp_path
+
+
+def test_issue_1178_interleaved_rerun_raises_noninteractive(isolated_project):
+    """Issue #1178: re-run of module_a after module_b ran in between must block (non-interactive).
+
+    On current buggy code, save_last_run(module_b) overwrites module_a's record,
+    so _duplicate_inputs_match finds no match when module_a re-runs and the guard
+    stays silent. After the fix, the keyed store retains module_a's record and
+    the guard raises UsageError as documented.
+    """
+    dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+    dg.save_last_run(isolated_project, ["sync", "module_b"], "sync")
+
+    ctx = _ctx(sub="sync")
+    with mock.patch.object(dg, "normalized_argv", return_value=["sync", "module_a"]):
+        with pytest.raises(click.UsageError, match="Duplicate expensive CLI run blocked"):
+            dg.check_duplicate_before_subcommand(ctx)
+
+
+def test_issue_1178_interleaved_rerun_warns_in_ci(isolated_project, monkeypatch, capsys):
+    """Issue #1178: in CI mode, re-run of module_a after module_b must emit a stderr warning.
+
+    The warning path uses the same load_last_run/_duplicate_inputs_match codepath as
+    the blocking path, so the CI test exercises the same bug on a different channel.
+    """
+    monkeypatch.setenv("CI", "1")
+    dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+    dg.save_last_run(isolated_project, ["sync", "module_b"], "sync")
+
+    ctx = _ctx(sub="sync")
+    with mock.patch.object(dg, "normalized_argv", return_value=["sync", "module_a"]):
+        dg.check_duplicate_before_subcommand(ctx)
+
+    assert "Same command was run" in capsys.readouterr().err
+
+
+def test_issue_1178_state_preserved_for_each_interleaved_module(isolated_project):
+    """After save(A) and save(B), BOTH modules' records must trigger the guard on re-run.
+
+    The single-record file collapses to the most recent save, so at most one of the two
+    re-runs will raise on the buggy code. The fix must keep per-argv records so both
+    invocations match their own prior entry.
+    """
+    dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+    dg.save_last_run(isolated_project, ["sync", "module_b"], "sync")
+
+    for argv in (["sync", "module_a"], ["sync", "module_b"]):
+        ctx = _ctx(sub="sync")
+        with mock.patch.object(dg, "normalized_argv", return_value=argv):
+            with pytest.raises(click.UsageError, match="Duplicate expensive CLI run blocked"):
+                dg.check_duplicate_before_subcommand(ctx)
+
+
+def test_issue_1178_upsert_does_not_clobber_other_entries(isolated_project):
+    """Upserting the same argv must preserve entries for other argvs.
+
+    Sequence: save A, save B, save A (upsert). On current buggy code, the third
+    save overwrites B's record and the guard misses a re-run of B. After the fix,
+    upsert only updates A's entry and B's record remains intact.
+    """
+    with mock.patch.object(dg.time, "time", return_value=1_700_000_000.0):
+        dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+    with mock.patch.object(dg.time, "time", return_value=1_700_000_050.0):
+        dg.save_last_run(isolated_project, ["sync", "module_b"], "sync")
+    with mock.patch.object(dg.time, "time", return_value=1_700_000_100.0):
+        dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+
+    ctx = _ctx(sub="sync")
+    with (
+        mock.patch.object(dg, "normalized_argv", return_value=["sync", "module_b"]),
+        mock.patch.object(dg.time, "time", return_value=1_700_000_110.0),
+    ):
+        with pytest.raises(click.UsageError, match="Duplicate expensive CLI run blocked"):
+            dg.check_duplicate_before_subcommand(ctx)
+
+
+def test_issue_1178_legacy_single_record_shape_still_triggers_guard(isolated_project):
+    """Backward-compat: an old-format single-record last_run.json must still be honored.
+
+    Users upgrading from earlier versions may have a last_run.json written by the
+    buggy single-record implementation. The new keyed loader must still recognize
+    that shape and trigger the guard when the current invocation matches it.
+    """
+    (isolated_project / ".pdd").mkdir(parents=True, exist_ok=True)
+    legacy = {
+        "argv": ["sync", "legacy_mod"],
+        "project_root": str(isolated_project.resolve()),
+        "fingerprint": "samefp",
+        "subcommand": "sync",
+        "timestamp": 9_999_999_999.0,  # far future -> always within window
+    }
+    (isolated_project / ".pdd" / "last_run.json").write_text(
+        json.dumps(legacy, indent=2), encoding="utf-8"
+    )
+
+    ctx = _ctx(sub="sync")
+    with mock.patch.object(dg, "normalized_argv", return_value=["sync", "legacy_mod"]):
+        with pytest.raises(click.UsageError, match="Duplicate expensive CLI run blocked"):
+            dg.check_duplicate_before_subcommand(ctx)
+
+
+def test_issue_1178_first_run_without_prior_state_does_not_raise(isolated_project):
+    """Regression: with no prior state file, the guard stays silent (no false positives)."""
+    ctx = _ctx(sub="sync")
+    with mock.patch.object(dg, "normalized_argv", return_value=["sync", "fresh_mod"]):
+        dg.check_duplicate_before_subcommand(ctx)  # no raise
+
+
+def test_issue_1178_legacy_record_does_not_block_different_argv(isolated_project):
+    """Legacy single-record file for module_a must NOT block a different module_b run.
+
+    Before the fix, this was the primary failure mode — a legacy file records only
+    the last invocation. After the fix, the legacy path still returns the stored record
+    but _duplicate_inputs_match filters it out because argv differs. This test locks in
+    that negative case: upgrading users with a legacy file must not see false positives.
+    """
+    (isolated_project / ".pdd").mkdir(parents=True, exist_ok=True)
+    legacy = {
+        "argv": ["sync", "module_a"],
+        "project_root": str(isolated_project.resolve()),
+        "fingerprint": "samefp",
+        "subcommand": "sync",
+        "timestamp": 9_999_999_999.0,  # far future — always within window
+    }
+    (isolated_project / ".pdd" / "last_run.json").write_text(
+        json.dumps(legacy, indent=2), encoding="utf-8"
+    )
+
+    ctx = _ctx(sub="sync")
+    with mock.patch.object(dg, "normalized_argv", return_value=["sync", "module_b"]):
+        dg.check_duplicate_before_subcommand(ctx)  # must not raise — module_b not in legacy file
+
+
+# ============================================================================
+# Regression tests for Greg's review on PR #1180:
+#   save_last_run must not crash on malformed persisted state.
+# Current main (single-record, overwrite-always) tolerated any garbage because
+# it never read the file before writing. The new keyed store does read + prune,
+# so it must treat bad timestamps / non-dict values like expired entries.
+# ============================================================================
+
+
+@pytest.mark.parametrize("bad_value", [
+    {"timestamp": "not-a-number"},
+    {"timestamp": None},
+    {"timestamp": {"nested": "dict"}},
+    {},  # timestamp missing entirely
+    "scalar-not-a-dict",
+    None,
+    42,
+])
+def test_save_last_run_survives_malformed_store_entry(isolated_project, bad_value):
+    """A corrupt entry in .pdd/last_run.json must be pruned, not crash save_last_run."""
+    (isolated_project / ".pdd").mkdir(parents=True, exist_ok=True)
+    (isolated_project / ".pdd" / "last_run.json").write_text(
+        json.dumps({"deadbeefdeadbeef": bad_value}, indent=2), encoding="utf-8"
+    )
+
+    # Must not raise. Before the fix, non-numeric timestamp raised ValueError
+    # inside the prune comprehension and propagated out of save_last_run.
+    dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+
+    # The malformed entry should have been pruned; the new record should be present.
+    store = json.loads((isolated_project / ".pdd" / "last_run.json").read_text())
+    assert "deadbeefdeadbeef" not in store
+    assert len(store) == 1
+    (new_key,) = store.keys()
+    assert store[new_key]["argv"] == ["sync", "module_a"]
+
+
+def test_save_last_run_preserves_other_entries_when_one_is_malformed(isolated_project):
+    """A single bad entry must not wipe out unrelated valid entries in the store."""
+    (isolated_project / ".pdd").mkdir(parents=True, exist_ok=True)
+    good_key = dg._signature_key(isolated_project, ["sync", "module_b"])
+    now = dg.time.time()
+    (isolated_project / ".pdd" / "last_run.json").write_text(
+        json.dumps({
+            "corrupt_key": {"timestamp": "bad"},
+            good_key: {
+                "argv": ["sync", "module_b"],
+                "project_root": str(isolated_project.resolve()),
+                "fingerprint": "samefp",
+                "subcommand": "sync",
+                "timestamp": now,
+            },
+        }, indent=2), encoding="utf-8"
+    )
+
+    dg.save_last_run(isolated_project, ["sync", "module_a"], "sync")
+
+    store = json.loads((isolated_project / ".pdd" / "last_run.json").read_text())
+    assert "corrupt_key" not in store, "malformed entry should be pruned"
+    assert good_key in store, "valid entry for a different argv must survive"
+    assert len(store) == 2, "new entry + surviving good entry"

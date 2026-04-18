@@ -4564,3 +4564,149 @@ class TestIssue1072FailureLogging:
                 "only failures need always-on logging"
             )
 
+
+# ---------------------------------------------------------------------------
+# Regression tests for cloud one-session sync empty-response failures.
+#
+# Three defects, scoped tightly:
+#   1. _parse_provider_json ignored Claude Code's `is_error` field — auth
+#      failures and refusals came back as success-with-text and downstream
+#      treated them as empty successes.
+#   2. False-positive empty-result success ran `break` to next provider.
+#      In single-provider configs (cloud anthropic-only) that meant zero
+#      retries — one transient response failed the whole sync.
+#   3. Multi-provider configs MUST keep the old fall-through behaviour —
+#      retrying a known-broken provider before falling through wastes time
+#      and money. Test #3 pins this.
+# ---------------------------------------------------------------------------
+
+
+def test_is_error_true_returns_failure(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Claude Code JSON with is_error=true must be reported as failure, not
+    success-with-text. The downstream false-positive branch shouldn't be the
+    thing that notices; the parser is the right place to surface the CLI's
+    own error signal.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result",
+        "is_error": True,
+        "result": "Not logged in · Please run /login",
+        "total_cost_usd": 0.0,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task(
+        "Fix the bug", mock_cwd, max_retries=1,
+    )
+
+    assert not success, "is_error=true must propagate as failure"
+    assert "Not logged in" in msg, (
+        f"Error message from CLI must be preserved for diagnostics, got: {msg!r}"
+    )
+
+
+def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Single-provider config (anthropic-only, the cloud one-session case):
+    transient empty-result success must retry on the same provider with
+    backoff rather than `break` to a non-existent next provider.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    # Remove google/openai creds so only anthropic is the candidate
+    for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+        os.environ.pop(k, None)
+
+    empty_response = json.dumps({
+        "type": "result",
+        "is_error": False,
+        "result": "",
+        "total_cost_usd": 0.0,
+    })
+    real_response = json.dumps({
+        "type": "result",
+        "is_error": False,
+        "result": "Task completed successfully after retry.",
+        "total_cost_usd": 0.05,
+    })
+    mock_subprocess.side_effect = [
+        MagicMock(returncode=0, stdout=empty_response, stderr=""),
+        MagicMock(returncode=0, stdout=real_response, stderr=""),
+    ]
+
+    with patch("pdd.agentic_common.time.sleep") as mock_sleep:
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            mock_cwd,
+            max_retries=2,
+            retry_delay=0.01,
+        )
+
+    assert success, f"Should succeed on retry, got msg={msg!r}"
+    assert msg == "Task completed successfully after retry."
+    assert mock_subprocess.call_count == 2, (
+        f"Expected 2 subprocess calls (first empty -> retry on same provider -> success), "
+        f"got {mock_subprocess.call_count}. Single-provider retry-on-false-positive regression."
+    )
+    assert mock_sleep.called, (
+        "Expected backoff sleep between attempts; retry path must use exponential delay."
+    )
+
+
+def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
+    """Multi-provider config (default for local dev): false-positive empty-result
+    must `break` and fall through to the next provider rather than retrying
+    a known-broken one. This pins the original "don't burn retries on a
+    busted provider" behaviour so the single-provider scoping doesn't
+    regress multi-provider runs.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    # All three providers available -> candidates is multi-provider
+    os.environ["ANTHROPIC_API_KEY"] = "ak"
+    os.environ["GOOGLE_API_KEY"] = "gk"
+    os.environ["OPENAI_API_KEY"] = "ok"
+
+    empty_anthropic = json.dumps({
+        "type": "result",
+        "is_error": False,
+        "result": "",
+        "total_cost_usd": 0.0,
+    })
+    real_google = json.dumps({
+        # Output > MIN_VALID_OUTPUT_LENGTH (50 chars) to avoid the false-positive
+        # short-output guard, simulating a real successful response.
+        "result": "Task completed via google fallback after anthropic returned empty.",
+        "stats": {
+            "models": {
+                "gemini-2.5-flash": {
+                    "tokens": {"prompt": 100, "candidates": 50, "thoughts": 0, "tool": 0},
+                    "api": {"totalLatencyMs": 1000, "totalRequests": 1},
+                }
+            }
+        },
+    })
+    mock_subprocess.side_effect = [
+        MagicMock(returncode=0, stdout=empty_anthropic, stderr=""),
+        MagicMock(returncode=0, stdout=real_google, stderr=""),
+    ]
+
+    with patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            mock_cwd,
+            max_retries=2,  # Even with retries available, multi-provider must fall through
+            retry_delay=0.01,
+        )
+
+    # Should have succeeded via the second provider on the first try — exactly
+    # one anthropic call (false-positive break) + one google call (success).
+    assert success, f"Should fall through to google and succeed, got msg={msg!r}"
+    assert mock_subprocess.call_count == 2, (
+        f"Expected 2 subprocess calls (anthropic empty -> break to google -> success), "
+        f"got {mock_subprocess.call_count}. Multi-provider must fall through immediately, "
+        "not retry the broken provider first."
+    )
+

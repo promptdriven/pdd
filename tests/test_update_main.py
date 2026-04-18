@@ -2399,3 +2399,184 @@ class TestFindAndResolveAllPairsNoTouch:
                 f"Scanning should not create prompt files, but {prompt_path} exists on disk"
             )
 
+
+# --- Regression tests for gltanaka/pdd#1220 ---
+# Legacy regeneration path must read the existing prompt from disk rather
+# than hardcoding "no prompt exists yet, create a new one", which caused the
+# autoheal destructive-rewrite class of bugs in PR #1187 and 5 other
+# commits. See the issue for the full empirical matrix.
+
+
+def _setup_regeneration_repo(tmp_path, monkeypatch, prompt_content=None):
+    """Helper: lay out a minimal repo for legacy-regeneration tests.
+
+    Returns (code_file_path, prompt_file_path). Creates the prompt file
+    only when prompt_content is not None.
+    """
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    prompts_dir = repo_path / "prompts"
+    prompts_dir.mkdir()
+
+    code_file = repo_path / "sample.py"
+    code_file.write_text("def sample():\n    return 1\n")
+
+    prompt_file = prompts_dir / "sample_python.prompt"
+    if prompt_content is not None:
+        prompt_file.write_text(prompt_content)
+
+    monkeypatch.chdir(repo_path)
+    git.Repo.init(repo_path)
+    return code_file, prompt_file
+
+
+def test_regeneration_mode_passes_existing_prompt_when_file_exists(tmp_path, monkeypatch):
+    """When a prompt already exists on disk, the legacy path must hand its
+    full content to update_prompt so the LLM can preserve structure."""
+    from pdd.update_main import update_main
+
+    existing_prompt = (
+        "<include>context/preamble.prompt</include>\n"
+        "% Goal\n"
+        "do the thing\n"
+        "<pdd.helper>\n"
+        "helper text\n"
+    )
+    code_file, prompt_file = _setup_regeneration_repo(
+        tmp_path, monkeypatch, prompt_content=existing_prompt
+    )
+
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language") as mock_get_language:
+        mock_update_prompt.return_value = (
+            "<include>context/preamble.prompt</include>\n% Goal\nupdated\n<pdd.helper>\n",
+            0.01,
+            "mock-model",
+        )
+        mock_agents.return_value = []  # force legacy path
+        mock_get_language.return_value = "python"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert mock_update_prompt.called
+    kwargs = mock_update_prompt.call_args.kwargs
+    assert kwargs["input_prompt"] == existing_prompt, (
+        "Legacy regeneration path must pass the existing prompt content "
+        "to update_prompt; got the first-time sentinel or wrong content."
+    )
+    assert "<pdd.helper>" in kwargs["input_prompt"]
+
+
+def test_regeneration_mode_uses_sentinel_when_prompt_file_missing(tmp_path, monkeypatch):
+    """When no prompt file exists, the legacy path falls back to the
+    first-time-generation sentinel — preserves original semantics."""
+    from pdd.update_main import update_main
+
+    code_file, _ = _setup_regeneration_repo(
+        tmp_path, monkeypatch, prompt_content=None
+    )
+
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language") as mock_get_language:
+        mock_update_prompt.return_value = ("fresh prompt", 0.01, "mock-model")
+        mock_agents.return_value = []
+        mock_get_language.return_value = "python"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert mock_update_prompt.called
+    kwargs = mock_update_prompt.call_args.kwargs
+    assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
+
+
+def test_regeneration_mode_degrades_gracefully_on_unicode_error(tmp_path, monkeypatch):
+    """Corrupt / non-UTF8 prompt file must not crash the pipeline — the
+    legacy path should fall back to the sentinel so pdd update still runs
+    instead of bubbling UnicodeDecodeError up through the heal pipeline."""
+    from pdd.update_main import update_main
+
+    code_file, prompt_file = _setup_regeneration_repo(
+        tmp_path, monkeypatch, prompt_content=""
+    )
+    # Write invalid UTF-8 bytes directly so Path.read_text() would raise
+    prompt_file.write_bytes(b"\xff\xfe<bad utf-8 \x80\x81\x82>\n")
+
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language") as mock_get_language:
+        mock_update_prompt.return_value = ("fresh prompt", 0.01, "mock-model")
+        mock_agents.return_value = []
+        mock_get_language.return_value = "python"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        # Should not raise UnicodeDecodeError
+        update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert mock_update_prompt.called
+    kwargs = mock_update_prompt.call_args.kwargs
+    assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
+
+
+def test_regeneration_mode_uses_sentinel_when_prompt_file_empty(tmp_path, monkeypatch):
+    """Empty / whitespace-only prompt file is treated as first-time
+    generation — the sentinel is passed through instead of an empty string."""
+    from pdd.update_main import update_main
+
+    code_file, _ = _setup_regeneration_repo(
+        tmp_path, monkeypatch, prompt_content="   \n\t\n"
+    )
+
+    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
+         patch("pdd.update_main.get_available_agents") as mock_agents, \
+         patch("pdd.update_main.get_language") as mock_get_language:
+        mock_update_prompt.return_value = ("fresh prompt", 0.01, "mock-model")
+        mock_agents.return_value = []
+        mock_get_language.return_value = "python"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
+
+        update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert mock_update_prompt.called
+    kwargs = mock_update_prompt.call_args.kwargs
+    assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
+

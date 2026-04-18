@@ -1258,8 +1258,30 @@ def update_main(
             with open(modified_code_file, 'r') as f:
                 modified_code_content = f.read()
 
+            # Read the existing prompt when one is present so the LLM can
+            # preserve its structure. Only fall back to the first-time
+            # sentinel when the file truly doesn't exist or is empty —
+            # otherwise the legacy path regenerates from scratch and strips
+            # <pdd.*> tags, <include> preambles, and % markers (gltanaka/pdd#1220).
+            existing_prompt_text = ""
+            try:
+                if prompt_path and Path(prompt_path).exists():
+                    existing_prompt_text = Path(prompt_path).read_text()
+            except (OSError, UnicodeDecodeError):
+                # OSError: I/O failure. UnicodeDecodeError: corrupt/binary
+                # prompt file (e.g., mojibake from a prior destructive heal).
+                # In both cases, degrade to the first-time sentinel rather
+                # than crashing the whole update pipeline.
+                existing_prompt_text = ""
+
+            input_prompt_arg = (
+                existing_prompt_text
+                if existing_prompt_text.strip()
+                else "no prompt exists yet, create a new one"
+            )
+
             modified_prompt, total_cost, model_name = update_prompt(
-                input_prompt="no prompt exists yet, create a new one",
+                input_prompt=input_prompt_arg,
                 input_code="",
                 modified_code=modified_code_content,
                 strength=ctx.obj.get("strength", 0.5),

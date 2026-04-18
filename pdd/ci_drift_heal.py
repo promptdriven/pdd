@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,6 +17,14 @@ from rich.table import Table
 
 console = Console()
 _ROLLBACK_PATHS = (".pdd/meta", "project_dependencies.csv")
+
+# Change-magnitude gate threshold. Motivation: PR gltanaka/pdd#1187 autohealed
+# a 1-line code fix (`ad98ea17`) into a 176-line prompt rewrite — a 1:176 ratio.
+# Typical healthy prompt-update ratios sit between 1:1 and 2:1; a cap at 5×
+# catches pathological cases cleanly without blocking legitimate updates where
+# a small refactor rightly touches multiple prompt sections. Override via
+# the `PDD_HEAL_PROMPT_CHURN_MAX_RATIO` env var in CI if needed.
+_HEAL_PROMPT_CHURN_MAX_RATIO = 5.0
 
 
 def _get_git_changed_files(diff_base: str) -> set:
@@ -49,6 +59,8 @@ class DriftInfo:
     operation: str  # 'update' (prompt stale) or 'example' (example stale)
     reason: str
     code_path: Optional[str] = None  # resolved code file path for pdd update
+    prompt_path: Optional[str] = None  # resolved prompt file path for churn gate
+    diff_base: Optional[str] = None  # git diff base, used by change-magnitude gate
 
 
 @dataclass
@@ -291,6 +303,14 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 )
 
         if decision.operation == "update":
+            resolved_prompt_path: Optional[str] = None
+            try:
+                paths = get_pdd_file_paths(basename, language)
+                prompt_file_abs = paths.get("prompt")
+                if prompt_file_abs is not None:
+                    resolved_prompt_path = str(prompt_file_abs)
+            except Exception:
+                resolved_prompt_path = None
             prompt_drifts.append(
                 DriftInfo(
                     basename=basename,
@@ -298,6 +318,8 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                     operation="update",
                     reason=getattr(decision, "reason", "Prompt stale"),
                     code_path=code_path,
+                    prompt_path=resolved_prompt_path,
+                    diff_base=diff_base,
                 )
             )
         else:
@@ -414,6 +436,286 @@ def _run_pdd_command(cmd: List[str], env: Dict[str, str], label: str) -> bool:
         return False
 
 
+def _numstat_line_counts(diff_args: List[str]) -> Optional[Tuple[int, int]]:
+    """Return (added, deleted) line counts from `git diff --numstat <args>`.
+
+    Returns None if the diff command fails or produces no rows. When multiple
+    files appear in the diff, the counts are summed. A binary-diff row
+    (indicated by "-\t-") contributes zero.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--numstat"] + diff_args,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        added = 0
+        deleted = 0
+        saw_row = False
+        for line in result.stdout.splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) < 2:
+                continue
+            a_str, d_str = parts[0], parts[1]
+            if a_str == "-" or d_str == "-":
+                saw_row = True
+                continue
+            try:
+                added += int(a_str)
+                deleted += int(d_str)
+                saw_row = True
+            except ValueError:
+                continue
+        if not saw_row:
+            return None
+        return (added, deleted)
+    except Exception:
+        return None
+
+
+def _enforce_prompt_churn_gate(drift: DriftInfo) -> bool:
+    """Check that the prompt churn is not wildly larger than the code churn.
+
+    After `pdd update` runs, the prompt file is modified in the working tree
+    (not yet committed). We compare `git diff --numstat HEAD -- <prompt_path>`
+    (prompt churn) against `git diff --numstat <diff_base> -- <code_path>`
+    (code churn that motivated the heal). If prompt-churn / code-churn
+    exceeds `_HEAL_PROMPT_CHURN_MAX_RATIO`, we revert the prompt file and
+    return False so the caller treats the heal as failed.
+
+    This is a safety net for cases where the LLM rewrites far more of the
+    prompt than the code change warrants (see PR gltanaka/pdd#1187).
+    Returns True when the gate passes or when we cannot measure (missing
+    paths, git errors) — in the unmeasurable case we prefer to let the
+    healthier structural-invariant validator be the gatekeeper.
+    """
+    if not drift.prompt_path or not drift.code_path or not drift.diff_base:
+        return True
+
+    ratio_cap_str = os.environ.get("PDD_HEAL_PROMPT_CHURN_MAX_RATIO")
+    try:
+        ratio_cap = float(ratio_cap_str) if ratio_cap_str else _HEAL_PROMPT_CHURN_MAX_RATIO
+    except ValueError:
+        ratio_cap = _HEAL_PROMPT_CHURN_MAX_RATIO
+
+    prompt_counts = _numstat_line_counts(["HEAD", "--", drift.prompt_path])
+    code_counts = _numstat_line_counts([drift.diff_base, "--", drift.code_path])
+
+    if prompt_counts is None or code_counts is None:
+        return True
+
+    prompt_churn = prompt_counts[0] + prompt_counts[1]
+    code_churn = max(1, code_counts[0] + code_counts[1])
+    ratio = prompt_churn / code_churn
+
+    if ratio <= ratio_cap:
+        return True
+
+    console.print(
+        f"[red]✗ Prompt churn gate tripped for {drift.basename}: "
+        f"prompt changed {prompt_churn} lines vs code {code_churn} lines "
+        f"(ratio {ratio:.1f} > cap {ratio_cap:.1f}).[/red]\n"
+        f"[red]  Rewrite was likely destructive — see PR gltanaka/pdd#1187. "
+        f"Reverting {drift.prompt_path} and skipping this module.[/red]"
+    )
+    try:
+        subprocess.run(
+            ["git", "checkout", "HEAD", "--", drift.prompt_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not revert {drift.prompt_path}: {e}[/yellow]")
+    return False
+
+
+# Regexes used by the structural-invariants validator. Compiled once at module
+# import time so the gate adds negligible overhead per heal.
+_INCLUDE_TAG_RE = re.compile(r"<include(?:-many)?>")
+_PDD_OPEN_TAG_RE = re.compile(r"<pdd\.[A-Za-z_][A-Za-z0-9_]*>")
+_PERCENT_MARKER_RE = re.compile(r"^%\s", re.MULTILINE)
+_FENCED_BLOCK_RE = re.compile(r"```[^\n]*\n.*?\n```", re.DOTALL)
+
+# Env var for selectively disabling individual invariants. Comma-separated
+# list of invariant names. Motivation: invariant #4 (fenced blocks byte-
+# identical) is the strictest — it blocks legitimate refactors where an
+# example's API signature inside a fenced block needs to change. Without
+# an escape hatch the only way out would be a code change here. The other
+# invariants are already soft (counts or subset checks) but expose them
+# for uniformity.
+_VALID_SKIPPABLE_INVARIANTS = frozenset({
+    "include",          # skip invariant #1 (<include>/<include-many> count)
+    "pdd_tags",         # skip invariant #2 (<pdd.*> prefix preservation)
+    "percent_markers",  # skip invariant #3 (% section marker threshold)
+    "fenced_blocks",    # skip invariant #4 (fenced block byte-identity)
+})
+
+
+def _get_skipped_invariants() -> set:
+    """Return the set of invariant names to skip, parsed from env var.
+
+    Reads `PDD_HEAL_INVARIANTS_SKIP` as a comma-separated list. Unknown
+    names are logged and dropped rather than raising, so a typo in CI
+    config doesn't break the whole heal. Empty / unset env → empty set
+    (all invariants enforced).
+    """
+    raw = os.environ.get("PDD_HEAL_INVARIANTS_SKIP", "")
+    if not raw.strip():
+        return set()
+    requested = {s.strip() for s in raw.split(",") if s.strip()}
+    unknown = requested - _VALID_SKIPPABLE_INVARIANTS
+    if unknown:
+        console.print(
+            f"[yellow]⚠ Unknown invariant names in "
+            f"PDD_HEAL_INVARIANTS_SKIP, ignoring: {sorted(unknown)}. "
+            f"Valid names: {sorted(_VALID_SKIPPABLE_INVARIANTS)}.[/yellow]"
+        )
+    return requested & _VALID_SKIPPABLE_INVARIANTS
+
+
+def _git_show_prompt_at_head(prompt_path: str) -> Optional[str]:
+    """Return the committed HEAD content of `prompt_path`, or None on failure.
+
+    `git show HEAD:<path>` requires a repo-relative path with forward slashes;
+    absolute paths (which is what DriftInfo.prompt_path holds, since
+    get_pdd_file_paths returns absolute Paths) are rejected by git. Resolve
+    the path against the repo root first, then hand the relative form to git.
+    """
+    try:
+        repo_root_proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if repo_root_proc.returncode != 0:
+            return None
+        repo_root = Path(repo_root_proc.stdout.strip())
+        rel = Path(prompt_path).resolve().relative_to(repo_root.resolve())
+        rel_str = rel.as_posix()
+        show_proc = subprocess.run(
+            ["git", "show", f"HEAD:{rel_str}"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if show_proc.returncode != 0:
+            return None
+        return show_proc.stdout
+    except Exception:
+        return None
+
+
+def _enforce_structural_invariants(drift: DriftInfo) -> bool:
+    """Verify that `pdd update` did not strip known structural elements.
+
+    Path-agnostic post-heal check: runs regardless of whether the legacy
+    two-stage `update_prompt()` or the agentic path produced the rewrite.
+    Pulls the pre-heal content from `git show HEAD:<prompt_path>` and
+    compares it against the on-disk content. Reverts the prompt file and
+    returns False on any violation. Returns True when the gate passes or
+    when inputs cannot be resolved (permissive on missing, mirroring the
+    churn gate — the churn gate is still running alongside as a
+    magnitude-based belt-and-suspenders).
+
+    Invariants (motivated by PR gltanaka/pdd#1187):
+      1. `<include>` / `<include-many>` tag count must not decrease.
+      2. Every `<pdd.NAME>` open tag in the original must still appear
+         verbatim (prefix included) in the current content.
+      3. If the original has `%`-prefixed section markers, the current
+         content must retain at least `max(1, ceil(original_count / 2))`.
+      4. Every fenced code block in the original must appear verbatim
+         (byte-identical) somewhere in the current content.
+
+    Individual invariants can be disabled via the comma-separated env var
+    `PDD_HEAL_INVARIANTS_SKIP` — valid names are `include`, `pdd_tags`,
+    `percent_markers`, `fenced_blocks`. Motivation: invariant #4 is the
+    strictest; legitimate example-code refactors inside a fenced block
+    need an escape hatch without a code change here.
+    """
+    if not drift.prompt_path:
+        return True
+
+    original = _git_show_prompt_at_head(drift.prompt_path)
+    if original is None:
+        return True
+
+    try:
+        current = Path(drift.prompt_path).read_text()
+    except Exception:
+        return True
+
+    skipped = _get_skipped_invariants()
+    violations: List[str] = []
+
+    if "include" not in skipped:
+        original_include_count = len(_INCLUDE_TAG_RE.findall(original))
+        current_include_count = len(_INCLUDE_TAG_RE.findall(current))
+        if current_include_count < original_include_count:
+            violations.append(
+                f"<include>/<include-many> count dropped from "
+                f"{original_include_count} to {current_include_count}"
+            )
+
+    if "pdd_tags" not in skipped:
+        original_pdd_tags = set(_PDD_OPEN_TAG_RE.findall(original))
+        missing_pdd_tags = sorted(tag for tag in original_pdd_tags if tag not in current)
+        if missing_pdd_tags:
+            violations.append(
+                "missing <pdd.*> tags (prefix stripped or tag deleted): "
+                + ", ".join(missing_pdd_tags)
+            )
+
+    if "percent_markers" not in skipped:
+        original_percent_lines = _PERCENT_MARKER_RE.findall(original)
+        current_percent_count = len(_PERCENT_MARKER_RE.findall(current))
+        if original_percent_lines:
+            required = max(1, math.ceil(len(original_percent_lines) / 2))
+            if current_percent_count < required:
+                violations.append(
+                    f"% section markers dropped below threshold "
+                    f"({current_percent_count} < {required}, "
+                    f"original had {len(original_percent_lines)})"
+                )
+
+    if "fenced_blocks" not in skipped:
+        original_blocks = _FENCED_BLOCK_RE.findall(original)
+        missing_blocks = [b for b in original_blocks if b not in current]
+        if missing_blocks:
+            previews = [b[:80].replace("\n", " ") + "..." for b in missing_blocks]
+            violations.append(
+                "missing fenced code blocks: " + " | ".join(previews)
+            )
+
+    if not violations:
+        return True
+
+    console.print(
+        f"[red]✗ Structural invariants failed for {drift.basename}:[/red]"
+    )
+    for v in violations:
+        console.print(f"[red]  - {v}[/red]")
+    console.print(
+        f"[red]  Reverting {drift.prompt_path} — see PR gltanaka/pdd#1187.[/red]"
+    )
+    try:
+        subprocess.run(
+            ["git", "checkout", "HEAD", "--", drift.prompt_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except Exception as e:
+        console.print(f"[yellow]⚠ Could not revert {drift.prompt_path}: {e}[/yellow]")
+    return False
+
+
 def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
     """Heal a single drifted module by running the appropriate pdd command.
 
@@ -436,6 +738,22 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
             update_cmd = ["pdd", "update"]
 
         if not _run_pdd_command(update_cmd, env, f"Healing {drift.basename} (update)"):
+            return False
+
+        # Change-magnitude gate: refuse prompt rewrites that are wildly
+        # out of proportion to the originating code change. When tripped,
+        # the prompt file is reverted and the module is treated as
+        # unhealed so commit_and_push does not publish a destructive
+        # rewrite.
+        if not _enforce_prompt_churn_gate(drift):
+            return False
+
+        # Structural-invariant gate: path-agnostic post-heal check that
+        # the rewrite still contains the <include> preamble, <pdd.*>
+        # namespaced tags, % section markers, and fenced code blocks
+        # from the pre-heal version. Catches destructive rewrites that
+        # slip under the churn-ratio cap.
+        if not _enforce_structural_invariants(drift):
             return False
 
         # Step 2: Sync example from the now-updated prompt so everything is

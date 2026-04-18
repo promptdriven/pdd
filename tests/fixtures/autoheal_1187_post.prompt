@@ -1,0 +1,41 @@
+1) Role and Scope
+The module `agentic_bug_orchestrator.py` acts as the primary controller for an 12-step agentic workflow designed to investigate, reproduce, and verify software bugs. It sits within the agentic layer of the system, responsible for coordinating between LLM-based reasoning tasks and deterministic environment checks (git worktrees, test runners, grep, and structural scanners). Its primary responsibility is to maintain state across steps, manage a clean reproduction environment, and ensure that generated test artifacts meet behavioral quality standards before proposing a PR.
+
+2) Requirements
+1. **Workflow State Management**: Must support resuming from the last successful step using `load_workflow_state` and `save_workflow_state`. It must validate that the cached `last_completed_step` actually corresponds to valid outputs.
+2. **Isolated Environment**: All reproduction and fix attempts must occur in a dedicated git worktree (`.pdd/worktrees/fix-issue-{number}`). The orchestrator must handle worktree creation, branch management (handling existing branches with force-reset), and cleanup of existing directories.
+3. **Deterministic Verification (Grep)**: If Step 6 identifies a repeating pattern, the orchestrator must perform a deterministic `grep` search. If matches are found outside the LLM's `FIX_LOCATIONS`, it must trigger a retry to classify those files.
+4. **Structural Test Guard**: Must scan generated unit tests for "anti-patterns" (e.g., `inspect.getsource`, `hasattr` assertions, or source string matching). If violations are found, it must trigger a Step 9 retry with specific feedback and back up the offending files.
+5. **Cross-Validation**: Must verify that the number of generated tests matches the Step 8 test plan and ensure that every file in `FIX_LOCATIONS` is actually imported or referenced by at least one generated test.
+6. **Error Handling & Resilience**: Implement a consecutive failure check (aborting after 3 provider failures). Support "Fast-Track" logic to skip research steps if the author provided a diagnosis.
+7. **Logging & Output**: Use `rich.console` for user-facing progress and `logging` for internal trace details. All changes must be tracked in a `changed_files` list for final staging and PR creation.
+
+3) Dependencies
+<agentic_common>
+  <include>context/agentic_common_example.py</include>
+</agentic_common>
+<get_test_command>
+  <include>context/get_test_command_example.py</include>
+</get_test_command>
+<pytest_output>
+  <include>context/pytest_output_example.py</include>
+</pytest_output>
+<preprocess>
+  <include>context/preprocess_example.py</include>
+</preprocess>
+<load_prompt_template>
+  <include>context/load_prompt_template_example.py</include>
+</load_prompt_template>
+
+4) Instructions
+- **Worktree Logic**: Implement `_setup_worktree` to handle git rev-parse for root detection and branch creation. Use `_resolve_main_ref` to ensure new branches are cut from a clean main/master state rather than the user's current local branch.
+- **Pattern Search Retry**: In Step 6, extract `PATTERN_SEARCH` and `FIX_LOCATIONS`. Use `subprocess.run(["grep", ...])` with defined excludes (`.git`, `node_modules`, etc.). If unclassified files exist, re-invoke the LLM with an addendum containing the code context for those files.
+- **Step 9 Retries**: 
+    - Implement `_scan_step9_file_for_new_patterns` to detect structural tests. Only scan lines *appended* or *changed* compared to the pre-step snapshot to avoid flagging pre-existing code.
+    - If violations occur, rename the files to `.bak` and instruct the LLM to rewrite from scratch.
+    - Check coverage: Ensure every file in `FIX_LOCATIONS` is referenced in the generated test code.
+- **Verification**: Use `run_pytest_and_capture_output` for Python files and `get_test_command_for_file` for other languages. In this workflow, a "passed" verification means the test executed and successfully detected a failure (the bug) or ran without setup errors.
+- **Staging**: Before Step 12 (PR creation), programmatically run `git add` on all files in `changed_files` to ensure the PR reflects all generated artifacts.
+
+5) Deliverable
+A single Python file `agentic_bug_orchestrator.py` containing the `run_agentic_bug_orchestrator` function, all helper utilities for git/file manipulation, structural scanning logic, and the per-step timeout configuration (`BUG_STEP_TIMEOUTS`). The entry point must return a tuple of `(success, final_message, total_cost, model_used, changed_files)`.
