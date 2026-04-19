@@ -175,6 +175,45 @@ def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
     return payload, changed
 
 
+def _collect_python_symbols(body: List[ast.stmt], prefix: str) -> List[str]:
+    """Recursively collect symbol names from a Python AST body.
+
+    At the module level (``prefix=""``), returns top-level functions, classes,
+    and module constants (``X = ...`` / ``X: T = ...``). Inside a class
+    (``prefix="ClassName."``), returns ``ClassName.method`` for each
+    direct-child method and ``ClassName.Inner`` / ``ClassName.Inner.method``
+    for nested classes.
+
+    Methods defined inside ``if``/``try``/``with`` branches inside a class
+    body are deliberately NOT collected: conformance is a hard validator and
+    must not accept a symbol whose existence at runtime depends on branch
+    evaluation (``if False: def maybe(self): ...`` must not satisfy
+    ``ClassName.maybe``).
+    """
+    symbols: List[str] = []
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.append(f"{prefix}{node.name}")
+        elif isinstance(node, ast.ClassDef):
+            class_name = f"{prefix}{node.name}"
+            symbols.append(class_name)
+            symbols.extend(_collect_python_symbols(node.body, prefix=f"{class_name}."))
+        elif not prefix and isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    symbols.append(target.id)
+        elif (
+            not prefix
+            and isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            # Only ``X: T = value`` binds at runtime; bare ``X: T`` does not
+            # create a module export, so it must not satisfy conformance.
+            symbols.append(node.target.id)
+    return symbols
+
+
 def _verify_architecture_conformance(
     generated_code: str,
     prompt_name: str,
@@ -249,23 +288,7 @@ def _verify_architecture_conformance(
     if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
         try:
             tree = ast.parse(generated_code)
-            for node in ast.iter_child_nodes(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    actual_symbols.append(node.name)
-                elif isinstance(node, ast.ClassDef):
-                    actual_symbols.append(node.name)
-                elif isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            actual_symbols.append(target.id)
-                elif (
-                    isinstance(node, ast.AnnAssign)
-                    and isinstance(node.target, ast.Name)
-                    and node.value is not None
-                ):
-                    # Only `X: T = value` binds at runtime; bare `X: T` does not
-                    # create a module export, so it must not satisfy conformance.
-                    actual_symbols.append(node.target.id)
+            actual_symbols.extend(_collect_python_symbols(tree.body, prefix=""))
         except SyntaxError:
             return  # Can't parse — skip conformance
     elif detected_lang in ("typescript", "javascript", "ts", "js") or any(
@@ -287,10 +310,17 @@ def _verify_architecture_conformance(
             f"Expected: {declared_symbols}. Found: {actual_symbols}."
         )
 
-    # Check naming convention: if architecture specifies snake_case but code has camelCase
+    # Check naming convention: if architecture specifies snake_case but code has camelCase.
+    # Dotted symbols (``ClassName.method``) are split on ``.`` so the camelCase
+    # guard inspects the method segment, not only the class-name prefix.
     if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
         camel_pattern = re.compile(r"^[a-z]+[A-Z]")
-        camel_exports = [s for s in actual_symbols if camel_pattern.match(s) and not s.startswith("_")]
+        camel_exports: List[str] = []
+        for s in actual_symbols:
+            for part in s.split("."):
+                if not part.startswith("_") and camel_pattern.match(part):
+                    camel_exports.append(s)
+                    break
         if camel_exports:
             raise click.UsageError(
                 f"Architecture conformance error for {prompt_name}: "

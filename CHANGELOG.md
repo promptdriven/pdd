@@ -1,16 +1,35 @@
+## v0.0.212 (2026-04-18)
+
+### Feat
+
+- add auto-heal churn/invariant gates, multi-provider Cloud Build support, and keyed CLI invocation state; fix destructive update rewrites, resume snapshot persistence, and NOT_A_BUG direct-edit detection.
+
 ## v0.0.211 (2026-04-17)
 
 ### Feat
 
-- implement 14-step agentic split pipeline, migrate CI auto-heal to Cloud Build, and update CLI/orchestrator interfaces.
+- **auto-heal structural-invariant + churn gates (#1220)**: new `pdd/ci_drift_heal.py` gates (+318 lines) that refuse destructive `pdd update` rewrites. `_enforce_prompt_churn_gate` reverts prompts whose churn-ratio vs. originating code change exceeds `_HEAL_PROMPT_CHURN_MAX_RATIO = 5.0` (override via `PDD_HEAL_PROMPT_CHURN_MAX_RATIO`); `_enforce_structural_invariants` diffs the HEAD prompt against post-heal content and reverts when `<include>`/`<include-many>` tag count drops, `<pdd.NAME>` namespace tags disappear, `%` section markers fall below `max(1, ceil(original/2))`, or any fenced code block is not byte-preserved. Selectively disable invariants via comma-separated `PDD_HEAL_INVARIANTS_SKIP` (`include`, `pdd_tags`, `percent_markers`, `fenced_blocks`); motivated by the PR gltanaka/pdd#1187 1→176-line autoheal incident
+- **multi-provider auto-heal on Cloud Build**: `cloudbuild-auto-heal.yaml` installs all three agent CLIs (`@anthropic-ai/claude-code`, `@google/gemini-cli`, `@openai/codex`), sets `PDD_AGENTIC_PROVIDER=anthropic,google,openai` (anthropic first — empirically preserves structure best), wires `OPENAI_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` Secret Manager secrets, raises `_PDD_BUDGET_CAP` 5.00→15.00 (pilot measured ~$1.95/module), and aborts the heal step when any CLI is missing after install
+- **core/duplicate_cli_guard — keyed multi-invocation store (#1178, #1180)**: `.pdd/last_run.json` is now a signature-keyed dict instead of a single record so interleaved re-runs across different modules each track their own entry. `_signature_key` hashes `(project_root, argv_tail)`; `_load_store` migrates legacy single-record files on read and tolerates corrupt JSON; `save_last_run` prunes expired entries on every write; `_entry_timestamp` treats malformed timestamps as expired; `_lookup_matching_record` routes through `load_last_run` to preserve pre-existing test mocks. Also ships new `pdd/prompts/core/duplicate_cli_guard_python.prompt`
 
 ### Fix
 
-- **#1206**: persist initial snapshot across resume + extend noise filter
-- **#1206**: check direct edits in NOT_A_BUG guard, update broken tests
-- scoped empty-CLI-response handling for cloud one-session sync
-- duplicate guard keyed store for interleaved module re-runs (#1178) (#1180)
-- resolve #1220 autoheal destructive rewrite (3-layer fix) (#1221)
+- **update_main destructive rewrite (#1220, #1221)**: the legacy two-stage `update_prompt()` path was called with the literal sentinel `"no prompt exists yet, create a new one"` whenever called from the update pipeline — so every update regenerated from scratch and stripped `<pdd.*>` tags, `<include>` preambles, and `%` markers. `update_main` now reads the existing prompt (when it exists and is non-empty) and passes its contents as `input_prompt`; `OSError`/`UnicodeDecodeError` degrade to the sentinel instead of crashing
+- **agentic_e2e_fix_orchestrator resume snapshot (#1206)**: persist `initial_file_hashes` and `initial_sha` into workflow state and restore them on resume, so NOT_A_BUG direct-edit detection still sees prior-cycle changes after interruption (previously resume re-snapshotted the worktree and forgot prior edits)
+- **NOT_A_BUG direct-edit + cycle-waste guards (#1206)**: both the inner- and outer-loop Step 3 NOT_A_BUG guards consult `_detect_meaningful_changes` in addition to `dev_unit_states.fixed` so direct edits to non-PDD modules suppress the exit. New `_is_noise_path`/`_detect_meaningful_changes` helpers filter `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `node_modules`, `.coverage`/`.coverage.*`, `htmlcov`, `.DS_Store`, `.eggs`, `.next`, `.turbo`, `.parcel-cache`, `*.egg-info`, `coverage.xml`, and `.pyc`/`.pyo`/`.log`/`.swp`/`.swo` suffixes (normalized to forward slashes for Windows parity). Cycle-waste breaker: when `has_direct_edits` and `not has_fixed_units` and `not has_cycle_progress` and `current_cycle > 1`, exit with `success=True` instead of looping to `max_cycles`
+- **single-provider false-positive retry (#1177)**: `agentic_common.run_agentic_task` distinguishes multi- vs single-provider configs on false-positive detection. Multi-provider configs still `break` and fall through (prior behavior); single-provider configs (`len(candidates) == 1`, e.g. cloud anthropic-only) retry on the same provider with exponential backoff + jitter up to `max_retries` so one transient empty response does not fail the entire sync
+- **scoped empty-CLI-response handling (#1177)**: `_run_with_provider` emits a diagnostic line with the stderr tail (last 500 chars), prompt size, sorted auth-env-key names, and cwd when a CLI exits 0 with empty/whitespace-only stdout; `_parse_provider_json` now returns `(False, …)` when Claude Code JSON has `is_error: true` (auth/refusal/crash) instead of silently treating it as empty success
+- **one_session_sync cloud retry**: `run_one_session_sync` passes `max_retries=2` to `run_agentic_task` so the single-provider retry path actually fires in cloud (anthropic-only) runs
+
+### Build
+
+- refresh `ci/cloud-batch/test-durations.json` and `.cloud-image-hash`; auto-healed prompt/example drift for `agentic_common`, `one_session_sync`, `update_main`, and `agentic_e2e_fix_orchestrator`; add `tests/fixtures/autoheal_1187_pre.prompt` + `autoheal_1187_post.prompt` as the #1187/#1220 regression fixture for the churn/invariants gates
+
+### Docs
+
+- `agentic_e2e_fix_orchestrator_python.prompt`: document the NOT_A_BUG direct-edit guard, noise filter (minimum filtered set + platform-neutral path matching), and cycle-waste breaker conditions (#1206)
+- `agentic_common_python.prompt`: document empty-stdout diagnostic logging, the multi- vs single-provider false-positive branch, and `is_error` propagation for Claude Code JSON
+- `one_session_sync_python.prompt` / `update_main_python.prompt`: narrow `agentic_common_example.py` and `architecture_sync_example.py` includes to specific functions; document `max_retries=2` rationale
 
 ## v0.0.210 (2026-04-16)
 

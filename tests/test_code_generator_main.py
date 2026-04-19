@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import pathlib
+import re
 import shlex
 import subprocess
 import sys
@@ -3964,3 +3965,453 @@ def test_issue_777_empty_output_file_git_derived_prompt_falls_back_to_full(
     mock_local_generator_fixture.assert_called_once()
     mock_incremental_generator_fixture.assert_not_called()
     mock_subprocess_run_fixture.side_effect = None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1224: _verify_architecture_conformance must handle ClassName.method
+# ---------------------------------------------------------------------------
+
+class TestVerifyArchitectureConformanceDottedMethods:
+    """Tests for dotted ClassName.method support in _verify_architecture_conformance (Issue #1224)."""
+
+    def test_passes_when_dotted_method_exists_on_class(self, tmp_path):
+        """Conformance passes when ClassName.method is declared and class defines that method."""
+        arch = [
+            {
+                "filename": "agentic_sync_runner_python.prompt",
+                "filepath": "pdd/agentic_sync_runner.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "AsyncSyncRunner", "signature": "class AsyncSyncRunner"},
+                            {"name": "AsyncSyncRunner.run", "signature": "def run(self)"},
+                            {"name": "build_dep_graph_from_architecture", "signature": "def build_dep_graph_from_architecture()"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "class AsyncSyncRunner:\n"
+            "    def run(self):\n"
+            "        pass\n\n"
+            "def build_dep_graph_from_architecture():\n"
+            "    pass\n"
+        )
+
+        # Should not raise — all declared symbols including dotted method exist
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="agentic_sync_runner_python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_fails_when_dotted_method_missing_from_class(self, tmp_path):
+        """Conformance raises UsageError when ClassName.method is declared but method doesn't exist."""
+        arch = [
+            {
+                "filename": "worker_python.prompt",
+                "filepath": "src/worker.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "MyClass", "signature": "class MyClass"},
+                            {"name": "MyClass.process", "signature": "def process(self)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        # Class exists but has 'run' not 'process'
+        generated_code = (
+            "class MyClass:\n"
+            "    def run(self):\n"
+            "        pass\n"
+        )
+
+        with pytest.raises(click.UsageError, match="MyClass.process"):
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="worker_python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+    def test_fails_when_dotted_class_missing(self, tmp_path):
+        """Conformance raises UsageError when ClassName.method is declared but class doesn't exist."""
+        arch = [
+            {
+                "filename": "runner_python.prompt",
+                "filepath": "src/runner.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "MissingClass.run", "signature": "def run(self)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "def some_function():\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(click.UsageError, match="MissingClass.run"):
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="runner_python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+    def test_passes_when_async_method_exists_on_class(self, tmp_path):
+        """Conformance passes when ClassName.method is declared and class defines an async method."""
+        arch = [
+            {
+                "filename": "worker_python.prompt",
+                "filepath": "src/worker.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Worker", "signature": "class Worker"},
+                            {"name": "Worker.execute", "signature": "async def execute(self)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "class Worker:\n"
+            "    async def execute(self):\n"
+            "        pass\n"
+        )
+
+        # Should not raise — async methods inside class bodies must be collected
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="worker_python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_passes_with_multiple_dotted_methods_on_same_class(self, tmp_path):
+        """Conformance passes when multiple ClassName.method entries are declared on one class."""
+        arch = [
+            {
+                "filename": "service_python.prompt",
+                "filepath": "src/service.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Service", "signature": "class Service"},
+                            {"name": "Service.start", "signature": "def start(self)"},
+                            {"name": "Service.stop", "signature": "def stop(self)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "class Service:\n"
+            "    def start(self):\n"
+            "        pass\n\n"
+            "    def stop(self):\n"
+            "        pass\n"
+        )
+
+        # Should not raise — all dotted methods resolve
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="service_python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+
+class TestVerifyArchitectureConformanceDeepRecursion:
+    """Issue #1224 follow-up: nested classes and control-flow-guarded methods."""
+
+    def _write_arch(self, tmp_path, filename, filepath, names):
+        arch = [
+            {
+                "filename": filename,
+                "filepath": filepath,
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [{"name": n, "signature": ""} for n in names]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+        return str(tmp_path / "architecture.json")
+
+    def test_nested_class_method_passes(self, tmp_path):
+        """Declared Outer.Inner.foo resolves when code defines it at that depth."""
+        arch_path = self._write_arch(
+            tmp_path,
+            "outer_python.prompt",
+            "src/outer.py",
+            ["Outer", "Outer.Inner", "Outer.Inner.foo"],
+        )
+        code = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def foo(self):\n"
+            "            pass\n"
+        )
+        _verify_architecture_conformance(
+            generated_code=code,
+            prompt_name="outer_python.prompt",
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+        )
+
+    def test_nested_class_method_missing_fails(self, tmp_path):
+        """Declared Outer.Inner.foo fails when Inner lacks the method."""
+        arch_path = self._write_arch(
+            tmp_path,
+            "outer_python.prompt",
+            "src/outer.py",
+            ["Outer.Inner.foo"],
+        )
+        code = (
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def bar(self):\n"
+            "            pass\n"
+        )
+        with pytest.raises(click.UsageError, match=re.escape("Outer.Inner.foo")):
+            _verify_architecture_conformance(
+                generated_code=code,
+                prompt_name="outer_python.prompt",
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+            )
+
+    def test_triple_nested_class_method_passes(self, tmp_path):
+        """Three levels deep: A.B.C.run resolves."""
+        arch_path = self._write_arch(
+            tmp_path,
+            "deep_python.prompt",
+            "src/deep.py",
+            ["A.B.C.run"],
+        )
+        code = (
+            "class A:\n"
+            "    class B:\n"
+            "        class C:\n"
+            "            def run(self):\n"
+            "                pass\n"
+        )
+        _verify_architecture_conformance(
+            generated_code=code,
+            prompt_name="deep_python.prompt",
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+        )
+
+    def test_if_guarded_method_does_not_satisfy_conformance(self, tmp_path):
+        """Method defined only inside `if` in a class body must NOT count.
+
+        Conformance is a hard validator — branch evaluation at runtime is not
+        checked here, so a conditionally-defined method cannot be relied on to
+        exist unconditionally.
+        """
+        arch_path = self._write_arch(
+            tmp_path,
+            "compat_python.prompt",
+            "src/compat.py",
+            ["Compat", "Compat.new_feature"],
+        )
+        code = (
+            "import sys\n"
+            "class Compat:\n"
+            "    if sys.version_info >= (3, 12):\n"
+            "        def new_feature(self):\n"
+            "            return 'new'\n"
+        )
+        with pytest.raises(click.UsageError, match=re.escape("Compat.new_feature")):
+            _verify_architecture_conformance(
+                generated_code=code,
+                prompt_name="compat_python.prompt",
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+            )
+
+    def test_if_false_method_does_not_satisfy_conformance(self, tmp_path):
+        """Greg's explicit counter-example: `if False: def maybe(self)` must not pass.
+
+        Accepting this would let unreachable code satisfy the architecture
+        contract, which defeats the purpose of the conformance check.
+        """
+        arch_path = self._write_arch(
+            tmp_path,
+            "foo_python.prompt",
+            "src/foo.py",
+            ["Foo", "Foo.maybe"],
+        )
+        code = (
+            "class Foo:\n"
+            "    if False:\n"
+            "        def maybe(self):\n"
+            "            return None\n"
+        )
+        with pytest.raises(click.UsageError, match=re.escape("Foo.maybe")):
+            _verify_architecture_conformance(
+                generated_code=code,
+                prompt_name="foo_python.prompt",
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+            )
+
+    def test_try_guarded_method_does_not_satisfy_conformance(self, tmp_path):
+        """Method defined inside `try`/`except` in a class body must NOT count."""
+        arch_path = self._write_arch(
+            tmp_path,
+            "fallback_python.prompt",
+            "src/fallback.py",
+            ["Fallback", "Fallback.optional"],
+        )
+        code = (
+            "class Fallback:\n"
+            "    try:\n"
+            "        def optional(self):\n"
+            "            return True\n"
+            "    except Exception:\n"
+            "        pass\n"
+        )
+        with pytest.raises(click.UsageError, match=re.escape("Fallback.optional")):
+            _verify_architecture_conformance(
+                generated_code=code,
+                prompt_name="fallback_python.prompt",
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+            )
+
+    def test_dotted_method_camelcase_fails(self, tmp_path):
+        """camelCase in the method segment of a dotted symbol must still fail the snake_case guard.
+
+        Before the segment-aware check, ``MyClass.processData`` slipped past
+        because the regex only matched on the start of the full string and
+        ``MyClass`` starts with an uppercase letter.
+        """
+        arch_path = self._write_arch(
+            tmp_path,
+            "myclass_python.prompt",
+            "src/myclass.py",
+            ["MyClass", "MyClass.processData"],
+        )
+        code = (
+            "class MyClass:\n"
+            "    def processData(self):\n"
+            "        pass\n"
+        )
+        with pytest.raises(click.UsageError, match="camelCase"):
+            _verify_architecture_conformance(
+                generated_code=code,
+                prompt_name="myclass_python.prompt",
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+            )
+
+    def test_top_level_functions_still_recognised(self, tmp_path):
+        """Regression: plain top-level functions continue to work as before."""
+        arch_path = self._write_arch(
+            tmp_path,
+            "plain_python.prompt",
+            "src/plain.py",
+            ["run", "helper"],
+        )
+        code = (
+            "def run():\n"
+            "    pass\n\n"
+            "def helper():\n"
+            "    pass\n"
+        )
+        _verify_architecture_conformance(
+            generated_code=code,
+            prompt_name="plain_python.prompt",
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+        )
+
+    def test_module_constants_still_recognised(self, tmp_path):
+        """Regression: top-level Assign / AnnAssign constants remain valid symbols."""
+        arch_path = self._write_arch(
+            tmp_path,
+            "consts_python.prompt",
+            "src/consts.py",
+            ["MAX_WORKERS", "DEFAULT_TIMEOUT"],
+        )
+        code = (
+            "MAX_WORKERS = 10\n"
+            "DEFAULT_TIMEOUT: int = 30\n"
+        )
+        _verify_architecture_conformance(
+            generated_code=code,
+            prompt_name="consts_python.prompt",
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+        )
+
+    def test_module_level_if_guard_does_not_leak_into_dotted(self, tmp_path):
+        """Module-level `if: def foo` must not be exposed as some_class.foo.
+
+        Only class-level control-flow recurses with a prefix; module level keeps
+        conservative semantics to avoid inventing fake dotted symbols.
+        """
+        arch_path = self._write_arch(
+            tmp_path,
+            "modguard_python.prompt",
+            "src/modguard.py",
+            ["top_level_fn"],  # declared at module top level
+        )
+        code = (
+            "import sys\n"
+            "if sys.version_info >= (3, 12):\n"
+            "    def top_level_fn():\n"
+            "        pass\n"
+        )
+        # `top_level_fn` is conditionally defined at module level — not
+        # recognised as a stable export, so conformance should fail loudly.
+        with pytest.raises(click.UsageError, match="top_level_fn"):
+            _verify_architecture_conformance(
+                generated_code=code,
+                prompt_name="modguard_python.prompt",
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+            )
