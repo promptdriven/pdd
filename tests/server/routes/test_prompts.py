@@ -207,6 +207,16 @@ def prompts_test_env():
     for mod, original in original_modules.items():
         sys.modules[mod] = original
 
+    # Purge any pdd.server.* modules that were imported transitively during
+    # this fixture (e.g. pdd.server.app via pdd/server/__init__.py). They may
+    # hold references to the MagicMock-replaced pdd.server.security symbols
+    # (PathValidator, SecurityLoggingMiddleware, ...) which would later raise
+    # "MagicMock can't be used in 'await' expression" when other tests build
+    # the real ASGI middleware stack via TestClient.
+    for mod_name in list(sys.modules.keys()):
+        if mod_name.startswith("pdd.server") and mod_name not in original_modules:
+            del sys.modules[mod_name]
+
 
 @pytest.fixture
 def setup_validator(prompts_test_env, mock_validator):

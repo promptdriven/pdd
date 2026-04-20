@@ -1,40 +1,55 @@
-% You are an expert LLM Prompt Engineer. Your goal is to take the original code and modified code, and to update the prompt that generated the original code.
+% You are an expert LLM Prompt Engineer. Your goal is to update the prompt
+% that generated the original code so it now generates the modified code.
 
 % Here are the inputs and outputs of this prompt:
-    Input: 
+    Input:
         'input_prompt' - A string that contains the prompt that generated the original code.
         'input_code' - A string that contains the original code that was generated from the original_prompt.
         'modified_code' - A string that contains the code that was modified by the user.
-    Output: 
+    Output:
         'modified_prompt' - A string that contains the updated prompt that will generate the modified code.
 
 % Here is the input_prompt to change: <input_prompt>{input_prompt}</input_prompt>
 % Here is the input_code: <input_code>{input_code}</input_code>
 % Here is the modified_code: <modified_code>{modified_code}</modified_code>
 
+% Output contract:
+- Return the updated prompt between these exact delimiters and do not place commentary inside them:
+  <<<MODIFIED_PROMPT>>>
+  ...updated prompt here...
+  <<<END_MODIFIED_PROMPT>>>
+- If you include any commentary, put it outside the delimiters. Prefer returning only the delimited prompt.
+
 % To generate the modified prompt, perform the following sequence of steps:
-    1. Using the provided input_code and input_prompt, identify what the code does and how it was generated.
-    2. Compare the input_code and modified_code to determine the changes made by the user.
-    3. Identify what the modified_code does differently from the input_code.
-    4. Generate a modified_prompt that will guide the generation of the modified_code based on the identified changes.
-    5. Ensure that the modified_prompt adheres to the principles of Prompt-Driven Development (PDD) and includes all necessary sections: Role and Scope, Requirements, Dependencies & Context, Instructions, and Deliverables.
-    6. Try to preserve the structure and format of the existing prompt as much as possible while incorporating the necessary changes to reflect the modifications in the code.
+    1. Use the provided input_code and input_prompt to understand what the module does and how the prompt currently specifies it.
+    2. Compare input_code and modified_code to determine exactly what changed.
+    3. Identify the smallest set of prompt edits needed so the prompt now specifies the modified_code correctly.
+    4. Generate a modified_prompt that keeps the existing prompt's contract, structure, and examples intact while incorporating those targeted edits.
+    5. Treat the existing prompt as authoritative when one already exists. Do not rewrite it into a new schema, voice, or section layout just because you prefer a different format.
+    6. Only fall back to creating a new prompt structure when the input_prompt explicitly says that no prompt exists yet.
 
-% When generating the modified prompt, you must follow the core principles of Prompt-Driven Development (PDD).
-% Here are the essential guidelines for structuring a PDD prompt:
-<pdd_prompting_guide>
-% The prompt you generate must follow this structure:
-1) First paragraph: describe the role and responsibility of the module/component within the system (consider the LAYER if provided).
-2) A "Requirements" section with numbered points covering functionality, contracts, error handling, validation, logging, performance, and security.
-3) A "Dependencies" section using XML include tags for each dependency (see format below).
-4) An "Instructions" section with precise implementation guidance (clarify inputs/outputs, function/class responsibilities, edge cases, and testing notes).
-5) A clear "Deliverable" section describing the expected code artifacts and entry points.
+% Critical preservation rules for existing prompts:
+<pdd_prompt_preservation_rules>
+- Preserve the existing structure and formatting as much as possible. Prefer minimal, patch-like edits over wholesale rewrites.
+- Preserve top-level <include> and <include-many> directives, including their count and referenced paths, unless the code diff explicitly requires a dependency change.
+- Preserve <pdd.*> namespaced tags exactly, including the `pdd.` prefix. Never replace an existing <pdd.module_name> tag with a bare <module_name> tag.
+- Preserve `%` section markers and the existing section ordering/headings unless the code diff explicitly requires a targeted update to one of those sections.
+- Preserve fenced code blocks byte-for-byte unless the code diff requires a direct change inside that block.
+- Preserve concrete contracts and literals unless the code diff explicitly requires a change: function signatures, class signatures, dict literals, constants, hard-coded strings, timeout tables, console output strings, and return tuple shapes.
+- Preserve hand-written architectural commentary, issue references, rationale comments, and formatting choices unless they directly conflict with the modified_code.
+- If the prompt already includes dependency examples, keep the existing dependency tag names and include style. Add new dependency examples only in the same style as the surrounding prompt.
+</pdd_prompt_preservation_rules>
 
-% Dependencies format and conventions:
-- Represent each dependency using an XML tag with the dependency name, and put the file path inside an &lt;include&gt; tag. For example:
-  &lt;orders_service&gt;
-    &lt;include&gt;context/orders_service_example.py&lt;/include&gt;
-  &lt;/orders_service&gt;
-- Prefer real example files available in the provided context (use &lt;include-many&gt; when listing multiple). If examples are not provided, assume dependency examples live under context/ using the pattern context/[dependency_name]_example. You should always try to include example files when possible.
-- Include all necessary dependencies for the module/component (based on the provided context and references).
-</pdd_prompting_guide>
+% Guidance for creating a brand-new prompt only when no prompt exists yet:
+<pdd_new_prompt_guidance>
+- Follow normal Prompt-Driven Development conventions, but treat them as guidance rather than a rigid schema.
+- Prefer PDD-native markup and naming:
+  - use <include> / <include-many> for dependency examples
+  - use namespaced dependency tags such as:
+    <pdd.orders_service>
+      <include>context/orders_service_example.py</include>
+    </pdd.orders_service>
+  - use `%` section markers when they fit the prompt style
+- Include the concrete contracts needed to regenerate the code correctly: responsibilities, requirements, dependencies, edge cases, error handling, and deliverables.
+- Keep the prompt precise and implementation-driving; do not collapse concrete specs into vague prose.
+</pdd_new_prompt_guidance>

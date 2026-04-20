@@ -1,16 +1,74 @@
+import re
 from typing import Tuple
+
 from rich.console import Console
 from rich.markdown import Markdown
 from pydantic import BaseModel, Field
+
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from . import DEFAULT_TIME
+
+
+MODIFIED_PROMPT_START = "<<<MODIFIED_PROMPT>>>"
+MODIFIED_PROMPT_END = "<<<END_MODIFIED_PROMPT>>>"
+
+
 class PromptUpdate(BaseModel):
     modified_prompt: str = Field(
         description="The updated prompt that will generate the modified code",
         min_length=10  # Reject empty or too-short prompts from LLM
     )
+
+
+def _extract_between_delimiters(text: str) -> str | None:
+    """Return prompt content between explicit delimiters when present."""
+    start_idx = text.find(MODIFIED_PROMPT_START)
+    end_idx = text.find(MODIFIED_PROMPT_END)
+    if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
+        return None
+
+    content_start = start_idx + len(MODIFIED_PROMPT_START)
+    extracted = text[content_start:end_idx]
+    if extracted.startswith("\r\n"):
+        extracted = extracted[2:]
+    elif extracted.startswith("\n"):
+        extracted = extracted[1:]
+    if extracted.endswith("\r\n"):
+        extracted = extracted[:-2]
+    elif extracted.endswith("\n"):
+        extracted = extracted[:-1]
+    return extracted or None
+
+
+def _extract_modified_prompt_tag(text: str) -> str | None:
+    """Return prompt content wrapped in legacy <modified_prompt> tags."""
+    match = re.search(
+        r"<modified_prompt>(.*?)</modified_prompt>",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        return None
+    extracted = match.group(1)
+    if extracted.startswith("\r\n"):
+        extracted = extracted[2:]
+    elif extracted.startswith("\n"):
+        extracted = extracted[1:]
+    return extracted or None
+
+
+def _extract_prompt_from_first_response(raw_result: object) -> str | None:
+    """Try cheap, deterministic prompt extraction before a second LLM call."""
+    if not isinstance(raw_result, str):
+        return None
+
+    for extractor in (_extract_between_delimiters, _extract_modified_prompt_tag):
+        extracted = extractor(raw_result)
+        if extracted and extracted.strip():
+            return extracted
+    return None
 
 def update_prompt(
     input_prompt: str,
@@ -84,38 +142,44 @@ def update_prompt(
         if not first_response or not isinstance(first_response, dict) or 'result' not in first_response:
             raise RuntimeError("First LLM invocation failed")
 
-        # Step 3: Second LLM invocation
-        if verbose:
-            console.print("[bold blue]Running second LLM invocation...[/bold blue]")
+        total_cost = first_response['cost']
+        modified_prompt_text = _extract_prompt_from_first_response(first_response['result'])
 
-        second_response = llm_invoke(
-            prompt=extract_prompt_processed,
-            input_json={"llm_output": first_response['result']},
-            strength=0.5,
-            temperature=temperature,
-            output_pydantic=PromptUpdate,
-            verbose=verbose,
-            time=time
-        )
+        if verbose and modified_prompt_text:
+            console.print("[bold blue]Extracted modified prompt directly from first response.[/bold blue]")
 
-        if not second_response or not isinstance(second_response, dict) or 'result' not in second_response:
-            raise RuntimeError("Second LLM invocation failed")
+        if not modified_prompt_text:
+            # Step 3: Second LLM invocation
+            if verbose:
+                console.print("[bold blue]Running second LLM invocation...[/bold blue]")
 
-        # Validate that modified_prompt is not empty or whitespace-only
-        modified_prompt_text = second_response['result'].modified_prompt
-        if not modified_prompt_text or not modified_prompt_text.strip():
-            raise RuntimeError(
-                "LLM returned an empty modified prompt. The extraction may have failed. "
-                "Try running with --verbose to see the first LLM's output."
+            second_response = llm_invoke(
+                prompt=extract_prompt_processed,
+                input_json={"llm_output": first_response['result']},
+                strength=0.5,
+                temperature=temperature,
+                output_pydantic=PromptUpdate,
+                verbose=verbose,
+                time=time
             )
+
+            if not second_response or not isinstance(second_response, dict) or 'result' not in second_response:
+                raise RuntimeError("Second LLM invocation failed")
+
+            total_cost += second_response['cost']
+
+            # Validate that modified_prompt is not empty or whitespace-only
+            modified_prompt_text = second_response['result'].modified_prompt
+            if not modified_prompt_text or not modified_prompt_text.strip():
+                raise RuntimeError(
+                    "LLM returned an empty modified prompt. The extraction may have failed. "
+                    "Try running with --verbose to see the first LLM's output."
+                )
 
         # Step 4: Print modified prompt if verbose
         if verbose:
             console.print("\n[bold green]Modified Prompt:[/bold green]")
-            console.print(Markdown(second_response['result'].modified_prompt))
-
-        # Step 5: Calculate total cost
-        total_cost = first_response['cost'] + second_response['cost']
+            console.print(Markdown(modified_prompt_text))
 
         if verbose:
             console.print(f"\n[bold yellow]Total Cost: ${total_cost:.6f}[/bold yellow]")
@@ -123,7 +187,7 @@ def update_prompt(
 
         # Step 6: Return results
         return (
-            second_response['result'].modified_prompt,
+            modified_prompt_text,
             total_cost,
             first_response['model_name']
         )

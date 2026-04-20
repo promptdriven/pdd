@@ -1,8 +1,32 @@
+## v0.0.213 (2026-04-19)
+
+### Feat
+
+- update architecture conformance to support dotted ClassName.method symbols and refresh build/docs artifacts
+
+### Fix
+
+- purge transitively imported pdd.server.* modules in test_prompts fixture
+- preserve multiline prompts in update extraction
+- preserve pdd prompt structure in update prompt
+- detect nested auto-heal modules
+- bump dedup min_block to 4 to close 4-of-5 short-file gap
+- bounded dedup in insert_includes (sync hang + over-removal)
+- skip timeout-prone auto-heal syncs
+
 ## v0.0.212 (2026-04-18)
 
 ### Feat
 
-- add auto-heal churn/invariant gates, multi-provider Cloud Build support, and keyed CLI invocation state; fix destructive update rewrites, resume snapshot persistence, and NOT_A_BUG direct-edit detection.
+- **code_generator_main — dotted `ClassName.method` conformance**: `_verify_architecture_conformance` now delegates Python symbol collection to a new recursive `_collect_python_symbols` helper that yields top-level functions/classes/constants **and** `ClassName.method` / `ClassName.Inner.method` dotted names for direct-child class members. Methods inside `if`/`try`/`with` blocks within a class body are deliberately excluded — conformance is a hard validator and must not accept branch-conditioned methods. The camelCase guard is updated to split dotted symbols on `.` and inspect each segment, so `MyClass.processData` still fails the snake_case check. Unblocks `pdd sync` on modules that declare methods in `architecture.json` (e.g. `AsyncSyncRunner.run`)
+
+### Build
+
+- auto-healed prompt/example drift for `code_generator_main` and `context_generator_main`; refresh `ci/cloud-batch/test-durations.json` and `.cloud-image-hash`
+
+### Docs
+
+- `code_generator_main_python.prompt`: document `_collect_python_symbols` recursive helper, branch-exclusion invariant, and camelCase segment-split check; expand `architecture_sync_example.py` include to add `example_check_existing_tags` and `example_inject_tags_workflow`; add `get_refresh_token` to auth_service context; add `__init__` example include
 
 ## v0.0.211 (2026-04-17)
 

@@ -56,6 +56,19 @@ Defense in depth: `.gitignore` (added in #1211) lists `github_token`, `modules.t
 | Per-subprocess wall time (`pdd sync`/`pdd update`) | `_run_pdd_command` in `ci_drift_heal.py` | 1200s |
 | Total build wall time | `timeout:` in the yaml | 1800s (30 min) |
 
+## Optional sync skips
+
+CI auto-heal supports an operator override for temporarily skipping specific
+`pdd sync` paths if a module regresses and starts timing out again.
+
+- Env var: `PDD_HEAL_SYNC_SKIP_MODULES`
+- Default when unset: no skipped modules
+- Override: comma-separated basenames
+
+When a module matches this list, `pdd.ci_drift_heal` prints a warning and skips
+the `pdd sync` step for that module instead of burning the 1200s timeout. Keep
+this as a short-lived operational bypass rather than a standing default.
+
 ## Loop prevention
 
 Single in-build check (GCB has no trigger-level commit-message filter):

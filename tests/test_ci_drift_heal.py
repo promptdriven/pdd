@@ -392,6 +392,49 @@ class TestHealModule:
 
         assert result is True  # partial success — prompt was updated
 
+    def test_update_does_not_skip_follow_up_sync_by_default(self):
+        """agentic_change_orchestrator sync runs normally once the default skip is removed."""
+        drift = DriftInfo(
+            "agentic_change_orchestrator",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/agentic_change_orchestrator.py",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        cmds = [c[0][0] for c in mock_run.call_args_list]
+        assert cmds == [
+            ["pdd", "update", "/repo/agentic_change_orchestrator.py"],
+            ["pdd", "sync", "agentic_change_orchestrator"],
+        ]
+
+    def test_update_skip_env_runs_update_but_skips_follow_up_sync(self):
+        """Explicit skip env still bypasses the sync tail for operational recovery."""
+        drift = DriftInfo(
+            "agentic_change_orchestrator",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/agentic_change_orchestrator.py",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch.dict(
+            os.environ,
+            {"PDD_HEAL_SYNC_SKIP_MODULES": "agentic_change_orchestrator"},
+            clear=False,
+        ), patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        cmds = [c[0][0] for c in mock_run.call_args_list]
+        assert cmds == [["pdd", "update", "/repo/agentic_change_orchestrator.py"]]
+
     def test_example_runs_pdd_sync(self):
         """example drift runs 'pdd sync <basename>'."""
         drift = DriftInfo("api", "python", "example", "stale")
@@ -403,6 +446,22 @@ class TestHealModule:
         assert result is True
         assert len(mock_run.call_args_list) == 1
         assert mock_run.call_args[0][0] == ["pdd", "sync", "api"]
+
+    def test_example_skip_env_returns_none_without_running_sync(self):
+        """Explicit skip env bypasses a module sync without failing CI."""
+        drift = DriftInfo(
+            "agentic_change_orchestrator", "python", "example", "stale"
+        )
+
+        with patch.dict(
+            os.environ,
+            {"PDD_HEAL_SYNC_SKIP_MODULES": "agentic_change_orchestrator"},
+            clear=False,
+        ), patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is None
+        mock_run.assert_not_called()
 
     def test_subprocess_timeout(self):
         """TimeoutExpired returns False."""
@@ -684,6 +743,27 @@ class TestMain:
 
         mock_commit.assert_not_called()
         assert result == 1
+
+    def test_explicit_sync_skip_env_skips_example_without_failing_build(self):
+        """Operator override can skip a sync path without blocking auto-heal."""
+        drifts = ([], [DriftInfo("agentic_change_orchestrator", "python", "example", "stale")])
+
+        with patch.dict(
+             os.environ,
+             {"PDD_HEAL_SYNC_SKIP_MODULES": "agentic_change_orchestrator"},
+             clear=False,
+        ), patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal._run_pdd_command") as mock_run_pdd, \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main()
+
+        assert result == 0
+        mock_run_pdd.assert_not_called()
+        mock_commit.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,11 @@ _ROLLBACK_PATHS = (".pdd/meta", "project_dependencies.csv")
 # the `PDD_HEAL_PROMPT_CHURN_MAX_RATIO` env var in CI if needed.
 _HEAL_PROMPT_CHURN_MAX_RATIO = 5.0
 
+# Optional operator override for temporarily skipping `pdd sync` paths in CI
+# auto-heal. Unset env means "skip nothing"; set
+# PDD_HEAL_SYNC_SKIP_MODULES=mod1,mod2 to opt modules out if a sync path
+# regresses and needs a short-lived operational bypass.
+
 
 def _get_git_changed_files(diff_base: str) -> set:
     """Return the set of file paths changed between diff_base and HEAD.
@@ -180,6 +185,22 @@ def _parse_cost_from_csv(csv_path: str) -> float:
     except Exception:
         return 0.0
     return total
+
+
+def _get_heal_sync_skip_modules() -> set[str]:
+    """Return modules whose `pdd sync` step should be skipped in CI auto-heal.
+
+    Unset or empty env means "skip nothing".
+    """
+    raw = os.environ.get("PDD_HEAL_SYNC_SKIP_MODULES", "")
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
+
+def _get_heal_sync_skip_reason(basename: str) -> Optional[str]:
+    """Return a human-readable skip reason for timeout-prone sync modules."""
+    if basename not in _get_heal_sync_skip_modules():
+        return None
+    return f"{basename} is listed in PDD_HEAL_SYNC_SKIP_MODULES"
 
 
 def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]:
@@ -716,7 +737,7 @@ def _enforce_structural_invariants(drift: DriftInfo) -> bool:
     return False
 
 
-def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
+def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     """Heal a single drifted module by running the appropriate pdd command.
 
     For 'update' drift (code changed, prompt stale), runs pdd update first
@@ -728,7 +749,8 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
         env: Environment variables dict for the subprocess.
 
     Returns:
-        True if healing succeeded, False otherwise.
+        True if healing succeeded, False if it failed, or None if it was
+        intentionally skipped by CI policy.
     """
     if drift.operation == "update":
         # Step 1: Update the prompt from code
@@ -758,6 +780,14 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
 
         # Step 2: Sync example from the now-updated prompt so everything is
         # consistent in a single CI pass (no second cycle needed).
+        skip_reason = _get_heal_sync_skip_reason(drift.basename)
+        if skip_reason:
+            console.print(
+                f"[yellow]⚠ Skipping follow-up sync for {drift.basename}: "
+                f"{skip_reason}. Example regeneration is left for a manual "
+                "or dedicated follow-up run.[/yellow]"
+            )
+            return True
         sync_cmd = ["pdd", "sync", drift.basename]
         if not _run_pdd_command(sync_cmd, env, f"Syncing {drift.basename} (example)"):
             # Update succeeded but sync failed — still count as partial success
@@ -769,6 +799,14 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> bool:
         return True
 
     elif drift.operation == "example":
+        skip_reason = _get_heal_sync_skip_reason(drift.basename)
+        if skip_reason:
+            console.print(
+                f"[yellow]⚠ Skipping auto-heal sync for {drift.basename}: "
+                f"{skip_reason}. This module can be synced in a separate "
+                "follow-up run without blocking the PR auto-heal build.[/yellow]"
+            )
+            return None
         return _run_pdd_command(
             ["pdd", "sync", drift.basename], env, f"Healing {drift.basename} (sync)"
         )
@@ -942,7 +980,9 @@ def main(
                     f"(cumulative: ${cumulative_cost:.4f})"
                 )
 
-            if success:
+            if success is None:
+                skipped_modules.append(drift.basename)
+            elif success:
                 healed_modules.append(drift.basename)
             else:
                 failed_modules.append(drift.basename)
