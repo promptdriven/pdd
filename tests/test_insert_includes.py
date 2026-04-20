@@ -853,6 +853,13 @@ class TestRemoveRedundantContentPathResolution:
         assert content.strip() not in result, (
             "Dedup should have removed inline content that matches the included file"
         )
+        # Surrounding non-matching lines must be preserved (no collateral removal).
+        assert "Some preamble" in result, (
+            "Preamble line must not be removed — it does not match the included file"
+        )
+        assert "Some postamble" in result, (
+            "Postamble line must not be removed — it does not match the included file"
+        )
 
     def test_dedup_works_when_cwd_is_not_project_root(self, tmp_path, monkeypatch):
         """When CWD is a subdirectory (e.g. tests/) but include paths are
@@ -892,6 +899,13 @@ class TestRemoveRedundantContentPathResolution:
             "file even when CWD is not the project root. The path "
             "'context/helper.py' is project-relative and should be resolved "
             "against the project root, not CWD."
+        )
+        # Surrounding non-matching lines must be preserved (no collateral removal).
+        assert "Some preamble" in result, (
+            "Preamble line must not be removed — it does not match the included file"
+        )
+        assert "Some postamble" in result, (
+            "Postamble line must not be removed — it does not match the included file"
         )
 
 
@@ -1248,4 +1262,145 @@ class TestDedupFromCwdOutsideProject:
             "Absolute-path include should let dedup find the file even when "
             "CWD is outside the project. The project-root anchor is only "
             "needed to resolve relative paths."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Dedup semantics: exact contiguous line matching with coverage threshold
+# (replaces the prior O(n^3) fuzzy-similarity scan that hung pdd sync on
+# agentic_change_orchestrator and over-removed structural header lines on
+# coincidental boilerplate overlap).
+# ---------------------------------------------------------------------------
+
+class TestRemoveRedundantContentSemantics:
+    """Verify dedup preserves prompt structure and only removes large copies."""
+
+    def test_preserves_structural_header_against_real_example(self):
+        """Regression for over-removal: the agentic_change_orchestrator prompt's
+        <pdd-interface> block contains generic JSON wrapper lines that also
+        appear inside an example string in architecture_sync_example.py.
+        A previous proposal stripped those header lines on coincidental match."""
+        from pdd.insert_includes import _remove_redundant_content
+        from pathlib import Path
+
+        repo_root = Path(__file__).resolve().parent.parent
+        prompt_path = repo_root / "pdd/prompts/agentic_change_orchestrator_python.prompt"
+        example_path = repo_root / "context/architecture_sync_example.py"
+        if not (prompt_path.exists() and example_path.exists()):
+            pytest.skip("agentic_change_orchestrator real files not present")
+
+        prompt = prompt_path.read_text()
+        result = _remove_redundant_content(prompt, [str(example_path)])
+
+        assert "<pdd-interface>" in result, (
+            "Structural <pdd-interface> header must not be stripped by "
+            "coincidental overlap with an example string."
+        )
+        assert "<pdd-reason>" in result
+        assert '"run_agentic_change_orchestrator"' in result, (
+            "Function signature inside the structural header must be preserved."
+        )
+
+    def test_removes_verbatim_inline_copy(self, tmp_path):
+        """Happy path: a prompt containing the entire file content verbatim
+        gets that block removed while preserving surrounding text."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        f = tmp_path / "lib.py"
+        body = "def helper():\n    return 42\n" * 20  # 40 lines
+        f.write_text(body)
+        prompt = "% Preamble line\n\n" + body + "\n% Postamble line\n"
+
+        result = _remove_redundant_content(prompt, [str(f)])
+
+        assert "% Preamble line" in result
+        assert "% Postamble line" in result
+        assert "def helper()" not in result, (
+            "Verbatim inline copy of the included file must be removed."
+        )
+
+    def test_skips_short_coincidental_overlap(self, tmp_path):
+        """A 3-line common block must not trigger removal when it covers
+        only a tiny fraction of the file (boilerplate-overlap guard)."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        f = tmp_path / "big.py"
+        f.write_text(
+            "x = 1\n" * 200
+            + "common_a = 1\ncommon_b = 2\ncommon_c = 3\n"
+            + "y = 2\n" * 200
+        )
+        prompt = "header\ncommon_a = 1\ncommon_b = 2\ncommon_c = 3\nfooter\n"
+
+        result = _remove_redundant_content(prompt, [str(f)])
+
+        assert "common_a = 1" in result, (
+            "A 3-line match covering <1% of a 403-line file must not trigger "
+            "removal — coverage threshold guards against boilerplate overlap."
+        )
+        assert "header" in result and "footer" in result
+
+    def test_skips_3_of_4_short_file_overlap(self, tmp_path):
+        """Regression: a 4-line include falls into the small-file branch
+        (size <= ceil(min_block / coverage) = 6), so a full-file match is
+        required. A 3-of-4 generic line overlap must not trigger removal."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        f = tmp_path / "short.py"
+        f.write_text("line_a\nline_b\nline_c\nline_d\n")  # 4 lines
+        prompt = "% pre\nline_a\nline_b\nline_c\n% post\n"  # 3-of-4 overlap
+
+        result = _remove_redundant_content(prompt, [str(f)])
+
+        assert result == prompt, (
+            "3-of-4 generic line overlap on a short include must not trigger "
+            "removal — the small-file branch requires a full-file contiguous "
+            "match to avoid coincidental overlap on short files."
+        )
+
+    def test_skips_4_of_5_short_file_overlap(self, tmp_path):
+        """Regression: a 5-line include also falls into the small-file branch
+        (size <= ceil(min_block / coverage) = 6), so a full-file match is
+        required. Without this guard a 4-of-5 generic overlap would coincide
+        with the 80% coverage threshold (ceil(0.75 * 5) = 4) and trigger
+        removal — the same accidental-overlap class as the 3-of-4 case."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        f = tmp_path / "short.py"
+        f.write_text("a\nb\nc\nd\ne\n")  # 5 lines
+        prompt = "pre\na\nb\nc\nd\npost\n"  # 4-of-5 overlap
+
+        result = _remove_redundant_content(prompt, [str(f)])
+
+        assert result == prompt, (
+            "4-of-5 generic line overlap on a short include must not trigger "
+            "removal — the small-file branch requires a full-file contiguous "
+            "match to avoid coincidental overlap on short files."
+        )
+
+    def test_skips_inline_copy_split_by_inserted_line(self, tmp_path):
+        """Documented conservative tradeoff: an inserted line splits the
+        contiguous match in two, each below the coverage threshold, so dedup
+        leaves the copy in place. We accept this false negative to avoid
+        false positives on coincidental boilerplate overlap."""
+        from pdd.insert_includes import _remove_redundant_content
+
+        f = tmp_path / "lib.py"
+        body_lines = ["def helper():\n", "    return 42\n"] * 30  # 60 lines
+        f.write_text("".join(body_lines))
+        # Insert a single comment line in the middle of the inline copy.
+        inserted = (
+            "".join(body_lines[:30])
+            + "# user added a comment\n"
+            + "".join(body_lines[30:])
+        )
+        prompt = "% pre\n\n" + inserted + "\n% post\n"
+
+        result = _remove_redundant_content(prompt, [str(f)])
+
+        # Longest contiguous match is 30 lines; threshold = ceil(0.75 * 60) = 45.
+        # 30 < 45 → no removal. The inline copy persists.
+        assert result == prompt, (
+            "Split inline copy must not be removed: each contiguous half is "
+            "below the coverage threshold. This is a deliberate tradeoff."
         )

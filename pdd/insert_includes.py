@@ -1,5 +1,6 @@
 from __future__ import annotations
 import difflib
+import math
 import os
 import re
 from typing import Callable, List, Optional, Tuple
@@ -22,28 +23,46 @@ class InsertIncludesOutput(BaseModel):
     output_prompt: str = Field(description="The prompt with dependencies inserted")
 
 
-def _remove_redundant_content(prompt: str, inserted_includes: List[str]) -> str:
-    """Remove inline content from the prompt that duplicates included documents.
+def _remove_redundant_content(
+    prompt: str,
+    inserted_includes: List[str],
+    *,
+    coverage: float = 0.75,
+    min_block: int = 4,
+) -> str:
+    """Remove a single large inline copy of each included file from the prompt.
 
-    For each included file path, read the file and compare contiguous blocks
-    (3+ lines) in the prompt against the file content using
-    ``difflib.SequenceMatcher``.  Blocks with a similarity ratio >= 0.80 are
-    removed.
+    For each included file, finds the longest contiguous run of lines that
+    appears identically in both the prompt and the file. The run is removed
+    when it is large enough relative to the file:
 
-    Args:
-        prompt: The prompt string to clean.
-        inserted_includes: List of file paths whose content may be duplicated
-            inline in the prompt.
+      - Small files (size <= ``ceil(min_block / coverage)``): the entire file
+        content must appear contiguously. This guards short files against
+        coincidental overlap — at these sizes the coverage-based threshold
+        would collapse to ``min_block`` and let any min_block-line generic
+        match trigger removal (e.g. with the defaults a 5-line file would
+        otherwise allow a 4-of-5 generic overlap to delete the block).
+      - Larger files: the run must cover at least ``coverage`` of the file's
+        lines (default 75%, rounded up).
 
-    Returns:
-        The cleaned prompt with redundant blocks removed.
+    ``min_block`` plays two roles here: the absolute floor on any match the
+    coverage rule will accept, and (via ``ceil(min_block / coverage)``) the
+    cutoff below which a full-file match is required. Coupling these is
+    intentional for now — it keeps the algorithm a single derived constant.
+
+    This is exact contiguous line matching, not fuzzy similarity. A copied
+    block split by an inserted line will not be removed, because the longest
+    contiguous match shrinks below the coverage threshold. The conservative
+    bias is intentional: a false positive (over-removal) corrupts the prompt
+    and breaks downstream steps, while a false negative only wastes some
+    context tokens. Only the single longest match per file is considered;
+    multiple separate inline copies of the same file are not handled.
     """
     if not inserted_includes:
         return prompt
 
-    # Collect content of each included file.
-    # Paths may be project-root-relative, so resolve against project root
-    # rather than relying on CWD.
+    # Paths may be project-root-relative; resolve against project root so
+    # dedup works regardless of CWD.
     from .path_resolution import find_project_root_from_path
     _found = find_project_root_from_path(".")
     _project_root = Path(_found).resolve() if _found else Path(".").resolve()
@@ -57,52 +76,38 @@ def _remove_redundant_content(prompt: str, inserted_includes: List[str]) -> str:
             if path.is_file():
                 included_contents.append(path.read_text(encoding="utf-8", errors="replace"))
         except Exception:
-            # Skip files that cannot be read
             continue
 
     if not included_contents:
         return prompt
 
-    lines = prompt.splitlines(keepends=True)
-    # Track which lines to keep
-    keep = [True] * len(lines)
+    prompt_lines = prompt.splitlines(keepends=True)
+    keep = [True] * len(prompt_lines)
 
-    # Slide a window of varying size (min 3 lines) over the prompt
-    min_block = 3
-    i = 0
-    while i < len(lines):
-        if not keep[i]:
-            i += 1
+    # For files where ``coverage * size`` would fall to or below ``min_block``,
+    # the coverage rule is too lax: a generic ``min_block``-line overlap could
+    # trigger removal. Require a full-file match for files at or below this
+    # cutoff. For larger files, the coverage threshold dominates and is
+    # guaranteed to exceed ``min_block`` by construction.
+    small_file_cutoff = math.ceil(min_block / coverage)
+
+    for content in included_contents:
+        content_lines = content.splitlines(keepends=True)
+        if not content_lines:
             continue
-
-        # Try the largest possible block first, then shrink
-        best_end = -1
-        for end in range(len(lines), i + min_block - 1, -1):
-            block_text = "".join(lines[i:end])
-            # Skip blocks that are only whitespace
-            if not block_text.strip():
-                continue
-
-            for content in included_contents:
-                ratio = difflib.SequenceMatcher(
-                    None, block_text, content
-                ).ratio()
-                if ratio >= 0.80:
-                    best_end = end
-                    break
-
-            if best_end != -1:
-                break
-
-        if best_end != -1:
-            for j in range(i, best_end):
-                keep[j] = False
-            i = best_end
+        sm = difflib.SequenceMatcher(
+            None, prompt_lines, content_lines, autojunk=False
+        )
+        m = sm.find_longest_match(0, len(prompt_lines), 0, len(content_lines))
+        if len(content_lines) <= small_file_cutoff:
+            threshold = len(content_lines)
         else:
-            i += 1
+            threshold = math.ceil(coverage * len(content_lines))
+        if m.size >= threshold:
+            for j in range(m.a, m.a + m.size):
+                keep[j] = False
 
-    cleaned = "".join(line for line, k in zip(lines, keep) if k)
-    return cleaned
+    return "".join(line for line, k in zip(prompt_lines, keep) if k)
 
 
 def insert_includes(

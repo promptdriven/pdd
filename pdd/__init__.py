@@ -66,3 +66,4 @@ from .split_main import split_main
 from .split_validation import ValidationFailure, ValidationResult, validate_extraction
 from .agentic_split_orchestrator import run_agentic_split_orchestrator
 from .agentic_split import run_agentic_split
+from .ci_detect_changed_modules import main
