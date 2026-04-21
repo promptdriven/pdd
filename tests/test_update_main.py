@@ -7,6 +7,7 @@ import click
 from click.testing import CliRunner
 import git
 
+from pdd import DEFAULT_STRENGTH
 from pdd.update_main import (
     _included_docs_for_drift_report,
     find_and_resolve_all_pairs,
@@ -235,6 +236,70 @@ def test_update_main_with_both_git_and_input_code_returns_none(
     # Assert
     # The function returns None on ValueError to allow orchestrator to handle gracefully
     assert result is None
+
+
+def test_update_main_without_cli_strength_uses_default_strength_for_direct_update(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_git_update,
+    mock_open_file,
+    mock_get_available_agents,
+):
+    """Fallback should use DEFAULT_STRENGTH when global --strength was omitted."""
+    mock_ctx.obj.pop("strength", None)
+    mock_ctx.params["quiet"] = False
+
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file=minimal_input_files["input_prompt_file"],
+        modified_code_file=minimal_input_files["modified_code_file"],
+        input_code_file=minimal_input_files["input_code_file"],
+        output="custom_output.prompt",
+        use_git=False,
+    )
+
+    kwargs = mock_update_prompt.call_args.kwargs
+    assert kwargs["strength"] == DEFAULT_STRENGTH
+    assert result == ("updated prompt text", 0.123456, "test-model")
+    mock_git_update.assert_not_called()
+
+
+def test_update_main_without_cli_strength_uses_default_strength_for_git_update(
+    mock_ctx,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_git_update,
+    mock_open_file,
+    mock_get_available_agents,
+):
+    """Git-backed updates should share the same DEFAULT_STRENGTH fallback."""
+    mock_ctx.obj.pop("strength", None)
+    mock_ctx.params["quiet"] = False
+    mock_construct_paths.return_value = (
+        {},
+        {
+            "input_prompt_file": "prompt content",
+            "modified_code_file": "def git_modified_code(): pass",
+        },
+        {"output": "updated_prompt_git.prompt"},
+        None,
+    )
+
+    result = update_main(
+        ctx=mock_ctx,
+        input_prompt_file="some_prompt_file.prompt",
+        modified_code_file="modified_code.py",
+        input_code_file=None,
+        output="git_output.prompt",
+        use_git=True,
+    )
+
+    kwargs = mock_git_update.call_args.kwargs
+    assert kwargs["strength"] == DEFAULT_STRENGTH
+    assert result == ("updated prompt from git", 0.654321, "git-model")
+    mock_update_prompt.assert_not_called()
 
 @patch('pdd.update_main.resolve_prompt_code_pair')
 def test_update_main_regeneration_mode(
@@ -579,7 +644,15 @@ def test_update_main_repo_mode_orchestration(mock_pddrc, mock_update_file_pair, 
     Test the main orchestration logic of update_main in --repo mode.
     """
     # Use a side_effect to return dynamic values based on input
-    def mock_update_logic(prompt_file, code_file, ctx, repo, simple=False):
+    def mock_update_logic(
+        prompt_file,
+        code_file,
+        ctx,
+        repo,
+        simple=False,
+        strength=None,
+        temperature=None,
+    ):
         return {
             "prompt_file": prompt_file,
             "status": "✅ Success",
@@ -619,7 +692,15 @@ def test_update_main_repo_mode_honors_budget_cap(mock_update_file_pair, mock_git
     """Repo mode should stop processing new files once budget cap is reached."""
     costs = iter([0.60, 0.60, 0.60])  # 3 changed pairs in fixture
 
-    def mock_update_logic(prompt_file, code_file, ctx, repo, simple=False):
+    def mock_update_logic(
+        prompt_file,
+        code_file,
+        ctx,
+        repo,
+        simple=False,
+        strength=None,
+        temperature=None,
+    ):
         return {
             "prompt_file": prompt_file,
             "status": "✅ Success",
@@ -2098,9 +2179,12 @@ class TestStrengthTemperatureResolution:
                 simple=True,
             )
 
-        # ctx.obj should be updated with resolved values
-        assert ctx.obj["strength"] == 0.9
-        assert ctx.obj["temperature"] == 0.5
+        kwargs = mock_up.call_args.kwargs
+        assert kwargs["strength"] == 0.9
+        assert kwargs["temperature"] == 0.5
+        # Explicit params should not poison ctx.obj for later per-target resolution.
+        assert ctx.obj["strength"] == 0.5
+        assert ctx.obj["temperature"] == 0.0
 
     def test_ctx_values_used_when_params_none(self):
         """When strength/temperature are None, ctx.obj values should be used."""
@@ -2579,4 +2663,3 @@ def test_regeneration_mode_uses_sentinel_when_prompt_file_empty(tmp_path, monkey
     assert mock_update_prompt.called
     kwargs = mock_update_prompt.call_args.kwargs
     assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
-

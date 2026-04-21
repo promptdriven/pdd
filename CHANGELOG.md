@@ -1,18 +1,38 @@
-## v0.0.213 (2026-04-19)
-
-### Feat
-
-- update architecture conformance to support dotted ClassName.method symbols and refresh build/docs artifacts
+## v0.0.214 (2026-04-20)
 
 ### Fix
 
-- purge transitively imported pdd.server.* modules in test_prompts fixture
-- preserve multiline prompts in update extraction
-- preserve pdd prompt structure in update prompt
-- detect nested auto-heal modules
-- bump dedup min_block to 4 to close 4-of-5 short-file gap
-- bounded dedup in insert_includes (sync hang + over-removal)
-- skip timeout-prone auto-heal syncs
+- clean meta-framing from MCP artifact prompt + widen regression coverage
+- extend meta-prompt cleanup to utils/mcp scaffolding template
+- remove meta-prompt framing from generate_prompt template (#1240)
+- resolve update config per target
+- use default strength in update flows
+- target only mock-tainted server modules in test_prompts cleanup
+
+### Refactor
+
+- update git_update prompt requirements and architecture dependencies
+
+## v0.0.213 (2026-04-19)
+
+### Fix
+
+- **`update_prompt` — preserve prompt structure across update runs**: the legacy update pipeline used to dispatch two LLM calls (generate → extract) and the extract step silently collapsed multiline prompts into a single line and stripped PDD-native markup. `update_prompt_LLM.prompt` now requires the model to return the updated prompt between explicit `<<<MODIFIED_PROMPT>>>` / `<<<END_MODIFIED_PROMPT>>>` delimiters, and `update_prompt.py` adds `_extract_between_delimiters`, `_extract_modified_prompt_tag`, and `_extract_prompt_from_first_response` helpers that short-circuit the second LLM call when extraction is deterministic (saves ~half the cost on the happy path). The LLM prompt is rewritten with a `<pdd_prompt_preservation_rules>` block that mandates byte-preserving `<include>`/`<include-many>` counts and paths, `<pdd.*>` namespaced tags, `%` section markers and ordering, fenced code blocks, signatures, and constants; a separate `<pdd_new_prompt_guidance>` block is used only when the input prompt signals that none exists yet. `extract_prompt_update_LLM.prompt` gains a delimiter-aware extraction rule and an explicit "do not collapse multiline prompts into a single line" instruction
+- **`insert_includes` dedup — bounded, coverage-based, O(n*m) per included file**: the previous descending-window scan called `difflib.SequenceMatcher(...).ratio()` per window (O(n²) windows × O(k*m) per call), which hung `pdd sync` on real prompts and over-removed content on coincidental short overlaps (e.g. the `<pdd-interface>` header overlapping with example strings inside `architecture_sync_example.py`). `_remove_redundant_content` is rewritten to call `SequenceMatcher.find_longest_match` once per included file on `splitlines(keepends=True)` with `autojunk=False`, removing the single longest exact run only when it covers `coverage=0.75` of the file's lines (`math.ceil`). Small files where `coverage * size <= min_block` fall under a full-file-match cutoff instead — `min_block` was bumped from 3 to 4 so a 5-line file no longer allows a 4-of-5 generic overlap to delete content
+- **`ci_detect_changed_modules` — nested module basenames**: replaces the root-only regex extractor with category-specific helpers (`_prompt_basename_from_path`, `_context_basename_from_path`, `_test_basename_from_path`) plus a shared `_normalize_repo_path` so `prompts/subdir/foo_python.prompt`, `context/subdir/foo_example.py`, and `tests/subdir/test_foo.py` all resolve to the nested `subdir/foo` basename. Include-reference resolution now scans both `<include>` and `<include-many>` blocks (multiline) rather than only single-line `<include>` tags, so reverse-dependency drift across nested modules is detected correctly. Ships as a new `pdd/ci_detect_changed_modules.py` (328 lines) with a dedicated `ci_detect_changed_modules_python.prompt` and test module; `scripts/ci_detect_changed_modules.py` is rewritten to delegate to it
+- **`ci_drift_heal` — optional operator skip for timeout-prone syncs**: `heal_module` return type is widened from `bool` to `Optional[bool]` where `None` signals an intentional skip, and `main` routes skipped basenames into a separate `skipped_modules` report channel (distinct from `healed_modules` / `failed_modules`). `_get_heal_sync_skip_modules` reads comma-separated basenames from `PDD_HEAL_SYNC_SKIP_MODULES` (unset means "skip nothing"), and both the `update`→sync tail and the standalone `example` sync path short-circuit with a yellow warning when a basename matches. The previously shipped default skip was removed — skips are now opt-in only, intended as a short-lived operational bypass
+- **`test_prompts` fixture — purge transitively imported `pdd.server.*` modules**: the fixture teardown now deletes any `pdd.server.*` modules imported during the test (e.g. `pdd.server.app` via `pdd/server/__init__.py`) that weren't in `original_modules`. Those modules retained references to `MagicMock`-replaced `pdd.server.security` symbols (`PathValidator`, `SecurityLoggingMiddleware`, ...), which later raised "MagicMock can't be used in 'await' expression" when unrelated tests built the real ASGI middleware stack via `TestClient`
+
+### Build
+
+- refresh `ci/cloud-batch/test-durations.json` and `.cloud-image-hash`; auto-healed prompt/example drift for `ci_detect_changed_modules` and `update_prompt`; register `ci_detect_changed_modules.main` in `pdd/__init__.py`
+
+### Docs
+
+- `ci-auto-heal.md`: document the `PDD_HEAL_SYNC_SKIP_MODULES` operator override (default unset = skip nothing; comma-separated basenames; short-lived bypass, not a standing default)
+- `insert_includes_python.prompt`: document the bounded dedup algorithm (`find_longest_match` on `splitlines(keepends=True)`, `coverage=0.75`, `min_block=4`, small-file cutoff via `ceil(min_block / coverage)`, O(n*m) invariant, and the over-removal case the coverage threshold guards against)
+- `update_prompt_LLM.prompt`: add the `<<<MODIFIED_PROMPT>>>` delimiter contract, the `<pdd_prompt_preservation_rules>` block (include directives, `<pdd.*>` tags, `%` markers, fenced blocks, signatures/literals), and the `<pdd_new_prompt_guidance>` fallback block
+- `update_prompt_python.prompt`: wire up the `change/14/initial_change.py` dependency example used by the update-flow auto-heal fixture
 
 ## v0.0.212 (2026-04-18)
 

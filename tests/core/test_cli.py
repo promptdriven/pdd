@@ -189,6 +189,13 @@ def test_cli_help_shows_core_dump_flag(runner):
     assert result.exit_code == 0
     assert "--core-dump" in result.output
 
+
+def test_cli_help_shows_current_strength_default(runner):
+    """Strength help text should stay aligned with the package default."""
+    result = runner.invoke(cli_command, ["--help"])
+    assert result.exit_code == 0
+    assert f"Default: {DEFAULT_STRENGTH} or .pddrc value." in result.output
+
 def test_cli_command_help(runner):
     """Test `pdd [COMMAND] --help`."""
     result = runner.invoke(cli_command, ["generate", "--help"])

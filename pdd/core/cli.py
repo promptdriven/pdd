@@ -258,7 +258,7 @@ class PDDCLI(click.Group):
     type=click.FloatRange(0.0, 1.0),
     default=None,
     show_default=False,
-    help="Set the strength of the AI model (0.0 to 1.0). Default: 0.75 or .pddrc value.",
+    help=f"Set the strength of the AI model (0.0 to 1.0). Default: {DEFAULT_STRENGTH} or .pddrc value.",
 )
 @click.option(
     "--temperature",

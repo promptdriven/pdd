@@ -123,7 +123,7 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
 <existing_backend_prompts><include-many>${EXISTING_PROMPTS}</include-many></existing_backend_prompts>
 
 % Do the following:
-- Explain concisely what you are going to do (create a prompt for the ${MODULE} module/component for the specified layer and stack).
+- Identify the architecture entry for ${MODULE} and analyze its requirements, dependencies, and interface constraints for the specified layer and stack.
 - Analyze any difficulties this prompt might encounter for ${MODULE} (e.g., data modeling, API or UI contracts, transactions, idempotency, auth, state management, error handling) and briefly state mitigation strategies tailored to the given LAYER and LANG_OR_FRAMEWORK.
 - Use the ARCHITECTURE_FILE to identify the item that corresponds to this prompt by matching `filename` to `${MODULE}_${LANG_OR_FRAMEWORK}.prompt` (or best match by basename and layer). Use that item's `reason`, `description`, `dependencies`, `interface`, and `tags` to shape the sections below.
 - If the matched architecture item has an "auth" tag, inject the following additional requirements into the prompt:
@@ -230,7 +230,6 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
   Implementation assumptions (explicit)
   - [ASSUMPTION_1]
   - [ASSUMPTION_2]
-  Please produce production-ready prompt content that will generate the module consistent with the above.
   &lt;/prompt&gt;
   ```
   Replace each `[PLACEHOLDER]` with concrete content while preserving the surrounding structure and literal &lt;include&gt; tags.

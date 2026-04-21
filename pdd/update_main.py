@@ -20,7 +20,13 @@ from rich.progress import (
 from rich.table import Table
 from rich.theme import Theme
 
-from .construct_paths import construct_paths, get_tests_dir_from_config, detect_context_for_file
+from .construct_paths import (
+    construct_paths,
+    get_tests_dir_from_config,
+    detect_context_for_file,
+    resolve_effective_config as resolve_target_context,
+)
+from .config_resolution import resolve_effective_config as resolve_command_config
 from .get_language import get_language
 from .update_prompt import update_prompt
 from .git_update import git_update
@@ -662,7 +668,15 @@ def is_code_changed(
     return False, "no fingerprint, file not in git changed set"
 
 
-def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False) -> Dict[str, Any]:
+def update_file_pair(
+    prompt_file: str,
+    code_file: str,
+    ctx: click.Context,
+    repo: git.Repo,
+    simple: bool = False,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+) -> Dict[str, Any]:
     """
     Wrapper to update a single file pair, choosing the correct method based on Git status and prompt content.
     """
@@ -717,22 +731,36 @@ def update_file_pair(prompt_file: str, code_file: str, ctx: click.Context, repo:
             with open(code_file, 'r') as f:
                 modified_code = f.read()
 
+            effective_config = _resolve_update_runtime_config(
+                ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                strength=strength,
+                temperature=temperature,
+            )
             modified_prompt, total_cost, model_name = update_prompt(
                 input_prompt="no prompt exists yet, create a new one",
                 input_code="",  # No previous version for generation
                 modified_code=modified_code,
-                strength=ctx.obj.get("strength", 0.5),
-                temperature=ctx.obj.get("temperature", 0),
+                strength=effective_config["strength"],
+                temperature=effective_config["temperature"],
                 verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME),
             )
         # UPDATE MODE: Only trigger if the file is tracked AND the prompt has content.
         else:
+            effective_config = _resolve_update_runtime_config(
+                ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                strength=strength,
+                temperature=temperature,
+            )
             modified_prompt, total_cost, model_name = git_update(
                 input_prompt=input_prompt,
                 modified_code_file=code_file,
-                strength=ctx.obj.get("strength", 0.5),
-                temperature=ctx.obj.get("temperature", 0),
+                strength=effective_config["strength"],
+                temperature=effective_config["temperature"],
                 verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME),
                 simple=True,  # Force legacy since we already tried agentic,
@@ -824,6 +852,64 @@ def _included_docs_for_drift_report(
             continue
         rows.append((doc_rel, len(prompters)))
     return sorted(rows, key=lambda x: (-x[1], x[0]))
+
+
+def _resolve_update_runtime_config(
+    ctx: click.Context,
+    *,
+    prompt_file: Optional[str] = None,
+    code_file: Optional[str] = None,
+    resolved_config: Optional[Dict[str, Any]] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Resolve effective update config for a single target.
+
+    Update flows can span multiple contexts in one command, especially in repo mode,
+    so config must be resolved per target instead of written once into ``ctx.obj``.
+    """
+
+    if resolved_config is None:
+        quiet = ctx.obj.get("quiet", False)
+        context_override = ctx.obj.get("context")
+        candidate_paths: List[str] = []
+        if prompt_file:
+            candidate_paths.append(prompt_file)
+        if code_file and code_file not in candidate_paths:
+            candidate_paths.append(code_file)
+
+        resolved_candidates: List[Dict[str, Any]] = []
+        for candidate in candidate_paths:
+            candidate_path = Path(candidate)
+            candidate_cwd = candidate_path.parent if candidate_path.parent else Path.cwd()
+            _, _, _, candidate_config, _ = resolve_target_context(
+                cli_options={},
+                context_override=context_override,
+                cwd=candidate_cwd,
+                prompt_file=str(candidate_path),
+                quiet=quiet,
+            )
+            resolved_candidates.append(candidate_config)
+            if candidate_config.get("_matched_context") not in ("default", "none"):
+                resolved_config = candidate_config
+                break
+
+        if resolved_config is None:
+            if resolved_candidates:
+                resolved_config = resolved_candidates[0]
+            else:
+                _, _, _, resolved_config, _ = resolve_target_context(
+                    cli_options={},
+                    context_override=context_override,
+                    cwd=Path.cwd(),
+                    quiet=quiet,
+                )
+
+    return resolve_command_config(
+        ctx,
+        resolved_config,
+        param_overrides={"strength": strength, "temperature": temperature},
+    )
 
 
 def _estimate_dry_run_cost_range(
@@ -927,12 +1013,6 @@ def update_main(
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
-    # Resolve strength/temperature (prefer passed parameters over ctx.obj)
-    resolved_strength = strength if strength is not None else ctx.obj.get("strength", 0.5)
-    resolved_temperature = temperature if temperature is not None else ctx.obj.get("temperature", 0)
-    # Update ctx.obj so internal calls use the resolved values
-    ctx.obj["strength"] = resolved_strength
-    ctx.obj["temperature"] = resolved_temperature
     if repo:
         try:
             # Find the repo root by searching up from the current directory
@@ -1055,7 +1135,15 @@ def update_main(
                 relative_path = os.path.relpath(code_path, repo_root)
                 progress.update(task, description=f"Processing [path]{relative_path}[/path]")
 
-                result = update_file_pair(prompt_path, code_path, ctx, repo_obj, simple=simple)
+                result = update_file_pair(
+                    prompt_path,
+                    code_path,
+                    ctx,
+                    repo_obj,
+                    simple=simple,
+                    strength=strength,
+                    temperature=temperature,
+                )
                 results.append(result)
 
                 total_repo_cost += result.get("cost", 0.0)
@@ -1279,13 +1367,20 @@ def update_main(
                 if existing_prompt_text.strip()
                 else "no prompt exists yet, create a new one"
             )
+            effective_config = _resolve_update_runtime_config(
+                ctx,
+                prompt_file=prompt_path,
+                code_file=modified_code_file,
+                strength=strength,
+                temperature=temperature,
+            )
 
             modified_prompt, total_cost, model_name = update_prompt(
                 input_prompt=input_prompt_arg,
                 input_code="",
                 modified_code=modified_code_content,
-                strength=ctx.obj.get("strength", 0.5),
-                temperature=ctx.obj.get("temperature", 0),
+                strength=effective_config["strength"],
+                temperature=effective_config["temperature"],
                 verbose=verbose,
                 time=ctx.obj.get('time', DEFAULT_TIME)
             )
@@ -1358,7 +1453,7 @@ def update_main(
 
             command_options = {"output": final_output_path}
 
-            _, input_strings, output_file_paths, _ = construct_paths(
+            resolved_config, input_strings, output_file_paths, _ = construct_paths(
                 input_file_paths=input_file_paths,
                 force=ctx.obj.get("force", False),
                 quiet=quiet,
@@ -1372,6 +1467,14 @@ def update_main(
             modified_code = input_strings["modified_code_file"]
             input_code = input_strings.get("input_code_file")
             time = ctx.obj.get('time', DEFAULT_TIME)
+            effective_config = _resolve_update_runtime_config(
+                ctx,
+                prompt_file=actual_input_prompt_file,
+                code_file=modified_code_file,
+                resolved_config=resolved_config,
+                strength=strength,
+                temperature=temperature,
+            )
 
             if not modified_code.strip():
                 raise ValueError("Modified code file cannot be empty when updating or generating a prompt.")
@@ -1389,8 +1492,8 @@ def update_main(
                 modified_prompt, total_cost, model_name = git_update(
                     input_prompt=input_prompt,
                     modified_code_file=modified_code_file,
-                    strength=ctx.obj.get("strength", 0.5),
-                    temperature=ctx.obj.get("temperature", 0),
+                    strength=effective_config["strength"],
+                    temperature=effective_config["temperature"],
                     verbose=verbose,
                     time=time,
                     simple=True if use_agentic else simple,  # Force legacy if agentic was tried
@@ -1407,8 +1510,8 @@ def update_main(
                     input_prompt=input_prompt,
                     input_code=input_code,
                     modified_code=modified_code,
-                    strength=ctx.obj.get("strength", 0.5),
-                    temperature=ctx.obj.get("temperature", 0),
+                    strength=effective_config["strength"],
+                    temperature=effective_config["temperature"],
                     verbose=verbose,
                     time=time
                 )

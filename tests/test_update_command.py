@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+from pdd import DEFAULT_STRENGTH
 from pdd.cli import cli
 
 
@@ -197,3 +198,96 @@ class TestUpdateCommandArgs:
 
         # Should error about mutual exclusivity
         assert "mutually exclusive" in result.output.lower() or "cannot" in result.output.lower()
+
+
+class TestUpdateCommandStrengthFallback:
+    """CLI update flows should inherit the package default strength when omitted."""
+
+    @patch("pdd.update_main.get_available_agents", return_value=[])
+    @patch("pdd.update_main.update_prompt", return_value=("updated prompt", 0.0, "mock-model"))
+    @patch("pdd.update_main.construct_paths")
+    def test_cli_direct_update_without_strength_uses_default_strength(
+        self,
+        mock_construct_paths,
+        mock_update_prompt,
+        _mock_get_available_agents,
+        tmp_path,
+    ):
+        prompt_file = tmp_path / "test_python.prompt"
+        prompt_file.write_text("Original prompt content")
+        original_code = tmp_path / "original.py"
+        original_code.write_text("def foo(): return 1\n")
+        modified_code = tmp_path / "modified.py"
+        modified_code.write_text("def foo(): return 2\n")
+        output_file = tmp_path / "updated.prompt"
+
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "input_prompt_file": "Original prompt content",
+                "modified_code_file": "def foo(): return 2\n",
+                "input_code_file": "def foo(): return 1\n",
+            },
+            {"output": str(output_file)},
+            None,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--force",
+                "update",
+                str(prompt_file),
+                str(modified_code),
+                str(original_code),
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert mock_update_prompt.call_args.kwargs["strength"] == DEFAULT_STRENGTH
+        assert output_file.read_text() == "updated prompt"
+
+    @patch("pdd.update_main.get_available_agents", return_value=[])
+    @patch("pdd.update_main.git_update", return_value=("updated prompt from git", 0.0, "mock-model"))
+    @patch("pdd.update_main.construct_paths")
+    def test_cli_git_update_without_strength_uses_default_strength(
+        self,
+        mock_construct_paths,
+        mock_git_update,
+        _mock_get_available_agents,
+        tmp_path,
+    ):
+        prompt_file = tmp_path / "test_python.prompt"
+        prompt_file.write_text("Original prompt content")
+        modified_code = tmp_path / "modified.py"
+        modified_code.write_text("def foo(): return 2\n")
+        output_file = tmp_path / "updated_git.prompt"
+
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "input_prompt_file": "Original prompt content",
+                "modified_code_file": "def foo(): return 2\n",
+            },
+            {"output": str(output_file)},
+            None,
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli,
+            [
+                "--force",
+                "update",
+                "--git",
+                str(prompt_file),
+                str(modified_code),
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        assert mock_git_update.call_args.kwargs["strength"] == DEFAULT_STRENGTH
+        assert output_file.read_text() == "updated prompt from git"
