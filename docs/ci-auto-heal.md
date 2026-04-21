@@ -10,7 +10,7 @@ Runs on Google Cloud Build against the `prompt-driven-development-stg` project, 
 
 | Path | Role |
 |---|---|
-| `cloudbuild-auto-heal.yaml` | Build pipeline: loop-guard → mint-token → fetch-history → detect-modules → heal |
+| `cloudbuild-auto-heal.yaml` | Build pipeline: loop-guard → mint-token → draft-guard → fetch-history → detect-modules → heal |
 | `scripts/ci_detect_changed_modules.py` | Standalone module-basename extractor (reads `git diff`, returns comma-separated list) |
 | `scripts/mint_github_app_token.py` | Mints installation tokens via RS256 JWT; uses `cryptography` directly (no pyjwt) |
 | `pdd/ci_drift_heal.py` | Orchestrator the `heal` step invokes: classifies drift, runs pdd subprocesses, commits and pushes |
@@ -24,6 +24,11 @@ Runs on Google Cloud Build against the `prompt-driven-development-stg` project, 
 | `pdd-auto-heal-push` | Push → `main` | `cloudbuild-auto-heal.yaml` |
 
 Both pass `_GITHUB_APP_ID=3404088` as a substitution. The push trigger additionally passes `_HEAD_BRANCH=main`.
+
+PR trigger behavior:
+- Draft PRs still start Cloud Build, but the in-build `draft-guard` step now short-circuits them before fetch/heal work.
+- Non-draft PRs run auto-heal normally on PR updates.
+- Because GCB has no trigger-level draft filter, the first guaranteed full run after marking a PR ready is the next pushed commit or a manual rerun of the latest build. If GitHub emits a PR update build for `ready_for_review`, that build will also pass the guard and run.
 
 ## Auth
 
@@ -81,6 +86,14 @@ fi
 ```
 
 Push-to-main heal commits are also prefixed `[skip ci]` so that `pdd-ci` and any other push-triggered builds also skip them.
+
+## Draft PR guard
+
+PR auto-heal is noisy during active draft churn, so draft PR builds now short-circuit before module detection.
+
+- Detection mechanism: the `draft-guard` step queries `GET /repos/gltanaka/pdd/pulls` with the GitHub App installation token and matches the current PR by `head=gltanaka:<branch>` plus `base=<base-branch>`.
+- Draft result: touches `/ci-state/skip`; downstream steps exit immediately.
+- API lookup failure: guard fails open and the build continues. The draft guard is an efficiency policy, not a correctness or safety gate.
 
 ## Emergency disable
 

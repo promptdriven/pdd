@@ -71,6 +71,4 @@ Deliverable
 Implementation assumptions (explicit)
 - The caller provides an accurate `file_size` (in bytes) computed elsewhere; this module may optionally read a small prefix of the file only for medium-size auto decisions and only if the file path is readable.
 - Anthropic prompt caching behavior (ephemeral cache, 5-minute minimum) is handled in the core API wrapper; this module only decides whether caching should be enabled for a given edit request.
-
-Please produce production-ready prompt content that will generate the module consistent with the above.
 </prompt>

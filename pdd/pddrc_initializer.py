@@ -41,9 +41,14 @@ LANGUAGE_DEFAULTS: dict[str, dict[str, str]] = {
     },
 }
 
+# Stable scaffold default for generated `.pddrc` files.
+# Keep this independent from the env-overridable runtime default so `pdd setup`
+# emits deterministic repo config and continues to steer toward Gemini 3.1 Pro.
+SCAFFOLD_DEFAULT_STRENGTH = 0.818
+
 # Standard defaults
 STANDARD_DEFAULTS: dict[str, float | int] = {
-    "strength": 0.818,
+    "strength": SCAFFOLD_DEFAULT_STRENGTH,
     "temperature": 0.0,
     "target_coverage": 80.0,
     "budget": 10.0,

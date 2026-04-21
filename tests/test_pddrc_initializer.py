@@ -47,6 +47,7 @@ from io import StringIO
 
 from pdd import pddrc_initializer
 from pdd.pddrc_initializer import (
+    SCAFFOLD_DEFAULT_STRENGTH,
     _detect_language,
     _build_pddrc_content,
     _detect_language_from_extensions,
@@ -210,12 +211,17 @@ def test_build_content_language_paths(language, gen_path, test_path, example_pat
 def test_build_content_standard_defaults():
     """Generated content includes all standard defaults."""
     content = _build_pddrc_content("python")
-    assert "strength: 0.818" in content
+    assert f"strength: {SCAFFOLD_DEFAULT_STRENGTH}" in content
     assert "temperature: 0.0" in content
     assert "target_coverage: 80.0" in content
     assert "budget: 10.0" in content
     assert "max_attempts: 3" in content
     assert 'version: "1.0"' in content
+
+
+def test_scaffold_default_strength_is_pinned():
+    """Scaffold default intentionally diverges from the runtime default."""
+    assert SCAFFOLD_DEFAULT_STRENGTH == 0.818
 
 
 def test_build_content_unknown_language_fallback():
@@ -264,7 +270,7 @@ def test_created_file_has_correct_content(tmp_path, monkeypatch):
     content = (tmp_path / ".pddrc").read_text()
     assert 'default_language: "python"' in content
     assert 'generate_output_path: "pdd/"' in content
-    assert "strength: 0.818" in content
+    assert f"strength: {SCAFFOLD_DEFAULT_STRENGTH}" in content
 
 
 def test_prompts_language_when_undetected(tmp_path, monkeypatch):

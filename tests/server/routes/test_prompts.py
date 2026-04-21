@@ -207,14 +207,24 @@ def prompts_test_env():
     for mod, original in original_modules.items():
         sys.modules[mod] = original
 
-    # Purge any pdd.server.* modules that were imported transitively during
-    # this fixture (e.g. pdd.server.app via pdd/server/__init__.py). They may
-    # hold references to the MagicMock-replaced pdd.server.security symbols
-    # (PathValidator, SecurityLoggingMiddleware, ...) which would later raise
-    # "MagicMock can't be used in 'await' expression" when other tests build
-    # the real ASGI middleware stack via TestClient.
-    for mod_name in list(sys.modules.keys()):
-        if mod_name.startswith("pdd.server") and mod_name not in original_modules:
+    # Purge modules whose top-level imports could have captured MagicMock
+    # references to the patched pdd.server.security / token_counter symbols
+    # (PathValidator, SecurityLoggingMiddleware, get_token_metrics, ...).
+    # These get loaded transitively via pdd/server/__init__.py and would
+    # otherwise survive the fixture and break later tests (e.g. starlette
+    # awaiting a MagicMock middleware in TestClient). Only purge if we
+    # didn't have a real version saved to restore; do NOT purge clean
+    # sibling modules like pdd.server.executor whose function objects are
+    # already bound by name in other test files' module globals.
+    polluted_modules = (
+        "pdd.server",
+        "pdd.server.app",
+        "pdd.server.routes",
+        "pdd.server.routes.prompts",
+        "pdd.server.routes.files",
+    )
+    for mod_name in polluted_modules:
+        if mod_name in sys.modules and mod_name not in original_modules:
             del sys.modules[mod_name]
 
 

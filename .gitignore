@@ -32,6 +32,9 @@ pdd_cost.csv
 # Test sync folder
 test_sync/
 
+# Vendored Python packages (created by pdd sync worktree setup)
+.pip_packages/
+
 
 # langchain cache
 .langchain.db
