@@ -4541,3 +4541,115 @@ def test_get_pdd_file_paths_deep_nesting_different_language(tmp_path, monkeypatc
         f"Bug #1169: prompt not found for TypeScript in deep nesting. Got: {paths['prompt']}. "
         f"Expected to find: {actual_prompt}"
     )
+
+
+def _write_frontend_page_test_config(tmp_path: Path) -> None:
+    """Create the minimal repo config needed for nested frontend page path resolution."""
+    config = {
+        "contexts": {
+            "frontend": {
+                "paths": ["frontend/**", "prompts/frontend/**"],
+                "defaults": {
+                    "prompts_dir": "prompts/frontend",
+                    "generate_output_path": "frontend/src",
+                    "default_language": "typescriptreact",
+                    "strength": 0.818,
+                    "outputs": {
+                        "prompt": {
+                            "path": "prompts/frontend/{dir_prefix}{name}_{language}.prompt"
+                        }
+                    },
+                },
+            },
+            "default": {"defaults": {}},
+        }
+    }
+    (tmp_path / ".pddrc").write_text(json.dumps(config))
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+
+def test_get_pdd_file_paths_nested_frontend_page_prefers_nested_prompt(tmp_path, monkeypatch):
+    """Nested frontend page basenames must not collapse to the flat `page` prompt."""
+    monkeypatch.chdir(tmp_path)
+    _write_frontend_page_test_config(tmp_path)
+
+    flat_prompt = tmp_path / "prompts" / "frontend" / "page_TypescriptReact.prompt"
+    flat_prompt.parent.mkdir(parents=True)
+    flat_prompt.write_text("flat page prompt")
+
+    nested_prompt = tmp_path / "prompts" / "frontend" / "app" / "settings" / "account" / "page_TypescriptReact.prompt"
+    nested_prompt.parent.mkdir(parents=True)
+    nested_prompt.write_text("account page prompt")
+
+    paths = get_pdd_file_paths("frontend/app/settings/account/page", "typescriptreact", "prompts")
+
+    assert paths["prompt"].is_file()
+    assert paths["prompt"].samefile(nested_prompt)
+    assert paths["code"].resolve() == (tmp_path / "frontend" / "src" / "app" / "settings" / "account" / "page.tsx").resolve()
+
+
+def test_get_pdd_file_paths_nested_frontend_page_uses_context_relative_architecture_entry(tmp_path, monkeypatch):
+    """Relative architecture filenames like app/settings/security/page_* must resolve correctly."""
+    monkeypatch.chdir(tmp_path)
+    _write_frontend_page_test_config(tmp_path)
+
+    flat_prompt = tmp_path / "prompts" / "frontend" / "page_TypescriptReact.prompt"
+    flat_prompt.parent.mkdir(parents=True)
+    flat_prompt.write_text("flat page prompt")
+
+    security_prompt = tmp_path / "prompts" / "frontend" / "app" / "settings" / "security" / "page_TypescriptReact.prompt"
+    security_prompt.parent.mkdir(parents=True)
+    security_prompt.write_text("security page prompt")
+
+    (tmp_path / "architecture.json").write_text(json.dumps([
+        {
+            "filename": "app/settings/security/page_TypescriptReact.prompt",
+            "filepath": "frontend/src/app/settings/security/page.tsx",
+        },
+        {
+            "filename": "page_TypescriptReact.prompt",
+            "filepath": "frontend/src/app/settings/github/page.tsx",
+        },
+    ]))
+
+    paths = get_pdd_file_paths("frontend/app/settings/security/page", "typescriptreact", "prompts")
+
+    assert paths["prompt"].is_file()
+    assert paths["prompt"].samefile(security_prompt)
+    assert paths["code"].resolve() == (tmp_path / "frontend" / "src" / "app" / "settings" / "security" / "page.tsx").resolve()
+
+
+def test_get_pdd_file_paths_nested_frontend_page_rejects_wrong_flat_architecture_match(tmp_path, monkeypatch):
+    """Flat architecture entries must not steal other nested page basenames with the same filename."""
+    monkeypatch.chdir(tmp_path)
+    _write_frontend_page_test_config(tmp_path)
+
+    flat_prompt = tmp_path / "prompts" / "frontend" / "page_TypescriptReact.prompt"
+    flat_prompt.parent.mkdir(parents=True)
+    flat_prompt.write_text("flat page prompt")
+
+    account_prompt = tmp_path / "prompts" / "frontend" / "app" / "settings" / "account" / "page_TypescriptReact.prompt"
+    account_prompt.parent.mkdir(parents=True)
+    account_prompt.write_text("account page prompt")
+
+    github_prompt = tmp_path / "prompts" / "frontend" / "app" / "settings" / "github" / "page_TypescriptReact.prompt"
+    github_prompt.parent.mkdir(parents=True)
+    github_prompt.write_text("github page prompt")
+
+    (tmp_path / "architecture.json").write_text(json.dumps([
+        {
+            "filename": "page_TypescriptReact.prompt",
+            "filepath": "frontend/src/app/settings/github/page.tsx",
+        },
+    ]))
+
+    github_paths = get_pdd_file_paths("frontend/app/settings/github/page", "typescriptreact", "prompts")
+    assert github_paths["prompt"].is_file()
+    assert github_paths["prompt"].samefile(github_prompt)
+    assert github_paths["code"].resolve() == (tmp_path / "frontend" / "src" / "app" / "settings" / "github" / "page.tsx").resolve()
+
+    account_paths = get_pdd_file_paths("frontend/app/settings/account/page", "typescriptreact", "prompts")
+    assert account_paths["prompt"].is_file()
+    assert account_paths["prompt"].samefile(account_prompt)
+    assert account_paths["code"].resolve() == (tmp_path / "frontend" / "src" / "app" / "settings" / "account" / "page.tsx").resolve()

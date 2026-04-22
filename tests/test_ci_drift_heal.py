@@ -11,6 +11,7 @@ import pytest
 from pdd.ci_drift_heal import (
     DriftInfo,
     HealResult,
+    PromptRevertError,
     _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
@@ -350,18 +351,22 @@ class TestHealModule:
         assert cmds[0] == ["pdd", "update", "/repo/auth.py"]
         assert cmds[1] == ["pdd", "sync", "auth"]
 
-    def test_update_no_code_path_falls_back(self):
-        """prompt drift (update) runs 'pdd update' (no args) when code_path is None."""
-        drift = DriftInfo("auth", "python", "update", "changed", code_path=None)
-        mock_result = MagicMock(returncode=0, stderr="")
+    def test_update_no_code_path_fails_closed(self):
+        """prompt drift (update) refuses repo-wide fallback when code_path is None."""
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path=None,
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
 
-        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             result = heal_module(drift, self._make_env())
 
-        assert result is True
-        cmds = [c[0][0] for c in mock_run.call_args_list]
-        assert cmds[0] == ["pdd", "update"]
-        assert cmds[1] == ["pdd", "sync", "auth"]
+        assert result is False
+        mock_run.assert_not_called()
 
     def test_update_failure_skips_sync(self):
         """If pdd update fails, pdd sync is not attempted."""
@@ -375,22 +380,110 @@ class TestHealModule:
         # Only update was called, not sync
         assert len(mock_run.call_args_list) == 1
 
-    def test_update_ok_sync_fails_still_returns_true(self):
-        """If update succeeds but sync fails, returns True (prompt update is committed)."""
-        drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
+    def test_update_ok_sync_fails_and_reverts_prompt(self):
+        """If update succeeds but sync fails, treat the heal as failed and revert prompt edits."""
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
         call_count = [0]
 
         def mock_run(cmd, **kwargs):
             call_count[0] += 1
             r = MagicMock()
+            if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                r.returncode = 0
+                r.stdout = "/repo\n"
+                r.stderr = ""
+                return r
+            if cmd[:4] == ["git", "checkout", "HEAD", "--"]:
+                r.returncode = 0
+                r.stderr = ""
+                return r
+            if cmd[:4] == ["git", "status", "--porcelain", "--"]:
+                r.returncode = 0
+                r.stdout = ""
+                r.stderr = ""
+                return r
             r.returncode = 0 if call_count[0] == 1 else 1  # update ok, sync fails
             r.stderr = "" if call_count[0] == 1 else "sync error"
             return r
 
-        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_subprocess:
             result = heal_module(drift, self._make_env())
 
-        assert result is True  # partial success — prompt was updated
+        assert result is False
+        checkout_calls = [
+            c for c in mock_subprocess.call_args_list
+            if c[0][0][:4] == ["git", "checkout", "HEAD", "--"]
+        ]
+        assert len(checkout_calls) == 1
+        assert checkout_calls[0][0][0][-1] == "prompts/auth_python.prompt"
+
+    def test_update_ok_sync_fails_and_revert_failure_raises(self):
+        """If prompt revert fails after sync failure, surface a fatal revert error."""
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        call_count = [0]
+
+        def mock_run(cmd, **kwargs):
+            call_count[0] += 1
+            r = MagicMock()
+            if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                r.returncode = 0
+                r.stdout = "/repo\n"
+                r.stderr = ""
+                return r
+            if cmd[:4] == ["git", "checkout", "HEAD", "--"]:
+                r.returncode = 1
+                r.stderr = "cannot checkout"
+                return r
+            r.returncode = 0 if call_count[0] == 1 else 1
+            r.stderr = "" if call_count[0] == 1 else "sync error"
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            with pytest.raises(PromptRevertError):
+                heal_module(drift, self._make_env())
+
+    def test_revert_prompt_file_uses_repo_relative_path_for_absolute_prompt(self):
+        """Absolute prompt paths must be normalized before git checkout/status."""
+        from pdd.ci_drift_heal import _revert_prompt_file
+
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                return subprocess.CompletedProcess(cmd, 0, "/repo\n", "")
+            if cmd[:4] == ["git", "checkout", "HEAD", "--"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if cmd[:4] == ["git", "status", "--porcelain", "--"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            _revert_prompt_file(drift)
+
+        assert ["git", "checkout", "HEAD", "--", "prompts/auth_python.prompt"] in calls
+        assert ["git", "status", "--porcelain", "--", "prompts/auth_python.prompt"] in calls
 
     def test_update_does_not_skip_follow_up_sync_by_default(self):
         """agentic_change_orchestrator sync runs normally once the default skip is removed."""
@@ -618,6 +711,24 @@ class TestCommitAndPush:
 # ---------------------------------------------------------------------------
 
 class TestMain:
+    @staticmethod
+    def _init_git_repo(repo: Path) -> None:
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "config", "user.email", "ci-drift-heal-test@example.com"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "CI Drift Heal Test"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     def test_no_drift_returns_zero(self):
         """When no drift detected, returns 0."""
         with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [])):
@@ -744,6 +855,31 @@ class TestMain:
         mock_commit.assert_not_called()
         assert result == 1
 
+    def test_prompt_revert_failure_blocks_commit_even_after_other_success(self):
+        """A failed revert makes the whole run unsafe to commit."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+                DriftInfo("api", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch(
+                 "pdd.ci_drift_heal.heal_module",
+                 side_effect=[True, PromptRevertError("revert failed")],
+             ), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main()
+
+        mock_commit.assert_not_called()
+        assert result == 1
+
     def test_explicit_sync_skip_env_skips_example_without_failing_build(self):
         """Operator override can skip a sync path without blocking auto-heal."""
         drifts = ([], [DriftInfo("agentic_change_orchestrator", "python", "example", "stale")])
@@ -764,6 +900,121 @@ class TestMain:
         assert result == 0
         mock_run_pdd.assert_not_called()
         mock_commit.assert_not_called()
+
+    def test_end_to_end_sync_failure_reverts_prompt_and_skips_commit(self, tmp_path, monkeypatch):
+        """main() leaves a temp repo clean when update succeeds but follow-up sync fails."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_git_repo(repo)
+
+        prompt_path = repo / "pdd" / "prompts" / "auth_python.prompt"
+        code_path = repo / "pdd" / "auth.py"
+        prompt_path.parent.mkdir(parents=True)
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+
+        initial_prompt = "% Goal\ninitial prompt\n"
+        updated_prompt = "% Goal\nupdated prompt\n"
+        prompt_path.write_text(initial_prompt, encoding="utf-8")
+        code_path.write_text("def auth():\n    return True\n", encoding="utf-8")
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path=str(code_path),
+            prompt_path=str(prompt_path),
+        )
+
+        def run_pdd_side_effect(cmd, env, label):
+            if cmd == ["pdd", "update", str(code_path)]:
+                prompt_path.write_text(updated_prompt, encoding="utf-8")
+                return True
+            if cmd == ["pdd", "sync", "auth"]:
+                return False
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect):
+            result = main()
+
+        assert result == 1
+        assert prompt_path.read_text(encoding="utf-8") == initial_prompt
+
+        status = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout.strip() == ""
+
+        head_message = subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert head_message.stdout.strip() == "initial"
+
+    def test_end_to_end_missing_code_path_skips_update_and_leaves_repo_clean(self, tmp_path, monkeypatch):
+        """main() fails closed without invoking pdd update when code_path is unresolved."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._init_git_repo(repo)
+
+        prompt_path = repo / "pdd" / "prompts" / "auth_python.prompt"
+        prompt_path.parent.mkdir(parents=True)
+        initial_prompt = "% Goal\ninitial prompt\n"
+        prompt_path.write_text(initial_prompt, encoding="utf-8")
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path=None,
+            prompt_path="pdd/prompts/auth_python.prompt",
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal._run_pdd_command") as mock_run_pdd:
+            result = main()
+
+        assert result == 1
+        mock_run_pdd.assert_not_called()
+        assert prompt_path.read_text(encoding="utf-8") == initial_prompt
+
+        status = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout.strip() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1094,7 +1345,7 @@ class TestStructuralInvariants:
     agnostic so it applies regardless of whether the legacy or agentic
     path produced the rewrite."""
 
-    def _make_drift(self, prompt_path="/repo/prompts/mod_python.prompt"):
+    def _make_drift(self, prompt_path="prompts/mod_python.prompt"):
         return DriftInfo(
             basename="mod",
             language="python",
@@ -1205,9 +1456,13 @@ class TestStructuralInvariants:
 
         pre = "<pdd.needed>\n% Goal\n"
         post = "<needed>\n% Goal\n"
+        def mock_run(cmd, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "--show-toplevel"]:
+                return subprocess.CompletedProcess(cmd, 0, "/repo\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
         with self._patch_git_show(pre), self._patch_read(post), \
-             patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+             patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_run:
             assert _enforce_structural_invariants(self._make_drift()) is False
 
         # Exactly one git checkout issued to revert the prompt file.
@@ -1216,7 +1471,7 @@ class TestStructuralInvariants:
             if c[0][0][:3] == ["git", "checkout", "HEAD"]
         ]
         assert len(checkout_calls) == 1
-        assert "/repo/prompts/mod_python.prompt" in checkout_calls[0][0][0]
+        assert checkout_calls[0][0][0][-1] == "prompts/mod_python.prompt"
 
     def test_invariants_pass_when_inputs_missing(self):
         """Mirrors churn gate permissive-on-missing behavior."""

@@ -209,10 +209,17 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                 raise
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing backtick include {file_path}: {e}")
+            if recursive:
+                return match.group(0)
             return f"```[Error processing include: {file_path}]```"
+        except OSError as e:
+            _dbg(f"OSError processing backtick include {file_path}: {e}")
+            return match.group(0)
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing backtick include {file_path}: {e}")
+            if recursive:
+                return match.group(0)
             return f"```[Error processing include: {file_path}]```"
     prev_text = ""
     current_text = text
@@ -423,10 +430,17 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 raise
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing XML include {file_path}: {e}")
+            if recursive:
+                return match.group(0)
             return f"[Error processing include: {file_path}]"
+        except OSError as e:
+            _dbg(f"OSError processing XML include {file_path}: {e}")
+            return match.group(0)
         except Exception as e:
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing XML include {file_path}: {e}")
+            if recursive:
+                return match.group(0)
             return f"[Error processing include: {file_path}]"
     prev_text = ""
     current_text = text

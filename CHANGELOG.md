@@ -1,17 +1,52 @@
+## v0.0.215 (2026-04-21)
+
+### Fix
+
+- resolve nested frontend page paths
+- guard OSError in both passes and add two-pass pipeline tests
+- backtick-escape bare <include> in prompts to prevent regex false-positive in pass 2
+- Preprocessing regex eats prompt content when literal <include> in prose exceeds 255 bytes
+- use repo-relative prompt paths for auto-heal reverts
+- anchor verdict regex to line start, accept plain Status: format
+- replace naive substring matching with structured verdict regex in _check_hard_stop (steps 2/6/8)
+- block commit when drift-heal revert fails
+- fail closed on partial auto-heal update
+
+### Refactor
+
+- resolve per-target configurations, fix meta-prompt framing, implement draft PR auto-heal, and standardize project root resolution
+
 ## v0.0.214 (2026-04-20)
 
 ### Fix
 
-- clean meta-framing from MCP artifact prompt + widen regression coverage
-- extend meta-prompt cleanup to utils/mcp scaffolding template
-- remove meta-prompt framing from generate_prompt template (#1240)
-- resolve update config per target
-- use default strength in update flows
-- target only mock-tainted server modules in test_prompts cleanup
+- **`update_main` — per-target config resolution in repo mode**: `update_main` used to write `strength`/`temperature` into `ctx.obj` once at entry, so a repo-mode run that spanned multiple contexts applied the first target's `.pddrc` values to every subsequent file pair. New `_resolve_update_runtime_config` helper resolves effective config per target (via `resolve_target_context` + `resolve_command_config`) using the prompt/code path's own cwd, preferring a non-default context match; `update_file_pair` takes `strength`/`temperature` kwargs and re-resolves on each pair. The single-file direct and `git` update paths also re-resolve using the resolved `construct_paths` context
+- **`update` flows — honor `DEFAULT_STRENGTH` when `--strength` omitted**: the legacy fallback `ctx.obj.get("strength", 0.5)` disagreed with the package-level `DEFAULT_STRENGTH` (0.75), so CLI `pdd update` invocations silently used `0.5` when no flag was set. All four call sites (`update_file_pair` generate and update branches, `update_main` direct-update branch, `update_main` git-update branch) now flow through `_resolve_update_runtime_config` which inherits the correct default
+- **`generate_prompt` template — strip meta-framing that caused meta-prompts**: the generic `generate_prompt.prompt` template ended with "Please produce production-ready prompt content..." and "Explain concisely what you are going to do (create a prompt for the ${MODULE} module...)"; downstream `pdd generate` runs interpreted this as a request to emit a prompt *about* generating the module instead of a prompt *for* generating it. Template reworded to "Identify the architecture entry for ${MODULE} and analyze its requirements..." and the trailing "produce production-ready prompt content" sentence is removed. Also cleans stale meta-framing lines from already-scaffolded artifacts (`examples/template_example/prompts/cache_manager_utility_Python.prompt`, `cost_tracker_utility_Python.prompt`, `pdd/prompts/resurface_check_Python.prompt`)
+- **`utils/mcp` scaffolding templates — extend meta-framing cleanup**: `utils/mcp/prompts/generate_prompt.prompt` and `utils/mcp/prompts/main_python.prompt` carried the same "write a prompt for generating..." framing. `main_python.prompt` is retargeted to "expert Python Engineer... write the complete code for `pdd_mcp_server/main.py`"; `generate_prompt.prompt` adds an explicit guard: "The content inside `<prompt>...</prompt>` must instruct the code-generating LLM to produce the Python implementation — it must NOT instruct the LLM to produce further prompt text about the module." New regression test `tests/test_issue_1240_generate_prompt_meta_framing.py` asserts the framing strings are absent from every `*generate_prompt*.prompt` template on disk (ignoring vendored `.pip_packages/` via `.gitignore`)
+- **`test_prompts` fixture — scope module purge to mock-tainted targets**: the previous teardown deleted any `pdd.server.*` module that wasn't in `original_modules`, which incidentally purged clean siblings (e.g. `pdd.server.executor`) that other test files had already bound by name in their globals. Replace the glob with an explicit allow-list — `pdd.server`, `pdd.server.app`, `pdd.server.routes`, `pdd.server.routes.prompts`, `pdd.server.routes.files` — covering only the transitively-imported modules that captured `MagicMock`-replaced `pdd.server.security` / `token_counter` references
+
+### Feat
+
+- **auto-heal — skip draft PR builds via in-build `draft-guard`**: auto-heal was re-running on every pushed WIP commit during active draft churn. `cloudbuild-auto-heal.yaml` adds a `draft-guard` step (between `mint-token` and `fetch-history`) that queries `GET /repos/gltanaka/pdd/pulls?state=open&head=gltanaka:<branch>&base=<base>` with the installation token; if the matched PR has `draft: true`, the guard touches `/ci-state/skip` and downstream steps exit immediately. Fails open on API errors (the guard is an efficiency policy, not a safety gate) and skips itself on push-to-`main` builds. `docs/ci-auto-heal.md` documents the new step, PR trigger behavior, and the post-`ready_for_review` first-run caveat (GCB triggers have no draft filter, so the first guaranteed full run is the next pushed commit or a manual rerun)
+- **`path_resolution` — `find_project_root_from_path` standalone + strong/weak markers**: adds top-level `find_project_root_from_path(start, max_levels=10)` that walks upward from a file or directory looking for project markers with priority: `.git` wins immediately (strong); `.pddrc`, `pyproject.toml`, `data/`, `.env` are tracked as weak markers where the *outermost* match wins but the walk continues in case a strong marker sits above. `PathResolver.resolve_project_root` adopts the same priority and widens `max_levels` from 5 to 10. Used across the auto-healed modules below so CSV caches, extract caches, and include-dedup all key off the same project root regardless of CWD
+- **`pddrc_initializer` — named `SCAFFOLD_DEFAULT_STRENGTH = 0.818` constant**: the scaffold default used to be a magic number in `STANDARD_DEFAULTS`. Hoisted to a module-level constant so `.pddrc` generation is deterministic and intentionally diverges from the env-overridable runtime `DEFAULT_STRENGTH` (0.75) — the scaffolded value is tuned to steer new projects toward Gemini 3.1 Pro. Standard defaults dict references the constant; YAML template and copy updated from `0.75` to `0.818`; new test `test_scaffold_default_strength_is_pinned` prevents accidental drift
+
+### Build
+
+- **auto-healed prompt/example drift (first batch)**: refresh prompt requirements and dependency blocks for `auto_include`, `extracts_prune`, `include_query_extractor`, `insert_includes`, `path_resolution`, `summarize_directory`. CSV-path handling is rewritten end-to-end: `summarize_directory` now emits project-root-relative `full_path` (falling back to absolute when no marker exists) and merges back pre-existing cache rows outside the current scan so cross-directory summaries aren't silently dropped. Cache lookup checks three path forms — normalized relative, `normpath`-absolute, and `realpath`-absolute — for symlink parity on macOS (`/var` → `/private/var`). `auto_include` drops the directory-prefix qualification pass (CSV paths are already root-relative) and resolves small-file size checks via `find_project_root_from_path`. `insert_includes` dedup resolves include paths via the project root instead of CWD. `include_query_extractor` cache keys normalize absolute paths to project-relative form before hashing so the same file keyed by different path styles hits the same cache entry. `extracts_prune` swaps `get_config()["project_root"]` for `find_project_root_from_path`
+- **auto-healed prompt/example drift (second batch)**: refresh `pddrc_initializer_python.prompt` to wire the new `SCAFFOLD_DEFAULT_STRENGTH` constant into standard defaults; refresh `main_gen_prompt.prompt` to declare `pdd.bug_main` and `pdd.bug_to_unit_test` dependencies used by the generated prompt; refresh `core/cli.py` help text to read `Default: {DEFAULT_STRENGTH} or .pddrc value.` (regression test added). A synthetic `pdd/setup.py` was emitted by the auto-heal pass against `pyproject.toml`
+- **`cloud-batch` source tarball includes `utils/`**: `ci/cloud-batch/submit.sh` adds `utils` to `SOURCE_PATHS` so MCP scaffolding templates (e.g. `utils/mcp/prompts/*`) are available inside the cloud test image; previously the `test_issue_1240_generate_prompt_meta_framing.py` regression could not run in cloud because the `utils/` tree was missing from the uploaded tarball
+- refresh `ci/cloud-batch/test-durations.json` benchmarks and `.cloud-image-hash`
+- `.gitignore`: ignore `.pip_packages/` (vendored Python packages created by `pdd sync` worktree setup)
 
 ### Refactor
 
-- update git_update prompt requirements and architecture dependencies
+- **`git_update_python.prompt` — tightened requirements, removed `agentic_common` dependency**: prompt requirements section is rewritten from a 6-item bullet list to 5 denser bullets that fold state management, routing logic, git safety, and output into per-step directives; the `pdd.agentic_common` module dependency is dropped from the prompt's `<module_dependencies>` block (its behavior is already transitively covered via `pdd.agentic_update`). `architecture.json` gains `llm_invoke_python.prompt` as an `agentic_common` dependency and adds the four drift-heal dependencies (`sync_determine_operation`, `operation_log`, `agentic_sync_runner`, `user_story_tests`) to `ci_drift_heal_python.prompt`. Non-ASCII escape sequences (`—`, `×`) in architecture descriptions are normalized to literal UTF-8
+
+### Docs
+
+- `ci-auto-heal.md`: add `draft-guard` to the pipeline diagram; document PR trigger behavior (draft PRs short-circuit in-build), the API lookup used (`GET /pulls` with `head`/`base` match), fail-open on API errors, and the `ready_for_review` post-transition rerun caveat
 
 ## v0.0.213 (2026-04-19)
 
