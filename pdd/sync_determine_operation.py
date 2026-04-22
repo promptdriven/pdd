@@ -947,8 +947,20 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_path = project_root / f"{example_dir}{code_stem}_example.{extension}"
                 test_path = project_root / f"{test_dir}test_{code_stem}.{extension}"
 
+                # If the flattened prompt basename already has corresponding example/test
+                # artifacts, prefer those over the architecture filepath stem. This keeps
+                # command summaries and sync behavior aligned with repos that intentionally
+                # namespace files such as lib_sse_example.ts or test_api_route.ts.
+                if name != code_stem:
+                    basename_example_path = project_root / f"{example_dir}{name}_example.{extension}"
+                    basename_test_path = project_root / f"{test_dir}test_{name}.{extension}"
+                    if basename_example_path.exists():
+                        example_path = basename_example_path
+                    if basename_test_path.exists():
+                        test_path = basename_test_path
+
                 test_dir_path = test_path.parent
-                test_stem = f"test_{code_stem}"
+                test_stem = glob.escape(test_path.stem)
                 if test_dir_path.exists():
                     matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
                 else:
