@@ -924,3 +924,40 @@ class TestTestOrchestratorSharedDetection:
         from pdd.agentic_test_orchestrator import _check_hard_stop
         result = _check_hard_stop(5, "PLAN_BLOCKED: insufficient coverage data")
         assert result is not None, "plan_blocked check should be case-insensitive"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1263: Test orchestrator call-boundary verification
+# ---------------------------------------------------------------------------
+
+def test_test_orchestrator_check_hard_stop_patterns_functional():
+    """Test orchestrator's _check_hard_stop patterns remain functional and are not
+    inadvertently broken by parallel changes to the change orchestrator's version.
+
+    Confirms the boundary between the two orchestrators' _check_hard_stop implementations.
+    """
+    from pdd.agentic_test_orchestrator import _check_hard_stop
+
+    # Step 1: duplicate detection still works via substring
+    result = _check_hard_stop(1, "This appears to be a Duplicate of #42 based on the description.")
+    assert result is not None, (
+        "Test orchestrator step 1 duplicate detection should still work"
+    )
+
+    # Step 5: PLAN_BLOCKED detection still works
+    result = _check_hard_stop(5, "PLAN_BLOCKED: insufficient test coverage data")
+    assert result is not None, (
+        "Test orchestrator step 5 PLAN_BLOCKED detection should still work"
+    )
+
+    # Step 3: STOP_CONDITION tag detection works
+    result = _check_hard_stop(3, "STOP_CONDITION: Needs More Info")
+    assert result is not None, (
+        "Test orchestrator step 3 STOP_CONDITION detection should still work"
+    )
+
+    # Step 3: casual mention without STOP_CONDITION tag must NOT trigger
+    result = _check_hard_stop(3, "needs more info mentioned casually")
+    assert result is None, (
+        "Test orchestrator step 3 casual mention must not trigger without STOP_CONDITION tag"
+    )

@@ -78,6 +78,10 @@ class HealResult:
     error: str = ""
 
 
+class PromptRevertError(RuntimeError):
+    """Raised when a failed heal cannot safely revert prompt edits."""
+
+
 def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     """Build environment dict for subprocess calls in CI/headless mode."""
     env = os.environ.copy()
@@ -542,16 +546,7 @@ def _enforce_prompt_churn_gate(drift: DriftInfo) -> bool:
         f"[red]  Rewrite was likely destructive — see PR gltanaka/pdd#1187. "
         f"Reverting {drift.prompt_path} and skipping this module.[/red]"
     )
-    try:
-        subprocess.run(
-            ["git", "checkout", "HEAD", "--", drift.prompt_path],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except Exception as e:
-        console.print(f"[yellow]⚠ Could not revert {drift.prompt_path}: {e}[/yellow]")
+    _revert_prompt_file(drift)
     return False
 
 
@@ -599,6 +594,35 @@ def _get_skipped_invariants() -> set:
     return requested & _VALID_SKIPPABLE_INVARIANTS
 
 
+def _git_repo_relative_path(file_path: str) -> Optional[str]:
+    """Return a git-friendly repo-relative path for `file_path`.
+
+    Absolute paths from get_pdd_file_paths() work for filesystem IO but not for
+    `git checkout HEAD -- <path>` in Cloud Build. Convert absolute paths to a
+    repo-relative POSIX form while leaving already-relative paths untouched.
+    Returns None when the repo root cannot be determined or the path is outside
+    the repo.
+    """
+    try:
+        path = Path(file_path)
+        if not path.is_absolute():
+            return path.as_posix()
+
+        repo_root_proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if repo_root_proc.returncode != 0:
+            return None
+
+        repo_root = Path(repo_root_proc.stdout.strip()).resolve()
+        return path.resolve().relative_to(repo_root).as_posix()
+    except Exception:
+        return None
+
+
 def _git_show_prompt_at_head(prompt_path: str) -> Optional[str]:
     """Return the committed HEAD content of `prompt_path`, or None on failure.
 
@@ -608,17 +632,9 @@ def _git_show_prompt_at_head(prompt_path: str) -> Optional[str]:
     the path against the repo root first, then hand the relative form to git.
     """
     try:
-        repo_root_proc = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if repo_root_proc.returncode != 0:
+        rel_str = _git_repo_relative_path(prompt_path)
+        if rel_str is None:
             return None
-        repo_root = Path(repo_root_proc.stdout.strip())
-        rel = Path(prompt_path).resolve().relative_to(repo_root.resolve())
-        rel_str = rel.as_posix()
         show_proc = subprocess.run(
             ["git", "show", f"HEAD:{rel_str}"],
             capture_output=True,
@@ -724,17 +740,72 @@ def _enforce_structural_invariants(drift: DriftInfo) -> bool:
     console.print(
         f"[red]  Reverting {drift.prompt_path} — see PR gltanaka/pdd#1187.[/red]"
     )
+    _revert_prompt_file(drift)
+    return False
+
+
+def _revert_prompt_file(drift: DriftInfo) -> None:
+    """Restore a prompt file to HEAD after a failed heal attempt.
+
+    Raises:
+        PromptRevertError: If the prompt path is unavailable, git checkout fails,
+            or the prompt still appears modified afterwards.
+    """
+    if not drift.prompt_path:
+        msg = (
+            f"Cannot safely revert {drift.basename}: prompt_path is unavailable. "
+            "Blocking commit phase to avoid publishing a partial heal."
+        )
+        console.print(f"[red]✗ {msg}[/red]")
+        raise PromptRevertError(msg)
     try:
-        subprocess.run(
-            ["git", "checkout", "HEAD", "--", drift.prompt_path],
+        rel_prompt_path = _git_repo_relative_path(drift.prompt_path)
+        if rel_prompt_path is None:
+            msg = (
+                f"Cannot safely revert {drift.prompt_path}: could not resolve a "
+                "repo-relative git path. Blocking commit phase to avoid "
+                "publishing a partial heal."
+            )
+            console.print(f"[red]✗ {msg}[/red]")
+            raise PromptRevertError(msg)
+
+        restore_result = subprocess.run(
+            ["git", "checkout", "HEAD", "--", rel_prompt_path],
             check=False,
             capture_output=True,
             text=True,
             timeout=30,
         )
+        if restore_result.returncode != 0:
+            stderr = (restore_result.stderr or "").strip()
+            msg = (
+                f"Failed to revert {drift.prompt_path} after heal failure"
+                + (f": {stderr}" if stderr else ".")
+            )
+            console.print(f"[red]✗ {msg}[/red]")
+            raise PromptRevertError(msg)
+
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain", "--", rel_prompt_path],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if status_result.returncode != 0 or (status_result.stdout or "").strip():
+            stderr = (status_result.stderr or "").strip()
+            msg = (
+                f"Prompt {drift.prompt_path} still appears dirty after revert"
+                + (f": {stderr}" if stderr else ".")
+            )
+            console.print(f"[red]✗ {msg}[/red]")
+            raise PromptRevertError(msg)
     except Exception as e:
-        console.print(f"[yellow]⚠ Could not revert {drift.prompt_path}: {e}[/yellow]")
-    return False
+        if isinstance(e, PromptRevertError):
+            raise
+        msg = f"Could not revert {drift.prompt_path}: {e}"
+        console.print(f"[red]✗ {msg}[/red]")
+        raise PromptRevertError(msg) from e
 
 
 def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
@@ -754,10 +825,14 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     """
     if drift.operation == "update":
         # Step 1: Update the prompt from code
-        if drift.code_path:
-            update_cmd = ["pdd", "update", drift.code_path]
-        else:
-            update_cmd = ["pdd", "update"]
+        if not drift.code_path:
+            console.print(
+                f"[red]✗ Refusing to run repo-wide `pdd update` for {drift.basename}: "
+                "code_path could not be resolved.[/red]"
+            )
+            return False
+
+        update_cmd = ["pdd", "update", drift.code_path]
 
         if not _run_pdd_command(update_cmd, env, f"Healing {drift.basename} (update)"):
             return False
@@ -790,12 +865,14 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             return True
         sync_cmd = ["pdd", "sync", drift.basename]
         if not _run_pdd_command(sync_cmd, env, f"Syncing {drift.basename} (example)"):
-            # Update succeeded but sync failed — still count as partial success
-            # so the prompt update gets committed.
+            # Update succeeded but sync failed. Revert the prompt update so
+            # commit_and_push() cannot stage and publish a half-healed module.
             console.print(
-                f"[yellow]⚠ Prompt updated but example sync failed for "
-                f"{drift.basename} — example may need a follow-up sync[/yellow]"
+                f"[red]✗ Follow-up example sync failed for {drift.basename}. "
+                "Reverting prompt update and marking the module failed.[/red]"
             )
+            _revert_prompt_file(drift)
+            return False
         return True
 
     elif drift.operation == "example":
@@ -954,6 +1031,7 @@ def main(
         failed_modules: List[str] = []
         skipped_modules: List[str] = []
         any_failure = False
+        unsafe_to_commit = False
 
         for drift in all_drifts:
             # Budget check before each heal
@@ -968,7 +1046,17 @@ def main(
             # Clear cost CSV before each operation to get per-operation cost
             Path(cost_csv_path).write_text("", encoding="utf-8")
 
-            success = heal_module(drift, env)
+            revert_failed = False
+            try:
+                success = heal_module(drift, env)
+            except PromptRevertError as e:
+                console.print(
+                    "[red]✗ Prompt revert failed; blocking commit phase to avoid "
+                    "publishing partial heal changes.[/red]"
+                )
+                unsafe_to_commit = True
+                revert_failed = True
+                success = False
 
             # Parse cost from this operation
             operation_cost = _parse_cost_from_csv(cost_csv_path)
@@ -985,7 +1073,8 @@ def main(
             elif success:
                 healed_modules.append(drift.basename)
             else:
-                failed_modules.append(drift.basename)
+                if not revert_failed or drift.basename not in failed_modules:
+                    failed_modules.append(drift.basename)
                 any_failure = True
 
         # Print skipped modules warning
@@ -1010,7 +1099,12 @@ def main(
     console.print(f"  Total cost: ${cumulative_cost:.4f}")
 
     # --- Commit Phase ---
-    if healed_modules:
+    if unsafe_to_commit:
+        console.print(
+            "\n[red]✗ Skipping commit phase because a failed heal could not be "
+            "safely reverted.[/red]"
+        )
+    elif healed_modules:
         console.print("\n[bold]Phase 3: Committing changes...[/bold]\n")
         commit_success = commit_and_push(healed_modules, skip_ci)
         if not commit_success:

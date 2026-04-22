@@ -36,6 +36,7 @@ except ImportError:
 # Import PDD internal modules
 from pdd.construct_paths import (
     _detect_context,
+    _detect_context_from_basename,
     _extract_prefix_from_prompts_dir,
     _find_pddrc_file,
     _get_relative_basename,
@@ -173,6 +174,107 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
     return joined
 
 
+def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
+    """Return the on-disk path for ``candidate`` with case-insensitive filename matching."""
+    if candidate.exists():
+        return candidate
+    if candidate.parent.is_dir():
+        target_lower = candidate.name.lower()
+        for sibling in candidate.parent.iterdir():
+            if sibling.is_file() and sibling.name.lower() == target_lower:
+                return sibling
+    return None
+
+
+def _resolve_context_name_for_basename(
+    basename: str,
+    context_override: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the context for a basename when no explicit override is provided."""
+    if context_override:
+        return context_override
+
+    pddrc_path = _find_pddrc_file()
+    if not pddrc_path:
+        return None
+
+    try:
+        config = _load_pddrc_config(pddrc_path)
+    except ValueError:
+        return None
+
+    return _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
+
+
+def _prompt_basename_candidates(
+    basename: str,
+    context_name: Optional[str] = None,
+    include_simple_name: bool = False,
+) -> List[str]:
+    """Return prompt-relative basename candidates ordered from most to least specific."""
+    candidates: List[str] = []
+
+    def _add(value: Optional[str]) -> None:
+        if value and value not in candidates:
+            candidates.append(value)
+
+    _add(basename)
+
+    if context_name:
+        _add(_relative_basename_for_context(basename, context_name))
+
+    if include_simple_name:
+        _add(basename.split("/")[-1] if "/" in basename else basename)
+
+    return candidates
+
+
+def _module_filepath_matches_basename(
+    module_filepath: Optional[str],
+    basename: str,
+    context_name: Optional[str] = None,
+) -> bool:
+    """Return True when a flat architecture filename still clearly maps to a nested basename."""
+    if not module_filepath:
+        return False
+
+    relative_basename = _relative_basename_for_context(basename, context_name)
+    basename_parts = Path(relative_basename).parts
+    filepath_parts = Path(module_filepath).with_suffix("").parts
+    if not basename_parts or not filepath_parts:
+        return False
+
+    if len(basename_parts) >= 2 and len(filepath_parts) >= 2:
+        return tuple(filepath_parts[-2:]) == tuple(basename_parts[-2:])
+
+    return filepath_parts[-1] == basename_parts[-1]
+
+
+def _overlay_configured_output_paths(
+    result: Dict[str, Path],
+    outputs_config: Dict[str, Any],
+    output_paths: Dict[str, str],
+    basename: str,
+    language: str,
+    context_name: Optional[str] = None,
+) -> Dict[str, Path]:
+    """Overlay construct_paths-derived output locations onto template-derived paths."""
+    merged = dict(result)
+
+    code_path = output_paths.get("generate_output_path") or output_paths.get("output") or output_paths.get("code_file")
+    if "code" not in outputs_config and code_path:
+        relative_basename = _relative_basename_for_context(basename, context_name)
+        dir_prefix, name_part = _extract_name_part(relative_basename)
+        extension = get_extension(language)
+        code_path_obj = Path(code_path)
+        if code_path.endswith("/") or code_path_obj.suffix == "":
+            merged["code"] = code_path_obj / dir_prefix / f"{name_part}.{extension}"
+        else:
+            merged["code"] = code_path_obj
+
+    return merged
+
+
 def _find_prompt_file(
     basename: str,
     language: str,
@@ -203,17 +305,23 @@ def _find_prompt_file(
         Actual filesystem Path with correct casing, or None if not found.
     """
     name = basename.split('/')[-1] if '/' in basename else basename
+    context_name = _resolve_context_name_for_basename(basename, context_override)
+    basename_candidates = _prompt_basename_candidates(
+        basename,
+        context_name=context_name,
+        include_simple_name="/" not in basename,
+    )
 
     # Resolve context prefix from .pddrc for scoping recursive searches.
     # e.g., context 'backend-utils' with prompts_dir='prompts/backend/utils'
     # yields context_prefix='backend/utils' so we prefer matches under that path.
     context_prefix = None
-    if context_override:
+    if context_name:
         pddrc_path = _find_pddrc_file()
         if pddrc_path:
             try:
                 config = _load_pddrc_config(pddrc_path)
-                context_config = config.get('contexts', {}).get(context_override, {})
+                context_config = config.get('contexts', {}).get(context_name, {})
                 prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
                 if prompts_dir_config:
                     from pdd.construct_paths import _extract_prefix_from_prompts_dir
@@ -222,22 +330,16 @@ def _find_prompt_file(
                 pass
 
     # --- Step 1: Direct path (fast path for simple/flat projects) ---
-    direct = prompts_root / f"{name}_{language}.prompt"
-    if direct.exists():
-        return direct
-
-    # --- Step 2: Case-insensitive match in prompts_root ---
-    target_lower = f"{name}_{language}.prompt".lower()
-    if prompts_root.is_dir():
-        for candidate in prompts_root.iterdir():
-            if candidate.is_file() and candidate.name.lower() == target_lower:
-                return candidate
+    for candidate_basename in basename_candidates:
+        resolved = _case_insensitive_path_lookup(prompts_root / f"{candidate_basename}_{language}.prompt")
+        if resolved:
+            return resolved
 
     # --- Step 3: Architecture.json hint → recursive search ---
     if architecture_path and architecture_path.exists():
         _, arch_filename = _get_filepath_from_architecture(
             architecture_path,
-            f"{name}_{language}.prompt",
+            f"{basename_candidates[0]}_{language}.prompt",
             basename=basename,
             language=language,
         )
@@ -280,16 +382,18 @@ def _find_prompt_file(
     # rglob("*.prompt") + manual filtering because rglob patterns are
     # case-sensitive on Linux, so we can't rely on the glob pattern for
     # basenames like "dashboard" vs on-disk "Dashboard".
-    name_lower = name.lower()
     lang_lower = language.lower()
-    target_lower = f"{name_lower}_{lang_lower}.prompt"
     dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
     matches = []
     for candidate in prompts_root.rglob("*.prompt"):
         if not candidate.is_file():
             continue
-        if candidate.name.lower() == target_lower:
-            matches.append(candidate)
+        candidate_lower = candidate.name.lower()
+        for candidate_basename in basename_candidates:
+            target_lower = f"{candidate_basename.split('/')[-1].lower()}_{lang_lower}.prompt"
+            if candidate_lower == target_lower:
+                matches.append(candidate)
+                break
     if matches:
         if len(matches) > 1:
             # Prefer match within context prefix (e.g., backend/utils)
@@ -342,6 +446,8 @@ def _get_filepath_from_architecture(
         if not isinstance(modules, list):
             return None
 
+        context_name = _resolve_context_name_for_basename(basename) if basename else None
+
         # Try exact filename match first
         for module in modules:
             if not isinstance(module, dict):
@@ -359,14 +465,37 @@ def _get_filepath_from_architecture(
 
         # Try basename + language match if provided
         if basename and language:
-            expected_filename = f"{basename}_{language}.prompt"
-            expected_filename_lower = expected_filename.lower()
-            for module in modules:
-                if not isinstance(module, dict):
-                    continue
-                module_filename = module.get("filename", "")
-                if module_filename.lower() == expected_filename_lower:
-                    return module.get("filepath"), module.get("filename")
+            basename_candidates = _prompt_basename_candidates(
+                basename,
+                context_name=context_name,
+                include_simple_name="/" not in basename,
+            )
+
+            for candidate_basename in basename_candidates:
+                expected_filename = f"{candidate_basename}_{language}.prompt"
+                expected_filename_lower = expected_filename.lower()
+                for module in modules:
+                    if not isinstance(module, dict):
+                        continue
+                    module_filename = module.get("filename", "")
+                    if module_filename.lower() == expected_filename_lower:
+                        return module.get("filepath"), module.get("filename")
+
+            # Nested basenames must not borrow an unrelated flat architecture entry.
+            # Only accept a flat filename match when the module filepath also aligns
+            # with the basename tail (e.g. github/page -> .../github/page.tsx).
+            if "/" in basename:
+                simple_filename_lower = f"{basename.split('/')[-1]}_{language}.prompt".lower()
+                matching_modules = [
+                    module for module in modules
+                    if isinstance(module, dict) and module.get("filename", "").lower() == simple_filename_lower
+                ]
+                safe_matches = [
+                    module for module in matching_modules
+                    if _module_filepath_matches_basename(module.get("filepath"), basename, context_name=context_name)
+                ]
+                if len(safe_matches) == 1:
+                    return safe_matches[0].get("filepath"), safe_matches[0].get("filename")
 
         return None, None
 
@@ -736,6 +865,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Use construct_paths to get configuration-aware paths
         prompts_root = _resolve_prompts_root(prompts_dir)
         name = basename.split('/')[-1] if '/' in basename else basename
+        resolved_context_name = _resolve_context_name_for_basename(basename, context_override)
+        construct_paths_basename = _relative_basename_for_context(basename, resolved_context_name)
 
         # Issue #225: Check architecture.json for filepath FIRST
         arch_path = _find_architecture_json()
@@ -773,7 +904,12 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # If architecture.json has a filepath, use it for code/test/example paths
         arch_filepath = None
         if arch_path:
+            prompt_path_obj = Path(prompt_path)
             prompt_filename_for_lookup = Path(prompt_path).name
+            try:
+                prompt_filename_for_lookup = str(prompt_path_obj.resolve().relative_to(prompts_root.resolve())).replace(os.sep, "/")
+            except ValueError:
+                pass
             arch_filepath, _ = _get_filepath_from_architecture(
                 arch_path,
                 prompt_filename_for_lookup,
@@ -840,7 +976,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     force=True,
                     quiet=True,
                     command="sync",
-                    command_options={"basename": basename, "language": language},
+                    command_options={"basename": construct_paths_basename, "language": language},
                     context_override=context_override,
                     path_resolution_mode="cwd"
                 )
@@ -862,6 +998,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         extension=extension,
                         outputs_config=outputs_config,
                         prompt_path=prompt_path
+                    )
+                    result = _overlay_configured_output_paths(
+                        result,
+                        outputs_config,
+                        output_paths,
+                        basename,
+                        language,
+                        context_name=context_name,
                     )
                     logger.debug(f"get_pdd_file_paths returning (template-based): {result}")
                     return result
@@ -974,7 +1118,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             force=True,  # Use force=True to avoid interactive prompts during sync
             quiet=True,
             command="sync",  # Use sync command to get more tolerant path handling
-            command_options={"basename": basename, "language": language},
+            command_options={"basename": construct_paths_basename, "language": language},
             context_override=context_override,
             path_resolution_mode="cwd"
         )
@@ -993,6 +1137,14 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 extension=extension,
                 outputs_config=outputs_config,
                 prompt_path=prompt_path
+            )
+            result = _overlay_configured_output_paths(
+                result,
+                outputs_config,
+                output_file_paths,
+                basename,
+                language,
+                context_name=context_name,
             )
             logger.debug(f"get_pdd_file_paths returning (template-based, prompt exists): {result}")
             return result

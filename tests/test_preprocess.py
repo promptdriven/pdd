@@ -2460,3 +2460,134 @@ def test_includes_processed_before_shell(tmp_path, monkeypatch) -> None:
     # (Though shell sees "echo included" as the command after include resolves)
     mock_run.assert_called_once()
     assert "included" in result
+
+
+# =============================================================================
+# Issue #1261: Exception handlers missing recursive guard
+#
+# The FileNotFoundError handler in process_include_tags correctly preserves
+# original text when recursive=True (return match.group(0)), but the ValueError
+# (non-circular) and generic Exception handlers unconditionally replace the
+# matched span with "[Error processing include: ...]" error markers — even
+# during the recursive pass where unresolved tags should be left intact.
+# The same bug exists in process_backtick_includes.
+# =============================================================================
+
+
+def test_xml_include_oserror_recursive_preserves_tag() -> None:
+    """OSError during recursive pass should preserve the original XML include tag.
+
+    This is the primary bug from issue #1261: when a bare <include> in prose
+    causes the regex to capture >255 bytes as a 'filename', open() raises
+    OSError('File name too long'). The generic Exception handler (line 427-430)
+    unconditionally replaces the match with an error marker instead of
+    preserving the original text like the FileNotFoundError handler does.
+    """
+    prompt = "<include>somefile.txt</include>"
+    with patch('builtins.open', side_effect=OSError(36, "File name too long")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "[Error processing include: somefile.txt]"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+# Scope addition: covers expansion item "process_include_tags ValueError
+# non-circular handler (line 426) missing recursive guard" identified by Step 6
+def test_xml_include_valueerror_non_circular_recursive_preserves_tag() -> None:
+    """Non-circular ValueError during recursive pass should preserve the original XML include tag.
+
+    The ValueError handler at line 421-426 re-raises circular-include errors but
+    unconditionally returns an error marker for all other ValueErrors, even when
+    recursive=True. It should preserve the original tag like FileNotFoundError does.
+    """
+    prompt = "<include>somefile.txt</include>"
+    with patch('pdd.preprocess.get_file_path', side_effect=ValueError("Invalid path encoding")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "[Error processing include: somefile.txt]"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+# Scope addition: covers expansion item "process_backtick_includes Exception
+# handler (line 216) missing recursive guard" identified by Step 6
+def test_backtick_include_oserror_recursive_preserves_tag() -> None:
+    """OSError during recursive pass should preserve the original backtick include tag.
+
+    The generic Exception handler in process_backtick_includes (line 213-216)
+    unconditionally returns an error marker instead of preserving the original
+    text when recursive=True.
+    """
+    prompt = "```<somefile.txt>```"
+    with patch('builtins.open', side_effect=OSError(36, "File name too long")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "```[Error processing include: somefile.txt]```"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+# Scope addition: covers expansion item "process_backtick_includes ValueError
+# non-circular handler (line 212) missing recursive guard" identified by Step 6
+def test_backtick_include_valueerror_non_circular_recursive_preserves_tag() -> None:
+    """Non-circular ValueError during recursive pass should preserve the original backtick include tag.
+
+    The ValueError handler in process_backtick_includes (line 207-212) re-raises
+    circular-include errors but unconditionally returns an error marker for all
+    other ValueErrors, even when recursive=True.
+    """
+    prompt = "```<somefile.txt>```"
+    with patch('pdd.preprocess.get_file_path', side_effect=ValueError("Invalid path encoding")):
+        result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: returns "```[Error processing include: somefile.txt]```"
+    # FIX: should return original text when recursive=True
+    assert result == prompt
+
+
+def test_bare_include_in_prose_over_255_bytes_preserves_content(tmp_path, monkeypatch) -> None:
+    """Realistic reproduction: bare <include> in prose with >255 bytes to next </include>.
+
+    This is the exact scenario from issue #1261. A prompt mentions <include> in
+    prose text (without backtick escaping). The preprocessing regex captures the
+    text between the bare <include> and the next real </include> as a 'filename'.
+    When that text exceeds 255 bytes, open() raises OSError('File name too long'),
+    and the generic Exception handler destructively replaces the entire matched
+    span with an error marker — eating all the requirement text in between.
+    """
+    monkeypatch.chdir(tmp_path)
+    padding = "A" * 300
+    # The regex will match from <include> to </include>, capturing the 300+ byte
+    # "filename" (the prose text + padding). open() raises OSError for the
+    # overlong filename component.
+    prompt = f"The system parses <include> tags from files {padding}</include> and more text."
+    result = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    # BUG: the error marker replaces the entire matched span, eating the padding
+    # FIX: recursive=True should preserve the original text
+    assert "[Error processing include:" not in result
+    assert padding in result
+
+
+def test_two_pass_xml_include_oserror_preserves_content(tmp_path, monkeypatch) -> None:
+    """Two-pass pipeline: bare <include> in prose survives both passes.
+
+    Exercises the real code_generator_main.py flow: pass 1 (recursive=True)
+    then pass 2 (recursive=False). Both passes must preserve the original text
+    when the regex false-matches prose as a filename.
+    """
+    monkeypatch.chdir(tmp_path)
+    padding = "A" * 300
+    prompt = f"The system parses <include> tags from files {padding}</include> and more text."
+    pass1 = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    pass2 = preprocess(pass1, recursive=False, double_curly_brackets=False)
+    assert "[Error processing include:" not in pass2
+    assert padding in pass2
+    assert "and more text." in pass2
+
+
+def test_two_pass_backtick_include_oserror_preserves_content(tmp_path, monkeypatch) -> None:
+    """Two-pass pipeline: backtick-escaped prose survives both passes."""
+    monkeypatch.chdir(tmp_path)
+    padding = "B" * 300
+    prompt = f"Use regex `r'<include>(.*?)</include>'` to parse {padding} from files."
+    pass1 = preprocess(prompt, recursive=True, double_curly_brackets=False)
+    pass2 = preprocess(pass1, recursive=False, double_curly_brackets=False)
+    assert "[Error processing include:" not in pass2
+    assert padding in pass2

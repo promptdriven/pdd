@@ -3128,18 +3128,22 @@ def test_check_hard_stop_case_insensitive_substring_matching():
     """Non-clarification steps use case-insensitive substring matching."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
-    # Step 2: "Already Implemented" (case-insensitive)
-    assert _check_hard_stop(2, "already implemented") is not None
-    assert _check_hard_stop(2, "ALREADY IMPLEMENTED") is not None
-    assert _check_hard_stop(2, "Already Implemented") is not None
+    # Step 2: matches verdict line (bold and plain, case-insensitive)
+    assert _check_hard_stop(2, "**Status:** already implemented") is not None
+    assert _check_hard_stop(2, "**Status:** ALREADY IMPLEMENTED") is not None
+    assert _check_hard_stop(2, "**Result:** Already Implemented") is not None
+    assert _check_hard_stop(2, "Status: Already Implemented") is not None
+    assert _check_hard_stop(2, "Result: Already Implemented") is not None
 
-    # Step 6: "No Dev Units Found" (case-insensitive)
-    assert _check_hard_stop(6, "no dev units found") is not None
-    assert _check_hard_stop(6, "NO DEV UNITS FOUND") is not None
+    # Step 6: matches verdict line (bold and plain, case-insensitive)
+    assert _check_hard_stop(6, "**Status:** No Dev Units Found") is not None
+    assert _check_hard_stop(6, "**Status:** NO DEV UNITS FOUND") is not None
+    assert _check_hard_stop(6, "Status: No Dev Units Found") is not None
 
-    # Step 8: "No Changes Required" (case-insensitive)
-    assert _check_hard_stop(8, "no changes required") is not None
-    assert _check_hard_stop(8, "NO CHANGES REQUIRED") is not None
+    # Step 8: matches verdict line (bold and plain, case-insensitive)
+    assert _check_hard_stop(8, "**Status:** No Changes Required") is not None
+    assert _check_hard_stop(8, "**Status:** NO CHANGES REQUIRED") is not None
+    assert _check_hard_stop(8, "Status: No Changes Required") is not None
 
 
 def test_check_hard_stop_universal_stop_condition_tag():
@@ -3171,9 +3175,9 @@ def test_check_hard_stop_case_insensitive_fallbacks():
 
     assert _check_hard_stop(1, "DUPLICATE OF #42") is not None
     assert _check_hard_stop(1, "duplicate of #42") is not None
-    assert _check_hard_stop(2, "ALREADY IMPLEMENTED") is not None
-    assert _check_hard_stop(6, "NO DEV UNITS FOUND") is not None
-    assert _check_hard_stop(8, "NO CHANGES REQUIRED") is not None
+    assert _check_hard_stop(2, "**Status:** ALREADY IMPLEMENTED") is not None
+    assert _check_hard_stop(6, "**Status:** NO DEV UNITS FOUND") is not None
+    assert _check_hard_stop(8, "**Status:** NO CHANGES REQUIRED") is not None
     assert _check_hard_stop(9, "FAIL: build error") is not None
 
 
@@ -4638,3 +4642,254 @@ def test_consecutive_provider_failures_abort(mock_dependencies, temp_cwd):
     assert "agent providers unavailable" in msg
     # Should abort after 3 consecutive failures
     assert call_count["n"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Issue #1263: _check_hard_stop step 2 false positive on negated phrases
+# ---------------------------------------------------------------------------
+
+def test_check_hard_stop_step2_negated_already_implemented():
+    """Step 2 must NOT false-positive on negated 'already implemented' in discussion text.
+
+    Production regression: job mDON5a7Hnu7UAnhMBWEA was stopped with 'Already implemented'
+    when the LLM output was "Neither feature is already implemented, so the workflow should
+    continue to Step 3." — verdict was Not Implemented, but substring match killed the run.
+    """
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        2,
+        "Neither feature is already implemented, so the workflow should continue to Step 3."
+    )
+    assert result is None, (
+        "Bug #1263: Negated 'already implemented' in discussion text should not trigger hard stop"
+    )
+
+
+def test_check_hard_stop_step2_structured_status_triggers_stop():
+    """Step 2 must stop when the structured **Status:** verdict line says Already Implemented."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        2,
+        "Analysis complete.\n\n**Status:** Already Implemented\n\nBoth features were found in the codebase."
+    )
+    assert result is not None, (
+        "Structured **Status:** Already Implemented verdict must trigger hard stop"
+    )
+    assert result == "Already implemented"
+
+
+def test_check_hard_stop_step2_result_variant_triggers_stop():
+    """Step 2 must stop when **Result:** Already Implemented is used (variant keyword)."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(2, "**Result:** Already Implemented")
+    assert result is not None, (
+        "**Result:** Already Implemented variant must trigger hard stop"
+    )
+    assert result == "Already implemented"
+
+
+def test_check_hard_stop_step2_category_name_no_false_positive():
+    """Step 2 must NOT false-positive when 'Already Implemented' appears as a category name."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        2,
+        "Checking the 'Already Implemented' category in the tracker. "
+        "These are all new features that need development."
+    )
+    assert result is None, (
+        "Bug #1263: 'Already Implemented' as a quoted category name should not trigger hard stop"
+    )
+
+
+# Scope addition: covers expansion item "Step 6 line 634 naive substring 'no dev units found'
+# needs regex hardening to target **Status:** verdict line" identified by Step 6
+def test_check_hard_stop_step6_negated_no_dev_units_found():
+    """Step 6 must NOT false-positive on negated 'no dev units found' in discussion text."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        6,
+        "It is not the case that no dev units found — we identified 3 dev units for this change."
+    )
+    assert result is None, (
+        "Expansion #1263: Negated 'no dev units found' in discussion text should not trigger hard stop"
+    )
+
+
+# Scope addition: covers expansion item "Step 6 line 634 naive substring 'no dev units found'
+# needs regex hardening to target **Status:** verdict line" identified by Step 6
+def test_check_hard_stop_step6_structured_status_triggers_stop():
+    """Step 6 must stop when **Status:** No Dev Units Found verdict is present."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        6,
+        "Analysis complete.\n\n**Status:** No Dev Units Found"
+    )
+    assert result is not None, (
+        "Structured **Status:** No Dev Units Found verdict must trigger hard stop"
+    )
+    assert result == "No dev units found"
+
+
+# Scope addition: covers expansion item "Step 8 line 640 naive substring 'no changes required'
+# needs regex hardening to target **Status:** verdict line" identified by Step 6
+def test_check_hard_stop_step8_negated_no_changes_required():
+    """Step 8 must NOT false-positive on negated 'no changes required' in discussion text."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        8,
+        "This does not mean no changes required; several files need updates to handle the new edge case."
+    )
+    assert result is None, (
+        "Expansion #1263: Negated 'no changes required' in discussion text should not trigger hard stop"
+    )
+
+
+# Scope addition: covers expansion item "Step 8 line 640 naive substring 'no changes required'
+# needs regex hardening to target **Status:** verdict line" identified by Step 6
+def test_check_hard_stop_step8_structured_status_triggers_stop():
+    """Step 8 must stop when **Status:** No Changes Required verdict is present."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    result = _check_hard_stop(
+        8,
+        "**Status:** No Changes Required\nThe codebase already handles this correctly."
+    )
+    assert result is not None, (
+        "Structured **Status:** No Changes Required verdict must trigger hard stop"
+    )
+    assert result == "No changes needed"
+
+
+def test_check_hard_stop_plain_status_no_bold():
+    """Verdict lines without bold markdown must still trigger hard stop."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(2, "Status: Already Implemented") is not None
+    assert _check_hard_stop(2, "Result: Already Implemented") is not None
+    assert _check_hard_stop(6, "Status: No Dev Units Found") is not None
+    assert _check_hard_stop(8, "Status: No Changes Required") is not None
+
+
+def test_check_hard_stop_quoted_token_false_positive():
+    """Verdict keywords in quoted instructions or explanatory prose must NOT trigger."""
+    from pdd.agentic_change_orchestrator import _check_hard_stop
+
+    assert _check_hard_stop(2, 'Do not write **Status:** Already Implemented here') is None
+    assert _check_hard_stop(2, '  **Status:** Already Implemented') is None  # indented
+    assert _check_hard_stop(6, 'The expected output is **Status:** No Dev Units Found when...') is None
+    assert _check_hard_stop(8, 'Example: **Status:** No Changes Required (see docs)') is None
+
+
+def test_orchestrator_continues_past_step2_with_negated_already_implemented(mock_dependencies_v2, tmp_path):
+    """Integration: orchestrator must NOT stop at step 2 when output has negated 'already implemented'.
+
+    Validates the full orchestrator path — not just _check_hard_stop in isolation —
+    to ensure the false positive does not prevent workflow continuation.
+    """
+    mocks = mock_dependencies_v2
+
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step2":
+            return (
+                True,
+                "Neither feature is already implemented, so the workflow should continue to Step 3.",
+                0.1,
+                "gpt-4",
+            )
+        if "step9" in label:
+            return (True, "FILES_CREATED: file1.py", 0.5, "gpt-4")
+        if "step11" in label:
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/99", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME,
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path,
+    )
+
+    # Orchestrator should NOT have stopped at step 2
+    assert "Already implemented" not in msg, (
+        "Bug #1263: Negated 'already implemented' must not stop the orchestrator at step 2"
+    )
+    # Should have progressed past step 2 (at least steps 1, 2, 3 called)
+    assert mocks["run"].call_count >= 3, (
+        "Orchestrator should continue past step 2 when verdict is not 'Already Implemented'"
+    )
+
+
+def test_orchestrator_stops_at_step2_with_structured_verdict(mock_dependencies_v2, tmp_path):
+    """Integration: orchestrator must stop at step 2 when structured verdict says Already Implemented."""
+    mocks = mock_dependencies_v2
+
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step2":
+            return (
+                True,
+                "**Status:** Already Implemented\nBoth features found.",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME,
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path,
+    )
+
+    assert success is False
+    assert "Stopped at step 2" in msg
+    assert "Already implemented" in msg
+    # Only steps 1 and 2 should have run
+    assert mocks["run"].call_count == 2
+
+
+def test_orchestrator_step2_failure_path_no_false_positive(mock_dependencies_v2, tmp_path):
+    """Integration: step 2 failure with negated phrase must NOT false-positive as hard stop.
+
+    Tests the failure-path code at line 1097 (distinct from success path at line 1119).
+    """
+    mocks = mock_dependencies_v2
+
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step2":
+            return (
+                False,
+                "Neither feature is already implemented, but an error occurred during analysis.",
+                0.1,
+                "gpt-4",
+            )
+        if "step9" in label:
+            return (True, "FILES_CREATED: file1.py", 0.5, "gpt-4")
+        if "step11" in label:
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/100", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    success, msg, _, _, _ = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME,
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path,
+    )
+
+    # Must NOT contain "Already implemented" as a hard stop reason
+    assert "Already implemented" not in msg, (
+        "Bug #1263: Failure path must not false-positive on negated 'already implemented'"
+    )
