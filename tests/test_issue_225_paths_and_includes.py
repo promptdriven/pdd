@@ -1,3 +1,4 @@
+import logging
 import os
 import textwrap
 from pathlib import Path
@@ -162,7 +163,9 @@ def test_get_pdd_file_paths_preserves_nested_prompt_path_when_architecture_filen
 def test_get_pdd_file_paths_prefers_existing_basename_artifacts_with_architecture_filepath(
     tmp_path: Path,
     monkeypatch,
+    caplog,
 ) -> None:
+    caplog.set_level(logging.INFO)
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".pddrc").write_text(
         textwrap.dedent(
@@ -200,3 +203,4 @@ def test_get_pdd_file_paths_prefers_existing_basename_artifacts_with_architectur
     assert paths["example"] == existing_example
     assert paths["test"] == existing_test
     assert existing_test in paths["test_files"]
+    assert "Preferring basename-derived artifacts for lib_sse over architecture stem sse" in caplog.text

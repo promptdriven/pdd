@@ -1,3 +1,10 @@
+## Unreleased
+
+### Fix
+
+- forward `language` from `postprocess()` into `llm_invoke()` so non-Python example extraction no longer trips Python-syntax cache-bypass retries
+- when `architecture.json` points to a nested filepath stem (for example `lib/sse.py`) but basename-derived artifacts already exist (`lib_sse_example.py`, `test_lib_sse.py`), prefer the existing flattened artifacts and log when that override activates
+
 ## v0.0.215 (2026-04-21)
 
 ### Fix

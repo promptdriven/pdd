@@ -980,6 +980,45 @@ def test_llm_invoke_retries_on_invalid_python_code(mock_load_models, mock_set_ll
                 assert "invalid Python syntax" in caplog.text.lower() or "cache bypass retry" in caplog.text.lower()
 
 
+def test_llm_invoke_skips_python_validation_retry_for_typescript_language(
+    mock_load_models,
+    mock_set_llm_cache,
+    caplog,
+):
+    """Valid TypeScript in a code field should not trigger Python-syntax retry."""
+    model_key_name = "OPENAI_API_KEY"
+    typescript_code = (
+        "import React from 'react';\n\n"
+        "export const WaitlistPending = ({ email, position }: { email: string; position: number }) => {\n"
+        "  return <p>{email} #{position}</p>;\n"
+        "};\n"
+    )
+    response_json = json.dumps({"explanation": "Generated TS", "code": typescript_code})
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_response = create_mock_litellm_response(response_json, model_name="gpt-5-nano")
+            mock_completion.return_value = mock_response
+
+            mock_cost = 0.0001
+            with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                response = llm_invoke(
+                    prompt="Generate code for {task}",
+                    input_json={"task": "test"},
+                    strength=0.5,
+                    temperature=0.7,
+                    verbose=True,
+                    output_pydantic=CodeOutputModel,
+                    language="typescript",
+                )
+
+            assert mock_completion.call_count == 1
+            assert isinstance(response["result"], CodeOutputModel)
+            assert response["result"].code == typescript_code
+            assert "invalid Python syntax" not in caplog.text
+            assert "cache bypass retry" not in caplog.text.lower()
+
+
 def test_llm_invoke_uses_repaired_code_without_retry(mock_load_models, mock_set_llm_cache):
     """Test that llm_invoke uses repaired code without retry when repair succeeds."""
     model_key_name = "OPENAI_API_KEY"

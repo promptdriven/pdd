@@ -954,10 +954,23 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if name != code_stem:
                     basename_example_path = project_root / f"{example_dir}{name}_example.{extension}"
                     basename_test_path = project_root / f"{test_dir}test_{name}.{extension}"
+                    preferred_example = False
+                    preferred_test = False
                     if basename_example_path.exists():
                         example_path = basename_example_path
+                        preferred_example = True
                     if basename_test_path.exists():
                         test_path = basename_test_path
+                        preferred_test = True
+                    if preferred_example or preferred_test:
+                        logger.info(
+                            "Preferring basename-derived artifacts for %s over architecture stem %s "
+                            "(example=%s, test=%s)",
+                            name,
+                            code_stem,
+                            preferred_example,
+                            preferred_test,
+                        )
 
                 test_dir_path = test_path.parent
                 test_stem = glob.escape(test_path.stem)
