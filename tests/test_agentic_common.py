@@ -4837,3 +4837,66 @@ def test_google_with_effort_does_not_modify_argv(
     joined = " ".join(cmd)
     assert "reasoning_effort" not in joined
     assert "reasoning-effort" not in joined
+
+
+@pytest.mark.parametrize("raw", ["  High  ", "HIGH", "High", "high\n"])
+def test_codex_effort_env_is_case_and_whitespace_tolerant(
+    raw, mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """`PDD_REASONING_EFFORT` arrives from many sources (shell, GitHub App,
+    env files). Tolerate mixed case and leading/trailing whitespace so a
+    harmless formatting difference does not silently drop the signal."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, raw)
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+def test_claude_always_prints_effort_notice_when_not_quiet(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """Silent-failure guard: dropping the user's reasoning request with no
+    feedback generates support tickets. The notice fires regardless of
+    --verbose, gated only by --quiet."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=False)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    captured = capsys.readouterr()
+    assert "PDD_REASONING_EFFORT=high" in captured.out
+    assert "Claude Code CLI" in captured.out
+
+
+def test_claude_suppresses_effort_notice_when_quiet(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """--quiet must stay quiet. The notice is informational, not diagnostic."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    captured = capsys.readouterr()
+    assert "PDD_REASONING_EFFORT" not in captured.out

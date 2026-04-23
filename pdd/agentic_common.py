@@ -1167,10 +1167,16 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
-        if reasoning_effort and verbose:
+        if reasoning_effort and not quiet:
+            # Always surface outside --quiet mode — silently dropping the user's
+            # reasoning signal is a support-ticket generator. The Claude Code CLI
+            # has no --reasoning-effort flag today, so clarify that the effort
+            # applies to LiteLLM-invoked steps (analysis/verification) but not
+            # to this code-writing subprocess.
             console.print(
                 f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
-                "has no reasoning-effort flag; effort not applied to this subprocess.[/dim]"
+                "has no reasoning-effort flag; applies to llm_invoke steps only, "
+                "not this subprocess.[/dim]"
             )
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
@@ -1187,10 +1193,12 @@ def _run_with_provider(
         gemini_model = env.get("GEMINI_MODEL")
         if gemini_model:
             cmd.extend(["--model", gemini_model])
-        if reasoning_effort and verbose:
+        if reasoning_effort and not quiet:
+            # See Claude Code branch above for rationale — same constraint applies.
             console.print(
                 f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
-                "has no reasoning-effort flag; effort not applied to this subprocess.[/dim]"
+                "has no reasoning-effort flag; applies to llm_invoke steps only, "
+                "not this subprocess.[/dim]"
             )
     elif provider == "openai":
         # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which

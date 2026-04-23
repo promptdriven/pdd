@@ -388,12 +388,8 @@ def cli(
     # Only set when the user explicitly passed --time; otherwise leave any
     # pre-existing value (e.g. from the worker env.yaml) alone.
     if time is not None:
-        if time > 0.7:
-            os.environ["PDD_REASONING_EFFORT"] = "high"
-        elif time > 0.3:
-            os.environ["PDD_REASONING_EFFORT"] = "medium"
-        else:
-            os.environ["PDD_REASONING_EFFORT"] = "low"
+        from ..reasoning import time_to_effort_level
+        os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump

@@ -2242,11 +2242,8 @@ def llm_invoke(
                         logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
 
                 elif reasoning_type == 'effort':
-                    effort = "low"
-                    if time > 0.7:
-                        effort = "high"
-                    elif time > 0.3:
-                        effort = "medium"
+                    from .reasoning import time_to_effort_level
+                    effort = time_to_effort_level(time)
 
                     # Map effort parameter per-provider/model family
                     model_lower = str(model_name_litellm).lower()
