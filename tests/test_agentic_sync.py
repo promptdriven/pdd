@@ -1890,3 +1890,43 @@ class TestAugmentAndFilterIntegration:
         assert "frontend/components/dashboard/GitHubAppCTA" in valid, (
             f"New module from PR branch should pass filter after augmentation, got invalid={invalid}"
         )
+
+
+# --- Issue #1256: Dict-format PR architecture tolerance test ---
+
+
+def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path):
+    """Dict-format PR architecture should have its modules extracted and merged (Test 9).
+
+    When a PR branch has architecture.json in object format {prd_files, modules},
+    _augment_architecture_from_pr_branch should extract the modules and merge new
+    entries into the architecture list. Currently, isinstance(pr_arch, list) at
+    line 167 silently drops dict-format data — root cause of #1244 sync failure.
+    """
+    # Local architecture (bare array) with one existing module
+    local_arch = [{"filename": "existing_Python.prompt", "priority": 1, "dependencies": []}]
+    (tmp_path / "architecture.json").write_text(json.dumps(local_arch), encoding="utf-8")
+
+    # PR branch returns dict-format architecture with an additional module
+    pr_arch_dict = {
+        "prd_files": ["docs/prd.md"],
+        "modules": [
+            {"filename": "existing_Python.prompt", "priority": 1, "dependencies": []},
+            {"filename": "new_module_Python.prompt", "priority": 2, "dependencies": []},
+        ],
+    }
+
+    def fake_git_show(args, **kwargs):
+        return MagicMock(returncode=0, stdout=json.dumps(pr_arch_dict), stderr="")
+
+    with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_git_show):
+        augmented = _augment_architecture_from_pr_branch(
+            list(local_arch), tmp_path, 123
+        )
+
+    assert augmented is not None
+    filenames = {m["filename"] for m in augmented}
+    assert "new_module_Python.prompt" in filenames, (
+        "Dict-format PR architecture modules should be merged, "
+        "but isinstance(pr_arch, list) check at agentic_sync.py:167 silently drops them"
+    )

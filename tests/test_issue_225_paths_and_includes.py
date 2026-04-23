@@ -1,3 +1,4 @@
+import logging
 import os
 import textwrap
 from pathlib import Path
@@ -157,3 +158,49 @@ def test_get_pdd_file_paths_preserves_nested_prompt_path_when_architecture_filen
 
     assert paths["prompt"] == prompt_path
     assert paths["code"] == tmp_path / "src" / "models" / "user.py"
+
+
+def test_get_pdd_file_paths_prefers_existing_basename_artifacts_with_architecture_filepath(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+) -> None:
+    caplog.set_level(logging.INFO)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        textwrap.dedent(
+            """\
+            version: "1.0"
+            contexts:
+              default:
+                defaults:
+                  generate_output_path: "lib/"
+                  test_output_path: "tests/"
+                  example_output_path: "examples/"
+            """
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "lib_sse_python.prompt").write_text("prompt", encoding="utf-8")
+    (tmp_path / "architecture.json").write_text(
+        (
+            '[{"filename":"lib_sse_python.prompt","filepath":"lib/sse.py",'
+            '"priority":1,"dependencies":[],"description":"x"}]'
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    existing_example = tmp_path / "examples" / "lib_sse_example.py"
+    existing_test = tmp_path / "tests" / "test_lib_sse.py"
+    existing_example.write_text("# example", encoding="utf-8")
+    existing_test.write_text("def test_it():\n    assert True\n", encoding="utf-8")
+
+    paths = get_pdd_file_paths("lib_sse", "python", prompts_dir="prompts")
+
+    assert paths["code"] == tmp_path / "lib" / "sse.py"
+    assert paths["example"] == existing_example
+    assert paths["test"] == existing_test
+    assert existing_test in paths["test_files"]
+    assert "Preferring basename-derived artifacts for lib_sse over architecture stem sse" in caplog.text

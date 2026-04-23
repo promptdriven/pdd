@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 from .architecture_include_validation import resolve_architecture_prompt_path
-from .architecture_registry import find_architecture_for_project, find_project_root
+from .architecture_registry import extract_modules, find_architecture_for_project, find_project_root
 from .sync_order import extract_module_from_include
 
 
@@ -39,30 +39,54 @@ def _find_architecture_record_for_prompt_file(
             data = json.loads(raw)
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(data, list):
+        modules = extract_modules(data)
+        if not modules:
             continue
         base = arch_path.parent
-        for i, entry in enumerate(data):
+        for i, entry in enumerate(modules):
             fn = entry.get("filename") or ""
             if not fn:
                 continue
             candidate = resolve_architecture_prompt_path(fn, base)
             try:
                 if candidate.resolve() == target:
-                    return arch_path, data, i
+                    return arch_path, modules, i
             except OSError:
                 continue
     return None
 
 
-def _find_top_level_array_element_span(text: str, element_index: int) -> Tuple[int, int]:
-    """Return ``(start, end)`` character spans of the ``element_index``-th top-level array element."""
-    decoder = json.JSONDecoder()
+def _find_modules_array_start(text: str) -> int:
+    """Return the byte offset of the ``[`` that opens the modules array.
+
+    Handles both on-disk shapes for ``architecture.json``:
+      - bare array: ``[ {...}, {...} ]`` → offset of first ``[``
+      - dict wrapper: ``{"prd_files": [...], "modules": [ {...} ]}`` → offset of ``[`` after ``"modules":``
+
+    Returns ``-1`` when no recognizable shape is found.
+    """
     pos = 0
     while pos < len(text) and text[pos].isspace():
         pos += 1
+    if pos >= len(text):
+        return -1
+    if text[pos] == "[":
+        return pos
+    if text[pos] != "{":
+        return -1
+    m = re.search(r'"modules"\s*:\s*\[', text)
+    if m is None:
+        return -1
+    return m.end() - 1
+
+
+def _find_array_element_span(text: str, array_start: int, element_index: int) -> Tuple[int, int]:
+    """Return ``(start, end)`` spans of the ``element_index``-th element of the JSON
+    array that opens at ``array_start`` (position of ``[``)."""
+    decoder = json.JSONDecoder()
+    pos = array_start
     if pos >= len(text) or text[pos] != "[":
-        raise ValueError("Expected top-level JSON array")
+        raise ValueError("Expected JSON array at given position")
     pos += 1
     while pos < len(text) and text[pos].isspace():
         pos += 1
@@ -84,6 +108,16 @@ def _find_top_level_array_element_span(text: str, element_index: int) -> Tuple[i
     start = pos
     _, end = decoder.raw_decode(text, pos)
     return start, end
+
+
+def _find_top_level_array_element_span(text: str, element_index: int) -> Tuple[int, int]:
+    """Return ``(start, end)`` character spans of the ``element_index``-th top-level array element."""
+    pos = 0
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    if pos >= len(text) or text[pos] != "[":
+        raise ValueError("Expected top-level JSON array")
+    return _find_array_element_span(text, pos, element_index)
 
 
 def _find_dependencies_value_span_in_object(text: str, obj_start: int, obj_end: int) -> Optional[Tuple[int, int]]:
@@ -180,12 +214,17 @@ def _replace_dependencies_in_architecture_text(
     raw: str, entry_index: int, new_dependencies: List[str]
 ) -> Optional[str]:
     """
-    Replace only the ``dependencies`` value for ``entry_index`` in the top-level array.
+    Replace only the ``dependencies`` value for ``entry_index`` in the modules array.
 
-    Returns ``None`` if the file layout is not patchable (falls back to full rewrite).
+    Works for both on-disk shapes: bare array ``[...]`` and dict wrapper
+    ``{"prd_files": [...], "modules": [...]}``. Returns ``None`` if the file
+    layout is not patchable (falls back to full rewrite).
     """
+    array_start = _find_modules_array_start(raw)
+    if array_start < 0:
+        return None
     try:
-        obj_start, obj_end = _find_top_level_array_element_span(raw, entry_index)
+        obj_start, obj_end = _find_array_element_span(raw, array_start, entry_index)
     except (ValueError, json.JSONDecodeError):
         return None
     span = _find_dependencies_value_span_in_object(raw, obj_start, obj_end)

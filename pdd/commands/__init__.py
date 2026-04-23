@@ -6,7 +6,7 @@ import click
 from .generate import generate, test, example
 from .fix import fix
 from .modify import split, change, update
-from .maintenance import sync, auto_deps, setup
+from .maintenance import sync, sync_architecture, auto_deps, setup
 from .checkup import checkup
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .connect import connect
@@ -30,6 +30,7 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(change)
     cli.add_command(update)
     cli.add_command(sync)
+    cli.add_command(sync_architecture)
     cli.add_command(checkup)
     cli.add_command(auto_deps)
     cli.add_command(setup)

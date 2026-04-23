@@ -4653,3 +4653,31 @@ def test_get_pdd_file_paths_nested_frontend_page_rejects_wrong_flat_architecture
     assert account_paths["prompt"].is_file()
     assert account_paths["prompt"].samefile(account_prompt)
     assert account_paths["code"].resolve() == (tmp_path / "frontend" / "src" / "app" / "settings" / "account" / "page.tsx").resolve()
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+# Scope addition: covers expansion item "pdd/sync_determine_operation.py:340-342
+# has partial tolerance but should use centralized extract_modules() for consistency"
+# identified by Step 6 but absent from Step 8's plan
+
+
+def test_get_filepath_dict_format_without_modules_key_returns_tuple(tmp_path):
+    """_get_filepath_from_architecture returns (None, None) for dict without 'modules' key (Test 18).
+
+    Bug: at sync_determine_operation.py:340, arch.get("modules", arch) falls back to
+    the dict itself when there is no "modules" key. Then isinstance(modules, list)
+    is False and line 343 returns bare None instead of the expected (None, None) tuple.
+    Callers that unpack `filepath, filename = _get_filepath_from_architecture(...)` crash
+    with TypeError.
+    """
+    from pdd.sync_determine_operation import _get_filepath_from_architecture
+
+    arch_path = tmp_path / "architecture.json"
+    # Dict without "modules" key — triggers the fallback bug
+    arch_path.write_text(json.dumps({"prd_files": ["prd.md"]}), encoding="utf-8")
+
+    result = _get_filepath_from_architecture(arch_path, "auth_Python.prompt")
+    assert result == (None, None), (
+        f"Expected (None, None) for dict without 'modules' key, got {result!r}. "
+        "Line 343 returns bare None instead of the expected (None, None) tuple."
+    )

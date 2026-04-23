@@ -321,3 +321,36 @@ def test_validate_arch_includes_cli_fails_on_mismatch(mock_auto_update, tmp_path
     )
     assert result.exit_code == 1
     assert "mismatch" in result.output.lower()
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+
+
+def test_dict_format_architecture_validates_includes(tmp_path: Path) -> None:
+    """collect_architecture_include_validation_warnings processes dict-format architecture (Test 11).
+
+    Bug: isinstance(data, list) at architecture_include_validation.py:76 returns
+    False for dict-format {"modules": [...]}, so the file is silently skipped and
+    no warnings about include mismatches are produced.
+    """
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    # Prompt a includes b, but architecture says a has no deps -> mismatch
+    (prompts / "a_Python.prompt").write_text(
+        "%\n<include>b_python.prompt</include>\n", encoding="utf-8"
+    )
+    (prompts / "b_Python.prompt").write_text("%\n", encoding="utf-8")
+    # Dict-format architecture with a having no declared deps
+    arch = {"modules": [
+        {"filename": "a_Python.prompt", "dependencies": []},
+        {"filename": "b_Python.prompt", "dependencies": []},
+    ]}
+    (tmp_path / "architecture.json").write_text(json.dumps(arch), encoding="utf-8")
+
+    warnings = collect_architecture_include_validation_warnings(
+        tmp_path, skip_bundled_sample_arch=False
+    )
+    assert len(warnings) > 0, (
+        "Dict-format architecture should be validated for include mismatches, "
+        "but isinstance(data, list) at architecture_include_validation.py:76 silently skips it"
+    )

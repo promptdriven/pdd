@@ -4415,3 +4415,49 @@ class TestVerifyArchitectureConformanceDeepRecursion:
                 language="python",
                 verbose=False,
             )
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+# Scope addition: covers expansion item "pdd/code_generator_main.py:244 loads
+# architecture.json with isinstance conditional that silently treats dict as empty"
+# identified by Step 6 but absent from Step 8's plan
+
+
+def test_verify_architecture_conformance_dict_format(tmp_path):
+    """_verify_architecture_conformance with dict-format architecture validates conformance (Test 17).
+
+    Bug: isinstance(arch_data, list) at code_generator_main.py:244 returns False
+    for dict-format, so the loop uses [] and never finds the architecture entry.
+    The conformance check silently passes without actually validating — missing
+    functions are not detected.
+    """
+    arch = {"modules": [
+        {
+            "filename": "models_Python.prompt",
+            "filepath": "src/models.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {"name": "UserModel", "signature": "class UserModel(BaseModel)", "returns": "UserModel"},
+                        {"name": "OrderModel", "signature": "class OrderModel(BaseModel)", "returns": "OrderModel"},
+                    ]
+                },
+            },
+        }
+    ]}
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    # Code that is MISSING OrderModel — should trigger UsageError
+    code = "class UserModel:\n    pass\n"
+
+    with pytest.raises(click.UsageError, match="OrderModel"):
+        _verify_architecture_conformance(
+            generated_code=code,
+            prompt_name="models_Python.prompt",
+            arch_path=str(arch_path),
+            language="python",
+            verbose=False,
+        )
+

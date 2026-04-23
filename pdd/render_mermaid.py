@@ -15,6 +15,20 @@ import sys
 import html
 from pathlib import Path
 
+try:
+    from .architecture_registry import extract_modules
+except ImportError:
+    # Fallback when this file runs as `__main__` (e.g. `python render_mermaid.py`)
+    # rather than imported from the package. Must stay byte-equivalent to
+    # `pdd.architecture_registry.extract_modules` — update both together.
+    def extract_modules(data):
+        """Standalone fallback — mirror of architecture_registry.extract_modules."""
+        if isinstance(data, list):
+            return [e for e in data if isinstance(e, dict)]
+        if isinstance(data, dict) and isinstance(data.get("modules"), list):
+            return [e for e in data["modules"] if isinstance(e, dict)]
+        return []
+
 # Indentation constants for better maintainability
 INDENT = '    '  # 4 spaces per level
 LEVELS = {
@@ -36,6 +50,7 @@ def write_pretty_architecture_json(arch_file, architecture):
 
 def generate_mermaid_code(architecture, app_name="System"):
     """Generate Mermaid flowchart code from architecture JSON."""
+    architecture = extract_modules(architecture)
     # Escape quotes for Mermaid label, which uses HTML entities
     escaped_app_name = app_name.replace('"', '&quot;')
     # Match test expectation: add a trailing space only if quotes were present

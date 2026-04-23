@@ -39,7 +39,7 @@ from pdd.agentic_common import (
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
 )
-from pdd.architecture_registry import merge_architecture, record_generation
+from pdd.architecture_registry import extract_modules, merge_architecture, record_generation
 from pdd.architecture_sync import normalize_architecture_filenames
 from pdd.load_prompt_template import load_prompt_template
 from pdd.preprocess import preprocess
@@ -256,7 +256,7 @@ def _save_architecture_files(
             normalize_architecture_filenames(arch_data)
             arch_list = arch_data
         elif isinstance(arch_data, dict):
-            for key in ("architecture", "files"):
+            for key in ("modules", "architecture", "files"):
                 if key in arch_data and isinstance(arch_data[key], list):
                     normalize_architecture_filenames(arch_data[key])
                     arch_list = arch_data[key]
@@ -264,7 +264,7 @@ def _save_architecture_files(
             else:
                 console.print(
                     "[yellow]Warning: architecture JSON is an object and does not "
-                    "contain a list under known keys ('architecture', 'files'); "
+                    "contain a list under known keys ('modules', 'architecture', 'files'); "
                     "skipping filename normalization.[/yellow]"
                 )
         else:
@@ -894,11 +894,10 @@ def run_agentic_architecture_orchestrator(
         existing_arch_snapshot: Optional[List[dict]] = None
         if step_num == 7 and arch_file_step7.exists():
             try:
-                existing_arch_snapshot = json.loads(
+                raw = json.loads(
                     arch_file_step7.read_text(encoding="utf-8")
                 )
-                if not isinstance(existing_arch_snapshot, list):
-                    existing_arch_snapshot = None
+                existing_arch_snapshot = extract_modules(raw) or None
             except (json.JSONDecodeError, OSError):
                 existing_arch_snapshot = None
 
@@ -957,9 +956,10 @@ def run_agentic_architecture_orchestrator(
                 try:
                     with open(arch_file, "r", encoding="utf-8") as f:
                         arch_content = f.read()
-                    arch_data = json.loads(arch_content)
-                    if not isinstance(arch_data, list):
-                        raise ValueError("Architecture must be a JSON array")
+                    arch_raw = json.loads(arch_content)
+                    arch_data = extract_modules(arch_raw)
+                    if not arch_data:
+                        raise ValueError("Architecture must be a JSON array or {\"modules\": [...]}")
 
                     # Post-Step-7 merge: merge new arch with snapshot
                     if existing_arch_snapshot is not None:
@@ -1143,10 +1143,10 @@ def run_agentic_architecture_orchestrator(
                     if review_file.exists() and arch_file.exists():
                         try:
                             with open(arch_file, "r", encoding="utf-8") as f:
-                                current_arch = json.loads(f.read())
+                                current_arch = extract_modules(json.loads(f.read()))
                             with open(review_file, "r", encoding="utf-8") as f:
-                                review_modules = json.loads(f.read())
-                            if isinstance(current_arch, list) and isinstance(review_modules, list):
+                                review_modules = extract_modules(json.loads(f.read()))
+                            if current_arch and review_modules:
                                 # Index reviewed modules by filename
                                 review_by_name = {
                                     m.get("filename", ""): m
@@ -1181,8 +1181,8 @@ def run_agentic_architecture_orchestrator(
                         try:
                             with open(arch_file, "r", encoding="utf-8") as f:
                                 arch_content = f.read()
-                            arch_data = json.loads(arch_content)
-                            if isinstance(arch_data, list):
+                            arch_data = extract_modules(json.loads(arch_content))
+                            if arch_data:
                                 # Safety: if module count dropped, restore from snapshot
                                 snapshot_count = len(existing_arch_snapshot) if existing_arch_snapshot else 0
                                 if len(arch_data) < snapshot_count:
@@ -1634,8 +1634,8 @@ def run_agentic_architecture_orchestrator(
                             try:
                                 with open(arch_file, "r", encoding="utf-8") as f:
                                     arch_content = f.read()
-                                arch_data = json.loads(arch_content)
-                                if isinstance(arch_data, list):
+                                arch_data = extract_modules(json.loads(arch_content))
+                                if arch_data:
                                     context["step7_output"] = arch_content
                             except (json.JSONDecodeError, ValueError):
                                 pass

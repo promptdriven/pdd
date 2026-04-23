@@ -47,6 +47,7 @@ from pdd.load_prompt_template import load_prompt_template
 from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
 from pdd.template_expander import expand_template
+from pdd.architecture_registry import extract_modules
 
 # Constants - Use functions for dynamic path resolution
 def get_pdd_dir():
@@ -440,11 +441,10 @@ def _get_filepath_from_architecture(
         with open(architecture_path, 'r', encoding='utf-8') as f:
             arch = json.load(f)
 
-        # Handle both nested and flat structures
-        modules = arch.get("modules", arch) if isinstance(arch, dict) else arch
+        modules = extract_modules(arch)
 
-        if not isinstance(modules, list):
-            return None
+        if not modules:
+            return None, None
 
         context_name = _resolve_context_name_for_basename(basename) if basename else None
 
@@ -947,8 +947,33 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_path = project_root / f"{example_dir}{code_stem}_example.{extension}"
                 test_path = project_root / f"{test_dir}test_{code_stem}.{extension}"
 
+                # If the flattened prompt basename already has corresponding example/test
+                # artifacts, prefer those over the architecture filepath stem. This keeps
+                # command summaries and sync behavior aligned with repos that intentionally
+                # namespace files such as lib_sse_example.ts or test_api_route.ts.
+                if name != code_stem:
+                    basename_example_path = project_root / f"{example_dir}{name}_example.{extension}"
+                    basename_test_path = project_root / f"{test_dir}test_{name}.{extension}"
+                    preferred_example = False
+                    preferred_test = False
+                    if basename_example_path.exists():
+                        example_path = basename_example_path
+                        preferred_example = True
+                    if basename_test_path.exists():
+                        test_path = basename_test_path
+                        preferred_test = True
+                    if preferred_example or preferred_test:
+                        logger.info(
+                            "Preferring basename-derived artifacts for %s over architecture stem %s "
+                            "(example=%s, test=%s)",
+                            name,
+                            code_stem,
+                            preferred_example,
+                            preferred_test,
+                        )
+
                 test_dir_path = test_path.parent
-                test_stem = f"test_{code_stem}"
+                test_stem = glob.escape(test_path.stem)
                 if test_dir_path.exists():
                     matching_test_files = sorted(test_dir_path.glob(f"{test_stem}*.{extension}"))
                 else:

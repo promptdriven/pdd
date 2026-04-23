@@ -380,6 +380,7 @@ def test_strength_gt_0_parameters_passed_to_llm_invoke(mock_llm_invoke, mock_loa
     assert kwargs['strength'] == strength_val
     assert kwargs['temperature'] == temperature_val
     assert kwargs['time'] == time_val
+    assert kwargs['language'] == language_val
     assert kwargs['verbose'] == verbose_val
     assert kwargs['output_pydantic'] == ExtractedCode
 
@@ -405,6 +406,7 @@ def test_default_parameters(mock_llm_invoke, mock_load_template):
     assert kwargs['strength'] == DEFAULT_STRENGTH  # Default strength
     assert kwargs['temperature'] == 0    # Default temperature
     assert kwargs['time'] == DEFAULT_TIME # Default time
+    assert kwargs['language'] == language_val
     assert kwargs['verbose'] == False   # Default verbose
     assert kwargs['output_pydantic'] == ExtractedCode
 

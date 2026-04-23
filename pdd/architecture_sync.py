@@ -18,6 +18,11 @@ from typing import Any, Dict, List, Optional
 
 from lxml import etree
 
+from .architecture_registry import (
+    extract_modules,
+    find_project_root,
+)
+
 from .architecture_sync_helper import filepath_to_prompt_filename
 
 # --- Issue #617: filename mirrors filepath ---
@@ -97,6 +102,50 @@ ARCHITECTURE_JSON_PATH = Path.cwd() / "architecture.json"
 PROMPTS_DIR = Path.cwd() / "prompts"
 
 
+def _resolve_sync_paths(
+    prompts_dir: Optional[Path],
+    architecture_path: Optional[Path],
+) -> tuple[Path, Path]:
+    """Resolve prompts/architecture from the nearest cwd-anchored sync root."""
+    cwd = Path.cwd().resolve()
+
+    def resolve_explicit(path: Path) -> Path:
+        return path if path.is_absolute() else (cwd / path)
+
+    if prompts_dir is not None:
+        resolved_prompts_dir = resolve_explicit(prompts_dir)
+    else:
+        project_root = find_project_root(cwd)
+        current = cwd
+        sync_root = project_root
+
+        while True:
+            if (current / "architecture.json").exists() or (current / "prompts").exists():
+                sync_root = current
+                break
+            if current == project_root or current.parent == current:
+                break
+            current = current.parent
+
+        resolved_prompts_dir = sync_root / "prompts"
+
+    if architecture_path is not None:
+        return resolved_prompts_dir, resolve_explicit(architecture_path)
+
+    resolved_architecture_path = resolved_prompts_dir.parent / "architecture.json"
+    return resolved_prompts_dir, resolved_architecture_path
+
+
+def _normalize_prompt_filename(filename: str) -> str:
+    """Accept prompt-relative paths while storing architecture keys as prompt filenames."""
+    normalized = filename.replace("\\", "/").strip()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.startswith("prompts/"):
+        normalized = normalized[len("prompts/"):]
+    return normalized
+
+
 # --- Tag Extraction ---
 
 def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
@@ -142,15 +191,32 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
     }
 
     try:
-        # Only parse the header section (content before the first % section marker).
-        # Real pdd-* tags are always declared before any % section; everything
-        # after is prompt body / instructional examples that must not be treated
-        # as metadata declarations.
-        # Use line scanning instead of split('\n%') so that files whose first
-        # line starts with '%' (no preceding newline) are handled correctly.
+        # Only parse the metadata header. Valid prompts may start with leading
+        # `%` preamble lines or XML-style helper tags such as `<include>...`
+        # before the real pdd-* tags, so tolerate those. Once we see the first
+        # real tag, keep collecting until the first later `%` section marker.
+        # If ordinary prose appears before any tag-ish header content, treat the
+        # file as having no metadata header so example tags in the body are
+        # ignored.
         header_lines = []
+        started_header = False
         for line in prompt_content.splitlines(keepends=True):
-            if line.lstrip().startswith('%'):
+            stripped = line.lstrip()
+            if not started_header:
+                if not stripped.strip():
+                    if header_lines:
+                        header_lines.append(line)
+                    continue
+                if stripped.startswith('%'):
+                    continue
+                if stripped.startswith('<'):
+                    header_lines.append(line)
+                    if stripped.startswith('<pdd-'):
+                        started_header = True
+                    continue
+                break
+
+            if stripped.startswith('%'):
                 break
             header_lines.append(line)
         header = ''.join(header_lines)
@@ -309,7 +375,8 @@ def register_untracked_prompts(
     if not architecture_path.exists():
         return {'registered': [], 'skipped': [], 'errors': ['Architecture file not found']}
 
-    arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
+    raw_arch = json.loads(architecture_path.read_text(encoding='utf-8'))
+    arch_data = extract_modules(raw_arch)
     existing_filenames = {m.get('filename') for m in arch_data}
     max_priority = max((m.get('priority', 0) for m in arch_data), default=0)
 
@@ -359,8 +426,13 @@ def register_untracked_prompts(
         registered.append(filename)
 
     if registered and not dry_run:
+        if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
+            raw_arch["modules"] = arch_data
+            write_data = raw_arch
+        else:
+            write_data = arch_data
         architecture_path.write_text(
-            json.dumps(arch_data, indent=2, ensure_ascii=False) + '\n',
+            json.dumps(write_data, indent=2, ensure_ascii=False) + '\n',
             encoding='utf-8'
         )
 
@@ -675,7 +747,8 @@ def update_architecture_from_prompt(
                     'changes': {},
                     'error': f'Architecture file not found: {architecture_path}'
                 }
-            arch_data_for_rename = json.loads(architecture_path.read_text(encoding='utf-8'))
+            raw_rename = json.loads(architecture_path.read_text(encoding='utf-8'))
+            arch_data_for_rename = extract_modules(raw_rename)
             for mod in arch_data_for_rename:
                 if mod.get('filename') == prompt_filename:
                     old_filepath = mod.get('filepath', '')
@@ -683,8 +756,13 @@ def update_architecture_from_prompt(
                         mod['filepath'] = f'prompts/{new_filename}'
                     mod['filename'] = new_filename
                     if not dry_run:
+                        if isinstance(raw_rename, dict) and isinstance(raw_rename.get("modules"), list):
+                            raw_rename["modules"] = arch_data_for_rename
+                            rename_write = raw_rename
+                        else:
+                            rename_write = arch_data_for_rename
                         architecture_path.write_text(
-                            json.dumps(arch_data_for_rename, indent=2, ensure_ascii=False) + '\n',
+                            json.dumps(rename_write, indent=2, ensure_ascii=False) + '\n',
                             encoding='utf-8'
                         )
                     prompt_filename = new_filename
@@ -716,7 +794,7 @@ def update_architecture_from_prompt(
                     'changes': {},
                     'error': f'Architecture file not found: {architecture_path}'
                 }
-            arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
+            arch_data = extract_modules(json.loads(architecture_path.read_text(encoding='utf-8')))
 
         # 4. Find matching module by filename
         module_entry = None
@@ -779,8 +857,14 @@ def update_architecture_from_prompt(
         # 6. Write back to architecture.json (if updated and not dry run)
         if updated and not dry_run:
             arch_data[module_index] = module_entry
+            raw_on_disk = json.loads(architecture_path.read_text(encoding='utf-8'))
+            if isinstance(raw_on_disk, dict) and isinstance(raw_on_disk.get("modules"), list):
+                raw_on_disk["modules"] = arch_data
+                write_data = raw_on_disk
+            else:
+                write_data = arch_data
             architecture_path.write_text(
-                json.dumps(arch_data, indent=2, ensure_ascii=False) + '\n',
+                json.dumps(write_data, indent=2, ensure_ascii=False) + '\n',
                 encoding='utf-8'
             )
 
@@ -848,7 +932,7 @@ def sync_all_prompts_to_architecture(
             'registered': reg_result['registered'],
         }
 
-    arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
+    arch_data = extract_modules(json.loads(architecture_path.read_text(encoding='utf-8')))
 
     results = []
     errors = []
@@ -894,6 +978,251 @@ def sync_all_prompts_to_architecture(
         'errors': errors,
         'registered': reg_result['registered'],
     }
+
+
+def _detect_circular_dependencies(modules: List[Dict[str, Any]]) -> List[List[str]]:
+    """Detect circular dependencies using DFS over prompt filenames."""
+    graph: Dict[str, set[str]] = {}
+    all_filenames: set[str] = set()
+
+    for module in modules:
+        filename = module.get("filename")
+        if not filename:
+            continue
+        all_filenames.add(filename)
+        dependencies = module.get("dependencies", [])
+        if isinstance(dependencies, list):
+            graph[filename] = {dep for dep in dependencies if isinstance(dep, str)}
+        else:
+            graph[filename] = set()
+
+    cycles: List[List[str]] = []
+    visited: set[str] = set()
+    rec_stack: set[str] = set()
+
+    def dfs(node: str, path: List[str]) -> None:
+        if node in rec_stack:
+            try:
+                cycle_start = path.index(node)
+                cycles.append(path[cycle_start:] + [node])
+            except ValueError:
+                pass
+            return
+
+        if node in visited or node not in graph:
+            return
+
+        visited.add(node)
+        rec_stack.add(node)
+        path.append(node)
+
+        for dependency in graph.get(node, set()):
+            if dependency in all_filenames:
+                dfs(dependency, path)
+
+        path.pop()
+        rec_stack.remove(node)
+
+    for filename in all_filenames:
+        if filename not in visited:
+            dfs(filename, [])
+
+    return cycles
+
+
+def validate_architecture_modules(modules: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Validate architecture modules and return route-compatible result dicts."""
+    errors: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+
+    all_filenames = {
+        module.get("filename")
+        for module in modules
+        if isinstance(module.get("filename"), str) and module.get("filename")
+    }
+
+    for cycle in _detect_circular_dependencies(modules):
+        errors.append(
+            {
+                "type": "circular_dependency",
+                "message": f"Circular dependency detected: {' -> '.join(cycle)}",
+                "modules": cycle,
+            }
+        )
+
+    for module in modules:
+        filename = module.get("filename", "")
+        dependencies = module.get("dependencies", [])
+        if not isinstance(dependencies, list):
+            dependencies = []
+
+        for dependency in dependencies:
+            if dependency not in all_filenames:
+                errors.append(
+                    {
+                        "type": "missing_dependency",
+                        "message": (
+                            f"Module '{filename}' depends on non-existent module "
+                            f"'{dependency}'"
+                        ),
+                        "modules": [filename, dependency],
+                    }
+                )
+
+        if not isinstance(filename, str) or not filename.strip():
+            errors.append(
+                {
+                    "type": "invalid_field",
+                    "message": "Module has empty filename",
+                    "modules": [filename or "(unnamed)"],
+                }
+            )
+
+        filepath = module.get("filepath", "")
+        if not isinstance(filepath, str) or not filepath.strip():
+            errors.append(
+                {
+                    "type": "invalid_field",
+                    "message": f"Module '{filename}' has empty filepath",
+                    "modules": [filename or "(unnamed)"],
+                }
+            )
+
+        description = module.get("description", "")
+        if not isinstance(description, str) or not description.strip():
+            errors.append(
+                {
+                    "type": "invalid_field",
+                    "message": f"Module '{filename}' has empty description",
+                    "modules": [filename or "(unnamed)"],
+                }
+            )
+
+        if len(dependencies) != len(set(dependencies)):
+            seen: set[str] = set()
+            duplicates: List[str] = []
+            for dependency in dependencies:
+                if dependency in seen:
+                    duplicates.append(dependency)
+                seen.add(dependency)
+            warnings.append(
+                {
+                    "type": "duplicate_dependency",
+                    "message": (
+                        f"Module '{filename}' has duplicate dependencies: "
+                        f"{', '.join(duplicates)}"
+                    ),
+                    "modules": [filename],
+                }
+            )
+
+    depended_upon: set[str] = set()
+    for module in modules:
+        dependencies = module.get("dependencies", [])
+        if isinstance(dependencies, list):
+            depended_upon.update(dep for dep in dependencies if isinstance(dep, str))
+
+    for module in modules:
+        filename = module.get("filename", "")
+        dependencies = module.get("dependencies", [])
+        if isinstance(dependencies, list) and not dependencies and filename not in depended_upon:
+            warnings.append(
+                {
+                    "type": "orphan_module",
+                    "message": (
+                        f"Module '{filename}' has no dependencies and is not depended upon "
+                        "by any other module"
+                    ),
+                    "modules": [filename],
+                }
+            )
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def sync_prompts_to_architecture(
+    filenames: Optional[List[str]] = None,
+    prompts_dir: Optional[Path] = None,
+    architecture_path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Shared architecture sync entry point used by the CLI and connect UI."""
+    resolved_prompts_dir, resolved_architecture_path = _resolve_sync_paths(
+        prompts_dir,
+        architecture_path,
+    )
+
+    try:
+        if filenames is None:
+            sync_result = sync_all_prompts_to_architecture(
+                prompts_dir=resolved_prompts_dir,
+                architecture_path=resolved_architecture_path,
+                dry_run=dry_run,
+            )
+        else:
+            results = []
+            updated_count = 0
+            errors: List[str] = []
+
+            for filename in filenames:
+                normalized_filename = _normalize_prompt_filename(filename)
+                result = update_architecture_from_prompt(
+                    normalized_filename,
+                    prompts_dir=resolved_prompts_dir,
+                    architecture_path=resolved_architecture_path,
+                    dry_run=dry_run,
+                )
+                results.append(
+                    {
+                        "filename": normalized_filename,
+                        "success": result["success"],
+                        "updated": result["updated"],
+                        "changes": result["changes"],
+                        "error": result.get("error"),
+                    }
+                )
+                if result["success"] and result["updated"]:
+                    updated_count += 1
+                elif not result["success"]:
+                    errors.append(f"{normalized_filename}: {result['error']}")
+
+            sync_result = {
+                "success": len(errors) == 0,
+                "updated_count": updated_count,
+                "skipped_count": 0,
+                "results": results,
+                "errors": errors,
+            }
+
+        if resolved_architecture_path.exists():
+            arch_data = extract_modules(
+                json.loads(resolved_architecture_path.read_text(encoding="utf-8"))
+            )
+            validation = validate_architecture_modules(arch_data)
+        else:
+            validation = {"valid": True, "errors": [], "warnings": []}
+
+        return {
+            "success": sync_result["success"] and validation["valid"],
+            "updated_count": sync_result["updated_count"],
+            "skipped_count": sync_result.get("skipped_count", 0),
+            "results": sync_result["results"],
+            "validation": validation,
+            "errors": sync_result.get("errors", []),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "updated_count": 0,
+            "skipped_count": 0,
+            "results": [],
+            "validation": {"valid": True, "errors": [], "warnings": []},
+            "errors": [f"Unexpected error: {exc}"],
+        }
 
 
 # --- Validation ---
@@ -1034,7 +1363,7 @@ def get_architecture_entry_for_prompt(
     if not architecture_path.exists():
         return None
 
-    arch_data = json.loads(architecture_path.read_text(encoding='utf-8'))
+    arch_data = extract_modules(json.loads(architecture_path.read_text(encoding='utf-8')))
 
     # Normalize to forward-slash path for comparison (Issue #617: filename may include subdirs)
     normalized = Path(prompt_filename).as_posix()

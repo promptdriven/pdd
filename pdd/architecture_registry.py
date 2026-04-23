@@ -18,6 +18,22 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def extract_modules(data: Any) -> List[Dict[str, Any]]:
+    """Tolerant accessor. Accepts bare-array or {modules: [...]}. Never raises."""
+    if isinstance(data, list):
+        return [e for e in data if isinstance(e, dict)]
+    if isinstance(data, dict) and isinstance(data.get("modules"), list):
+        return [e for e in data["modules"] if isinstance(e, dict)]
+    return []
+
+
+def extract_prd_files(data: Any) -> List[str]:
+    """Return prd_files from object format; [] otherwise."""
+    if isinstance(data, dict) and isinstance(data.get("prd_files"), list):
+        return [p for p in data["prd_files"] if isinstance(p, str)]
+    return []
+
+
 def load_registry(project_root: Path) -> dict:
     """Load the architecture registry from .pdd/architecture_registry.json.
 
@@ -268,8 +284,7 @@ def load_combined_architecture_data(
         try:
             with open(arch_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, list):
-                combined.extend(data)
+            combined.extend(extract_modules(data))
         except (json.JSONDecodeError, OSError):
             continue
 

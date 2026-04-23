@@ -26,7 +26,7 @@ from .agentic_sync_runner import (
 )
 from .architecture_include_validation import collect_architecture_include_validation_warnings
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
-from .architecture_registry import find_project_root as _find_project_root
+from .architecture_registry import extract_modules, find_project_root as _find_project_root
 from .construct_paths import (
     _detect_context_from_basename,
     _extract_prefix_from_prompts_dir,
@@ -164,12 +164,8 @@ def _augment_architecture_from_pr_branch(
         except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
             continue
 
-        if not isinstance(pr_arch, list):
-            continue
-
-        for entry in pr_arch:
-            if not isinstance(entry, dict):
-                continue
+        pr_modules = extract_modules(pr_arch)
+        for entry in pr_modules:
             filename = entry.get("filename")
             if not filename or filename in existing_filenames:
                 continue

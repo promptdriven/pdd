@@ -17,6 +17,7 @@ from rich.console import Console
 
 # Internal imports
 from .agentic_architecture_orchestrator import run_agentic_architecture_orchestrator
+from .architecture_registry import extract_modules
 
 console = Console()
 
@@ -207,8 +208,9 @@ def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -
         if arch_file.exists():
             try:
                 arch_data = json.loads(arch_file.read_text(encoding="utf-8"))
-                if isinstance(arch_data, list):
-                    siblings[child.name] = arch_data
+                modules = extract_modules(arch_data)
+                if modules:
+                    siblings[child.name] = modules
                     sibling_contexts[child.name] = _read_sibling_context_yamls(child)
             except (json.JSONDecodeError, IOError):
                 continue
@@ -218,8 +220,9 @@ def _fetch_sibling_architectures(cwd: Path, current_target_dir: Optional[str]) -
         if root_arch.exists():
             try:
                 arch_data = json.loads(root_arch.read_text(encoding="utf-8"))
-                if isinstance(arch_data, list):
-                    siblings["."] = arch_data
+                modules = extract_modules(arch_data)
+                if modules:
+                    siblings["."] = modules
                     sibling_contexts["."] = _read_sibling_context_yamls(cwd)
             except (json.JSONDecodeError, IOError):
                 pass

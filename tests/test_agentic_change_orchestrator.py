@@ -4893,3 +4893,97 @@ def test_orchestrator_step2_failure_path_no_false_positive(mock_dependencies_v2,
     assert "Already implemented" not in msg, (
         "Bug #1263: Failure path must not false-positive on negated 'already implemented'"
     )
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+
+
+def test_sanitize_architecture_dependencies_dict_format_cleans_deps(tmp_path):
+    """_sanitize_architecture_dependencies with dict-format architecture cleans corrupted deps (Test 19).
+
+    Bug: `for entry in data` at agentic_change_orchestrator.py:102 iterates dict keys
+    (strings like "modules") instead of module entries. isinstance(entry, dict) is
+    False for string keys, so all entries are skipped. Corrupted dependencies in
+    modules are never cleaned.
+    """
+    from pdd.agentic_change_orchestrator import _sanitize_architecture_dependencies
+
+    arch = {"modules": [
+        {
+            "filename": "a_Python.prompt",
+            "dependencies": [
+                "b_python.prompt",
+                "corrupted\nnewline",
+                "x" * 200,
+            ],
+        },
+    ]}
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch, indent=2), encoding="utf-8")
+
+    _sanitize_architecture_dependencies(tmp_path)
+
+    reloaded = json.loads(arch_path.read_text(encoding="utf-8"))
+    # Extract modules from whatever format is on disk
+    if isinstance(reloaded, dict):
+        modules = reloaded.get("modules", [])
+    else:
+        modules = reloaded
+    assert len(modules) == 1, f"Expected 1 module, got {len(modules)}"
+    deps = modules[0].get("dependencies", [])
+    assert "b_python.prompt" in deps, "Valid dep should be preserved"
+    assert all("\n" not in d for d in deps), (
+        "Corrupted deps with newlines should be removed, "
+        "but iterating dict keys skips all entries"
+    )
+    assert all(len(d) <= 100 for d in deps), (
+        "Oversized deps should be removed, but iterating dict keys skips all entries"
+    )
+
+
+def test_scope_architecture_dict_format_no_corruption(tmp_path):
+    """_scope_architecture_to_changed_files must not corrupt dict-format architecture.
+
+    Bug: `for entry in current_architecture` iterates dict keys ("prd_files",
+    "modules") when the file is dict-format. isinstance(entry, dict) is False
+    for strings, so they are appended to scoped. Write-back produces
+    ["prd_files", "modules"] — all module data destroyed.
+    """
+    from pdd.agentic_change_orchestrator import _scope_architecture_to_changed_files
+
+    previous = [
+        {"filename": "a_Python.prompt", "filepath": "src/a.py", "priority": 1, "dependencies": []},
+        {"filename": "b_Python.prompt", "filepath": "src/b.py", "priority": 2, "dependencies": []},
+    ]
+    current = {
+        "prd_files": ["docs/prd.md"],
+        "modules": [
+            {"filename": "a_Python.prompt", "filepath": "src/a.py", "priority": 1, "dependencies": []},
+            {"filename": "b_Python.prompt", "filepath": "src/b.py", "priority": 2, "dependencies": ["a_Python.prompt"]},
+        ],
+    }
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(current, indent=2), encoding="utf-8")
+
+    _scope_architecture_to_changed_files(
+        tmp_path, previous, ["prompts/b_Python.prompt"]
+    )
+
+    reloaded = json.loads(arch_path.read_text(encoding="utf-8"))
+    assert isinstance(reloaded, dict), (
+        f"Dict-format should be preserved, got {type(reloaded).__name__}: {reloaded!r}"
+    )
+    assert "prd_files" in reloaded, "prd_files key must be preserved"
+    modules = reloaded.get("modules", [])
+    assert len(modules) == 2, f"Expected 2 modules, got {len(modules)}: {modules}"
+    filenames = {m["filename"] for m in modules}
+    assert filenames == {"a_Python.prompt", "b_Python.prompt"}, (
+        f"Both modules should be present, got {filenames}"
+    )
+    # b is in scope (changed) — should keep LLM's mutation (added dep)
+    b_entry = next(m for m in modules if m["filename"] == "b_Python.prompt")
+    assert b_entry["dependencies"] == ["a_Python.prompt"]
+    # a is out of scope — should revert to previous (no deps)
+    a_entry = next(m for m in modules if m["filename"] == "a_Python.prompt")
+    assert a_entry["dependencies"] == []
+
