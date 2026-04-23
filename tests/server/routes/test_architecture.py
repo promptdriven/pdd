@@ -44,6 +44,8 @@ from pdd.server.routes.architecture import (
     ValidationWarning,
     generate_from_issue,
     GenerateFromIssueRequest,
+    generate_tags_for_prompt,
+    GenerateTagsRequest,
     rearrange_graph_layout,
     RearrangeRequest,
 )
@@ -212,6 +214,42 @@ async def test_validate_architecture_complex_mixed():
     
     # Check warnings
     assert any(w.type == "orphan_module" for w in result.warnings)
+
+
+@pytest.mark.asyncio
+async def test_generate_tags_for_prompt_success_uses_cwd_prompts_dir(tmp_path, monkeypatch):
+    """Success path should read prompt files from cwd/prompts without NameError."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "core_python.prompt").write_text(
+        "<pdd-reason>Existing tag</pdd-reason>",
+        encoding="utf-8",
+    )
+
+    entry = {
+        "filename": "core_python.prompt",
+        "reason": "Core reason",
+        "description": "Core module",
+        "dependencies": [],
+        "priority": 1,
+        "filepath": "core.py",
+    }
+
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("pdd.server.routes.architecture.get_architecture_entry_for_prompt", return_value=entry),
+        patch("pdd.server.routes.architecture.generate_tags_from_architecture", return_value="<pdd-reason>Core reason</pdd-reason>"),
+    ):
+        result = await generate_tags_for_prompt(
+            GenerateTagsRequest(prompt_filename="core_python.prompt")
+        )
+
+    assert result.success is True
+    assert result.tags == "<pdd-reason>Core reason</pdd-reason>"
+    assert result.has_existing_tags is True
+    assert result.architecture_entry == entry
+    assert result.error is None
 
 # -----------------------------------------------------------------------------
 # Rearrange Endpoint Tests

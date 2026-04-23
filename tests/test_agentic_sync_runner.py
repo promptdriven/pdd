@@ -1370,3 +1370,31 @@ class TestInitialCostTracking:
         # All modules pending (cost=0.0)
         body = runner._build_comment_body(1)
         assert "$0.50" in body
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+
+
+def test_dep_graph_from_dict_format_architecture(tmp_path):
+    """build_dep_graph_from_architecture with dict-format architecture.json builds correct graph (Test 10).
+
+    Bug: isinstance(arch, list) at agentic_sync_runner.py:120 returns False for
+    dict-format {"modules": [...]}, returning an empty dependency graph instead of
+    extracting and processing the modules.
+    """
+    arch = {
+        "modules": [
+            {"filename": "a_python.prompt", "dependencies": ["b_python.prompt"]},
+            {"filename": "b_python.prompt", "dependencies": []},
+        ]
+    }
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch))
+
+    result = build_dep_graph_from_architecture(arch_path, ["a", "b"])
+
+    assert result.graph["a"] == ["b"], (
+        "Dict-format architecture should produce a dependency graph, "
+        "but isinstance(arch, list) at agentic_sync_runner.py:120 rejects it "
+        f"and returns empty graph: {result.graph}"
+    )

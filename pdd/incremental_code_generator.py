@@ -17,7 +17,7 @@ class DiffAnalysis(BaseModel):
     analysis: str = Field(description="Detailed analysis of the differences and recommendation")
 
 class CodePatchResult(BaseModel):
-    patched_code: str = Field(description="The updated code with incremental patches applied")
+    patched_code: Optional[str] = Field(default=None, description="The updated code with incremental patches applied, or None/omitted when no code changes are needed (treated as a no-op, falls back to full regeneration)")
     analysis: str = Field(description="Analysis of the patching process")
     planned_modifications: str = Field(description="Description of the modifications planned and applied")
 
@@ -155,9 +155,10 @@ def incremental_code_generator(
                 console.print(Markdown(f"**Planned Modifications:**\n{patch_result.planned_modifications}"))
                 console.print(f"Total Cost: ${total_cost:.6f}")
 
-            # If the patcher returned code identical to the input, treat as
-            # no-op and signal the caller to fall back to full generation.
-            if patch_result.patched_code == existing_code:
+            # If the patcher returned None (field omitted) or code identical
+            # to the input, treat as no-op and signal the caller to fall back
+            # to full generation.
+            if patch_result.patched_code is None or patch_result.patched_code == existing_code:
                 if verbose:
                     console.print("[yellow]Incremental patch produced no changes. Recommending full regeneration.[/yellow]")
                 return None, False, total_cost, model_name

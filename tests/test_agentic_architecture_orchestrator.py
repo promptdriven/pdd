@@ -3341,3 +3341,80 @@ class TestStep8_5ContextDocs:
                 found_8_5_output = True
                 break
         assert found_8_5_output, "Step 8.5 output should be stored in state"
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+
+
+@patch("pdd.agentic_architecture_orchestrator.merge_architecture")
+def test_step7_dict_format_existing_arch_triggers_merge(
+    mock_merge, mock_dependencies, base_args
+):
+    """Dict-format existing architecture.json should trigger merge after step 7 (Test 20).
+
+    Bug: isinstance(existing_arch_snapshot, list) at line 900 is False for dict-format
+    {"modules": [...]}, setting snapshot to None. This causes the merge at line 965
+    to be skipped entirely, so existing modules from other sub-issues are lost when
+    step 7's new architecture replaces them.
+    """
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    # Create dict-format architecture.json BEFORE orchestrator runs (existing architecture)
+    existing_arch = {"modules": [
+        {"filename": "existing_module_Python.prompt", "priority": 1, "dependencies": []}
+    ]}
+    (cwd / "architecture.json").write_text(json.dumps(existing_arch), encoding="utf-8")
+
+    # New architecture that step 7 will produce (list format, as the LLM would generate)
+    new_arch = [
+        {"filename": "new_module_Python.prompt", "priority": 1, "dependencies": []},
+    ]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE\nComplexity score: 2/14.", 0.1, "gpt-4")
+        if "step5b" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7b" in label:
+            return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
+        if "step8_5" in label:
+            ctx_dir = cwd / "prompts" / "_context"
+            ctx_dir.mkdir(parents=True, exist_ok=True)
+            (ctx_dir / "data_dictionary.yaml").write_text("models: {}")
+            return (True, "FILES_CREATED: prompts/_context/data_dictionary.yaml", 0.1, "gpt-4")
+        if "step9b" in label:
+            return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
+        if "step10" in label or "step11" in label or "step12" in label:
+            return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
+        if "step7" in label:
+            # Step 7 writes new list-format architecture to disk
+            (cwd / "architecture.json").write_text(json.dumps(new_arch))
+            return (True, "FILES_CREATED: architecture.json", 0.1, "gpt-4")
+        if "step8" in label:
+            (cwd / ".pddrc").write_text("prompts_dir: prompts\n")
+            return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
+        if "step9" in label:
+            return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    # Mock merge_architecture to return merged result
+    merged = new_arch + [
+        {"filename": "existing_module_Python.prompt", "priority": 2, "dependencies": []}
+    ]
+    mock_merge.return_value = (
+        merged,
+        {"added": ["new_module_Python.prompt"], "updated": [], "unchanged": ["existing_module_Python.prompt"]},
+    )
+
+    success, msg, cost, model, files = run_agentic_architecture_orchestrator(**base_args)
+
+    # Bug: merge_architecture was NOT called because snapshot was set to None
+    assert mock_merge.called, (
+        "merge_architecture should be called to merge existing dict-format architecture "
+        "with step 7's output, but isinstance check at line 900 sets snapshot to None, "
+        "skipping the merge and losing existing modules"
+    )

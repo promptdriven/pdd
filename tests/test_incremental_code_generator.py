@@ -349,3 +349,200 @@ def test_decision_logic_formal_verification():
         solver.add(should_regenerate == combo["expected_should_regenerate"])
         solver.add(expected_logic)
         assert solver.check() == sat, f"Failed for {combo}"
+
+
+# --- Regression tests for issue #1273 ---
+# Bug: pdd sync fails with "Failed to parse response into CodePatchResult"
+# when the LLM correctly signals "no changes needed" by omitting patched_code.
+# Fix: CodePatchResult.patched_code must be Optional[str] with default None,
+# and the caller must treat None as a successful no-op.
+
+
+def test_code_patch_result_accepts_missing_patched_code_issue_1273():
+    """Schema-level regression: the exact LLM reproduction payload from issue #1273
+    must validate successfully as a CodePatchResult, with patched_code resolving
+    to None. Prior to the fix, patched_code was a required non-null string and
+    this payload raised ValidationError: 'patched_code — Field required'."""
+    reproduction_payload = {
+        "analysis": "No changes needed; existing code already satisfies the prompt.",
+        "planned_modifications": "None.",
+    }
+
+    # Must not raise; must coerce missing field to None.
+    result = CodePatchResult.model_validate(reproduction_payload)
+    assert result.patched_code is None
+    assert result.analysis == "No changes needed; existing code already satisfies the prompt."
+    assert result.planned_modifications == "None."
+
+
+def test_code_patch_result_accepts_explicit_null_patched_code_issue_1273():
+    """Schema-level regression: an LLM payload with an explicit null patched_code
+    (vs. omitting the field) must also validate. This covers JSON-mode LLMs that
+    emit `"patched_code": null` rather than omitting the key."""
+    null_payload = {
+        "patched_code": None,
+        "analysis": "No changes needed.",
+        "planned_modifications": "None.",
+    }
+
+    result = CodePatchResult.model_validate(null_payload)
+    assert result.patched_code is None
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_missing_patched_code_treated_as_noop_issue_1273(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """Caller regression: when the code-patcher LLM returns a result whose
+    patched_code is None (because the LLM omitted the field to signal no-op),
+    the caller must return (None, False, total_cost, model_name) — i.e. treat
+    it as a successful no-op, not raise. Prior to the fix this path raised
+    a RuntimeError wrapping a Pydantic ValidationError and aborted `pdd sync`."""
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+
+    # Simulate what llm_invoke returns after validating the LLM's JSON response
+    # against CodePatchResult — with the fix, missing patched_code -> None.
+    noop_patch_result = CodePatchResult.model_validate({
+        "analysis": "No changes needed; existing code already satisfies the prompt.",
+        "planned_modifications": "None.",
+    })
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False, cost=0.001),
+        {
+            "result": noop_patch_result,
+            "cost": 0.002,
+            "model_name": "test-patch-model",
+        },
+    ]
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+
+    assert updated_code is None, "Missing patched_code must be treated as no-op (None)"
+    assert is_incremental is False, "No-op must not be reported as incremental"
+    assert total_cost == pytest.approx(0.001 + 0.002)
+    assert model_name == "test-patch-model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_string_equality_noop_still_works_after_fix_issue_1273(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """Regression guard: the pre-existing string-equality no-op path
+    (patched_code == existing_code) must continue to return (None, False)
+    after the Optional[str] schema change, not be masked by the new None path."""
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False, cost=0.001),
+        mock_patch_response(patched_code=common_inputs["existing_code"], cost=0.002),
+    ]
+
+    updated_code, is_incremental, total_cost, _ = incremental_code_generator(**common_inputs)
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == pytest.approx(0.001 + 0.002)
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_happy_path_patch_still_returns_code_after_fix_issue_1273(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """Regression guard: the happy-path (LLM returns a real patched_code string
+    that differs from existing_code) must continue to return the patched code
+    with is_incremental=True. Ensures the Optional[str] fix hasn't accidentally
+    routed real patches into the no-op branch."""
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    new_code = "def example(x): return x + 1"
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False, cost=0.001),
+        mock_patch_response(patched_code=new_code, cost=0.002),
+    ]
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(**common_inputs)
+
+    assert updated_code == new_code
+    assert is_incremental is True
+    assert total_cost == pytest.approx(0.001 + 0.002)
+    assert model_name == "test-patch-model"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1273 end-to-end regression — address Greg's review blocker #1 on PR
+# #1280: the earlier tests mocked llm_invoke *after* Pydantic validation and
+# therefore did not prove the real `Failed to parse response into
+# CodePatchResult` error path is fixed. These tests feed raw LLM JSON through
+# CodePatchResult.model_validate_json — the exact code path that failed in
+# production — and verify the schema llm_invoke sends to the LLM still admits
+# null under OpenAI strict mode.
+# ---------------------------------------------------------------------------
+
+
+def test_real_parse_path_accepts_omitted_patched_code_end_to_end():
+    """The exact reproduction payload from issue #1273, parsed through the
+    same code path used by the cloud/local LLM invoker, must validate.
+
+    Before the fix this raised
+        ValidationError: patched_code — Field required [type=missing]
+    which is what `pdd sync` surfaced to users.
+    """
+    raw_llm_response = (
+        '{"analysis": "No changes needed; existing code already satisfies the '
+        'prompt.", "planned_modifications": "None."}'
+    )
+
+    result = CodePatchResult.model_validate_json(raw_llm_response)
+
+    assert result.patched_code is None
+    assert result.analysis.startswith("No changes needed")
+
+
+def test_real_parse_path_accepts_explicit_null_patched_code_end_to_end():
+    """Under OpenAI strict mode every property is in `required`, so the LLM
+    emits `"patched_code": null` rather than omitting the field. The raw
+    parse path must accept that null value."""
+    raw_llm_response = (
+        '{"analysis": "No changes needed.", "planned_modifications": "None.", '
+        '"patched_code": null}'
+    )
+
+    result = CodePatchResult.model_validate_json(raw_llm_response)
+    assert result.patched_code is None
+
+
+def test_schema_sent_to_llm_allows_null_patched_code():
+    """The JSON schema llm_invoke rewrites before sending to the LLM must
+    keep patched_code nullable — otherwise the schema rewriter would force
+    the LLM to emit a real string (sometimes existing_code, sometimes an
+    empty string) and the no-op signal is lost.
+
+    Guards against Greg's review blocker on PR #1280: Optional[str] on the
+    Pydantic model is only half the fix; the rewritten schema must still
+    admit null after `_ensure_all_properties_required` runs.
+    """
+    from pdd.llm_invoke import _ensure_all_properties_required
+
+    schema = CodePatchResult.model_json_schema()
+    schema = _ensure_all_properties_required(schema)
+
+    assert "patched_code" in schema["required"], (
+        "patched_code must be in schema['required'] for OpenAI strict mode"
+    )
+
+    patched_code_schema = schema["properties"]["patched_code"]
+    any_of_types = {sub.get("type") for sub in patched_code_schema.get("anyOf", [])}
+    assert "null" in any_of_types, (
+        f"patched_code schema must allow null (got {patched_code_schema!r}); "
+        "otherwise the LLM cannot signal 'no changes needed' under strict mode."
+    )
+    assert "string" in any_of_types, (
+        f"patched_code schema must still allow string (got {patched_code_schema!r})"
+    )

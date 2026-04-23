@@ -24,6 +24,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
+from .architecture_registry import extract_modules
 from .sync_order import extract_module_from_include
 
 console = Console()
@@ -117,12 +118,13 @@ def build_dep_graph_from_architecture(
     except (OSError, json.JSONDecodeError):
         return empty
 
-    if not isinstance(arch, list):
+    modules = extract_modules(arch)
+    if not modules:
         return empty
 
     # Map prompt filename -> stripped basename (e.g., "crm_models_Python.prompt" -> "crm_models")
     filename_to_basename: Dict[str, str] = {}
-    for entry in arch:
+    for entry in modules:
         filename = entry.get("filename", "")
         basename = extract_module_from_include(filename)
         if basename:
@@ -143,7 +145,7 @@ def build_dep_graph_from_architecture(
     warnings: List[str] = []
     # Build graph using original target basenames
     graph: Dict[str, List[str]] = {}
-    for entry in arch:
+    for entry in modules:
         basename = filename_to_basename.get(entry.get("filename", ""))
         if basename and basename in target_set:
             target_name = stripped_to_target[basename]

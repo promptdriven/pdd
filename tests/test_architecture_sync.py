@@ -21,9 +21,11 @@ from pdd.architecture_sync import (
     normalize_architecture_filenames,
     parse_prompt_tags,
     register_untracked_prompts,
+    sync_prompts_to_architecture,
     sync_all_prompts_to_architecture,
     update_architecture_from_prompt,
     validate_dependencies,
+    validate_architecture_modules,
     validate_interface_structure,
 )
 
@@ -121,6 +123,422 @@ def test_parse_tags_invalid_json_in_interface():
     assert result['reason'] == 'Valid reason'
     assert result['interface'] is None
     assert result['dependencies'] == []
+
+
+def test_parse_tags_after_leading_percent_preamble():
+    """Leading % prompt prose must not hide real PDD tags that follow."""
+    content = """% You are an expert TypeScript engineer.
+
+<pdd-reason>Reason after leading percent line</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
+<pdd-dependency>types_TypeScript.prompt</pdd-dependency>
+
+% Requirements
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result["reason"] == "Reason after leading percent line"
+    assert result["interface"] is not None
+    assert result["interface"]["type"] == "module"
+    assert result["dependencies"] == ["types_TypeScript.prompt"]
+
+
+def test_parse_tags_after_multiple_percent_and_blank_preamble_lines():
+    """Multiple leading %/blank lines before tags should still parse correctly."""
+    content = """% First preamble line
+% Second preamble line
+
+<pdd-reason>Still visible</pdd-reason>
+<pdd-dependency>dep.prompt</pdd-dependency>
+
+% Body
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result["reason"] == "Still visible"
+    assert result["dependencies"] == ["dep.prompt"]
+
+
+def test_parse_tags_after_leading_include_header():
+    """Leading XML-style include lines before the first real tag must remain parseable."""
+    content = """<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Reason after include header</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
+<pdd-dependency>dep.prompt</pdd-dependency>
+
+% Body
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result["reason"] == "Reason after include header"
+    assert result["interface"] is not None
+    assert result["interface"]["type"] == "module"
+    assert result["dependencies"] == ["dep.prompt"]
+
+
+def test_validate_architecture_modules_returns_route_shaped_result():
+    """Validation helper should produce the same dict shape the route exposes."""
+    modules = [
+        {
+            "filename": "core_python.prompt",
+            "filepath": "core.py",
+            "description": "Core module",
+            "reason": "Handles core logic",
+            "dependencies": ["dep_python.prompt"],
+            "priority": 1,
+        },
+        {
+            "filename": "dep_python.prompt",
+            "filepath": "dep.py",
+            "description": "Dependency module",
+            "reason": "Supports core logic",
+            "dependencies": [],
+            "priority": 2,
+        },
+    ]
+
+    result = validate_architecture_modules(modules)
+
+    assert result == {
+        "valid": True,
+        "errors": [],
+        "warnings": [],
+    }
+
+
+def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp_path):
+    """Single-prompt sync should normalize prompt paths, write changes, and validate."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "core_python.prompt").write_text(
+        "\n".join(
+            [
+                "<pdd-reason>New core reason</pdd-reason>",
+                "<pdd-dependency>dep_python.prompt</pdd-dependency>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "core_python.prompt",
+                    "filepath": "core.py",
+                    "description": "Core module",
+                    "reason": "Old reason",
+                    "dependencies": [],
+                    "priority": 1,
+                },
+                {
+                    "filename": "dep_python.prompt",
+                    "filepath": "dep.py",
+                    "description": "Dependency module",
+                    "reason": "Dependency reason",
+                    "dependencies": [],
+                    "priority": 2,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = sync_prompts_to_architecture(
+        filenames=["prompts/core_python.prompt"],
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False,
+    )
+
+    updated_arch = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    assert result["skipped_count"] == 0
+    assert result["validation"]["valid"] is True
+    assert result["errors"] == []
+    assert updated_arch[0]["reason"] == "New core reason"
+    assert updated_arch[0]["dependencies"] == ["dep_python.prompt"]
+
+
+def test_sync_prompts_to_architecture_dry_run_preserves_architecture_file(tmp_path):
+    """Dry-run should report changes without rewriting architecture.json."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "core_python.prompt").write_text(
+        "<pdd-reason>Changed in dry run</pdd-reason>",
+        encoding="utf-8",
+    )
+
+    original_architecture = json.dumps(
+        [
+            {
+                "filename": "core_python.prompt",
+                "filepath": "core.py",
+                "description": "Core module",
+                "reason": "Original reason",
+                "dependencies": [],
+                "priority": 1,
+            }
+        ]
+    )
+    architecture_path.write_text(original_architecture, encoding="utf-8")
+
+    result = sync_prompts_to_architecture(
+        filenames=["core_python.prompt"],
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    assert result["validation"]["valid"] is True
+    assert architecture_path.read_text(encoding="utf-8") == original_architecture
+
+
+def test_sync_prompts_to_architecture_reports_sync_errors_without_crashing(tmp_path):
+    """Missing prompt files should be surfaced in the shared result structure."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "core_python.prompt",
+                    "filepath": "core.py",
+                    "description": "Core module",
+                    "reason": "Core reason",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = sync_prompts_to_architecture(
+        filenames=["missing_python.prompt"],
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False,
+    )
+
+    assert result["success"] is False
+    assert result["updated_count"] == 0
+    assert result["validation"]["valid"] is True
+    assert result["errors"] == [
+        "missing_python.prompt: Prompt file not found: missing_python.prompt"
+    ]
+
+
+def test_update_architecture_from_prompt_parses_tags_after_leading_percent_preamble(tmp_path):
+    """Architecture sync should update entries when prompts start with % preamble lines."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "lib_db_TypeScript.prompt").write_text(
+        """% You are an expert TypeScript engineer.
+
+<pdd-reason>Updated from prompt tags</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": [{"name": "getDb", "signature": "(): Database", "returns": "db"}]}}</pdd-interface>
+<pdd-dependency>types_TypeScript.prompt</pdd-dependency>
+
+% Body
+""",
+        encoding="utf-8",
+    )
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "lib_db_TypeScript.prompt",
+                    "filepath": "lib/db.ts",
+                    "description": "db",
+                    "reason": "Old reason",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = update_architecture_from_prompt(
+        "lib_db_TypeScript.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert result["success"] is True
+    assert result["updated"] is True
+    assert result["changes"]["reason"]["new"] == "Updated from prompt tags"
+    assert result["changes"]["dependencies"]["new"] == ["types_TypeScript.prompt"]
+
+
+def test_update_architecture_from_prompt_parses_tags_after_leading_include_header(tmp_path):
+    """Architecture sync should update entries when prompts start with include headers."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "agentic_split_python.prompt").write_text(
+        """<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Updated from include-first prompt tags</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": [{"name": "run_agentic_split", "signature": "(target_file)", "returns": "tuple"}]}}</pdd-interface>
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% Body
+""",
+        encoding="utf-8",
+    )
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "agentic_split_python.prompt",
+                    "filepath": "pdd/agentic_split.py",
+                    "description": "agentic split",
+                    "reason": "Old reason",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = update_architecture_from_prompt(
+        "agentic_split_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=True,
+    )
+
+    assert result["success"] is True
+    assert result["updated"] is True
+    assert result["changes"]["reason"]["new"] == "Updated from include-first prompt tags"
+    assert result["changes"]["dependencies"]["new"] == [
+        "agentic_split_orchestrator_python.prompt"
+    ]
+
+
+def test_sync_prompts_to_architecture_prefers_nearest_cwd_project(tmp_path, monkeypatch):
+    """Default path resolution should target the nearest ancestor with prompts/architecture."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    root_prompts = repo_root / "prompts"
+    root_prompts.mkdir()
+    (root_prompts / "root_python.prompt").write_text(
+        "<pdd-reason>Updated root reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (repo_root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "root_python.prompt",
+                    "filepath": "root.py",
+                    "description": "Root module",
+                    "reason": "Original root reason",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    nested_root = repo_root / "apps" / "nested"
+    nested_root.mkdir(parents=True)
+    nested_prompts = nested_root / "prompts"
+    nested_prompts.mkdir()
+    (nested_prompts / "nested_python.prompt").write_text(
+        "<pdd-reason>Updated nested reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (nested_root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "nested_python.prompt",
+                    "filepath": "nested.py",
+                    "description": "Nested module",
+                    "reason": "Original nested reason",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(nested_root)
+
+    result = sync_prompts_to_architecture(dry_run=False)
+
+    root_arch = json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))
+    nested_arch = json.loads((nested_root / "architecture.json").read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    assert root_arch[0]["reason"] == "Original root reason"
+    assert nested_arch[0]["reason"] == "Updated nested reason"
+
+
+def test_sync_prompts_to_architecture_falls_back_to_repo_root_from_nested_cwd(tmp_path, monkeypatch):
+    """If no nearer prompts/architecture exist, default resolution should fall back to repo root."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    root_prompts = repo_root / "prompts"
+    root_prompts.mkdir()
+    (root_prompts / "root_python.prompt").write_text(
+        "<pdd-reason>Updated root reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (repo_root / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "root_python.prompt",
+                    "filepath": "root.py",
+                    "description": "Root module",
+                    "reason": "Original root reason",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    nested_cwd = repo_root / "apps" / "nested" / "src"
+    nested_cwd.mkdir(parents=True)
+    monkeypatch.chdir(nested_cwd)
+
+    result = sync_prompts_to_architecture(dry_run=False)
+    root_arch = json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    assert root_arch[0]["reason"] == "Updated root reason"
 
 
 def test_parse_tags_double_brace_escaped_json():
@@ -2058,6 +2476,30 @@ def test_register_untracked_prompts_adds_entry():
         assert 'python' in cli_entry['tags']
 
 
+def test_register_untracked_prompts_adds_include_first_entry():
+    """Auto-registration must not skip prompts whose header starts with <include>."""
+    with tempfile.TemporaryDirectory() as tmp:
+        prompts_dir = Path(tmp)
+        arch_path = Path(tmp) / 'architecture.json'
+
+        (prompts_dir / 'commands_modify_python.prompt').write_text(
+            '<include>context/python_preamble.prompt</include>\n\n'
+            '<pdd-reason>Modify commands</pdd-reason>\n'
+            '<pdd-dependency>split_main_python.prompt</pdd-dependency>\n'
+            '% body\n'
+        )
+        arch_path.write_text(json.dumps([], indent=2) + '\n')
+
+        result = register_untracked_prompts(prompts_dir=prompts_dir, architecture_path=arch_path)
+
+        assert 'commands_modify_python.prompt' in result['registered']
+
+        updated = json.loads(arch_path.read_text())
+        entry = next(m for m in updated if m['filename'] == 'commands_modify_python.prompt')
+        assert entry['reason'] == 'Modify commands'
+        assert entry['dependencies'] == ['split_main_python.prompt']
+
+
 def test_register_skips_file_without_tags():
     """register_untracked_prompts skips prompt files with no PDD tags."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -3021,3 +3463,103 @@ def test_merge_rejects_when_only_self_overlaps():
     assert "app_ref" in merged
     assert "basename" not in merged
     assert len(warnings) > 0
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+
+
+def test_register_untracked_prompts_dict_format_architecture(tmp_path):
+    """register_untracked_prompts with dict-format architecture.json does not crash (Test 12).
+
+    Bug: iterating dict-format data yields dict keys (strings like "modules"),
+    not module entries. m.get("filename") crashes with
+    AttributeError: 'str' object has no attribute 'get' at architecture_sync.py:313.
+    """
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    # Existing prompt tracked in architecture
+    (prompts / "existing_Python.prompt").write_text(
+        "% PDD-generated\n", encoding="utf-8"
+    )
+    # Untracked prompt not in architecture
+    (prompts / "untracked_Python.prompt").write_text(
+        "% PDD-generated\n", encoding="utf-8"
+    )
+    # Dict-format architecture
+    arch = {"modules": [
+        {"filename": "existing_Python.prompt", "priority": 1, "dependencies": []}
+    ]}
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    result = register_untracked_prompts(
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=True,
+    )
+    assert isinstance(result, dict), (
+        "register_untracked_prompts should handle dict-format architecture "
+        "without crashing (currently iterates dict keys instead of modules)"
+    )
+    # After fix, untracked_Python.prompt should be detected
+    assert "existing_Python.prompt" not in result.get("registered", []), (
+        "Already-tracked prompt should not be re-registered"
+    )
+
+
+def test_get_architecture_entry_for_prompt_dict_format(tmp_path):
+    """get_architecture_entry_for_prompt with dict-format architecture finds the entry (Test 13).
+
+    Bug: iterating dict-format data yields dict keys (strings like "modules"),
+    not module entries. entry.get("filename") crashes with
+    AttributeError: 'str' object has no attribute 'get' at architecture_sync.py:1045.
+    """
+    from pdd.architecture_sync import get_architecture_entry_for_prompt
+
+    arch = {"modules": [
+        {"filename": "auth_Python.prompt", "priority": 1, "reason": "Auth module"}
+    ]}
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    entry = get_architecture_entry_for_prompt(
+        "auth_Python.prompt", architecture_path=arch_path
+    )
+    assert entry is not None, (
+        "Dict-format architecture should return the matching entry, "
+        "but directly iterating dict yields keys (strings), causing AttributeError"
+    )
+    assert entry["reason"] == "Auth module"
+
+
+def test_register_untracked_prompts_preserves_dict_format(tmp_path):
+    """register_untracked_prompts preserves {prd_files, modules} on-disk shape after write-back."""
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "existing_Python.prompt").write_text(
+        "% PDD-generated\n", encoding="utf-8"
+    )
+    (prompts / "new_Python.prompt").write_text(
+        "<pdd-reason>New module</pdd-reason>\n%\n", encoding="utf-8"
+    )
+    arch = {
+        "prd_files": ["docs/prd.md"],
+        "modules": [
+            {"filename": "existing_Python.prompt", "priority": 1, "dependencies": []}
+        ],
+    }
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch, indent=2), encoding="utf-8")
+
+    register_untracked_prompts(
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+
+    reloaded = json.loads(arch_path.read_text(encoding="utf-8"))
+    assert isinstance(reloaded, dict), "On-disk format should remain dict after write-back"
+    assert reloaded.get("prd_files") == ["docs/prd.md"], "prd_files should be preserved"
+    assert isinstance(reloaded.get("modules"), list), "modules key should be preserved"
+    filenames = {m["filename"] for m in reloaded["modules"]}
+    assert "new_Python.prompt" in filenames, "Newly registered prompt should be in modules"

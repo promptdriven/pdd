@@ -484,3 +484,147 @@ def test_find_architecture_skips_venv_directories(tmp_path):
         f"Expected 1 architecture file (backend/api only), got {len(result)}: {result}"
     )
     assert result[0] == tmp_path / "backend" / "api" / "architecture.json"
+
+
+# --- Issue #1256: Tolerant architecture.json loader tests ---
+
+
+def test_extract_modules_bare_array():
+    """extract_modules returns modules from bare array input (Test 1)."""
+    from pdd.architecture_registry import extract_modules
+
+    data = [{"filename": "auth_Python.prompt", "priority": 1, "dependencies": []}]
+    result = extract_modules(data)
+    assert len(result) == 1
+    assert result[0]["filename"] == "auth_Python.prompt"
+    assert result[0]["priority"] == 1
+
+
+def test_extract_modules_object_format():
+    """extract_modules returns modules from object-format {prd_files, modules} input (Test 2)."""
+    from pdd.architecture_registry import extract_modules
+
+    data = {
+        "prd_files": ["docs/prd.md"],
+        "modules": [{"filename": "auth_Python.prompt", "priority": 1, "dependencies": []}],
+    }
+    result = extract_modules(data)
+    assert len(result) == 1
+    assert result[0]["filename"] == "auth_Python.prompt"
+
+
+def test_extract_modules_unknown_shapes_return_empty():
+    """extract_modules returns [] for unknown shapes without raising (Test 3)."""
+    from pdd.architecture_registry import extract_modules
+
+    for bad_input in ["just a string", 42, None, {"random_key": "value"}, {"modules": "not_a_list"}]:
+        result = extract_modules(bad_input)
+        assert result == [], f"Expected [] for input {bad_input!r}, got {result!r}"
+
+
+def test_extract_modules_filters_non_dict_entries():
+    """extract_modules filters out non-dict entries from the modules list (Test 4)."""
+    from pdd.architecture_registry import extract_modules
+
+    data = [{"filename": "a.prompt"}, "stray_string", 42, {"filename": "b.prompt"}]
+    result = extract_modules(data)
+    assert len(result) == 2
+    assert result[0]["filename"] == "a.prompt"
+    assert result[1]["filename"] == "b.prompt"
+
+
+def test_extract_prd_files_object_format():
+    """extract_prd_files returns prd_files from object-format input (Test 5)."""
+    from pdd.architecture_registry import extract_prd_files
+
+    data = {
+        "prd_files": ["docs/prd.md", "docs/spec.md"],
+        "modules": [{"filename": "auth_Python.prompt"}],
+    }
+    result = extract_prd_files(data)
+    assert result == ["docs/prd.md", "docs/spec.md"]
+
+
+def test_extract_prd_files_returns_empty_for_non_object():
+    """extract_prd_files returns [] for bare array, unknown shapes, and dicts without prd_files (Test 6)."""
+    from pdd.architecture_registry import extract_prd_files
+
+    for input_data in [
+        [{"filename": "a.prompt"}],
+        "string",
+        42,
+        None,
+        {"modules": [{"filename": "a.prompt"}]},
+    ]:
+        result = extract_prd_files(input_data)
+        assert result == [], f"Expected [] for input {input_data!r}, got {result!r}"
+
+
+def test_load_combined_mixed_formats_returns_combined_modules(tmp_path):
+    """load_combined_architecture_data with mixed formats returns modules from both files (Test 7).
+
+    Root architecture.json uses bare-array format; subdir uses object-format.
+    Both should contribute modules to the combined result.
+    """
+    from pdd.architecture_registry import load_combined_architecture_data
+
+    # Root architecture.json: bare array format
+    root_arch = [{"filename": "mod_a_Python.prompt", "priority": 1, "dependencies": []}]
+    (tmp_path / "architecture.json").write_text(json.dumps(root_arch), encoding="utf-8")
+
+    # Subdir architecture.json: object format
+    subdir = tmp_path / "backend"
+    subdir.mkdir()
+    subdir_arch = {
+        "prd_files": ["prd.md"],
+        "modules": [{"filename": "mod_b_Python.prompt", "priority": 2, "dependencies": []}],
+    }
+    (subdir / "architecture.json").write_text(json.dumps(subdir_arch), encoding="utf-8")
+
+    combined, primary_path = load_combined_architecture_data(tmp_path)
+
+    assert combined is not None, (
+        "load_combined_architecture_data returned None — dict-format architecture.json "
+        "was silently dropped by isinstance(data, list) check at architecture_registry.py:271"
+    )
+    filenames = {m["filename"] for m in combined}
+    assert "mod_a_Python.prompt" in filenames, "Bare-array module should be in combined result"
+    assert "mod_b_Python.prompt" in filenames, (
+        "Object-format module should be in combined result but was silently dropped "
+        "by isinstance(data, list) check at architecture_registry.py:271"
+    )
+
+
+def test_load_combined_preserves_object_format_on_write_back(tmp_path):
+    """Write-back of object-format architecture.json preserves {prd_files, modules} shape (Test 8)."""
+    from pdd.architecture_registry import extract_modules, extract_prd_files
+
+    original_data = {
+        "prd_files": ["docs/prd.md", "docs/spec.md"],
+        "modules": [
+            {"filename": "auth_Python.prompt", "priority": 1, "dependencies": []},
+            {"filename": "api_Python.prompt", "priority": 2, "dependencies": ["auth_Python.prompt"]},
+        ],
+    }
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(original_data, indent=2), encoding="utf-8")
+
+    # Load, extract modules, modify one
+    raw = json.loads(arch_path.read_text(encoding="utf-8"))
+    modules = extract_modules(raw)
+    assert len(modules) == 2, "extract_modules should return 2 modules from object-format"
+
+    # Modify a module
+    modules[0]["priority"] = 99
+
+    # Reconstruct and write back (preserving object-format shape)
+    prd_files = extract_prd_files(raw)
+    written_data = {"prd_files": prd_files, "modules": modules}
+    arch_path.write_text(json.dumps(written_data, indent=2), encoding="utf-8")
+
+    # Verify object-format is preserved
+    reloaded = json.loads(arch_path.read_text(encoding="utf-8"))
+    assert isinstance(reloaded, dict), "On-disk file should remain object-format (dict)"
+    assert "prd_files" in reloaded, "prd_files key should be preserved on write-back"
+    assert reloaded["prd_files"] == ["docs/prd.md", "docs/spec.md"]
+    assert reloaded["modules"][0]["priority"] == 99

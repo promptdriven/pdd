@@ -14,7 +14,7 @@
 % Output a JSON object with:
     - analysis: string - a detailed analysis of the changes needed
     - planned_modifications: string - a detailed description of the modifications needed and why this change should not break the existing code
-    - patched_code: string - the complete updated code after applying all necessary changes
+    - patched_code: string OR null - the complete updated code after applying all necessary changes. Return null when the new prompt requires no functional changes to the existing code (the caller treats null as a no-op and falls back to full regeneration — see issue #1273).
 
 ORIGINAL_PROMPT:
 <original_prompt>
@@ -61,3 +61,11 @@ Now, implement those changes to create the updated code:
   "patched_code": "YOUR COMPLETE UPDATED CODE HERE"
 }}
 </output_json_example>
+
+<output_json_example_noop>
+{{
+  "analysis": "The new prompt does not alter any behavior observable in the existing code; every requirement is already satisfied.",
+  "planned_modifications": "None — no source changes required.",
+  "patched_code": null
+}}
+</output_json_example_noop>

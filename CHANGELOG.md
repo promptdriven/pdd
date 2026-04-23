@@ -1,22 +1,25 @@
+## v0.0.216 (2026-04-22)
+
+### Fix
+
+- address Greg's review blockers on #1273 (prompt + end-to-end tests)
+- pdd sync fails with 'Failed to parse response into CodePatchResult' when LLM correctly returns no-change
+- tolerant architecture.json loader — accept list or dict format across all consumers (#1256) (#1264)
+
 ## v0.0.215 (2026-04-21)
 
 ### Fix
 
-- resolve nested frontend page paths
-- guard OSError in both passes and add two-pass pipeline tests
-- backtick-escape bare <include> in prompts to prevent regex false-positive in pass 2
-- Preprocessing regex eats prompt content when literal <include> in prose exceeds 255 bytes
-- use repo-relative prompt paths for auto-heal reverts
-- anchor verdict regex to line start, accept plain Status: format
-- replace naive substring matching with structured verdict regex in _check_hard_stop (steps 2/6/8)
-- block commit when drift-heal revert fails
-- fail closed on partial auto-heal update
+- **`preprocess` — guard bare `<include>` in prose against content-eating regex (#1261)**: the `<include>...</include>` pattern is non-greedy but unrestricted, so a literal `<include>` token in free-form prose whose closing form appeared hundreds of bytes later would get interpreted as an include directive and the intervening content would be replaced by `[Error processing include: ...]`. This reliably fired whenever the "eaten" span exceeded ~255 bytes on platforms where `ENAMETOOLONG` causes `open()` to raise `OSError`. Both `process_backtick_includes` and `process_include_tags` now catch `OSError` separately from generic exceptions and return `match.group(0)` (the original matched text) so the prompt content is preserved byte-for-byte. The existing `FileNotFoundError` / generic `Exception` branches also now preserve the original text on recursive-mode calls instead of collapsing to an error string, closing the pass-2 variant where two-pass callers (`code_generator_main`, agentic orchestrators) would still lose content. Regression tests in `tests/test_preprocess.py` exercise the full two-pass pipeline
+- **`agentic_change_orchestrator` — structured verdict regex in `_check_hard_stop` (steps 2/6/8) (#1263)**: the hard-stop check for steps 2 ("Already implemented"), 6 ("No dev units found"), and 8 ("No changes required") used naive `"keyword" in output_lower` substring matching. This false-positived on negated phrases and category discussions in LLM output — e.g. a step 2 report quoting the instruction `"STOP only if already implemented"` would itself trigger the stop condition. Replaced with line-anchored regex `^(?:\*\*)?(?:status|result)[:\s*]*<phrase>` under `re.MULTILINE`, which matches only the structured verdict line (either bold `**Status:** already implemented` or plain `Status: already implemented`) and rejects quoted instructions or indented prose. Steps 4/7 already used explicit `STOP_CONDITION:` tags for the same reason. The `agentic_change_orchestrator_python.prompt` Stop Conditions table is updated to document the regex contract per step
+- **`ci_drift_heal` — fail closed on partial auto-heal update**: previously, when `pdd update` succeeded but the follow-up `pdd sync` for the example failed, `heal_module` printed a yellow warning and still returned `True`, so `commit_and_push` would stage and publish a half-healed module (prompt updated, example unsynced). The behavior is inverted: on sync failure the prompt update is reverted via `_revert_prompt_file` and the module is marked failed. Also refuses to run a bare repo-wide `pdd update` when `drift.code_path` cannot be resolved (previously fell through to a repo-wide update that could rewrite unrelated prompts)
+- **`ci_drift_heal` — block commit phase when a failed heal cannot be safely reverted**: introduces a `PromptRevertError` exception and a hardened `_revert_prompt_file` helper that asserts the revert actually happened (non-zero `git checkout` exit, or a non-empty `git status --porcelain` after the checkout, both trip the error). `main` catches `PromptRevertError`, sets an `unsafe_to_commit` flag, and short-circuits Phase 3 (commit) with a red error message rather than publishing partial heal changes. Regression tests cover the "revert failed → commit skipped" path
+- **`ci_drift_heal` — use repo-relative prompt paths for auto-heal reverts**: `DriftInfo.prompt_path` holds absolute paths (that's what `get_pdd_file_paths` returns), but `git checkout HEAD -- <path>` and `git status --porcelain -- <path>` both require a repo-relative POSIX path in Cloud Build. A new `_git_repo_relative_path` helper resolves absolute paths against `git rev-parse --show-toplevel` and returns `None` when the path is outside the repo. `_git_show_prompt_at_head` is refactored to share this helper. Without this fix, every revert attempt in Cloud Build silently failed with "fatal: <path> is outside repository"
+- **`sync_determine_operation` — resolve nested frontend page paths (#1267, #1269)**: prompt/code lookup for nested basenames like `github/page` (backed by `prompts/github/page_typescript.prompt` and a context-scoped `pages/github/page.tsx`) previously failed in two places. `_find_prompt_file` only tried the flat basename tail (`page_typescript.prompt`) on the fast path, missing the nested layout; and `_get_filepath_from_architecture` would match any unrelated module whose filename happened to be `page_typescript.prompt` even if its `filepath` pointed somewhere completely different. Introduces a `_prompt_basename_candidates` helper that yields candidates ordered from most- to least-specific (full basename → context-relative basename → simple tail, de-duplicated), a `_case_insensitive_path_lookup` helper for macOS/Linux parity, and a `_module_filepath_matches_basename` guard that only accepts a flat-filename architecture match when the module's `filepath` tail also aligns with the basename's directory parts. `get_pdd_file_paths` resolves the prompt filename as a prompts-root-relative POSIX path before consulting architecture, and overlays construct_paths-derived output locations onto the template-derived result via a new `_overlay_configured_output_paths` helper so nested code outputs land under the right context-scoped directory
 
-### Refactor
+### Build
 
-- resolve per-target configurations, fix meta-prompt framing, implement draft PR auto-heal, and standardize project root resolution
-
-## v0.0.214 (2026-04-20)
+- **auto-healed prompt/example drift**: refresh `agentic_change_orchestrator_python.prompt` and `agentic_architecture_orchestrator_python.prompt` to narrow their `<include>` directives with `select=`/`query=` qualifiers (e.g. `<include select="def:preprocess">pdd/preprocess.py</include>`) so the orchestrator prompts pull only the functions they actually reference; refresh `validate_prompt_includes_python.prompt` to declare a `pdd.auto_include` dependency and backtick-escape every literal `<include>` reference so the tokens survive pass 2 preprocessing; refresh `sync_order_python.prompt` with the same backtick-escape treatment for bare `<include>` tokens in its Role/Requirements/Instructions blocks
 
 ### Fix
 

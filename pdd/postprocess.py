@@ -121,6 +121,7 @@ def postprocess(
             strength=strength,
             temperature=temperature,
             time=time,
+            language=language,
             output_pydantic=ExtractedCode,
             verbose=verbose,
         )

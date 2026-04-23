@@ -2,9 +2,10 @@
 Maintenance commands (sync, auto_deps, setup).
 """
 import click
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from pathlib import Path
 
+from ..architecture_sync import sync_prompts_to_architecture
 from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
 from ..agentic_sync import _is_github_issue_url, run_agentic_sync
@@ -222,6 +223,84 @@ def _run_agentic_sync_dispatch(
         raise
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
+        return None
+
+
+def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> None:
+    """Render a concise summary for prompt-to-architecture sync."""
+    summary = (
+        f"Dry run: would update {result['updated_count']} module(s); "
+        f"skipped {result['skipped_count']}."
+        if dry_run
+        else f"Updated {result['updated_count']} module(s); skipped {result['skipped_count']}."
+    )
+    click.echo(summary)
+
+    for entry in result.get("results", []):
+        if entry.get("updated"):
+            click.echo(f"UPDATED {entry['filename']}")
+        elif not entry.get("success"):
+            click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
+
+    sync_errors = result.get("errors", [])
+    validation = result.get("validation", {})
+    validation_errors = validation.get("errors", [])
+    validation_warnings = validation.get("warnings", [])
+
+    if sync_errors:
+        click.echo("Sync errors:")
+        for error in sync_errors:
+            click.echo(f"- {error}")
+
+    if validation_errors:
+        click.echo("Validation errors:")
+        for error in validation_errors:
+            click.echo(f"- {error['message']}")
+
+    if validation_warnings:
+        click.echo("Validation warnings:")
+        for warning in validation_warnings:
+            click.echo(f"- {warning['message']}")
+
+
+@click.command("sync-architecture")
+@click.argument("filenames", nargs=-1)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Analyze prompt-to-architecture sync without writing architecture.json.",
+)
+@click.pass_context
+@track_cost
+def sync_architecture(
+    ctx: click.Context,
+    filenames: Tuple[str, ...],
+    dry_run: bool,
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
+    """Sync architecture.json from prompt metadata tags."""
+    ctx.ensure_object(dict)
+    quiet = ctx.obj.get("quiet", False)
+
+    try:
+        result = sync_prompts_to_architecture(
+            filenames=list(filenames) or None,
+            dry_run=dry_run,
+        )
+
+        if not quiet:
+            _echo_architecture_sync_result(result, dry_run=dry_run)
+
+        if not result.get("success"):
+            raise click.exceptions.Exit(1)
+
+        return result, 0.0, "local"
+    except click.Abort:
+        raise
+    except click.exceptions.Exit:
+        raise
+    except Exception as exception:
+        handle_error(exception, "sync-architecture", quiet)
         return None
 
 

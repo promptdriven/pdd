@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Optional
 
+from .architecture_registry import extract_modules
 from .sync_order import extract_includes_from_file, extract_module_from_include
 
 
@@ -73,10 +74,11 @@ def collect_architecture_include_validation_warnings(
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             continue
-        if not isinstance(data, list) or not data:
+        modules = extract_modules(data)
+        if not modules:
             continue
         base = arch_path.parent
-        for w in cross_validate_architecture_with_prompt_includes(data, base):
+        for w in cross_validate_architecture_with_prompt_includes(modules, base):
             warnings.append(f"{arch_path}: {w}")
     return warnings
 

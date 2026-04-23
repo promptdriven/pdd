@@ -40,6 +40,7 @@ from pdd.sync_order import (
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
 from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
+from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 
 # Initialize console for rich output
@@ -98,8 +99,9 @@ def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
     try:
         with open(arch_path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        modules = extract_modules(data)
         changed = False
-        for entry in data:
+        for entry in modules:
             if not isinstance(entry, dict):
                 continue
             deps = entry.get("dependencies", [])
@@ -111,6 +113,11 @@ def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
                 entry["dependencies"] = clean
                 changed = True
         if changed:
+            # Preserve on-disk format: if original was dict-format, write back as dict
+            if isinstance(data, dict) and isinstance(data.get("modules"), list):
+                data["modules"] = modules
+            else:
+                data = modules
             with open(arch_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
     except (json.JSONDecodeError, OSError):
@@ -135,18 +142,12 @@ def _scope_architecture_to_changed_files(
 
     try:
         with open(arch_path, "r", encoding="utf-8") as f:
-            current_architecture = json.load(f)
+            raw_arch = json.load(f)
     except (json.JSONDecodeError, OSError):
         return
 
-    # Build a set of filenames that are in scope from changed_files.
-    # changed_files may contain paths like "pdd/prompts/foo_python.prompt",
-    # "prompts/foo_python.prompt", "pdd/prompts/commands/foo_python.prompt",
-    # or "architecture.json".
-    #
-    # We add both the basename and the relative path under "prompts/"
-    # so that subdirectory prompts (e.g. "commands/maintenance_python.prompt")
-    # match their architecture.json filename field.
+    current_modules = extract_modules(raw_arch)
+
     in_scope_filenames: set = set()
     for fp in changed_files:
         normalized = fp.replace("\\", "/")
@@ -161,7 +162,6 @@ def _scope_architecture_to_changed_files(
             if rel != basename:
                 in_scope_filenames.add(rel)
 
-    # Build lookup from previous architecture by filename and filepath
     prev_by_filename: Dict[str, Dict[str, Any]] = {}
     prev_by_filepath: Dict[str, Dict[str, Any]] = {}
     for entry in previous_architecture:
@@ -175,33 +175,29 @@ def _scope_architecture_to_changed_files(
             prev_by_filepath[fp] = entry
 
     scoped: List[Dict[str, Any]] = []
-    for entry in current_architecture:
-        if not isinstance(entry, dict):
-            scoped.append(entry)
-            continue
-
+    for entry in current_modules:
         filename = entry.get("filename", "")
         filepath = entry.get("filepath", "")
 
-        # Determine if this entry is in scope
         entry_in_scope = filename in in_scope_filenames
 
         if entry_in_scope:
-            # Changed file — keep LLM's mutations
             scoped.append(entry)
         else:
-            # Out of scope — look up previous version
             prev_entry = prev_by_filename.get(filename)
             if prev_entry is None and filepath:
                 prev_entry = prev_by_filepath.get(filepath)
             if prev_entry is not None:
-                # Revert to previous
                 scoped.append(prev_entry)
-            # else: entry didn't exist before AND isn't in scope — drop it (hallucination)
 
     try:
+        if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
+            raw_arch["modules"] = scoped
+            write_data = raw_arch
+        else:
+            write_data = scoped
         with open(arch_path, "w", encoding="utf-8") as f:
-            json.dump(scoped, f, indent=2)
+            json.dump(write_data, f, indent=2)
     except OSError:
         pass
 
@@ -223,38 +219,30 @@ def _validate_architecture_filepaths(
 
     try:
         with open(arch_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            raw_arch = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
 
+    modules = extract_modules(raw_arch)
     warnings: List[str] = []
     changed = False
 
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
+    for entry in modules:
         filepath = entry.get("filepath")
         if not filepath:
             continue
 
         full_path = worktree_path / filepath
         if full_path.exists():
-            continue  # filepath is valid
+            continue
 
-        # Try to derive the conventional PDD path from the filename field.
-        # filename is like "ci_drift_heal_python.prompt" -> module "ci_drift_heal" -> "pdd/ci_drift_heal.py"
-        # Only Python modules can be reliably mapped to pdd/<name>.py; other
-        # languages (shell, typescript, etc.) have different conventions.
         filename = entry.get("filename", "")
         conventional_path = None
         if filename.endswith(".prompt"):
-            # Strip the language suffix (e.g. "_python.prompt", "_shell.prompt")
             stem = filename[:-len(".prompt")]
-            # Remove the last _<language> suffix
             parts = stem.rsplit("_", 1)
             if len(parts) == 2:
                 module_name, lang_suffix = parts
-                # Only derive pdd/<module>.py for Python modules
                 if lang_suffix == "python":
                     conventional_path = f"pdd/{module_name}.py"
 
@@ -273,8 +261,13 @@ def _validate_architecture_filepaths(
 
     if changed:
         try:
+            if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
+                raw_arch["modules"] = modules
+                write_data = raw_arch
+            else:
+                write_data = modules
             with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(write_data, f, indent=2)
         except OSError:
             pass
 
@@ -292,9 +285,11 @@ def _sanitize_architecture_interfaces(
 
     try:
         with open(arch_path, "r", encoding="utf-8") as f:
-            current_architecture = json.load(f)
+            raw_arch = json.load(f)
     except (json.JSONDecodeError, OSError):
         return []
+
+    current_modules = extract_modules(raw_arch)
 
     old_by_filename = {
         entry.get("filename"): entry
@@ -310,10 +305,7 @@ def _sanitize_architecture_interfaces(
     warnings: List[str] = []
     changed = False
 
-    for entry in current_architecture:
-        if not isinstance(entry, dict):
-            continue
-
+    for entry in current_modules:
         old_entry = None
         filename = entry.get("filename")
         filepath = entry.get("filepath")
@@ -335,8 +327,13 @@ def _sanitize_architecture_interfaces(
 
     if changed:
         try:
+            if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
+                raw_arch["modules"] = current_modules
+                write_data = raw_arch
+            else:
+                write_data = current_modules
             with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(current_architecture, f, indent=2)
+                json.dump(write_data, f, indent=2)
         except OSError:
             return []
 
@@ -1045,7 +1042,7 @@ def run_agentic_change_orchestrator(
             if arch_path.exists():
                 try:
                     with open(arch_path, "r", encoding="utf-8") as f:
-                        previous_architecture = json.load(f)
+                        previous_architecture = extract_modules(json.load(f))
                 except (json.JSONDecodeError, OSError):
                     previous_architecture = None
 

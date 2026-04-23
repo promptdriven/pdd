@@ -29,6 +29,7 @@ from .architecture_sync import (
     has_pdd_tags,
     generate_tags_from_architecture,
 )
+from .architecture_registry import extract_modules
 from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
@@ -241,7 +242,7 @@ def _verify_architecture_conformance(
     # Find the matching architecture entry
     entry: Optional[Dict[str, Any]] = None
     basename = pathlib.Path(prompt_name).stem  # e.g. "models_Python"
-    for item in arch_data if isinstance(arch_data, list) else []:
+    for item in extract_modules(arch_data):
         item_filename = item.get("filename", "")
         if item_filename == prompt_name or pathlib.Path(item_filename).stem == basename:
             entry = item

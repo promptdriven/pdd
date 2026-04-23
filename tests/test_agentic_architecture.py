@@ -323,3 +323,40 @@ class TestRunAgenticArchitecture:
         
         assert success is False
         assert "Failed to parse GitHub API response" in msg
+
+
+# --- Issue #1256: Dict-format architecture tolerance ---
+# Scope addition: covers expansion item "pdd/agentic_architecture.py:210 and 221
+# load architecture.json from sibling dirs with isinstance check that silently
+# drops dict-format data" identified by Step 6 but absent from Step 8's plan
+
+
+def test_fetch_sibling_architectures_dict_format(tmp_path):
+    """_fetch_sibling_architectures includes dict-format sibling architecture modules (Test 16).
+
+    Bug: isinstance(arch_data, list) at agentic_architecture.py:210 returns False
+    for dict-format {"modules": [...]}, so the sibling architecture is silently
+    dropped and not included in the context string.
+    """
+    from pdd.agentic_architecture import _fetch_sibling_architectures
+
+    # Create sibling subdirectory with dict-format architecture
+    sibling = tmp_path / "backend"
+    sibling.mkdir()
+    sibling_arch = {
+        "modules": [
+            {"filename": "api_Python.prompt", "priority": 1, "description": "Backend API"},
+        ]
+    }
+    (sibling / "architecture.json").write_text(
+        json.dumps(sibling_arch), encoding="utf-8"
+    )
+
+    result = _fetch_sibling_architectures(tmp_path, current_target_dir="frontend")
+    assert result != "", (
+        "Dict-format sibling architecture should be included in context string, "
+        "but isinstance(arch_data, list) at agentic_architecture.py:210 silently drops it"
+    )
+    assert "api_Python" in result or "Backend API" in result, (
+        "Context string should mention the sibling module from dict-format architecture"
+    )

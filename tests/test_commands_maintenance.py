@@ -1,5 +1,6 @@
 # tests/test_commands_maintenance.py
 """Tests for commands/maintenance."""
+import json
 import os
 import sys
 import subprocess
@@ -238,3 +239,144 @@ def test_target_coverage_cli_option_converts_string_to_float(mock_sync_main, moc
     assert isinstance(target_coverage, float), \
         f"target_coverage should be float, got {type(target_coverage)}: {target_coverage}"
     assert target_coverage == 85.5
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_reports_summary_and_success(mock_sync_prompts, mock_auto_update, runner):
+    """Explicit architecture sync command should call the shared helper and print a summary."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 2,
+        "skipped_count": 1,
+        "results": [
+            {"filename": "core_python.prompt", "success": True, "updated": True, "changes": {"reason": {"old": "old", "new": "new"}}, "error": None},
+            {"filename": "dep_python.prompt", "success": True, "updated": False, "changes": {}, "error": None},
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    mock_sync_prompts.assert_called_once_with(filenames=None, dry_run=False)
+    assert "Updated 2 module(s); skipped 1." in result.output
+    assert "core_python.prompt" in result.output
+    assert "Unexpected result format" not in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_passes_filenames_and_dry_run(mock_sync_prompts, mock_auto_update, runner):
+    """Specific prompt filenames and --dry-run should flow into the shared helper."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {"filename": "core_python.prompt", "success": True, "updated": True, "changes": {"reason": {"old": "old", "new": "new"}}, "error": None},
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(
+        cli.cli,
+        ["sync-architecture", "--dry-run", "prompts/core_python.prompt"],
+    )
+
+    assert result.exit_code == 0
+    mock_sync_prompts.assert_called_once_with(
+        filenames=["prompts/core_python.prompt"],
+        dry_run=True,
+    )
+    assert "Dry run: would update 1 module(s); skipped 0." in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_exits_nonzero_on_validation_failure(mock_sync_prompts, mock_auto_update, runner):
+    """Validation failures should surface clearly and fail the command."""
+    mock_sync_prompts.return_value = {
+        "success": False,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {"filename": "core_python.prompt", "success": True, "updated": True, "changes": {"reason": {"old": "old", "new": "new"}}, "error": None},
+        ],
+        "validation": {
+            "valid": False,
+            "errors": [
+                {
+                    "type": "missing_dependency",
+                    "message": "Module 'core_python.prompt' depends on non-existent module 'dep_python.prompt'",
+                    "modules": ["core_python.prompt", "dep_python.prompt"],
+                }
+            ],
+            "warnings": [],
+        },
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 1
+    assert "Validation errors:" in result.output
+    assert "depends on non-existent module" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.handle_error')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_calls_handle_error_on_exception(mock_sync_prompts, mock_handle_error, mock_auto_update, runner):
+    """Unexpected sync failures should still go through shared CLI error handling."""
+    mock_sync_prompts.side_effect = RuntimeError("boom")
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    mock_handle_error.assert_called_once()
+    call_args = mock_handle_error.call_args[0]
+    assert isinstance(call_args[0], RuntimeError)
+    assert call_args[1] == "sync-architecture"
+
+
+@patch('pdd.core.cli.auto_update')
+def test_sync_architecture_uses_nearest_cwd_project(mock_auto_update, runner, tmp_path, monkeypatch):
+    """CLI should target the nearest ancestor project, not always the repo root."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / ".git").mkdir()
+
+    root_prompts = repo_root / "prompts"
+    root_prompts.mkdir()
+    (root_prompts / "root_python.prompt").write_text(
+        "<pdd-reason>Updated root reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (repo_root / "architecture.json").write_text(
+        '[{"filename":"root_python.prompt","filepath":"root.py","description":"Root module","reason":"Original root reason","dependencies":[],"priority":1}]',
+        encoding="utf-8",
+    )
+
+    nested_root = repo_root / "apps" / "nested"
+    nested_root.mkdir(parents=True)
+    nested_prompts = nested_root / "prompts"
+    nested_prompts.mkdir()
+    (nested_prompts / "nested_python.prompt").write_text(
+        "<pdd-reason>Updated nested reason</pdd-reason>",
+        encoding="utf-8",
+    )
+    (nested_root / "architecture.json").write_text(
+        '[{"filename":"nested_python.prompt","filepath":"nested.py","description":"Nested module","reason":"Original nested reason","dependencies":[],"priority":1}]',
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(nested_root)
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    assert "Updated 1 module(s); skipped 0." in result.output
+    assert json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Original root reason"
+    assert json.loads((nested_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Updated nested reason"
