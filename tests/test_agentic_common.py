@@ -4710,3 +4710,130 @@ def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_en
         "not retry the broken provider first."
     )
 
+
+
+# ---------------------------------------------------------------------------
+# PDD_REASONING_EFFORT -> provider argv plumbing
+# ---------------------------------------------------------------------------
+
+
+def _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, effort):
+    """Helper: invoke _run_with_provider for openai with the env var set and return argv."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    prev = os.environ.get("PDD_REASONING_EFFORT")
+    if effort is None:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+    else:
+        os.environ["PDD_REASONING_EFFORT"] = effort
+    try:
+        _run_with_provider("openai", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        if prev is None:
+            os.environ.pop("PDD_REASONING_EFFORT", None)
+        else:
+            os.environ["PDD_REASONING_EFFORT"] = prev
+
+    args, _ = mock_subprocess.call_args
+    return args[0]
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_codex_injects_reasoning_effort_before_exec(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, effort
+):
+    """Codex -c / --config is only honored as a top-level flag BEFORE the subcommand."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, effort)
+
+    assert cmd[0] == "/bin/codex"
+    assert "-c" in cmd
+    flag_idx = cmd.index("-c")
+    exec_idx = cmd.index("exec")
+    assert flag_idx < exec_idx, f"-c must precede 'exec' (got {cmd})"
+    assert cmd[flag_idx + 1] == f"model_reasoning_effort={effort}"
+
+
+def test_codex_without_effort_env_unchanged(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Unset PDD_REASONING_EFFORT -> argv has no -c flag (preserves prior behavior)."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, None)
+    assert "-c" not in cmd
+    assert "model_reasoning_effort" not in " ".join(cmd)
+
+
+def test_codex_invalid_effort_value_ignored(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Values outside {low,medium,high} are rejected so bad env cannot poison argv."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, "ultra")
+    assert "-c" not in cmd
+
+
+def test_anthropic_with_effort_does_not_modify_argv(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Claude Code CLI has no reasoning flag today — argv must stay identical."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    # No reasoning-effort related token should have leaked into the Claude argv
+    joined = " ".join(cmd)
+    assert "reasoning_effort" not in joined
+    assert "reasoning-effort" not in joined
+
+
+def test_google_with_effort_does_not_modify_argv(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Gemini CLI has no reasoning flag today — argv must stay identical."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/gemini"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "response": "ok",
+        "stats": {"models": {"gemini-2.5-pro": {"tokens": {"prompt": 1, "candidates": 1}}}},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("google", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    joined = " ".join(cmd)
+    assert "reasoning_effort" not in joined
+    assert "reasoning-effort" not in joined

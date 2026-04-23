@@ -1134,6 +1134,14 @@ def _run_with_provider(
     # Read prompt content for providers that pipe via stdin
     prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
 
+    # Reasoning-effort plumbing. The top-level CLI sets PDD_REASONING_EFFORT
+    # from --time so provider subprocesses can honor the allocation. Only
+    # Codex exposes a matching CLI flag today; Anthropic and Gemini CLIs do
+    # not, so we log the miss once rather than silently dropping the signal.
+    reasoning_effort = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+    if reasoning_effort not in {"low", "medium", "high"}:
+        reasoning_effort = ""
+
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         # Use -p - to pipe prompt as direct user message via stdin.
@@ -1159,6 +1167,11 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
+        if reasoning_effort and verbose:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
+                "has no reasoning-effort flag; effort not applied to this subprocess.[/dim]"
+            )
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
         # so passing a file path gives Gemini the path string instead of content.
@@ -1174,19 +1187,28 @@ def _run_with_provider(
         gemini_model = env.get("GEMINI_MODEL")
         if gemini_model:
             cmd.extend(["--model", gemini_model])
+        if reasoning_effort and verbose:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
+                "has no reasoning-effort flag; effort not applied to this subprocess.[/dim]"
+            )
     elif provider == "openai":
         # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
         # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
         # container IS the sandbox boundary, use danger-full-access instead.
         # Ref: https://github.com/openai/codex/issues/6828
         sandbox_mode = env.get("CODEX_SANDBOX_MODE", "danger-full-access")
-        cmd = [
-            cli_path,
+        cmd = [cli_path]
+        # Codex accepts -c / --config only as a top-level flag before the
+        # subcommand; appending after "exec" is silently ignored.
+        if reasoning_effort:
+            cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+        cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,
             "--json",
             str(prompt_path)
-        ]
+        ])
         # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
         codex_model = env.get("CODEX_MODEL")
         if codex_model:

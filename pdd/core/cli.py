@@ -382,6 +382,18 @@ def cli(
         os.environ['PDD_FORCE_LOCAL'] = '1'
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
+    # Mirror --time into PDD_REASONING_EFFORT so agentic CLI subprocesses
+    # (Codex especially) honor the user's reasoning allocation. Env-var
+    # pattern matches CLAUDE_MODEL/CODEX_MODEL threading in _run_with_provider.
+    # Only set when the user explicitly passed --time; otherwise leave any
+    # pre-existing value (e.g. from the worker env.yaml) alone.
+    if time is not None:
+        if time > 0.7:
+            os.environ["PDD_REASONING_EFFORT"] = "high"
+        elif time > 0.3:
+            os.environ["PDD_REASONING_EFFORT"] = "medium"
+        else:
+            os.environ["PDD_REASONING_EFFORT"] = "low"
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump
