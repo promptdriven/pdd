@@ -109,7 +109,14 @@ def _capture_rollback_state(cmd: List[str], env: Dict[str, str]) -> Optional[boo
     """
     if env.get("PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE") != "1":
         return None
-    if len(cmd) < 2 or cmd[0] != "pdd" or cmd[1] not in {"sync", "update"}:
+    if not cmd or cmd[0] != "pdd":
+        return None
+    # Allow `--strength X` (or other top-level flags with values) before the
+    # subcommand by scanning cmd[1:] for the first non-flag token.
+    idx = 1
+    while idx < len(cmd) and cmd[idx].startswith("--"):
+        idx += 2  # skip flag and its value
+    if idx >= len(cmd) or cmd[idx] not in {"sync", "update"}:
         return None
 
     try:
@@ -348,14 +355,35 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 )
             )
         else:
-            # All other drift types (example, verify, generate, test, crash,
-            # auto-deps, etc.) are handled via pdd sync
+            # Preserve the original operation so heal_module can dispatch
+            # correctly. Only `operation == "example"` uses the cheap
+            # `pdd example` path; other operations (verify, generate,
+            # auto-deps, test, crash) still run through `pdd sync` so
+            # sync_determine_operation can do its smart dispatch — using
+            # `pdd example` for them would either overwrite user edits
+            # (verify), skip required code regeneration (generate), or
+            # save a stale fingerprint that hides drift on the next run.
+            example_prompt_path: Optional[str] = None
+            example_code_path: Optional[str] = None
+            if decision.operation == "example":
+                try:
+                    paths = get_pdd_file_paths(basename, language)
+                    prompt_file_abs = paths.get("prompt")
+                    code_file_abs = paths.get("code")
+                    if prompt_file_abs is not None:
+                        example_prompt_path = str(prompt_file_abs)
+                    if code_file_abs is not None:
+                        example_code_path = str(code_file_abs)
+                except Exception:
+                    pass
             example_drifts.append(
                 DriftInfo(
                     basename=basename,
                     language=language,
-                    operation="example",
-                    reason=getattr(decision, "reason", "Needs sync"),
+                    operation=decision.operation,
+                    reason=getattr(decision, "reason", "Drift detected"),
+                    prompt_path=example_prompt_path,
+                    code_path=example_code_path,
                 )
             )
 
@@ -808,12 +836,62 @@ def _revert_prompt_file(drift: DriftInfo) -> None:
         raise PromptRevertError(msg) from e
 
 
+_HEAL_STRENGTH = "0.5"
+"""CLI `--strength` value passed to every heal subprocess.
+
+Must be passed explicitly because `.pddrc` context strengths (often 0.75–0.9)
+otherwise take precedence over `PDD_STRENGTH_DEFAULT` and push model selection
+up the ELO ladder into Sonnet/Opus territory. `.5` keeps the selector pinned
+to `PDD_MODEL_DEFAULT` without interpolating above it.
+"""
+
+
+def _resolve_prompt_path_after_update(drift: DriftInfo) -> Optional[str]:
+    """Look up the prompt path for a module after `pdd update` has run.
+
+    Used by the code-without-prompt update flow: detect_drift creates a drift
+    with prompt_path=None because the prompt didn't exist yet; pdd update
+    creates it; we now need the path to run the follow-up example step.
+    """
+    try:
+        from pdd.sync_determine_operation import get_pdd_file_paths
+        paths = get_pdd_file_paths(drift.basename, drift.language)
+    except Exception:
+        return None
+    if not paths:
+        return None
+    prompt = paths.get("prompt")
+    if prompt is None:
+        return None
+    try:
+        if not prompt.exists():
+            return None
+    except Exception:
+        return None
+    return str(prompt)
+
+
 def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
     """Heal a single drifted module by running the appropriate pdd command.
 
-    For 'update' drift (code changed, prompt stale), runs pdd update first
-    to sync the prompt from code, then pdd sync to regenerate the example
-    from the updated prompt — all in one pass.
+    Dispatch by `drift.operation`:
+
+    * `"update"` — run `pdd update <code>` then `pdd example <prompt> <code>`.
+      Both calls are a single LLM invocation each. The follow-up example
+      regenerates the example from the now-updated prompt. For the
+      code-without-prompt case (prompt created by `pdd update`), prompt_path
+      is resolved lazily after the update succeeds.
+    * `"example"` — run `pdd example <prompt> <code>` directly. Single call.
+    * Any other operation (`"verify"`, `"generate"`, `"auto-deps"`, `"test"`,
+      `"crash"`) — run `pdd sync <basename>` so sync_determine_operation can
+      dispatch through the correct flow. We do NOT use `pdd example` for
+      these because it would overwrite user edits (verify), skip required
+      code regeneration (generate), or save a fingerprint that hides drift
+      on the next run.
+
+    All commands take `--strength 0.5` to override `.pddrc` context defaults
+    (which can interpolate the model pick up into Sonnet/Opus) and keep
+    selection pinned to `PDD_MODEL_DEFAULT`.
 
     Args:
         drift: DriftInfo describing the drift to heal.
@@ -824,7 +902,6 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         intentionally skipped by CI policy.
     """
     if drift.operation == "update":
-        # Step 1: Update the prompt from code
         if not drift.code_path:
             console.print(
                 f"[red]✗ Refusing to run repo-wide `pdd update` for {drift.basename}: "
@@ -832,43 +909,68 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             )
             return False
 
-        update_cmd = ["pdd", "update", drift.code_path]
-
+        update_cmd = ["pdd", "--strength", _HEAL_STRENGTH, "update", drift.code_path]
         if not _run_pdd_command(update_cmd, env, f"Healing {drift.basename} (update)"):
             return False
 
+        # Lazily resolve prompt_path if it wasn't set pre-update.
+        # This is the code-without-prompt flow: pdd update created the
+        # prompt; now we need the path for gates and the follow-up example.
+        if not drift.prompt_path:
+            resolved = _resolve_prompt_path_after_update(drift)
+            if resolved:
+                drift.prompt_path = resolved
+
+        if not drift.prompt_path:
+            # pdd update returned 0 but `get_pdd_file_paths` still can't
+            # find the prompt. This is a path-resolution inconsistency —
+            # pdd update may have written the prompt to a location other
+            # than the resolver expects, language may be misdetected, or
+            # the exit code was spurious. Fail closed: returning True
+            # would push this module into healed_modules, and
+            # commit_and_push's `git add -A` would publish whatever state
+            # is on disk, including possibly a prompt at the wrong path.
+            # The churn/structural gates also rely on prompt_path, so we
+            # can't vet the rewrite before committing.
+            console.print(
+                f"[red]✗ `pdd update` claimed success for {drift.basename} "
+                "but prompt_path is still unresolvable post-update. Path "
+                "resolution is inconsistent for this module — failing "
+                "closed instead of publishing a partial heal.[/red]"
+            )
+            return False
+
         # Change-magnitude gate: refuse prompt rewrites that are wildly
-        # out of proportion to the originating code change. When tripped,
-        # the prompt file is reverted and the module is treated as
-        # unhealed so commit_and_push does not publish a destructive
-        # rewrite.
+        # out of proportion to the originating code change.
         if not _enforce_prompt_churn_gate(drift):
             return False
 
-        # Structural-invariant gate: path-agnostic post-heal check that
-        # the rewrite still contains the <include> preamble, <pdd.*>
-        # namespaced tags, % section markers, and fenced code blocks
-        # from the pre-heal version. Catches destructive rewrites that
-        # slip under the churn-ratio cap.
+        # Structural-invariant gate: ensure the rewrite still contains the
+        # <include> preamble, <pdd.*> namespaced tags, % section markers,
+        # and fenced code blocks from the pre-heal version.
         if not _enforce_structural_invariants(drift):
             return False
 
-        # Step 2: Sync example from the now-updated prompt so everything is
-        # consistent in a single CI pass (no second cycle needed).
+        # Step 2: Regenerate example from the now-updated prompt.
         skip_reason = _get_heal_sync_skip_reason(drift.basename)
         if skip_reason:
             console.print(
-                f"[yellow]⚠ Skipping follow-up sync for {drift.basename}: "
+                f"[yellow]⚠ Skipping follow-up example for {drift.basename}: "
                 f"{skip_reason}. Example regeneration is left for a manual "
                 "or dedicated follow-up run.[/yellow]"
             )
             return True
-        sync_cmd = ["pdd", "sync", drift.basename]
-        if not _run_pdd_command(sync_cmd, env, f"Syncing {drift.basename} (example)"):
-            # Update succeeded but sync failed. Revert the prompt update so
-            # commit_and_push() cannot stage and publish a half-healed module.
+
+        example_cmd = [
+            "pdd", "--strength", _HEAL_STRENGTH,
+            "example", drift.prompt_path, drift.code_path,
+        ]
+        if not _run_pdd_command(example_cmd, env, f"Regenerating example for {drift.basename}"):
+            # Update succeeded but example regeneration failed. Revert the
+            # prompt update so commit_and_push() cannot stage and publish a
+            # half-healed module.
             console.print(
-                f"[red]✗ Follow-up example sync failed for {drift.basename}. "
+                f"[red]✗ Follow-up example regeneration failed for {drift.basename}. "
                 "Reverting prompt update and marking the module failed.[/red]"
             )
             _revert_prompt_file(drift)
@@ -876,16 +978,44 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         return True
 
     elif drift.operation == "example":
+        if not drift.prompt_path or not drift.code_path:
+            console.print(
+                f"[red]✗ Refusing to heal {drift.basename} (example): "
+                f"prompt_path={drift.prompt_path!r} code_path={drift.code_path!r} — "
+                "cannot invoke `pdd example` without both paths.[/red]"
+            )
+            return False
         skip_reason = _get_heal_sync_skip_reason(drift.basename)
         if skip_reason:
             console.print(
-                f"[yellow]⚠ Skipping auto-heal sync for {drift.basename}: "
-                f"{skip_reason}. This module can be synced in a separate "
+                f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
+                f"{skip_reason}. This module can be regenerated in a separate "
                 "follow-up run without blocking the PR auto-heal build.[/yellow]"
             )
             return None
         return _run_pdd_command(
-            ["pdd", "sync", drift.basename], env, f"Healing {drift.basename} (sync)"
+            ["pdd", "--strength", _HEAL_STRENGTH, "example", drift.prompt_path, drift.code_path],
+            env,
+            f"Regenerating example for {drift.basename}",
+        )
+
+    elif drift.operation in {"verify", "generate", "auto-deps", "test", "crash"}:
+        # Non-update, non-example operations: fall back to `pdd sync` so
+        # sync_determine_operation can dispatch through the correct flow
+        # (verify preserves user edits, generate regenerates code, etc.).
+        # This preserves the original pdd-sync-based behavior for the rarer
+        # drift types that can't be served by pdd example alone.
+        skip_reason = _get_heal_sync_skip_reason(drift.basename)
+        if skip_reason:
+            console.print(
+                f"[yellow]⚠ Skipping auto-heal sync for {drift.basename} "
+                f"(operation={drift.operation}): {skip_reason}.[/yellow]"
+            )
+            return None
+        return _run_pdd_command(
+            ["pdd", "--strength", _HEAL_STRENGTH, "sync", drift.basename],
+            env,
+            f"Healing {drift.basename} (operation={drift.operation})",
         )
     else:
         console.print(

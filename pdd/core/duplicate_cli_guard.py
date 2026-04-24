@@ -332,9 +332,17 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     )
 
 
-def record_after_guarded_command(ctx: click.Context) -> None:
-    """Persist this invocation into the keyed recent-runs store for duplicate detection."""
+def record_after_guarded_command(ctx: click.Context, success: bool = True) -> None:
+    """Persist this invocation into the keyed recent-runs store for duplicate detection.
+
+    Fix #1275: skip recording when ``success=False`` so that a failed run (hang,
+    transient network error, mid-run exception) does not poison the dedup store
+    and block an immediate retry of the identical command. ``success`` defaults
+    to ``True`` to preserve backward compatibility with every existing caller.
+    """
     if not _guard_enabled():
+        return
+    if not success:
         return
 
     invoked = getattr(ctx, "invoked_subcommands", None) or []

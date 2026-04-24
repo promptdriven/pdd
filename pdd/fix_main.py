@@ -538,7 +538,8 @@ def fix_main(
                         response = requests.post(
                             'https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample',
                             json=payload,
-                            headers=headers
+                            headers=headers,
+                            timeout=get_cloud_request_timeout(),
                         )
                         
                         if response.status_code == 200:

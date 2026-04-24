@@ -587,6 +587,24 @@ def test_process_xml_web_tag(reset_firecrawl_cache) -> None:
             result = preprocess(prompt, recursive=False, double_curly_brackets=False)
             assert result == expected_output
 
+def test_process_xml_web_tag_firecrawl_app_fallback(reset_firecrawl_cache) -> None:
+    """The pinned firecrawl-py SDK exposes FirecrawlApp rather than Firecrawl."""
+    mock_markdown_content = "# Webpage Content from FirecrawlApp"
+    prompt = "This is a test <web>https://example.com</web>"
+    expected_output = f"This is a test {mock_markdown_content}"
+
+    mock_app = MagicMock()
+    mock_app.scrape_url.return_value = {'markdown': mock_markdown_content}
+    mock_firecrawl = MagicMock()
+    del mock_firecrawl.Firecrawl
+    mock_firecrawl.FirecrawlApp.return_value = mock_app
+
+    with patch.dict('sys.modules', {'firecrawl': mock_firecrawl}):
+        with patch.dict('os.environ', {'FIRECRAWL_API_KEY': 'fake_api_key', 'FIRECRAWL_CACHE_ENABLE': 'false'}):
+            result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            assert result == expected_output
+            mock_firecrawl.FirecrawlApp.assert_called_once_with(api_key='fake_api_key')
+
 # Test for handling missing Firecrawl API key
 def test_process_xml_web_tag_missing_api_key(reset_firecrawl_cache) -> None:
     """Test handling of missing Firecrawl API key."""

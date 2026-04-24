@@ -548,8 +548,11 @@ def process_web_tags(text: str, recursive: bool) -> str:
             try:
                 from firecrawl import Firecrawl
             except ImportError:
-                _dbg("firecrawl import failed; package not installed")
-                return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+                try:
+                    from firecrawl import FirecrawlApp as Firecrawl
+                except ImportError:
+                    _dbg("firecrawl import failed; package not installed")
+                    return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
 
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:

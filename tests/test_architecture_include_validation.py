@@ -262,6 +262,33 @@ def test_pdd_dependency_tag_satisfies_arch_dep(tmp_path: Path) -> None:
     assert warnings == [], f"Expected no warnings; got: {warnings}"
 
 
+def test_pdd_dependency_tag_after_erb_comment_satisfies_arch_dep(tmp_path: Path) -> None:
+    """ERB-style prompt comments before metadata must not hide pdd-dependency tags."""
+    root = tmp_path / "proj"
+    (root / "prompts").mkdir(parents=True)
+
+    _write_pair(
+        root,
+        "orchestrator_Python.prompt",
+        "<%-- NOTE: multi-line prompt comment\n"
+        "     before metadata tags. --%>\n"
+        "<pdd-dependency>helper_python.prompt</pdd-dependency>\n"
+        "% Body\n",
+    )
+    _write_pair(root, "helper_Python.prompt", "% Helper\n")
+
+    arch = [
+        {
+            "filename": "orchestrator_Python.prompt",
+            "dependencies": ["helper_Python.prompt"],
+        },
+        {"filename": "helper_Python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, root)
+    assert warnings == [], f"Expected no warnings; got: {warnings}"
+
+
 def test_pdd_dependency_and_include_mixed(tmp_path: Path) -> None:
     """A prompt may satisfy different arch deps via <pdd-dependency> and <include>."""
     root = tmp_path / "proj"

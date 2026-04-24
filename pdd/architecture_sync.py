@@ -192,20 +192,37 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
 
     try:
         # Only parse the metadata header. Valid prompts may start with leading
-        # `%` preamble lines or XML-style helper tags such as `<include>...`
-        # before the real pdd-* tags, so tolerate those. Once we see the first
-        # real tag, keep collecting until the first later `%` section marker.
+        # `%` preamble lines, prompt comments, or XML-style helper tags such as
+        # `<include>...` before the real pdd-* tags, so tolerate those. Once we
+        # see the first real tag, keep collecting until the first later `%`
+        # section marker.
         # If ordinary prose appears before any tag-ish header content, treat the
         # file as having no metadata header so example tags in the body are
         # ignored.
         header_lines = []
         started_header = False
+        in_erb_comment = False
+        in_xml_comment = False
         for line in prompt_content.splitlines(keepends=True):
             stripped = line.lstrip()
             if not started_header:
+                if in_erb_comment:
+                    if '--%>' in stripped:
+                        in_erb_comment = False
+                    continue
+                if in_xml_comment:
+                    if '-->' in stripped:
+                        in_xml_comment = False
+                    continue
                 if not stripped.strip():
                     if header_lines:
                         header_lines.append(line)
+                    continue
+                if stripped.startswith('<%--'):
+                    in_erb_comment = '--%>' not in stripped
+                    continue
+                if stripped.startswith('<!--'):
+                    in_xml_comment = '-->' not in stripped
                     continue
                 if stripped.startswith('%'):
                     continue

@@ -27,8 +27,9 @@ Both pass `_GITHUB_APP_ID=3404088` as a substitution. The push trigger additiona
 
 PR trigger behavior:
 - Draft PRs still start Cloud Build, but the in-build `draft-guard` step now short-circuits them before fetch/heal work.
-- Non-draft PRs run auto-heal normally on PR updates.
-- Because GCB has no trigger-level draft filter, the first guaranteed full run after marking a PR ready is the next pushed commit or a manual rerun of the latest build. If GitHub emits a PR update build for `ready_for_review`, that build will also pass the guard and run.
+- The PR trigger should be configured with Cloud Build comment control enabled, so auto-heal only starts after `/gcbrun`.
+- A PR build starts when `/gcbrun` is present in the PR description from a writer, or when a writer comments `/gcbrun` on the PR.
+- Because GCB has no trigger-level draft filter, the first guaranteed full run after marking a PR ready is the next pushed commit or a manual rerun after `/gcbrun`. If GitHub emits a PR update build for `ready_for_review`, that build will also pass the guard once the manual gate has been satisfied.
 
 ## Auth
 

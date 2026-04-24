@@ -487,6 +487,7 @@ def _auto_submit_example(
 
     import requests
 
+    from .core.cloud import get_cloud_request_timeout
     from .get_jwt_token import get_jwt_token
     from .preprocess import preprocess
 
@@ -544,6 +545,7 @@ def _auto_submit_example(
         "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample",
         json=payload,
         headers=headers,
+        timeout=get_cloud_request_timeout(),
     )
 
     if response.status_code == 200:
