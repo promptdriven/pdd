@@ -475,6 +475,20 @@ def cli(
         raise
 
 
+def _derive_success_from_normalized_results(normalized_results: List[Any]) -> bool:
+    """Return True iff every guarded subcommand reported success.
+
+    Convention (documented at ``cli.py`` result-callback summary loop): guarded
+    subcommands return a 3-tuple ``(result, cost, model_name)`` on success and
+    ``None`` on failure. An empty list is treated as non-success so that an
+    empty dispatch does not poison the dedup store. Used by the ``process_commands``
+    result callback to decide whether to persist a record for fix #1275.
+    """
+    if not normalized_results:
+        return False
+    return not any(r is None for r in normalized_results)
+
+
 # --- Result Callback for Command Execution Summary ---
 @cli.result_callback()
 @click.pass_context
@@ -583,7 +597,9 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
             console.print("[warning]Note: Chain may have terminated early due to errors.[/warning]")
         console.print("[info]-------------------------------------[/info]")
 
-    record_after_guarded_command(ctx)
+    record_after_guarded_command(
+        ctx, success=_derive_success_from_normalized_results(normalized_results)
+    )
 
     # Collect terminal output if capture was enabled
     terminal_output = None

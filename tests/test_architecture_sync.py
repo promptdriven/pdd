@@ -180,6 +180,25 @@ def test_parse_tags_after_leading_include_header():
     assert result["dependencies"] == ["dep.prompt"]
 
 
+def test_parse_tags_after_leading_erb_comment_header():
+    """Leading ERB-style prompt comments must not hide real PDD metadata tags."""
+    content = """<%-- NOTE: multi-line prompt comment
+     before metadata tags. --%>
+<pdd-reason>Reason after ERB comment</pdd-reason>
+<pdd-interface>{"type": "module", "module": {"functions": []}}</pdd-interface>
+<pdd-dependency>dep.prompt</pdd-dependency>
+
+% Body
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result["reason"] == "Reason after ERB comment"
+    assert result["interface"] is not None
+    assert result["interface"]["type"] == "module"
+    assert result["dependencies"] == ["dep.prompt"]
+
+
 def test_validate_architecture_modules_returns_route_shaped_result():
     """Validation helper should produce the same dict shape the route exposes."""
     modules = [

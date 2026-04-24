@@ -96,14 +96,13 @@ except ImportError:
 
 # Cloud configuration
 try:
-    from .core.cloud import CloudConfig
+    from .core.cloud import CloudConfig, get_cloud_request_timeout
     CLOUD_AVAILABLE = True
 except ImportError:
     CLOUD_AVAILABLE = False
     CloudConfig = None
+    get_cloud_request_timeout = None  # type: ignore[assignment]
 
-# Cloud request timeout for crash fix
-CLOUD_REQUEST_TIMEOUT = 400  # seconds
 
 def cloud_crash_fix(
     program: str,
@@ -155,7 +154,7 @@ def cloud_crash_fix(
         cloud_url,
         json=payload,
         headers=headers,
-        timeout=CLOUD_REQUEST_TIMEOUT
+        timeout=get_cloud_request_timeout(),
     )
     response.raise_for_status()
 

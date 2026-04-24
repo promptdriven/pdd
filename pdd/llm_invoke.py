@@ -361,10 +361,9 @@ def _llm_invoke_cloud(
     from rich.console import Console
 
     # Lazy import to avoid circular dependency
-    from pdd.core.cloud import CloudConfig
+    from pdd.core.cloud import CloudConfig, get_cloud_request_timeout
 
     console = Console()
-    CLOUD_TIMEOUT = 300  # 5 minutes
 
     # Get JWT token
     jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
@@ -412,7 +411,7 @@ def _llm_invoke_cloud(
             cloud_url,
             json=payload,
             headers=headers,
-            timeout=CLOUD_TIMEOUT
+            timeout=get_cloud_request_timeout(),
         )
 
         if response.status_code == 200:

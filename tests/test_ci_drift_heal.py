@@ -12,6 +12,7 @@ from pdd.ci_drift_heal import (
     DriftInfo,
     HealResult,
     PromptRevertError,
+    _capture_rollback_state,
     _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
@@ -100,6 +101,49 @@ class TestDetectDrift:
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
         assert example_drifts[0].basename == "api"
+
+    def test_example_drift_populates_prompt_and_code_paths(self):
+        """`operation='example'` drift carries prompt_path and code_path so
+        heal_module can run `pdd example <prompt> <code>` directly."""
+        decision = MagicMock(operation="example", reason="Example stale")
+        files, infer, sync = self._setup_mocks({"api": decision})
+
+        fake_paths = {
+            "prompt": Path("/repo/prompts/api_python.prompt"),
+            "code": Path("/repo/api.py"),
+        }
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths):
+            _, example_drifts = detect_drift()
+
+        assert len(example_drifts) == 1
+        d = example_drifts[0]
+        assert d.operation == "example"
+        assert d.prompt_path == "/repo/prompts/api_python.prompt"
+        assert d.code_path == "/repo/api.py"
+
+    def test_non_example_ops_preserve_original_operation(self):
+        """verify/generate/auto-deps/test/crash decisions keep their operation name.
+
+        The prior implementation collapsed every non-update decision to
+        `operation='example'`, losing the intent. Auto-heal must preserve
+        the original operation so heal_module can dispatch correctly (pdd
+        example for example, pdd sync for the others).
+        """
+        for op in ("verify", "generate", "auto-deps", "test", "crash"):
+            decision = MagicMock(operation=op, reason=f"{op} needed")
+            files, infer, sync = self._setup_mocks({"mod": decision})
+
+            with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+                 patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+                 patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync):
+                _, drifts = detect_drift()
+
+            assert len(drifts) == 1, f"expected 1 drift for op={op}"
+            assert drifts[0].operation == op, f"op collapsed to {drifts[0].operation} for {op}"
 
     def test_no_drift(self):
         """Modules with operation=='nothing' are not collected."""
@@ -338,18 +382,40 @@ class TestHealModule:
     def _make_env(self):
         return {"PDD_FORCE": "1", "CI": "1", "NO_COLOR": "1", "PDD_OUTPUT_COST_PATH": "/tmp/c.csv"}
 
-    def test_update_runs_update_then_sync(self):
-        """prompt drift (update) runs 'pdd update' then 'pdd sync' in one pass."""
-        drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
+    def test_update_runs_update_then_example_with_strength_override(self):
+        """Update drift runs `pdd --strength 0.5 update` then `pdd --strength 0.5 example`.
+
+        Passes `--strength 0.5` explicitly so the command overrides any
+        `.pddrc` context strength (e.g. 0.818) that would otherwise push
+        model selection to Sonnet/Opus-class models and defeat the env-var
+        pin to Gemini Pro.
+        """
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
         mock_result = MagicMock(returncode=0, stderr="")
 
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
             result = heal_module(drift, self._make_env())
 
         assert result is True
-        cmds = [c[0][0] for c in mock_run.call_args_list]
-        assert cmds[0] == ["pdd", "update", "/repo/auth.py"]
-        assert cmds[1] == ["pdd", "sync", "auth"]
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [
+            ["pdd", "--strength", "0.5", "update", "/repo/auth.py"],
+            [
+                "pdd",
+                "--strength",
+                "0.5",
+                "example",
+                "/repo/prompts/auth_python.prompt",
+                "/repo/auth.py",
+            ],
+        ]
 
     def test_update_no_code_path_fails_closed(self):
         """prompt drift (update) refuses repo-wide fallback when code_path is None."""
@@ -368,20 +434,27 @@ class TestHealModule:
         assert result is False
         mock_run.assert_not_called()
 
-    def test_update_failure_skips_sync(self):
-        """If pdd update fails, pdd sync is not attempted."""
-        drift = DriftInfo("auth", "python", "update", "changed", code_path="/repo/auth.py")
+    def test_update_failure_skips_example(self):
+        """If pdd update fails, pdd example is not attempted."""
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
         mock_result = MagicMock(returncode=1, stderr="error")
 
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
             result = heal_module(drift, self._make_env())
 
         assert result is False
-        # Only update was called, not sync
+        # Only update was called, not example
         assert len(mock_run.call_args_list) == 1
 
-    def test_update_ok_sync_fails_and_reverts_prompt(self):
-        """If update succeeds but sync fails, treat the heal as failed and revert prompt edits."""
+    def test_update_ok_example_fails_and_reverts_prompt(self):
+        """If update succeeds but example fails, treat the heal as failed and revert prompt edits."""
         drift = DriftInfo(
             "auth",
             "python",
@@ -409,8 +482,8 @@ class TestHealModule:
                 r.stdout = ""
                 r.stderr = ""
                 return r
-            r.returncode = 0 if call_count[0] == 1 else 1  # update ok, sync fails
-            r.stderr = "" if call_count[0] == 1 else "sync error"
+            r.returncode = 0 if call_count[0] == 1 else 1  # update ok, example fails
+            r.stderr = "" if call_count[0] == 1 else "example error"
             return r
 
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_subprocess:
@@ -424,8 +497,8 @@ class TestHealModule:
         assert len(checkout_calls) == 1
         assert checkout_calls[0][0][0][-1] == "prompts/auth_python.prompt"
 
-    def test_update_ok_sync_fails_and_revert_failure_raises(self):
-        """If prompt revert fails after sync failure, surface a fatal revert error."""
+    def test_update_ok_example_fails_and_revert_failure_raises(self):
+        """If prompt revert fails after example failure, surface a fatal revert error."""
         drift = DriftInfo(
             "auth",
             "python",
@@ -485,14 +558,15 @@ class TestHealModule:
         assert ["git", "checkout", "HEAD", "--", "prompts/auth_python.prompt"] in calls
         assert ["git", "status", "--porcelain", "--", "prompts/auth_python.prompt"] in calls
 
-    def test_update_does_not_skip_follow_up_sync_by_default(self):
-        """agentic_change_orchestrator sync runs normally once the default skip is removed."""
+    def test_update_does_not_skip_follow_up_example_by_default(self):
+        """agentic_change_orchestrator example step runs normally once the default skip is removed."""
         drift = DriftInfo(
             "agentic_change_orchestrator",
             "python",
             "update",
             "changed",
             code_path="/repo/agentic_change_orchestrator.py",
+            prompt_path="/repo/prompts/agentic_change_orchestrator_python.prompt",
         )
         mock_result = MagicMock(returncode=0, stderr="")
 
@@ -500,20 +574,28 @@ class TestHealModule:
             result = heal_module(drift, self._make_env())
 
         assert result is True
-        cmds = [c[0][0] for c in mock_run.call_args_list]
-        assert cmds == [
-            ["pdd", "update", "/repo/agentic_change_orchestrator.py"],
-            ["pdd", "sync", "agentic_change_orchestrator"],
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [
+            ["pdd", "--strength", "0.5", "update", "/repo/agentic_change_orchestrator.py"],
+            [
+                "pdd",
+                "--strength",
+                "0.5",
+                "example",
+                "/repo/prompts/agentic_change_orchestrator_python.prompt",
+                "/repo/agentic_change_orchestrator.py",
+            ],
         ]
 
-    def test_update_skip_env_runs_update_but_skips_follow_up_sync(self):
-        """Explicit skip env still bypasses the sync tail for operational recovery."""
+    def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
+        """Explicit skip env still bypasses the follow-up example step for operational recovery."""
         drift = DriftInfo(
             "agentic_change_orchestrator",
             "python",
             "update",
             "changed",
             code_path="/repo/agentic_change_orchestrator.py",
+            prompt_path="/repo/prompts/agentic_change_orchestrator_python.prompt",
         )
         mock_result = MagicMock(returncode=0, stderr="")
 
@@ -525,12 +607,21 @@ class TestHealModule:
             result = heal_module(drift, self._make_env())
 
         assert result is True
-        cmds = [c[0][0] for c in mock_run.call_args_list]
-        assert cmds == [["pdd", "update", "/repo/agentic_change_orchestrator.py"]]
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [
+            ["pdd", "--strength", "0.5", "update", "/repo/agentic_change_orchestrator.py"],
+        ]
 
-    def test_example_runs_pdd_sync(self):
-        """example drift runs 'pdd sync <basename>'."""
-        drift = DriftInfo("api", "python", "example", "stale")
+    def test_example_drift_runs_pdd_example(self):
+        """example drift runs `pdd --strength 0.5 example <prompt> <code>`."""
+        drift = DriftInfo(
+            "api",
+            "python",
+            "example",
+            "stale",
+            code_path="/repo/api.py",
+            prompt_path="/repo/prompts/api_python.prompt",
+        )
         mock_result = MagicMock(returncode=0, stderr="")
 
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
@@ -538,12 +629,183 @@ class TestHealModule:
 
         assert result is True
         assert len(mock_run.call_args_list) == 1
-        assert mock_run.call_args[0][0] == ["pdd", "sync", "api"]
+        assert mock_run.call_args[0][0] == [
+            "pdd",
+            "--strength",
+            "0.5",
+            "example",
+            "/repo/prompts/api_python.prompt",
+            "/repo/api.py",
+        ]
 
-    def test_example_skip_env_returns_none_without_running_sync(self):
-        """Explicit skip env bypasses a module sync without failing CI."""
+    def test_verify_drift_runs_pdd_sync_to_preserve_semantics(self):
+        """operation=='verify' (user-edited example needs validation) must NOT run pdd example.
+
+        pdd example regenerates the example from scratch, which would
+        overwrite user edits. verify drift keeps pdd sync so
+        sync_determine_operation dispatches through verify/fix loops.
+        """
         drift = DriftInfo(
-            "agentic_change_orchestrator", "python", "example", "stale"
+            "api",
+            "python",
+            "verify",
+            "example edited",
+            code_path="/repo/api.py",
+            prompt_path="/repo/prompts/api_python.prompt",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [["pdd", "--strength", "0.5", "sync", "api"]]
+
+    def test_generate_drift_runs_pdd_sync_to_preserve_semantics(self):
+        """operation=='generate' (prompt changed, code needs regen) must run pdd sync.
+
+        pdd example only regenerates the example from existing code —
+        it won't regenerate code from the updated prompt. pdd sync dispatches
+        to the full generate flow.
+        """
+        drift = DriftInfo(
+            "api", "python", "generate", "prompt changed",
+            code_path="/repo/api.py",
+            prompt_path="/repo/prompts/api_python.prompt",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [["pdd", "--strength", "0.5", "sync", "api"]]
+
+    def test_sync_fallback_ops_do_not_require_paths(self):
+        """verify/generate/auto-deps/test/crash operations work even when
+        prompt_path/code_path aren't pre-resolved — pdd sync resolves them."""
+        for op in ("verify", "generate", "auto-deps", "test", "crash"):
+            drift = DriftInfo("mod", "python", op, f"{op} needed")
+            mock_result = MagicMock(returncode=0, stderr="")
+            with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+                result = heal_module(drift, self._make_env())
+            assert result is True, f"failed for op={op}"
+            pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+            assert pdd_cmds == [["pdd", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
+
+    def test_update_without_prompt_path_resolves_after_update(self):
+        """Code-without-prompt flow: pdd update creates the prompt, then we
+        resolve prompt_path lazily before the follow-up pdd example.
+
+        This is the `reason='Code exists without prompt — needs pdd update'`
+        drift created by detect_drift when scanning modules without a prompt.
+        """
+        drift = DriftInfo(
+            "newmod",
+            "python",
+            "update",
+            "Code exists without prompt — needs pdd update",
+            code_path="/repo/newmod.py",
+            prompt_path=None,  # doesn't exist pre-update; pdd update creates it
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        # After pdd update runs, prompt_path should resolve via get_pdd_file_paths
+        created_prompt = MagicMock()
+        created_prompt.exists.return_value = True
+        created_prompt.__str__ = lambda self: "/repo/prompts/newmod_python.prompt"
+        fake_paths = {
+            "prompt": created_prompt,
+            "code": MagicMock(__str__=lambda self: "/repo/newmod.py"),
+        }
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths):
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        # pdd update runs first; pdd example runs with the freshly-resolved prompt path
+        assert pdd_cmds[0] == ["pdd", "--strength", "0.5", "update", "/repo/newmod.py"]
+        assert pdd_cmds[1] == [
+            "pdd",
+            "--strength",
+            "0.5",
+            "example",
+            "/repo/prompts/newmod_python.prompt",
+            "/repo/newmod.py",
+        ]
+
+    def test_example_drift_missing_prompt_path_fails_closed(self):
+        """example drift without a resolved prompt path fails without running pdd."""
+        drift = DriftInfo("api", "python", "example", "stale", code_path="/repo/api.py")
+        # prompt_path is None — heal_module must refuse rather than guess
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is False
+        mock_run.assert_not_called()
+
+    def test_example_drift_missing_code_path_fails_closed(self):
+        """example drift without a resolved code path fails without running pdd."""
+        drift = DriftInfo(
+            "api", "python", "example", "stale",
+            prompt_path="/repo/prompts/api_python.prompt",
+        )
+        # code_path is None
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is False
+        mock_run.assert_not_called()
+
+    def test_update_with_unresolvable_prompt_fails_closed(self):
+        """Update drift where prompt_path can't be resolved even after pdd update.
+
+        If `pdd update` claimed success but `get_pdd_file_paths` still can't
+        find the prompt, the module's path resolution is inconsistent — maybe
+        `pdd update` wrote to a different location than the path-resolver
+        expects, maybe language was misdetected, maybe update returned 0 by
+        accident. Whatever the cause, we refuse to treat this as a successful
+        heal: returning True would push the module into `healed_modules` and
+        let `commit_and_push`'s `git add -A` publish whatever state is on
+        disk, including possibly a prompt at the wrong location.
+        """
+        drift = DriftInfo(
+            "auth", "python", "update", "changed",
+            code_path="/repo/auth.py",
+            prompt_path=None,
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+        # Simulate get_pdd_file_paths returning a prompt path that doesn't exist on disk
+        no_prompt = MagicMock()
+        no_prompt.exists.return_value = False
+        fake_paths = {"prompt": no_prompt, "code": MagicMock()}
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths):
+            result = heal_module(drift, self._make_env())
+
+        # pdd update itself ran; but we fail closed because the post-update
+        # state is inconsistent — don't let the failed module piggy-back on
+        # other modules' commits.
+        assert result is False
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [["pdd", "--strength", "0.5", "update", "/repo/auth.py"]]
+
+    def test_example_skip_env_returns_none_without_running(self):
+        """Explicit skip env bypasses a module's heal step without failing CI."""
+        drift = DriftInfo(
+            "agentic_change_orchestrator",
+            "python",
+            "example",
+            "stale",
+            code_path="/repo/agentic_change_orchestrator.py",
+            prompt_path="/repo/prompts/agentic_change_orchestrator_python.prompt",
         )
 
         with patch.dict(
@@ -581,22 +843,69 @@ class TestHealModule:
         assert result is False
 
     def test_env_passed_to_subprocess(self):
-        """Environment dict is passed to subprocess.run."""
-        drift = DriftInfo("auth", "python", "update", "changed")
+        """Environment dict is passed to subprocess.run for every pdd invocation."""
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/auth.py",
+            prompt_path="/repo/prompts/auth_python.prompt",
+        )
         env = self._make_env()
         mock_result = MagicMock(returncode=0, stderr="")
 
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
             heal_module(drift, env)
 
-        # Both update and sync calls should use the same env
-        for call in mock_run.call_args_list:
-            assert call[1]["env"] is env
+        # Every pdd command must use the heal env (git helper calls are
+        # allowed to omit it — they need the ambient repo env to run).
+        pdd_calls = [c for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_calls, "heal_module should have invoked at least one pdd command"
+        for call in pdd_calls:
+            assert call[1].get("env") is env
 
 
 # ---------------------------------------------------------------------------
 # commit_and_push tests
 # ---------------------------------------------------------------------------
+
+class TestCaptureRollbackState:
+    """_capture_rollback_state must recognize pdd sync/update even when
+    top-level flags like `--strength 0.5` precede the subcommand."""
+
+    _ENV = {"PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE": "1"}
+
+    def test_recognizes_update_with_strength_flag(self):
+        clean = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=clean):
+            result = _capture_rollback_state(
+                ["pdd", "--strength", "0.5", "update", "/repo/foo.py"],
+                self._ENV,
+            )
+        assert result is True  # clean state, rollback-eligible
+
+    def test_recognizes_sync_with_strength_flag(self):
+        clean = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=clean):
+            result = _capture_rollback_state(
+                ["pdd", "--strength", "0.5", "sync", "mod"],
+                self._ENV,
+            )
+        assert result is True
+
+    def test_ignores_pdd_example(self):
+        """pdd example isn't tracked by the rollback mechanism."""
+        result = _capture_rollback_state(
+            ["pdd", "--strength", "0.5", "example", "p.prompt", "c.py"],
+            self._ENV,
+        )
+        assert result is None
+
+    def test_ignores_non_pdd_commands(self):
+        result = _capture_rollback_state(["git", "status"], self._ENV)
+        assert result is None
+
 
 class TestCommitAndPush:
     def _mock_run_success(self, cmd, **kwargs):
@@ -881,8 +1190,20 @@ class TestMain:
         assert result == 1
 
     def test_explicit_sync_skip_env_skips_example_without_failing_build(self):
-        """Operator override can skip a sync path without blocking auto-heal."""
-        drifts = ([], [DriftInfo("agentic_change_orchestrator", "python", "example", "stale")])
+        """Operator override can skip a module's example regeneration without blocking auto-heal."""
+        drifts = (
+            [],
+            [
+                DriftInfo(
+                    "agentic_change_orchestrator",
+                    "python",
+                    "example",
+                    "stale",
+                    code_path="/repo/agentic_change_orchestrator.py",
+                    prompt_path="/repo/prompts/agentic_change_orchestrator_python.prompt",
+                )
+            ],
+        )
 
         with patch.dict(
              os.environ,
@@ -901,8 +1222,8 @@ class TestMain:
         mock_run_pdd.assert_not_called()
         mock_commit.assert_not_called()
 
-    def test_end_to_end_sync_failure_reverts_prompt_and_skips_commit(self, tmp_path, monkeypatch):
-        """main() leaves a temp repo clean when update succeeds but follow-up sync fails."""
+    def test_end_to_end_example_failure_reverts_prompt_and_skips_commit(self, tmp_path, monkeypatch):
+        """main() leaves a temp repo clean when update succeeds but follow-up example fails."""
         repo = tmp_path / "repo"
         repo.mkdir()
         self._init_git_repo(repo)
@@ -937,10 +1258,10 @@ class TestMain:
         )
 
         def run_pdd_side_effect(cmd, env, label):
-            if cmd == ["pdd", "update", str(code_path)]:
+            if cmd == ["pdd", "--strength", "0.5", "update", str(code_path)]:
                 prompt_path.write_text(updated_prompt, encoding="utf-8")
                 return True
-            if cmd == ["pdd", "sync", "auth"]:
+            if cmd == ["pdd", "--strength", "0.5", "example", str(prompt_path), str(code_path)]:
                 return False
             raise AssertionError(f"Unexpected command: {cmd}")
 

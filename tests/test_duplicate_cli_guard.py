@@ -498,3 +498,145 @@ def test_save_last_run_preserves_other_entries_when_one_is_malformed(isolated_pr
     assert "corrupt_key" not in store, "malformed entry should be pruned"
     assert good_key in store, "valid entry for a different argv must survive"
     assert len(store) == 2, "new entry + surviving good entry"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1275: only record *successful* runs so failed invocations can be
+# retried immediately. record_after_guarded_command now takes success: bool.
+# ---------------------------------------------------------------------------
+
+
+def test_record_skips_when_success_false(enable_guard, monkeypatch):
+    """A failed run must NOT be persisted to the dedup store, so retrying
+    the same command immediately is not blocked by the guard (issue #1275)."""
+    ctx = mock.MagicMock()
+    ctx.invoked_subcommand = "sync"
+    ctx.invoked_subcommands = ["sync"]
+    ctx.obj = {"invoked_subcommands": ["sync"]}
+
+    called = {"n": 0}
+
+    def fake_save(*_args, **_kwargs):
+        called["n"] += 1
+
+    monkeypatch.setattr(dg, "save_last_run", fake_save)
+
+    dg.record_after_guarded_command(ctx, success=False)
+
+    assert called["n"] == 0, (
+        "record_after_guarded_command must not persist a record when "
+        "success=False (issue #1275 — failed runs must be retriable)"
+    )
+
+
+def test_record_persists_when_success_true(enable_guard, monkeypatch):
+    """Regression guard: a successful run must still be recorded (the existing
+    happy path must not be broken by the new success kwarg)."""
+    ctx = mock.MagicMock()
+    ctx.invoked_subcommand = "sync"
+    ctx.invoked_subcommands = ["sync"]
+    ctx.obj = {"invoked_subcommands": ["sync"]}
+
+    called = {"n": 0}
+
+    def fake_save(*_args, **_kwargs):
+        called["n"] += 1
+
+    monkeypatch.setattr(dg, "save_last_run", fake_save)
+    monkeypatch.setattr(dg, "find_project_root", lambda: FAKE_ROOT)
+    monkeypatch.setattr(dg, "normalized_argv", lambda: ["sync", "mod"])
+
+    dg.record_after_guarded_command(ctx, success=True)
+
+    assert called["n"] == 1, (
+        "record_after_guarded_command must persist the record for a "
+        "successful run (default behavior)"
+    )
+
+
+def test_record_default_success_is_true(enable_guard, monkeypatch):
+    """Backward compatibility: callers that invoke record_after_guarded_command(ctx)
+    without the success kwarg must still get the recording behavior (success
+    defaults to True)."""
+    ctx = mock.MagicMock()
+    ctx.invoked_subcommand = "sync"
+    ctx.invoked_subcommands = ["sync"]
+    ctx.obj = {"invoked_subcommands": ["sync"]}
+
+    called = {"n": 0}
+
+    def fake_save(*_args, **_kwargs):
+        called["n"] += 1
+
+    monkeypatch.setattr(dg, "save_last_run", fake_save)
+    monkeypatch.setattr(dg, "find_project_root", lambda: FAKE_ROOT)
+    monkeypatch.setattr(dg, "normalized_argv", lambda: ["sync", "mod"])
+
+    # Intentionally do NOT pass success=
+    dg.record_after_guarded_command(ctx)
+
+    assert called["n"] == 1, (
+        "default success=True must preserve backward compatibility with "
+        "existing callers that do not pass the new kwarg"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1275: integration-level coverage of the cli.py result-callback
+# derivation. The unit tests above verify record_after_guarded_command in
+# isolation; the tests below verify that the caller in cli.py computes the
+# success boolean correctly from the normalized_results convention and wires
+# it through to the guard. Without these, a future refactor of the derivation
+# in cli.py could silently flip the success semantics without any test failing.
+# ---------------------------------------------------------------------------
+
+
+def test_derive_success_all_three_tuples_is_true():
+    """Happy path: every entry is a success 3-tuple -> success=True."""
+    from pdd.core.cli import _derive_success_from_normalized_results
+
+    assert _derive_success_from_normalized_results(
+        [("ok", 0.01, "model"), ({"examplesUsed": []}, 0.0, "local")]
+    ) is True
+
+
+def test_derive_success_any_none_is_false():
+    """Any None entry in the list signals a failed subcommand -> success=False.
+    This is the core fix #1275 contract that prevents a partially-failed chain
+    from being recorded as a successful run."""
+    from pdd.core.cli import _derive_success_from_normalized_results
+
+    assert _derive_success_from_normalized_results(
+        [("ok", 0.01, "model"), None]
+    ) is False
+    assert _derive_success_from_normalized_results([None]) is False
+    assert _derive_success_from_normalized_results([None, None]) is False
+
+
+def test_derive_success_empty_list_is_false():
+    """Empty results -> success=False. No dispatch occurred; nothing to record.
+    Erring toward not-recording keeps retry-ability intact (the PR's goal)."""
+    from pdd.core.cli import _derive_success_from_normalized_results
+
+    assert _derive_success_from_normalized_results([]) is False
+
+
+def test_derive_success_single_tuple_is_true():
+    """Single successful command -> success=True (typical `pdd sync` path)."""
+    from pdd.core.cli import _derive_success_from_normalized_results
+
+    assert _derive_success_from_normalized_results(
+        [({"status": "ok"}, 0.02, "gpt-5")]
+    ) is True
+
+
+def test_derive_success_mixed_tuple_and_dict_is_true():
+    """A 3-tuple plus a dict-return command is still all-success. Covers the
+    `elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed")`
+    branch in cli.py — dicts are valid successful returns alongside tuples.
+    """
+    from pdd.core.cli import _derive_success_from_normalized_results
+
+    assert _derive_success_from_normalized_results(
+        [("ok", 0.01, "model"), {"examplesUsed": [{"slug": "x", "title": "y"}]}]
+    ) is True
