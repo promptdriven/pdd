@@ -179,7 +179,7 @@ class TestIssue469DuplicateUnresolvedE2E:
 
         steps_executed = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM that follows the fixed prompt for unresolved duplicates."""
             match = re.search(r"step(\d+(?:_\d+)?)", label)
             if match:
@@ -260,7 +260,7 @@ class TestIssue469DuplicateUnresolvedE2E:
 
         steps_executed = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM that finds a resolved duplicate."""
             match = re.search(r"step(\d+(?:_\d+)?)", label)
             if match:

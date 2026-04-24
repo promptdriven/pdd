@@ -207,7 +207,7 @@ class TestIssue445WorktreeResumptionE2E:
         def mock_clear_state(*args, **kwargs):
             pass
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             return (True, f"Mock success for {label}", 0.001, "mock-model")
 
         with patch('pdd.agentic_change_orchestrator.load_workflow_state', side_effect=mock_load_state):
@@ -284,7 +284,7 @@ class TestIssue445WorktreeResumptionE2E:
 
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM calls - verify we get to step 11 (requires worktree)."""
             step_calls.append(label)
             return (True, f"Mock success for {label}", 0.001, "mock-model")
