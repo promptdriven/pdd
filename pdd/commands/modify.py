@@ -262,7 +262,8 @@ def change(
                 verbose=verbose,
                 quiet=quiet,
                 timeout_adder=timeout_adder,
-                use_github_state=not no_github_state
+                use_github_state=not no_github_state,
+                reasoning_time=ctx.obj.get("time"),
             )
 
             # Display results using click.echo as requested

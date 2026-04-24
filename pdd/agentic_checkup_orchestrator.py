@@ -328,6 +328,7 @@ def _run_single_step(
     quiet: bool,
     label: str,
     timeout_adder: float,
+    reasoning_time: Optional[float] = None,
 ) -> Optional[Tuple[bool, str, float, str]]:
     """Load template, preprocess, format, and run a single LLM step.
 
@@ -362,6 +363,7 @@ def _run_single_step(
         label=label,
         timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
+        reasoning_time=reasoning_time,
     )
     return (success, output, cost, model)
 
@@ -387,6 +389,7 @@ def run_agentic_checkup_orchestrator(
     no_fix: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """Orchestrate the 8-step agentic checkup workflow.
 
@@ -624,6 +627,7 @@ def run_agentic_checkup_orchestrator(
             verbose=verbose, quiet=quiet,
             label=f"step{step_num}",
             timeout_adder=timeout_adder,
+            reasoning_time=reasoning_time,
         )
 
         if result is None:
@@ -665,6 +669,7 @@ def run_agentic_checkup_orchestrator(
                 verbose=verbose, quiet=quiet,
                 label=f"step{step_num}",
                 timeout_adder=timeout_adder,
+                reasoning_time=reasoning_time,
             )
 
             if result is None:
@@ -711,6 +716,7 @@ def run_agentic_checkup_orchestrator(
                 verbose=verbose, quiet=quiet,
                 label="step7",
                 timeout_adder=timeout_adder,
+                reasoning_time=reasoning_time,
             )
 
             if result is None:
@@ -815,6 +821,7 @@ def run_agentic_checkup_orchestrator(
                     verbose=verbose, quiet=quiet,
                     label=iter_label,
                     timeout_adder=timeout_adder,
+                    reasoning_time=reasoning_time,
                 )
 
                 if result is None:
@@ -866,6 +873,7 @@ def run_agentic_checkup_orchestrator(
                 verbose=verbose, quiet=quiet,
                 label="step8",
                 timeout_adder=timeout_adder,
+                reasoning_time=reasoning_time,
             )
 
             if result is None:

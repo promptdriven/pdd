@@ -205,6 +205,7 @@ def _run_agentic_sync_dispatch(
             timeout_adder=timeout_adder,
             use_github_state=not no_github_state,
             one_session=one_session,
+            reasoning_time=ctx.obj.get("time"),
         )
 
         if not quiet:

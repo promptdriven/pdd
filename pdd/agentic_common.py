@@ -763,6 +763,7 @@ def run_agentic_task(
     retry_delay: float = DEFAULT_RETRY_DELAY,
     deadline: Optional[float] = None,
     use_playwright: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -778,6 +779,10 @@ def run_agentic_task(
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
         deadline: Optional Unix timestamp for job-level time budgeting
         use_playwright: Enable constrained tool access mode for browser-based testing
+        time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
+            top-level ``pdd --time`` flag. When provided, overrides the
+            ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
+            means "fall back to env" so unplumbed call sites keep working.
 
     Returns:
         (success, output_text, cost_usd, provider_used)
@@ -867,6 +872,7 @@ def run_agentic_task(
                 success, output, cost = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
+                    reasoning_time=reasoning_time,
                 )
                 last_output = output
 
@@ -1091,6 +1097,7 @@ def _run_with_provider(
     cli_path: Optional[str] = None,
     label: str = "",
     use_playwright: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -1106,6 +1113,11 @@ def _run_with_provider(
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
         label: Task label for heartbeat messages
         use_playwright: Enable constrained tool access for browser testing
+        time: Reasoning-allocation float in [0.0, 1.0]. When provided,
+            takes precedence over the ``PDD_REASONING_EFFORT`` env var.
+            ``None`` means "fall back to env" so unplumbed call sites
+            keep receiving the signal via the global variable set by
+            ``pdd/core/cli.py``.
     """
 
     # Prepare Environment
@@ -1134,13 +1146,21 @@ def _run_with_provider(
     # Read prompt content for providers that pipe via stdin
     prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
 
-    # Reasoning-effort plumbing. The top-level CLI sets PDD_REASONING_EFFORT
-    # from --time so provider subprocesses can honor the allocation. Only
-    # Codex exposes a matching CLI flag today; Anthropic and Gemini CLIs do
-    # not, so we log the miss once rather than silently dropping the signal.
-    reasoning_effort = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
-    if reasoning_effort not in {"low", "medium", "high"}:
-        reasoning_effort = ""
+    # Reasoning-effort plumbing. Two paths converge here:
+    # 1. Explicit ``reasoning_time`` kwarg threaded down from the command →
+    #    orchestrator → run_agentic_task chain (preferred — ctx.obj["time"]
+    #    provenance so per-call overrides don't need a global env mutation).
+    # 2. PDD_REASONING_EFFORT env var set by pdd/core/cli.py for call sites
+    #    that don't thread the kwarg. Kept so unplumbed callers (sync, split,
+    #    test_generate, update, verify, crash, etc.) still honor --time.
+    # Explicit kwarg wins; env is the fallback.
+    if reasoning_time is not None:
+        from .reasoning import time_to_effort_level
+        reasoning_effort = time_to_effort_level(reasoning_time)
+    else:
+        reasoning_effort = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        if reasoning_effort not in {"low", "medium", "high"}:
+            reasoning_effort = ""
 
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":

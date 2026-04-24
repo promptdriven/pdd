@@ -11,6 +11,7 @@ import os
 from unittest.mock import patch
 
 import click
+import pytest
 from click.testing import CliRunner
 
 
@@ -146,3 +147,74 @@ def test_cli_env_survives_to_downstream_same_process():
         cli.commands.pop("_test_full_chain", None)
         os.environ.pop("_TEST_TMPDIR", None)
         os.environ.pop("PDD_REASONING_EFFORT", None)
+
+
+@pytest.mark.parametrize(
+    "command_name, orchestrator_mod, orchestrator_fn",
+    [
+        ("fix", "pdd.agentic_e2e_fix", "run_agentic_e2e_fix"),
+        ("bug", "pdd.agentic_bug", "run_agentic_bug"),
+        ("change", "pdd.agentic_change", "run_agentic_change"),
+        ("sync", "pdd.agentic_sync", "run_agentic_sync"),
+        ("checkup", "pdd.agentic_checkup", "run_agentic_checkup"),
+    ],
+)
+def test_command_forwards_reasoning_time_to_orchestrator(
+    command_name, orchestrator_mod, orchestrator_fn,
+):
+    """Greg's review #3: each issue-URL command must forward
+    ``ctx.obj["time"]`` into its agentic orchestrator via an explicit
+    kwarg. This parametrized test patches each orchestrator, runs its
+    command via CliRunner with ``--time 0.85``, and asserts the
+    orchestrator received ``reasoning_time=0.85``."""
+    import importlib
+    from unittest.mock import patch
+
+    # Side-effect-import registers all commands onto ``pdd.core.cli.cli``.
+    import pdd.cli  # noqa: F401
+    from pdd.core.cli import cli
+
+    captured = {}
+
+    # `fix` imports run_agentic_e2e_fix lazily inside its command body; the
+    # other commands import at module load time. Patch both the source
+    # module (covers lazy imports) and the already-bound name in the command
+    # module (covers early binding).
+    source_target = f"{orchestrator_mod}.{orchestrator_fn}"
+    cmd_bindings = {
+        "run_agentic_e2e_fix": None,  # fix imports lazily — only source patch needed
+        "run_agentic_bug": "pdd.commands.analysis.run_agentic_bug",
+        "run_agentic_change": "pdd.commands.modify.run_agentic_change",
+        "run_agentic_sync": "pdd.commands.maintenance.run_agentic_sync",
+        "run_agentic_checkup": "pdd.commands.checkup.run_agentic_checkup",
+    }
+
+    def fake_orch_with_exit(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        # checkup/sync return 4-tuple, fix/bug/change return 5-tuple
+        if orchestrator_fn in {"run_agentic_checkup", "run_agentic_sync"}:
+            return (True, "ok", 0.0, "claude")
+        return (True, "ok", 0.0, "claude", [])
+
+    runner = CliRunner()
+    bound = cmd_bindings[orchestrator_fn]
+
+    with patch(source_target, side_effect=fake_orch_with_exit):
+        ctx_patches = [patch(bound, side_effect=fake_orch_with_exit)] if bound else []
+        for p in ctx_patches:
+            p.start()
+        try:
+            args = ["--time", "0.85", command_name, "https://github.com/owner/repo/issues/1"]
+            result = runner.invoke(cli, args)
+        finally:
+            for p in ctx_patches:
+                p.stop()
+
+    assert "kwargs" in captured, (
+        f"{orchestrator_fn} was never invoked by ``pdd {command_name}`` "
+        f"(CliRunner output: {result.output!r})"
+    )
+    assert captured["kwargs"].get("reasoning_time") == 0.85, (
+        f"{orchestrator_fn} did not receive reasoning_time=0.85; "
+        f"got kwargs={captured['kwargs']!r}"
+    )

@@ -4900,3 +4900,105 @@ def test_claude_suppresses_effort_notice_when_quiet(
 
     captured = capsys.readouterr()
     assert "PDD_REASONING_EFFORT" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# reasoning_time kwarg threading (complements the PDD_REASONING_EFFORT env path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "reasoning_time, expected_effort",
+    [(0.2, "low"), (0.5, "medium"), (0.85, "high"), (0.0, "low"), (1.0, "high")],
+)
+def test_codex_injects_reasoning_effort_from_time_kwarg(
+    reasoning_time, expected_effort,
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess,
+):
+    """Explicit ``reasoning_time`` kwarg on _run_with_provider takes
+    precedence over (or works in the absence of) PDD_REASONING_EFFORT and
+    produces the correct Codex argv token. Greg's review #3 asks for
+    "tests that assert the effective provider command/env changes" — this
+    is that assertion for the kwarg-threaded path."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    # Env var intentionally left UNSET — kwarg alone must drive the argv.
+    os.environ.pop("PDD_REASONING_EFFORT", None)
+    _run_with_provider(
+        "openai", prompt_file, mock_cwd,
+        verbose=False, quiet=True, reasoning_time=reasoning_time,
+    )
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == f"model_reasoning_effort={expected_effort}"
+    assert cmd.index("-c") < cmd.index("exec")
+
+
+def test_reasoning_time_kwarg_overrides_env_var(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess,
+):
+    """When both signals are present, the explicit kwarg wins. Prevents a
+    stale env var from silently overriding per-call choices made by the
+    command layer reading ctx.obj["time"]."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "low"  # env says low
+    try:
+        _run_with_provider(
+            "openai", prompt_file, mock_cwd,
+            verbose=False, quiet=True, reasoning_time=0.85,  # kwarg says high
+        )
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+def test_run_agentic_task_forwards_reasoning_time_to_provider(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess,
+):
+    """run_agentic_task must forward its ``reasoning_time`` kwarg to
+    _run_with_provider. Covers the middle seam that Greg's review #3
+    called out: "run_agentic_task has no reasoning/time input" — the
+    new kwarg fills that gap."""
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "Codex output.",
+        "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0},
+    })
+
+    os.environ.pop("PDD_REASONING_EFFORT", None)
+    run_agentic_task("instruction", mock_cwd, reasoning_time=0.85)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"

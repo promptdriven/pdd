@@ -1322,7 +1322,8 @@ def run_agentic_bug_orchestrator(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 11-step agentic bug investigation workflow.
@@ -1668,6 +1669,7 @@ def run_agentic_bug_orchestrator(
             timeout=timeout,
             label=step_label,
             max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=reasoning_time,
         )
 
         total_cost += step_cost
@@ -1839,6 +1841,7 @@ def run_agentic_bug_orchestrator(
                         timeout=timeout,
                         label="step6",
                         max_retries=DEFAULT_MAX_RETRIES,
+                        reasoning_time=reasoning_time,
                     )
                     total_cost += retry_cost
                     model_used = retry_model
@@ -2046,6 +2049,7 @@ def run_agentic_bug_orchestrator(
                     timeout=timeout,
                     label="step9",
                     max_retries=DEFAULT_MAX_RETRIES,
+                    reasoning_time=reasoning_time,
                 )
                 total_cost += retry_cost
                 model_used = retry_model
@@ -2133,6 +2137,7 @@ def run_agentic_bug_orchestrator(
                         timeout=timeout,
                         label="step9",
                         max_retries=DEFAULT_MAX_RETRIES,
+                        reasoning_time=reasoning_time,
                     )
                     total_cost += cv_cost
                     model_used = cv_model
@@ -2198,6 +2203,7 @@ def run_agentic_bug_orchestrator(
                         timeout=timeout,
                         label="step9",
                         max_retries=DEFAULT_MAX_RETRIES,
+                        reasoning_time=reasoning_time,
                     )
                     total_cost += cov_cost
                     model_used = cov_model
