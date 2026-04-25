@@ -204,7 +204,7 @@ class TestIssue357Step9KeyErrorE2E:
         # Track which steps were attempted
         steps_attempted = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """
             Mock that lets us track which steps are called and what prompts are used.
 

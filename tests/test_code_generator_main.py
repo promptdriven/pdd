@@ -4461,3 +4461,185 @@ def test_verify_architecture_conformance_dict_format(tmp_path):
             verbose=False,
         )
 
+
+# ---------------------------------------------------------------------------
+# Tests for _parse_front_matter CRLF handling (Issue #197)
+# ---------------------------------------------------------------------------
+from pdd.code_generator_main import _parse_front_matter
+
+
+class TestParseFrontMatterCRLF:
+    """Tests for _parse_front_matter handling of CRLF line endings (Issue #197)."""
+
+    def test_parse_front_matter_crlf(self):
+        """Front matter with Windows (CRLF) line endings should parse correctly."""
+        text = "---\r\nname: my_module\r\nlanguage: python\r\n---\r\nPrompt body here"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None, "CRLF front matter returned None"
+        assert meta["name"] == "my_module"
+        assert meta["language"] == "python"
+        assert "Prompt body here" in body
+
+    def test_parse_front_matter_mixed_line_endings(self):
+        """Front matter with mixed LF/CRLF should still parse."""
+        text = "---\nname: mixed\r\n---\nBody content"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None, "Mixed line ending front matter returned None"
+        assert meta["name"] == "mixed"
+        assert "Body content" in body
+
+    def test_parse_front_matter_crlf_delimiters_lf_inside(self):
+        """CRLF on delimiters but LF inside YAML content should parse."""
+        text = "---\r\nname: test\nlanguage: python\n---\r\nBody"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None, "CRLF-delimiter front matter returned None"
+        assert meta["name"] == "test"
+        assert "Body" in body
+
+    def test_parse_front_matter_lf_still_works(self):
+        """Existing LF-only front matter must continue to work (regression guard)."""
+        text = "---\nname: lf_module\nlanguage: python\n---\nPrompt body"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None, "LF front matter should still work"
+        assert meta["name"] == "lf_module"
+        assert "Prompt body" in body
+
+    def test_parse_front_matter_no_front_matter(self):
+        """Text without front matter should pass through unchanged."""
+        text = "Just a regular prompt with no front matter"
+        meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+
+    def test_parse_front_matter_unclosed_fence_silent(self, caplog):
+        """Opener '---\\n' without a closing fence MUST be silent: that pattern
+        is indistinguishable from a markdown horizontal rule, so warning would
+        produce false positives on valid content.
+        """
+        text = "---\nname: broken\nno closing fence here"
+        with caplog.at_level("WARNING", logger="pdd.code_generator_main"):
+            meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+        assert not caplog.records, (
+            f"Unclosed-fence path must not warn; got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+
+    def test_parse_front_matter_unclosed_fence_crlf_silent(self, caplog):
+        """Same silence rule for CRLF-opened unclosed front matter."""
+        text = "---\r\nname: broken\r\nno closing fence"
+        with caplog.at_level("WARNING", logger="pdd.code_generator_main"):
+            meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+        assert not caplog.records
+
+    def test_parse_front_matter_markdown_hr_no_warn(self, caplog):
+        """A prompt that opens with a markdown HR (``---\\nProse text...``)
+        is the canonical false-positive shape and MUST NOT warn. ``main``
+        returned ``(None, original_text)`` silently; this fix must preserve
+        that.
+        """
+        text = "---\nPrompt starts after a Markdown horizontal rule\n\nMore prose."
+        with caplog.at_level("WARNING", logger="pdd.code_generator_main"):
+            meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+        assert not caplog.records, (
+            f"Markdown-HR opener must not warn; got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+
+    def test_parse_front_matter_malformed_yaml_warns(self, caplog):
+        """Invalid YAML inside valid fences must log a warning naming the cause."""
+        text = "---\nname: [unclosed\nlanguage: python\n---\nBody"
+        with caplog.at_level("WARNING", logger="pdd.code_generator_main"):
+            meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+        assert any(
+            "yaml" in record.message.lower() for record in caplog.records
+        ), f"Expected YAML-parse warning; got: {[r.message for r in caplog.records]}"
+
+    def test_parse_front_matter_plain_text_does_not_warn(self, caplog):
+        """No warning for text that does not begin with '---' (avoid false positives)."""
+        text = "Regular prompt with no sentinel"
+        with caplog.at_level("WARNING", logger="pdd.code_generator_main"):
+            meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+        assert not caplog.records, (
+            f"Should not warn on plain text; got: {[r.message for r in caplog.records]}"
+        )
+
+    def test_parse_front_matter_bom_crlf(self):
+        """UTF-8 BOM + CRLF front matter must parse (Windows Notepad/Excel default)."""
+        text = "﻿---\r\nname: bom_module\r\nlanguage: python\r\n---\r\nBody"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None, "BOM+CRLF front matter returned None"
+        assert meta["name"] == "bom_module"
+        assert body == "Body"
+
+    def test_parse_front_matter_bom_lf(self):
+        """UTF-8 BOM + LF front matter must parse."""
+        text = "﻿---\nname: bom_lf\n---\nBody"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None
+        assert meta["name"] == "bom_lf"
+        assert body == "Body"
+
+    def test_parse_front_matter_trailing_whitespace_on_fence(self):
+        """Trailing spaces/tabs on fence lines must be tolerated (editor artifacts)."""
+        text = "---   \nname: ws_ok\n---\t\nBody"
+        meta, body = _parse_front_matter(text)
+        assert meta is not None, "Trailing fence whitespace should be tolerated"
+        assert meta["name"] == "ws_ok"
+        assert body == "Body"
+
+    def test_parse_front_matter_bare_dashes_markdown_hr_no_warn(self, caplog):
+        """Bare '---' (no newline) looks like a markdown HR, not a fence — must not warn."""
+        text = "---some inline text that happens to start with three dashes"
+        with caplog.at_level("WARNING", logger="pdd.code_generator_main"):
+            meta, body = _parse_front_matter(text)
+        assert meta is None
+        assert body == text
+        assert not caplog.records, (
+            f"Bare '---' without newline must not warn; got: "
+            f"{[r.message for r in caplog.records]}"
+        )
+
+    def test_parse_front_matter_crlf_via_file_read_no_newline_translation(self, tmp_path):
+        """End-to-end: opening a CRLF file with newline='' (no translation) must
+        still yield parseable front matter. Covers callers that bypass universal
+        newlines (binary pipelines, network sources, or explicit newline='').
+        """
+        p = tmp_path / "crlf.prompt"
+        p.write_bytes(
+            b"---\r\nname: e2e_crlf\r\nlanguage: python\r\n---\r\nBody here"
+        )
+        # newline='' disables universal-newlines — CRLF survives to _parse_front_matter
+        with open(p, "r", encoding="utf-8", newline="") as f:
+            raw = f.read()
+        assert "\r\n" in raw, "Sanity: newline='' must preserve CRLF in read buffer"
+        meta, body = _parse_front_matter(raw)
+        assert meta is not None, "End-to-end CRLF (no newline translation) returned None"
+        assert meta["name"] == "e2e_crlf"
+        assert "Body here" in body
+
+    def test_parse_front_matter_bom_via_file_read_utf8(self, tmp_path):
+        """End-to-end: a UTF-8-with-BOM file opened with encoding='utf-8'
+        (not 'utf-8-sig') still parses. This matches the production read path
+        at code_generator_main.py which does NOT strip BOM.
+        """
+        p = tmp_path / "bom.prompt"
+        p.write_bytes(
+            b"\xef\xbb\xbf---\r\nname: e2e_bom\r\n---\r\nBody"
+        )
+        with open(p, "r", encoding="utf-8") as f:
+            raw = f.read()
+        assert raw.startswith("﻿"), "Sanity: utf-8 decode keeps BOM as U+FEFF"
+        meta, body = _parse_front_matter(raw)
+        assert meta is not None, "BOM prompt read with encoding='utf-8' returned None"
+        assert meta["name"] == "e2e_bom"
+        assert body == "Body"

@@ -87,7 +87,7 @@ Build a simple Python data model system with examples.
         # Track which steps were called and control their outputs
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM agent for each step of the architecture workflow."""
             step_calls.append(label)
 

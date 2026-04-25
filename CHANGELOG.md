@@ -1,23 +1,47 @@
+## v0.0.218 (2026-04-24)
+
+### Feat
+
+- **agentic**: thread --time into provider subprocess reasoning flags
+- **ci_drift_heal**: use pdd example for heal step (#1296)
+
+### Fix
+
+- **#1087**: sync prompt + relocate tests to match module ownership
+- **#1087**: detect_control_token handle CRLF via splitlines()
+- **#1276**: drop unclosed-fence warning to avoid markdown HR false positive
+- **#197**: _parse_front_matter accept CRLF line endings
+- **reasoning**: gate reasoning_time forwarding on time_explicit + add CODEX_REASONING_EFFORT precedence (xhigh)
+- **prompt**: unblock checkup by replacing EJS-style comment with % preamble
+- **llm_invoke**: provider-aware prefix-variant lookup before surrogate fallback (#1300)
+
 ## v0.0.217 (2026-04-23)
 
 ### Feat
 
-- **ci_drift_heal**: use pdd example instead of pdd sync for heal step
-- add pdd sync-architecture CLI and implement robust, tolerant architecture.json parsing across all consumers
-- skip recording failed runs in duplicate CLI guard (#1275)
-- skip recording failed runs in duplicate CLI guard (#1275)
+- **ci_drift_heal**: dispatch heal via `pdd example` (single LLM call) instead of full `pdd sync` for prompt+example drift; preserve `pdd sync` for verify/generate/auto-deps/test/crash operations; pin `--strength 0.5` on every heal subprocess to override `.pddrc` context-strength escalation
+- **duplicate_cli_guard**: skip recording failed runs so failures can be retried immediately (#1275)
 
 ### Fix
 
-- **ci_drift_heal**: fail closed when prompt_path unresolvable post-update
-- **ci_drift_heal**: preserve sync semantics for non-example drift ops
-- parse metadata after prompt comments
-- support FirecrawlApp SDK import
-- apply get_cloud_request_timeout() to all cloud requests.post sites (#1272)
+- **ci_drift_heal**: fail closed when `prompt_path` is unresolvable post-update (revert partial heals instead of publishing them)
+- **ci_drift_heal**: preserve original `decision.operation` in `DriftInfo` instead of collapsing non-update decisions to `"example"` — restores correct dispatch semantics for verify/generate/auto-deps/test/crash
+- **`architecture_sync`**: extend `parse_prompt_tags` to tolerate ERB (`<%-- --%>`) and XML (`<!-- -->`) comment blocks before the `<pdd-*>` metadata header (follow-up to the `%`-preamble fix in v0.0.216)
+- **firecrawl**: support new `FirecrawlApp` SDK import shape (#1295)
+- **cloud requests**: apply `get_cloud_request_timeout()` to every `requests.post` call site so hung requests actually time out (#1272)
 
 ### Refactor
 
-- extract success derivation helper + testable contract (#1275)
+- extract success-derivation helper + testable contract for duplicate_cli_guard (#1275)
+
+### Docs
+
+- document the manual `/gcbrun` PR auto-heal gate (#1291)
+
+### Build
+
+- auto-healed prompt/example drift across `fix_code_loop`, `fix_main`, `llm_invoke`, `sync_main`, `core/cli`, `core/duplicate_cli_guard`, `main_gen` (with reverts for auto-heal over-correction on `sync_main`)
+- refresh `ci/cloud-batch/test-durations.json` benchmarks and `.cloud-image-hash`
 
 ## v0.0.216 (2026-04-22)
 

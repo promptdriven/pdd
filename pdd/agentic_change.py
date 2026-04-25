@@ -143,7 +143,8 @@ def run_agentic_change(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     CLI entry point for the agentic change workflow.
@@ -243,5 +244,6 @@ def run_agentic_change(
         verbose=verbose,
         quiet=quiet,
         timeout_adder=timeout_adder,
-        use_github_state=use_github_state
+        use_github_state=use_github_state,
+        reasoning_time=reasoning_time,
     )

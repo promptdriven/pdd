@@ -103,15 +103,22 @@ class TestStep10PromptFormatting:
 def test_generation_prompts_include_ci_examples():
     """The new generation prompts should include the examples they reference.
 
-    Reads _python.prompt files not synced to the public repo.
+    Reads _python.prompt files not synced to the public repo. Accepts both
+    bare `<include>...</include>` and selector-filtered
+    `<include select="...">...</include>` forms, since auto-heal may narrow
+    which definitions are pulled from a given example file.
     """
     orchestrator_prompt = _read_repo_text("pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt")
     ci_validation_prompt = _read_repo_text("pdd/prompts/ci_validation_python.prompt")
 
-    assert "<include>context/agentic_e2e_fix_orchestrator_example.py</include>" in orchestrator_prompt
-    assert "<include>context/ci_validation_example.py</include>" in orchestrator_prompt
-    assert "<include>context/agentic_common_example.py</include>" in ci_validation_prompt
-    assert "<include>context/ci_validation_example.py</include>" in ci_validation_prompt
+    def _has_include(prompt: str, path: str) -> bool:
+        pattern = rf'<include(?:\s+select="[^"]*")?\s*>{re.escape(path)}</include>'
+        return re.search(pattern, prompt) is not None
+
+    assert _has_include(orchestrator_prompt, "context/agentic_e2e_fix_orchestrator_example.py")
+    assert _has_include(orchestrator_prompt, "context/ci_validation_example.py")
+    assert _has_include(ci_validation_prompt, "context/agentic_common_example.py")
+    assert _has_include(ci_validation_prompt, "context/ci_validation_example.py")
 
 
 def test_agentic_common_example_demonstrates_post_pr_comment():

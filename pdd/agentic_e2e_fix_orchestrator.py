@@ -1290,6 +1290,7 @@ def _run_step11_code_cleanup(
     timeout_adder: float,
     verbose: bool,
     quiet: bool,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[float, List[str]]:
     """Run Step 11: Code cleanup before CI validation.
 
@@ -1376,6 +1377,7 @@ def _run_step11_code_cleanup(
         timeout=cleanup_timeout,
         label="step11_code_cleanup",
         max_retries=DEFAULT_MAX_RETRIES,
+        reasoning_time=reasoning_time,
     )
     total_cost += cleanup_cost
 
@@ -1463,6 +1465,7 @@ def run_agentic_e2e_fix_orchestrator(
     ci_retries: int = 3,
     skip_ci: bool = False,
     skip_cleanup: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrator for the 11-step agentic e2e fix workflow.
@@ -1789,6 +1792,7 @@ def run_agentic_e2e_fix_orchestrator(
                     timeout=timeout,
                     label=f"cycle{current_cycle}_step{step_num}",
                     max_retries=DEFAULT_MAX_RETRIES,
+                    reasoning_time=reasoning_time,
                 )
 
                 # Step 1 timeout retry: retry once with increased timeout
@@ -1808,6 +1812,7 @@ def run_agentic_e2e_fix_orchestrator(
                         timeout=retry_timeout,
                         label=f"cycle{current_cycle}_step{step_num}_retry1",
                         max_retries=DEFAULT_MAX_RETRIES,
+                        reasoning_time=reasoning_time,
                     )
                     step_cost += retry_cost
 
@@ -2022,6 +2027,7 @@ def run_agentic_e2e_fix_orchestrator(
                             timeout=base_timeout + timeout_adder,
                             label=f"cycle{current_cycle}_step9_retry",
                             max_retries=DEFAULT_MAX_RETRIES,
+                            reasoning_time=reasoning_time,
                         )
                         total_cost += retry_cost
                         if retry_model:
@@ -2167,6 +2173,7 @@ def run_agentic_e2e_fix_orchestrator(
                     timeout_adder=timeout_adder,
                     verbose=verbose,
                     quiet=quiet,
+                    reasoning_time=reasoning_time,
                 )
 
             if skip_ci:

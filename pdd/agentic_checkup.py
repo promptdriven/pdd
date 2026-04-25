@@ -149,6 +149,7 @@ def run_agentic_checkup(
     no_fix: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -238,6 +239,7 @@ def run_agentic_checkup(
             no_fix=no_fix,
             timeout_adder=timeout_adder,
             use_github_state=use_github_state,
+            reasoning_time=reasoning_time,
         )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"

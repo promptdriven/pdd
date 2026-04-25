@@ -382,6 +382,21 @@ def cli(
         os.environ['PDD_FORCE_LOCAL'] = '1'
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
+    # Track whether the user explicitly supplied --time on the command line.
+    # ctx.obj["time"] is always populated (DEFAULT_TIME fallback), so callers
+    # that want to forward an explicit reasoning override per-call must gate
+    # on this flag — otherwise plain `pdd bug ...` would behave as if
+    # `--time DEFAULT_TIME` was passed and force-set provider effort.
+    ctx.obj["time_explicit"] = time is not None
+    # Mirror --time into PDD_REASONING_EFFORT so agentic CLI subprocesses
+    # (Codex especially) honor the user's reasoning allocation. Env-var
+    # pattern matches CLAUDE_MODEL/CODEX_MODEL threading in _run_with_provider.
+    # Only set when the user explicitly passed --time; otherwise leave any
+    # pre-existing value (e.g. from the worker env.yaml such as
+    # CODEX_REASONING_EFFORT=xhigh for GPT-5.4 routing) alone.
+    if time is not None:
+        from ..reasoning import time_to_effort_level
+        os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump

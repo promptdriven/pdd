@@ -157,7 +157,7 @@ class TestIssue579OrchestratorRerunE2E:
 
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM calls — return success for all steps.
 
             Steps 1-6 produce outputs that don't trigger any hard-stop conditions.
@@ -299,7 +299,7 @@ class TestIssue579OrchestratorRerunE2E:
 
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             step_calls.append(label)
 
             # Step 10: Verify test
@@ -408,7 +408,7 @@ class TestIssue579OrchestratorRerunE2E:
         def mock_clear_state(*args, **kwargs):
             pass
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             return (True, f"Mock success for {label}", 0.001, "mock-model")
 
         with patch('pdd.agentic_change_orchestrator.load_workflow_state', side_effect=mock_load_state):

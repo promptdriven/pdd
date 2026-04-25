@@ -3486,6 +3486,23 @@ class TestClassifyStepOutput:
         output = "18 passed, 3 failed. The fix needs more work."
         assert _classify_step_output(output, step_num=9) != "LOCAL_TESTS_PASS"
 
+    def test_crlf_input_classify_step_output_step9(self):
+        """Issue #1087: _classify_step_output fails with CRLF line endings.
+
+        When LLM output has \\r\\n endings, detect_control_token's .split('\\n')
+        produces an extra trailing element, shifting the 30-line tail window by
+        one and excluding the semantic phrase at the boundary. Step 9 should
+        map ALL_TESTS_PASS → LOCAL_TESTS_PASS via semantic detection.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
+        # 35 CRLF lines with semantic phrase at boundary index 5.
+        # .splitlines() → 35 elements, [-30:] starts at 5, includes phrase.
+        # .split('\n') → 36 elements, [-30:] starts at 6, excludes phrase.
+        lines = [f"filler line {i}" for i in range(35)]
+        lines[5] = "all tests passed successfully"
+        output = "\r\n".join(lines) + "\r\n"
+        assert _classify_step_output(output, step_num=9) == "LOCAL_TESTS_PASS"
+
 
 class TestClassifyStepOutputCodeBugPriority:
     """Bug: _classify_step_output for step 3 only checks for NOT_A_BUG, missing
@@ -3804,6 +3821,11 @@ class TestDetectControlTokenUnit:
         assert detect_control_token("CUSTOM_TOKEN", "CUSTOM_TOKEN")
         assert detect_control_token("custom_token", "CUSTOM_TOKEN")
         assert not detect_control_token("something else", "CUSTOM_TOKEN")
+
+    # Issue #1087 CRLF line-ending tests for detect_control_token live in
+    # tests/test_agentic_common.py::TestDetectControlTokenLineEndings — test
+    # ownership matches the module under change. The caller-chain regression
+    # test_crlf_input_classify_step_output_step9 stays here in TestClassifyStepOutput.
 
 
 class TestClassifyStepOutputWiring:

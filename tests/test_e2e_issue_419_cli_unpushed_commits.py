@@ -102,7 +102,7 @@ class TestIssue419CLIUnpushedCommitsE2E:
 
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM agent: Step 1 creates commit, Step 2 returns ALL_TESTS_PASS."""
             step_calls.append(label)
 
@@ -218,7 +218,7 @@ def generate():
         monkeypatch.chdir(worktree_path)
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             if "_step1" in label:
                 generate_file = cwd / "pdd" / "commands" / "generate.py"
                 generate_file.write_text('"""Fixed."""\ndef generate():\n    return "Fixed"\n')

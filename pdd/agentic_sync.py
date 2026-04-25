@@ -396,6 +396,7 @@ def _llm_fix_dry_run_failure(
     dry_run_error: str,
     quiet: bool = False,
     verbose: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, Optional[Path], float, str]:
     """Ask the LLM to suggest the correct cwd/command when dry-run fails.
 
@@ -454,6 +455,7 @@ def _llm_fix_dry_run_failure(
         verbose=verbose,
         quiet=quiet,
         label="agentic_sync_fix_dry_run",
+        reasoning_time=reasoning_time,
     )
 
     if not llm_success:
@@ -528,6 +530,7 @@ def _run_dry_run_validation(
     project_root: Path,
     quiet: bool = False,
     verbose: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, Dict[str, Path], List[str], float]:
     """Run dry-run validation for each module with LLM fallback.
 
@@ -561,6 +564,7 @@ def _run_dry_run_validation(
             dry_run_error=err_output,
             quiet=quiet,
             verbose=verbose,
+            reasoning_time=reasoning_time,
         )
         total_llm_cost += llm_cost
 
@@ -773,6 +777,7 @@ def run_agentic_sync(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     one_session: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -889,6 +894,7 @@ def run_agentic_sync(
             verbose=verbose,
             quiet=quiet,
             label="agentic_sync_identify_modules",
+            reasoning_time=reasoning_time,
         )
 
         if not llm_success:
@@ -971,6 +977,7 @@ def run_agentic_sync(
         project_root=project_root,
         quiet=quiet,
         verbose=verbose,
+        reasoning_time=reasoning_time,
     )
     llm_cost += dry_run_cost
 
