@@ -153,7 +153,7 @@ def fix(
                 ci_retries=ci_retries,
                 skip_ci=skip_ci,
                 skip_cleanup=skip_cleanup,
-                reasoning_time=ctx.obj.get("time"),
+                reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             )
 
             if not quiet:

@@ -218,3 +218,71 @@ def test_command_forwards_reasoning_time_to_orchestrator(
         f"{orchestrator_fn} did not receive reasoning_time=0.85; "
         f"got kwargs={captured['kwargs']!r}"
     )
+
+
+@pytest.mark.parametrize(
+    "command_name, orchestrator_mod, orchestrator_fn",
+    [
+        ("fix", "pdd.agentic_e2e_fix", "run_agentic_e2e_fix"),
+        ("bug", "pdd.agentic_bug", "run_agentic_bug"),
+        ("change", "pdd.agentic_change", "run_agentic_change"),
+        ("sync", "pdd.agentic_sync", "run_agentic_sync"),
+        ("checkup", "pdd.agentic_checkup", "run_agentic_checkup"),
+    ],
+)
+def test_command_does_not_forward_default_time_when_flag_omitted(
+    command_name, orchestrator_mod, orchestrator_fn,
+):
+    """Greg's PR #1293 review B1: when the user does NOT pass --time on the
+    command line, ``ctx.obj["time"]`` is still populated (DEFAULT_TIME
+    fallback), but the command must NOT forward it as ``reasoning_time``.
+    Otherwise plain ``pdd bug ...`` would force-set Codex effort to 'low'
+    and silently regress every existing user. This test pins the explicitness
+    gate: with no --time, ``reasoning_time`` arrives as None at the
+    orchestrator."""
+    from unittest.mock import patch
+
+    import pdd.cli  # noqa: F401  — registers commands onto cli group
+    from pdd.core.cli import cli
+
+    captured = {}
+
+    source_target = f"{orchestrator_mod}.{orchestrator_fn}"
+    cmd_bindings = {
+        "run_agentic_e2e_fix": None,
+        "run_agentic_bug": "pdd.commands.analysis.run_agentic_bug",
+        "run_agentic_change": "pdd.commands.modify.run_agentic_change",
+        "run_agentic_sync": "pdd.commands.maintenance.run_agentic_sync",
+        "run_agentic_checkup": "pdd.commands.checkup.run_agentic_checkup",
+    }
+
+    def fake_orch(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        if orchestrator_fn in {"run_agentic_checkup", "run_agentic_sync"}:
+            return (True, "ok", 0.0, "claude")
+        return (True, "ok", 0.0, "claude", [])
+
+    runner = CliRunner()
+    bound = cmd_bindings[orchestrator_fn]
+
+    with patch(source_target, side_effect=fake_orch):
+        ctx_patches = [patch(bound, side_effect=fake_orch)] if bound else []
+        for p in ctx_patches:
+            p.start()
+        try:
+            # No --time on argv this time.
+            args = [command_name, "https://github.com/owner/repo/issues/1"]
+            result = runner.invoke(cli, args)
+        finally:
+            for p in ctx_patches:
+                p.stop()
+
+    assert "kwargs" in captured, (
+        f"{orchestrator_fn} was never invoked by ``pdd {command_name}`` "
+        f"(CliRunner output: {result.output!r})"
+    )
+    assert captured["kwargs"].get("reasoning_time") is None, (
+        f"{orchestrator_fn} received reasoning_time={captured['kwargs'].get('reasoning_time')!r} "
+        f"despite no --time on argv — the explicitness gate failed and a "
+        f"plain command would silently force-set provider effort."
+    )

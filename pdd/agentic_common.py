@@ -1146,14 +1146,20 @@ def _run_with_provider(
     # Read prompt content for providers that pipe via stdin
     prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
 
-    # Reasoning-effort plumbing. Two paths converge here:
-    # 1. Explicit ``reasoning_time`` kwarg threaded down from the command →
-    #    orchestrator → run_agentic_task chain (preferred — ctx.obj["time"]
-    #    provenance so per-call overrides don't need a global env mutation).
-    # 2. PDD_REASONING_EFFORT env var set by pdd/core/cli.py for call sites
-    #    that don't thread the kwarg. Kept so unplumbed callers (sync, split,
-    #    test_generate, update, verify, crash, etc.) still honor --time.
-    # Explicit kwarg wins; env is the fallback.
+    # Reasoning-effort plumbing. Three input paths converge here, in
+    # precedence order:
+    # 1. ``CODEX_REASONING_EFFORT`` env var — Codex-specific override, accepts
+    #    ``low|medium|high|xhigh`` (xhigh is Codex-only, used by the cloud
+    #    worker for GPT-5.4 routing). Only consulted when provider == "openai".
+    # 2. Explicit ``reasoning_time`` kwarg threaded down from a command that
+    #    saw ``--time`` on argv (cli.py only forwards when ``time_explicit`` is
+    #    True, so a default ``ctx.obj["time"]`` does NOT reach here).
+    # 3. ``PDD_REASONING_EFFORT`` env var set by pdd/core/cli.py for call
+    #    sites that don't thread the kwarg (sync, split, test_generate,
+    #    update, verify, crash, etc.).
+    # ``CODEX_REASONING_EFFORT`` only fires for the openai branch below; the
+    # generic ``reasoning_effort`` resolved here covers paths 2 and 3 and is
+    # what the anthropic/gemini logging notices read.
     if reasoning_time is not None:
         from .reasoning import time_to_effort_level
         reasoning_effort = time_to_effort_level(reasoning_time)
@@ -1229,8 +1235,20 @@ def _run_with_provider(
         cmd = [cli_path]
         # Codex accepts -c / --config only as a top-level flag before the
         # subcommand; appending after "exec" is silently ignored.
-        if reasoning_effort:
-            cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+        # Codex-specific override: CODEX_REASONING_EFFORT takes precedence
+        # over the generic reasoning_effort (kwarg / PDD_REASONING_EFFORT)
+        # and additionally accepts ``xhigh`` for GPT-5.4 routing — the
+        # cloud worker sets this env var directly when promoting Codex to
+        # an extra-high reasoning budget regardless of the user's --time.
+        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+        if codex_effort in {"low", "medium", "high", "xhigh"}:
+            effective_codex_effort: Optional[str] = codex_effort
+        elif reasoning_effort:
+            effective_codex_effort = reasoning_effort
+        else:
+            effective_codex_effort = None
+        if effective_codex_effort:
+            cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
         cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,
