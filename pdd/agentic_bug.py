@@ -178,6 +178,7 @@ def run_agentic_bug(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
     # Legacy/Manual mode arguments (handled via *args in a real CLI, but here explicit for type safety if called directly)
     manual_args: Optional[Tuple[str, str, str, str, str]] = None
 ) -> Tuple[bool, str, float, str, List[str]]:
@@ -309,7 +310,8 @@ def run_agentic_bug(
             verbose=verbose,
             quiet=quiet,
             timeout_adder=timeout_adder,
-            use_github_state=use_github_state
+            use_github_state=use_github_state,
+            reasoning_time=reasoning_time,
         )
         return success, message, cost, model, changed_files
 

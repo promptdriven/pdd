@@ -3974,6 +3974,184 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
 
+    def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
+        """Mirror the bundled CSV's prefix inconsistency: most Vertex models
+        listed with `vertex_ai/` prefix, but Pro listed bare."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # First row is the trap: surrogate-base falls back to this if the
+            # configured base isn't found by literal-match lookup.
+            "Google Vertex AI,vertex_ai/claude-opus-4-6,5.0,25.0,1561,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,200000,8192,128000\n"
+            # Pro listed bare (no prefix) — like the real bundled CSV
+            "Google Vertex AI,gemini-3.1-pro-preview,2.0,12.0,1461,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            # Flash listed with prefix — also like the real bundled CSV
+            "Google Vertex AI,vertex_ai/gemini-3-flash-preview,0.5,3.0,1440,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "vertex_models.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def _make_cross_provider_df(self, llm_mod, tmp_path):
+        """CSV with the same bare model name under multiple providers, so we
+        can verify provider-aware alias resolution (a configured Vertex
+        prefix must NOT silently match an Anthropic-direct or Gemini-direct
+        row that happens to share the bare name)."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # First row is the surrogate-base trap.
+            "AWS Bedrock,anthropic.claude-opus-4-6-v1,5.0,25.0,1561,"
+            "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,"
+            "True,effort,0,0,0\n"
+            # Direct Anthropic Opus (bare name) — must NOT be matched by a
+            # `vertex_ai/claude-opus-4-6` configured base.
+            "Anthropic,claude-opus-4-6,5.0,25.0,1561,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            # Direct Gemini API Flash (gemini/ prefix) — must NOT be matched
+            # by a `vertex_ai/gemini-3-flash-preview` configured base.
+            "Google Gemini,gemini/gemini-3-flash-preview,0.5,3.0,1440,"
+            "GEMINI_API_KEY,True,effort,1000000,8192,0\n"
+            # Vertex AI Pro (bare under "Google Vertex AI") — what
+            # `vertex_ai/gemini-3.1-pro-preview` should resolve to.
+            "Google Vertex AI,gemini-3.1-pro-preview,2.0,12.0,1461,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "cross_provider_models.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_vertex_prefix_variant_resolves_to_bare_csv_row(self, llm_mod, tmp_path):
+        """Bug regression: PDD_MODEL_DEFAULT=vertex_ai/gemini-3.1-pro-preview
+        must resolve to the bare gemini-3.1-pro-preview row in the CSV
+        instead of silently falling back to the surrogate-base path
+        (which lands on claude-opus-4-6, the first row).
+
+        Without the fix, this test would have returned 'vertex_ai/claude-opus-4-6'
+        as candidates[0] and silently sent every user request to Opus despite
+        the base being a Gemini model."""
+        df = self._make_vertex_inconsistent_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3.1-pro-preview", df
+        )
+        assert candidates[0]["model"] == "gemini-3.1-pro-preview"
+
+    def test_bare_variant_resolves_to_prefixed_csv_row(self, llm_mod, tmp_path):
+        """Inverse of the previous test — if the configured name has no prefix
+        but the CSV only has a prefixed row, the lookup should still resolve."""
+        df = self._make_vertex_inconsistent_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "gemini-3-flash-preview", df
+        )
+        assert candidates[0]["model"] == "vertex_ai/gemini-3-flash-preview"
+
+    def test_unrelated_unknown_base_still_uses_surrogate(self, llm_mod, tmp_path):
+        """Names that don't have a known provider prefix and don't have a
+        prefixed alias in the CSV still fall through to the surrogate-base
+        path — the existing soft-fallback behavior is preserved."""
+        df = self._make_vertex_inconsistent_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "totally-fake-model-xyz", df
+        )
+        # Fell back to surrogate (first available row)
+        assert candidates[0]["model"] == "vertex_ai/claude-opus-4-6"
+
+    def test_vertex_prefix_does_not_match_direct_anthropic_row(self, llm_mod, tmp_path):
+        """Provider-boundary regression: vertex_ai/claude-opus-4-6 must NOT
+        silently resolve to a direct Anthropic row that happens to share
+        the bare name. Cross-provider matching would change credentials
+        (GOOGLE_APPLICATION_CREDENTIALS → ANTHROPIC_API_KEY) and the API
+        endpoint, defeating the deployment's intent."""
+        df = self._make_cross_provider_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/claude-opus-4-6", df
+        )
+        # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
+        # constrained to provider="Google Vertex AI" finds nothing → falls
+        # through to surrogate-base = first row (AWS Bedrock).
+        assert candidates[0]["model"] != "claude-opus-4-6", (
+            "vertex_ai/ prefix must not silently match direct Anthropic row"
+        )
+        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+
+    def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
+        """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
+        must NOT silently resolve to a `gemini/`-prefixed Direct Gemini API
+        row. Different provider, different credentials, different endpoint."""
+        df = self._make_cross_provider_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3-flash-preview", df
+        )
+        # CSV has no `Google Vertex AI,gemini-3-flash-preview` (bare) row.
+        # The `Google Gemini,gemini/gemini-3-flash-preview` row exists but
+        # is from a different provider. Provider-aware alias should NOT
+        # match it. Surrogate-base fires.
+        assert candidates[0]["model"] != "gemini/gemini-3-flash-preview", (
+            "vertex_ai/ prefix must not silently match direct Gemini row"
+        )
+
+    def test_vertex_prefix_resolves_correctly_when_vertex_row_exists(self, llm_mod, tmp_path):
+        """Positive companion to the negative tests: when the configured
+        Vertex prefix has a matching Vertex row (bare under "Google Vertex
+        AI"), it resolves correctly — without sniping a same-name row from
+        a different provider."""
+        df = self._make_cross_provider_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3.1-pro-preview", df
+        )
+        # Should resolve to the Google Vertex AI row, not anything else.
+        assert candidates[0]["model"] == "gemini-3.1-pro-preview"
+        assert candidates[0]["provider"] == "Google Vertex AI"
+
+
+class TestAlternativeBaseLookups:
+    """Direct tests for the `_alternative_base_lookups` helper."""
+
+    def test_strips_known_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "vertex_ai/gemini-3.1-pro-preview"
+        ) == [("gemini-3.1-pro-preview", "Google Vertex AI")]
+
+    def test_strips_anthropic_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "anthropic/claude-opus-4-6"
+        ) == [("claude-opus-4-6", "Anthropic")]
+
+    def test_strips_gemini_prefix_with_provider(self, llm_mod):
+        assert llm_mod._alternative_base_lookups(
+            "gemini/gemini-3.1-pro-preview"
+        ) == [("gemini-3.1-pro-preview", "Google Gemini")]
+
+    def test_bare_name_emits_each_provider_pair(self, llm_mod):
+        alts = llm_mod._alternative_base_lookups("gemini-3.1-pro-preview")
+        # Each bare-name alternative is bound to its specific provider —
+        # never just the alt name alone, never cross-provider.
+        assert ("vertex_ai/gemini-3.1-pro-preview", "Google Vertex AI") in alts
+        assert ("gemini/gemini-3.1-pro-preview", "Google Gemini") in alts
+        assert ("anthropic/gemini-3.1-pro-preview", "Anthropic") in alts
+        assert ("azure_ai/gemini-3.1-pro-preview", "Azure AI") in alts
+
+    def test_known_prefix_does_not_emit_other_prefixes(self, llm_mod):
+        """If the user supplied vertex_ai/X, only emit (X, Google Vertex AI).
+        Don't also try (anthropic/X, Anthropic) etc. — that would defeat
+        the provider boundary."""
+        alts = llm_mod._alternative_base_lookups("vertex_ai/some-model")
+        assert len(alts) == 1
+        assert alts[0] == ("some-model", "Google Vertex AI")
+
+    def test_empty_input(self, llm_mod):
+        assert llm_mod._alternative_base_lookups("") == []
+        assert llm_mod._alternative_base_lookups(None) == []
+
 
 # ============================================================================
 # TESTS: _ensure_api_key

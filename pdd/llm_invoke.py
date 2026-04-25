@@ -996,6 +996,63 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     except Exception as e:
         raise RuntimeError(f"Error loading or processing LLM model CSV {csv_path}: {e}") from e
 
+
+# Provider-prefix aliases. Each maps a model-name prefix (the form
+# `litellm.completion(model=...)` expects for routing) to the provider
+# string used in `llm_model.csv`. When `_select_model_candidates` misses
+# a literal-match lookup, it retries with provider-aware alternatives
+# derived from this map before falling back to the surrogate base.
+#
+# AWS Bedrock is intentionally omitted — its model names use a
+# dot-separated convention (e.g. `anthropic.claude-opus-4-6-v1`) rather
+# than a slash prefix, so there is no clean alias mapping.
+_PROVIDER_PREFIX_TO_PROVIDER = {
+    "vertex_ai/": "Google Vertex AI",
+    "gemini/": "Google Gemini",
+    "anthropic/": "Anthropic",
+    "azure_ai/": "Azure AI",
+}
+
+
+def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
+    """Return ``(alt_name, required_provider)`` pairs to try when the literal
+    form of ``base_model_name`` is not in the CSV.
+
+    The lookup is provider-aware: each alternative is bound to the specific
+    `provider` column value the prefix implies. This prevents a configured
+    Vertex name like ``vertex_ai/claude-opus-4-6`` from silently resolving
+    to a direct ``Anthropic,claude-opus-4-6`` row, which would change both
+    credentials (`GOOGLE_APPLICATION_CREDENTIALS` → `ANTHROPIC_API_KEY`)
+    and the actual API endpoint that gets hit. The same provider boundary
+    is what the user's deployment expects when they pick a prefixed name.
+
+    Two cases:
+
+    * Configured name *has* a known provider prefix → try the bare form,
+      constrained to the corresponding provider only. (Solves the bundled
+      CSV's prefix inconsistency for Vertex models like
+      ``vertex_ai/gemini-3.1-pro-preview`` that are stored bare under
+      ``Google Vertex AI``.)
+    * Configured name has *no* known prefix → try each prefix added,
+      each constrained to its provider. (Solves the inverse direction:
+      a bare configured name where the CSV only has the prefixed form.)
+
+    Returns an empty list for empty/None input.
+    """
+    if not base_model_name:
+        return []
+    alternatives: List[Tuple[str, str]] = []
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        if base_model_name.startswith(prefix):
+            # Strip the prefix; only consider rows from the matching provider.
+            alternatives.append((base_model_name[len(prefix):], provider))
+            return alternatives
+    # No known prefix → try with each prefix added, each provider-bound.
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        alternatives.append((prefix + base_model_name, provider))
+    return alternatives
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -1030,27 +1087,56 @@ def _select_model_candidates(
     # 2. Find Base Model
     base_model_row = available_df[available_df['model'] == base_model_name]
     if base_model_row.empty:
-        # Try finding base model in the *original* df in case it was filtered out
-        original_base = model_df[model_df['model'] == base_model_name]
-        if not original_base.empty:
-            # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
-            raise ValueError(
-                f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
-            )
-        # Option A': Soft fallback – choose a reasonable surrogate base and continue
-        # Strategy (simplified and deterministic): pick the first available model
-        # from the CSV as the surrogate base. This mirrors typical CSV ordering
-        # expectations and keeps behavior predictable across environments.
-        # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
-        try:
-            base_model = available_df.iloc[0]
-            # Silently use the first available model from user's CSV without warning
-            # Users who intentionally customize their CSV shouldn't see warnings about removed models
-        except Exception:
-            # If any unexpected error occurs during fallback, raise a clear error
-            raise ValueError(
-                f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
-            )
+        # The bundled llm_model.csv has inconsistent provider-prefix conventions
+        # for Vertex AI models — most have a `vertex_ai/` prefix, but a few
+        # (notably gemini-3.1-pro-preview) are listed bare under
+        # provider="Google Vertex AI". Users who configure
+        # `PDD_MODEL_DEFAULT=vertex_ai/gemini-3.1-pro-preview` (the natural
+        # form expected by litellm.completion for Vertex routing) silently
+        # missed the lookup and fell into the surrogate-base branch below,
+        # which picks the first CSV row — typically claude-opus-4-6 — and
+        # routes every request to Opus regardless of strength.
+        #
+        # Before falling back, try provider-aware alternatives of the
+        # configured name. Each alternative is bound to the provider that
+        # the prefix implies, so prefix mismatches NEVER cross provider
+        # boundaries (which would silently change credentials and routing).
+        # Example: `vertex_ai/gemini-3.1-pro-preview` will only match rows
+        # where provider="Google Vertex AI" — it will not pick up a direct
+        # Gemini API or Anthropic row even if one happens to share the
+        # bare name.
+        alt_resolved = False
+        for alt_name, required_provider in _alternative_base_lookups(base_model_name):
+            alt_row = available_df[
+                (available_df['model'] == alt_name)
+                & (available_df['provider'] == required_provider)
+            ]
+            if not alt_row.empty:
+                base_model = alt_row.iloc[0]
+                alt_resolved = True
+                break
+        if not alt_resolved:
+            # Try finding base model in the *original* df in case it was filtered out
+            original_base = model_df[model_df['model'] == base_model_name]
+            if not original_base.empty:
+                # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
+                raise ValueError(
+                    f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
+                )
+            # Option A': Soft fallback – choose a reasonable surrogate base and continue
+            # Strategy (simplified and deterministic): pick the first available model
+            # from the CSV as the surrogate base. This mirrors typical CSV ordering
+            # expectations and keeps behavior predictable across environments.
+            # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
+            try:
+                base_model = available_df.iloc[0]
+                # Silently use the first available model from user's CSV without warning
+                # Users who intentionally customize their CSV shouldn't see warnings about removed models
+            except Exception:
+                # If any unexpected error occurs during fallback, raise a clear error
+                raise ValueError(
+                    f"Specified base model '{base_model_name}' not found and fallback selection failed. Check your LLM model CSV."
+                )
     else:
         base_model = base_model_row.iloc[0]
 
@@ -2241,11 +2327,8 @@ def llm_invoke(
                         logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
 
                 elif reasoning_type == 'effort':
-                    effort = "low"
-                    if time > 0.7:
-                        effort = "high"
-                    elif time > 0.3:
-                        effort = "medium"
+                    from .reasoning import time_to_effort_level
+                    effort = time_to_effort_level(time)
 
                     # Map effort parameter per-provider/model family
                     model_lower = str(model_name_litellm).lower()

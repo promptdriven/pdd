@@ -3195,7 +3195,7 @@ def test_step4_stop_with_stop_condition_prefix(mock_dependencies, temp_cwd):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, **kwargs):
         if label == "step4":
             return (True, "I posted clarification questions.\nSTOP_CONDITION: Clarification needed", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")
@@ -3225,7 +3225,7 @@ def test_step4_clarification_saves_step_minus_one(mock_dependencies, temp_cwd):
 
     def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                     timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                    use_playwright=False):
+                    use_playwright=False, **kwargs):
         if label == "step4":
             return (True, "STOP_CONDITION: Clarification needed", 0.1, "gpt-4")
         return (True, f"Output for {label}", 0.1, "gpt-4")

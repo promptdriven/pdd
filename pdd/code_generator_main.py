@@ -1,5 +1,6 @@
 import ast
 import glob
+import logging
 import os
 import re
 import json
@@ -33,6 +34,7 @@ from .architecture_registry import extract_modules
 from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 # --- Helper Functions ---
 def _parse_llm_bool(value: str) -> bool:
@@ -100,24 +102,40 @@ def _expand_vars(text: str, vars_map: Optional[Dict[str, str]]) -> str:
 
 
 def _parse_front_matter(text: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    """Parse YAML front matter at the start of a prompt and return (meta, body)."""
-    try:
-        if not text.startswith("---\n"):
-            return None, text
-        end_idx = text.find("\n---", 4)
-        if end_idx == -1:
-            return None, text
-        fm_body = text[4:end_idx]
-        rest = text[end_idx + len("\n---"):]
-        if rest.startswith("\n"):
-            rest = rest[1:]
-        import yaml as _yaml
-        meta = _yaml.safe_load(fm_body) or {}
-        if not isinstance(meta, dict):
-            meta = {}
-        return meta, rest
-    except Exception:
+    """Parse YAML front matter at the start of a prompt and return (meta, body).
+
+    Accepts LF, CRLF, or mixed line endings and a leading UTF-8 BOM (#1276) —
+    Windows editors frequently save prompts with CRLF and/or BOM, either of
+    which the previous string-prefix check rejected. Trailing whitespace on
+    the fence lines is tolerated to match ``template_registry._parse_front_matter``.
+
+    Only the malformed-YAML path is logged — that condition requires BOTH
+    fences to be present, so it is unambiguous user intent. The unclosed-fence
+    case is silent because ``---\\nProse...`` is also a valid markdown
+    horizontal rule and we cannot distinguish "intended front matter, forgot
+    to close" from "markdown HR" without false positives.
+    """
+    # Strip a leading UTF-8 BOM (U+FEFF) if present — Windows editors that
+    # save as UTF-8-with-BOM would otherwise make the anchor fail silently.
+    if text.startswith("﻿"):
+        text = text[1:]
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", text, re.DOTALL)
+    if not m:
         return None, text
+    fm_body = m.group(1)
+    rest = text[m.end():]
+    import yaml as _yaml
+    try:
+        meta = _yaml.safe_load(fm_body) or {}
+    except _yaml.YAMLError as exc:
+        logger.warning(
+            "Failed to parse YAML front matter: %s. Treating entire prompt as body.",
+            exc,
+        )
+        return None, text
+    if not isinstance(meta, dict):
+        meta = {}
+    return meta, rest
 
 
 def _is_architecture_template(meta: Optional[Dict[str, Any]]) -> bool:

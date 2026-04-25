@@ -838,7 +838,8 @@ def run_agentic_change_orchestrator(
     verbose: bool = False,
     quiet: bool = False,
     timeout_adder: float = 0.0,
-    use_github_state: bool = True
+    use_github_state: bool = True,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Orchestrates the 13-step agentic change workflow.
@@ -1067,6 +1068,7 @@ def run_agentic_change_orchestrator(
             timeout=timeout,
             label=f"step{step_num}",
             max_retries=DEFAULT_MAX_RETRIES,
+            reasoning_time=reasoning_time,
         )
 
         total_cost += step_cost
@@ -1274,7 +1276,7 @@ def run_agentic_change_orchestrator(
             s11_prompt = substitute_template_variables(s11_template, context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
-                instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
+                instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
             if _review_loop_no_issues(s11_output):
@@ -1291,7 +1293,7 @@ def run_agentic_change_orchestrator(
             s12_prompt = substitute_template_variables(s12_template, context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
-                instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES,
+                instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
             previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
@@ -1379,7 +1381,7 @@ def run_agentic_change_orchestrator(
         s13_prompt = substitute_template_variables(s13_template, context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
-            instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES,
+            instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
         )
         total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
         if not s13_success:

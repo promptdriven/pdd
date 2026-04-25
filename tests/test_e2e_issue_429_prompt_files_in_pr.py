@@ -136,7 +136,7 @@ class TestIssue429PromptFilesInPRE2E:
         files_to_stage_at_step10 = None
         step_calls = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM agent for each step of the bug workflow."""
             nonlocal files_to_stage_at_step10
             step_calls.append(label)
@@ -306,7 +306,7 @@ def test_step10_prompt_references_files_to_stage():
         # Capture the full instruction sent to Step 10
         step10_instruction = None
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM agent - capture Step 10 instruction."""
             nonlocal step10_instruction
 

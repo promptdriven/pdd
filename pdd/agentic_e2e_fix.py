@@ -237,6 +237,7 @@ def run_agentic_e2e_fix(
     ci_retries: int = 3,
     skip_ci: bool = False,
     skip_cleanup: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """Run the agentic E2E fix workflow for a GitHub issue."""
     if not _check_gh_cli():
@@ -321,6 +322,7 @@ def run_agentic_e2e_fix(
             ci_retries=ci_retries,
             skip_ci=skip_ci,
             skip_cleanup=skip_cleanup,
+            reasoning_time=reasoning_time,
         )
     except Exception as exc:
         message = f"Orchestrator failed: {exc}"

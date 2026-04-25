@@ -55,7 +55,7 @@ class TestIssue773HardStopE2E:
 
         steps_attempted = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Track which steps are attempted."""
             match = re.search(r"step(\d+)", label)
             if match:
@@ -122,7 +122,7 @@ class TestIssue773HardStopE2E:
 
         steps_attempted = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Track which steps are attempted."""
             match = re.search(r"step(\d+)", label)
             if match:
