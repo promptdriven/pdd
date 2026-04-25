@@ -1,4 +1,5 @@
 # Byte-compiled / optimized / DLL files
+
 __pycache__/
 *.py[cod]
 *$py.class
@@ -231,6 +232,9 @@ yarn.lock
 # PDD internal directory (backups, locks, worktrees, etc.)
 .pdd/
 !.pdd/meta/
+.pdd/meta/*_sync.log
+.pdd/logs/
+.pdd/agentic-logs/
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)

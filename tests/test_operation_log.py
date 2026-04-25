@@ -67,8 +67,10 @@ def temp_pdd_env(tmp_path):
     # Since they are global variables in operation_log, we patch where they are used or defined.
     # Ideally, the code should allow configuring these, but we can patch os.path.join or the variables directly.
     
+    logs_dir = pdd_dir / "logs"
     with patch("pdd.operation_log.PDD_DIR", str(pdd_dir)), \
-         patch("pdd.operation_log.META_DIR", str(meta_dir)):
+         patch("pdd.operation_log.META_DIR", str(meta_dir)), \
+         patch("pdd.operation_log.LOGS_DIR", str(logs_dir)):
         yield meta_dir
 
 # --------------------------------------------------------------------------------
@@ -87,7 +89,8 @@ def test_get_paths(temp_pdd_env):
     lang = "python"
     
     log_path = operation_log.get_log_path(basename, lang)
-    assert log_path == Path(temp_pdd_env) / "test_mod_python_sync.log"
+    assert log_path.name == "test_mod_python_sync.log"
+    assert log_path.parent.name == "logs"
     
     fp_path = operation_log.get_fingerprint_path(basename, lang)
     assert fp_path == Path(temp_pdd_env) / "test_mod_python.json"
@@ -683,16 +686,16 @@ def test_get_paths_with_subdirectory_basename(temp_pdd_env):
     # Paths should use underscores instead of slashes (sanitized)
     expected_safe_basename = "frontend_app_admin_discount-codes_page"
 
-    assert log_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}_sync.log", \
+    assert log_path.name == f"{expected_safe_basename}_{lang}_sync.log", \
         f"Log path should be flat with sanitized basename, got: {log_path}"
     assert fp_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}.json", \
         f"Fingerprint path should be flat with sanitized basename, got: {fp_path}"
     assert rr_path == Path(temp_pdd_env) / f"{expected_safe_basename}_{lang}_run.json", \
         f"Run report path should be flat with sanitized basename, got: {rr_path}"
 
-    # Verify path is flat (no nested directories beyond .pdd/meta/)
-    assert log_path.parent == Path(temp_pdd_env), \
-        f"Log path should be directly in meta dir, not nested: {log_path}"
+    # Verify path is flat (no nested directories beyond .pdd/logs/)
+    assert log_path.parent.name == "logs", \
+        f"Log path should be directly in logs dir, not nested: {log_path}"
 
 
 def test_basename_sanitization_deeply_nested(temp_pdd_env):
@@ -710,7 +713,7 @@ def test_basename_sanitization_deeply_nested(temp_pdd_env):
     assert rr_path.name == f"{expected_safe}_{lang}_run.json"
 
     # Verify no nested directories created
-    assert log_path.parent == Path(temp_pdd_env)
+    assert log_path.parent.name == "logs"
 
 
 # --------------------------------------------------------------------------------

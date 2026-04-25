@@ -18,11 +18,17 @@ logger = logging.getLogger(__name__)
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
+LOGS_DIR = os.path.join(PDD_DIR, "logs")
 
 
 def ensure_meta_dir() -> None:
     """Ensure the .pdd/meta directory exists."""
     os.makedirs(META_DIR, exist_ok=True)
+
+
+def _ensure_logs_dir() -> None:
+    """Ensure the .pdd/logs directory exists."""
+    os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 def _safe_basename(basename: str) -> str:
@@ -35,9 +41,34 @@ def _safe_basename(basename: str) -> str:
 
 
 def get_log_path(basename: str, language: str) -> Path:
-    """Get the path to the sync log for a specific module."""
-    ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_sync.log"
+    """Get the path to the sync log for a specific module.
+
+    Returns the path under .pdd/logs/. If a legacy sync log exists under
+    .pdd/meta/, it is migrated (moved) to the new location first.
+    """
+    _ensure_logs_dir()
+    filename = f"{_safe_basename(basename)}_{language}_sync.log"
+    new_path = Path(LOGS_DIR) / filename
+    old_path = Path(META_DIR) / filename
+
+    # Migrate on both read and write
+    if old_path.exists() and not new_path.exists():
+        try:
+            import shutil
+            shutil.move(str(old_path), str(new_path))
+        except Exception:
+            pass
+    elif old_path.exists() and new_path.exists():
+        # Both exist (unlikely but defensive) — append old to new, delete old
+        try:
+            old_content = old_path.read_bytes()
+            with open(new_path, 'ab') as f:
+                f.write(old_content)
+            old_path.unlink()
+        except Exception:
+            pass
+
+    return new_path
 
 
 def get_fingerprint_path(basename: str, language: str) -> Path:

@@ -5,7 +5,7 @@ import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 @dataclass
@@ -13,11 +13,12 @@ class LLMTracePair:
     prompt: str
     response: str
     model: str = "unknown"
+    thinking: Optional[str] = None
 
 
 _current_operation: ContextVar[Optional[str]] = ContextVar("pdd_current_operation", default=None)
-_last_pair_by_operation: ContextVar[Dict[str, LLMTracePair]] = ContextVar(
-    "pdd_llm_last_pair_by_operation", default={}
+_pairs_by_operation: ContextVar[Dict[str, List[LLMTracePair]]] = ContextVar(
+    "pdd_llm_pairs_by_operation", default={}
 )
 
 
@@ -58,17 +59,44 @@ def _redact(text: str) -> str:
     return redacted
 
 
+def _normalize_thinking(thinking: Any) -> Optional[str]:
+    """Normalize thinking to a string or None.
+
+    Some providers return thinking as a string. Others return it as a list
+    of objects (e.g., [{"type": "thinking", "thinking": "..."}]). Normalize
+    to a single string before storing.
+    """
+    if thinking is None:
+        return None
+    if isinstance(thinking, str):
+        return thinking
+    if isinstance(thinking, list):
+        parts = []
+        for item in thinking:
+            if isinstance(item, dict):
+                # Extract text content from dict items
+                text = item.get("thinking") or item.get("text") or item.get("content") or ""
+                if text:
+                    parts.append(str(text))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(thinking)
+
+
 def record_llm_pair(
     *,
     prompt: Any,
     response: Any,
     model: str = "unknown",
+    thinking: Any = None,
     prompt_limit_chars: int = 20_000,
     response_limit_chars: int = 20_000,
+    thinking_limit_chars: int = 20_000,
 ) -> None:
     """
-    Record the most recent (prompt, raw_response) pair for the current operation.
-    Intended to be called by llm_invoke.
+    Record a (prompt, raw_response) pair for the current operation.
+    Intended to be called by llm_invoke. All pairs are accumulated in a list.
     """
     op = _current_operation.get()
     if not op:
@@ -84,21 +112,36 @@ def record_llm_pair(
     except Exception:
         response_text = str(response)
 
+    thinking_text = _normalize_thinking(thinking)
+
     pair = LLMTracePair(
         prompt=_truncate(_redact(prompt_text), prompt_limit_chars),
         response=_truncate(_redact(response_text), response_limit_chars),
         model=str(model or "unknown"),
+        thinking=_truncate(_redact(thinking_text), thinking_limit_chars) if thinking_text is not None else None,
     )
 
-    current = dict(_last_pair_by_operation.get() or {})
-    current[op] = pair
-    _last_pair_by_operation.set(current)
+    current = dict(_pairs_by_operation.get() or {})
+    pairs_list = list(current.get(op, []))
+    pairs_list.append(pair)
+    current[op] = pairs_list
+    _pairs_by_operation.set(current)
 
 
+def pop_all_pairs(operation: str) -> List[Dict[str, Any]]:
+    """Pop and return all recorded pairs for an operation (as a list of dicts)."""
+    current = dict(_pairs_by_operation.get() or {})
+    pairs = current.pop(operation, [])
+    _pairs_by_operation.set(current)
+    return [asdict(p) for p in pairs]
+
+
+# Backwards compatibility alias
 def pop_last_pair(operation: str) -> Optional[Dict[str, Any]]:
-    """Pop and return the last recorded pair for an operation (as a dict)."""
-    current = dict(_last_pair_by_operation.get() or {})
-    pair = current.pop(operation, None)
-    _last_pair_by_operation.set(current)
-    return asdict(pair) if pair else None
+    """Pop and return the last recorded pair for an operation (as a dict).
 
+    Deprecated: use pop_all_pairs() instead. Kept for callers that only
+    need the most recent pair.
+    """
+    all_pairs = pop_all_pairs(operation)
+    return all_pairs[-1] if all_pairs else None

@@ -428,6 +428,7 @@ def _llm_invoke_cloud(
                         prompt=trace_prompt,
                         response=result,
                         model=str(data.get("modelName", "cloud_model")),
+                        thinking=data.get("thinkingOutput"),
                     )
                 except Exception:
                     pass
@@ -2686,10 +2687,11 @@ def llm_invoke(
                                     prompt=trace_prompt_repr,
                                     response=raw_result,
                                     model=str(model_name_litellm),
+                                    thinking=thinking,
                                 )
                             except Exception:
                                 pass
-                        
+
                         # Check if raw_result is None (likely cached corrupted data)
                         if raw_result is None:
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
@@ -2724,12 +2726,20 @@ def llm_invoke(
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    # Extract thinking from retry response (best-effort)
+                                    retry_thinking = None
+                                    try:
+                                        if hasattr(retry_response, '_hidden_params') and retry_response._hidden_params and 'thinking' in retry_response._hidden_params:
+                                            retry_thinking = retry_response._hidden_params['thinking']
+                                    except Exception:
+                                        pass
                                     if _record_llm_pair is not None and trace_prompt_repr is not None:
                                         try:
                                             _record_llm_pair(
                                                 prompt=trace_prompt_repr,
                                                 response=retry_raw_result,
                                                 model=str(model_name_litellm),
+                                                thinking=retry_thinking,
                                             )
                                         except Exception:
                                             pass

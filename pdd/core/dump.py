@@ -66,6 +66,94 @@ def _extract_sync_steps_from_file_contents(file_contents: Dict[str, Any]) -> Lis
     return steps
 
 
+def _extract_sync_data_from_disk() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Read sync log files from disk and extract step records + refs.
+
+    Reads from .pdd/logs/ (new location) and .pdd/meta/ (unmigrated repos).
+    Returns (sync_steps, sync_log_refs).
+    """
+    import re
+    steps: List[Dict[str, Any]] = []
+    refs: List[Dict[str, Any]] = []
+    log_files: List[Tuple[Path, str]] = []  # (path, relative_display_path)
+
+    logs_dir = Path.cwd() / ".pdd" / "logs"
+    meta_dir = Path.cwd() / ".pdd" / "meta"
+
+    # Collect log files from both locations
+    if logs_dir.exists():
+        for f in logs_dir.glob("*_sync.log"):
+            log_files.append((f, f".pdd/logs/{f.name}"))
+    if meta_dir.exists():
+        for f in meta_dir.glob("*_sync.log"):
+            # Only include if not already found in logs_dir
+            new_loc = logs_dir / f.name
+            if not new_loc.exists():
+                log_files.append((f, f".pdd/meta/{f.name}"))
+
+    # Pattern: {module}_{language}_sync.log
+    name_pattern = re.compile(r"^(.+)_([^_]+)_sync\.log$")
+
+    for log_path, display_path in log_files:
+        try:
+            content = log_path.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        entry_count = 0
+        match = name_pattern.match(log_path.name)
+        module = match.group(1) if match else log_path.stem
+        language = match.group(2) if match else "unknown"
+
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            entry_count += 1
+            # Skip events; keep operation rows
+            if entry.get("type") == "event":
+                continue
+            op = entry.get("operation")
+            if not op:
+                continue
+            details = entry.get("details") or {}
+            steps.append(
+                {
+                    "operation": op,
+                    "success": bool(entry.get("success")),
+                    "cost": entry.get("actual_cost"),
+                    "model": entry.get("model") or "unknown",
+                    "duration": entry.get("duration"),
+                    "reason": entry.get("reason"),
+                    "error": entry.get("error"),
+                    "failure_summary": entry.get("error") or (details.get("failure_reason") if isinstance(details, dict) else None),
+                    "test_output_excerpt": details.get("test_output_excerpt") if isinstance(details, dict) else None,
+                    "source_log": display_path,
+                }
+            )
+
+        try:
+            size_bytes = log_path.stat().st_size
+        except Exception:
+            size_bytes = 0
+
+        refs.append(
+            {
+                "module": module,
+                "language": language,
+                "path": display_path,
+                "size_bytes": size_bytes,
+                "entry_count": entry_count,
+            }
+        )
+
+    return steps, refs
+
+
 def garbage_collect_core_dumps(keep: int = 10) -> int:
     """Delete old core dumps, keeping only the most recent `keep` files.
 
@@ -173,10 +261,8 @@ def _write_core_dump(
                         meta_file.stem.endswith(f"_{c}") for c in ["generate", "test", "run", "fix", "update"]
                     ):
                         core_dump_files.add(str(meta_file.resolve()))
-                # Include operation logs and run reports (critical for sync debugging)
-                # These are line-delimited JSON logs and are safe to attach (size-gated below).
-                for log_file in meta_dir.glob("*_sync.log"):
-                    core_dump_files.add(str(log_file.resolve()))
+                # Include run reports (critical for sync debugging).
+                # Sync logs are NOT embedded in file_contents — they go into sync_log_refs.
                 for run_file in meta_dir.glob("*_run.json"):
                     core_dump_files.add(str(run_file.resolve()))
 
@@ -256,9 +342,13 @@ def _write_core_dump(
             "file_contents": file_contents,
             "terminal_output": terminal_output,
         }
-        sync_steps = _extract_sync_steps_from_file_contents(file_contents)
+        # Extract sync steps directly from log files on disk (not from file_contents)
+        # and build sync_log_refs for each log file found.
+        sync_steps, sync_log_refs = _extract_sync_data_from_disk()
         if sync_steps:
             payload["sync_steps"] = sync_steps
+        if sync_log_refs:
+            payload["sync_log_refs"] = sync_log_refs
         if exit_reason is not None:
             payload["exit_reason"] = exit_reason
 
