@@ -245,7 +245,7 @@ class TestIssue448OrchestratorIntegration:
         # Track which steps were attempted
         steps_attempted = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM agent that returns success for each step."""
             import re
             match = re.search(r"step(\d+)", label)

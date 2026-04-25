@@ -465,7 +465,7 @@ class TestIssue373OrchestratorE2EIntegration:
         steps_attempted = []
         prompts_received = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """
             Mock that lets us track which steps are called and what prompts are used.
 
@@ -585,7 +585,7 @@ class TestIssue373OrchestratorE2EIntegration:
                 return expanded_template
             return real_loader(template_name)
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             match = re.search(r"step(\d+)", label)
             if match:
                 steps_attempted.append(int(match.group(1)))

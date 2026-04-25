@@ -4710,3 +4710,412 @@ def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_en
         "not retry the broken provider first."
     )
 
+
+
+# ---------------------------------------------------------------------------
+# PDD_REASONING_EFFORT -> provider argv plumbing
+# ---------------------------------------------------------------------------
+
+
+def _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, effort):
+    """Helper: invoke _run_with_provider for openai with the env var set and return argv."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    prev = os.environ.get("PDD_REASONING_EFFORT")
+    if effort is None:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+    else:
+        os.environ["PDD_REASONING_EFFORT"] = effort
+    try:
+        _run_with_provider("openai", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        if prev is None:
+            os.environ.pop("PDD_REASONING_EFFORT", None)
+        else:
+            os.environ["PDD_REASONING_EFFORT"] = prev
+
+    args, _ = mock_subprocess.call_args
+    return args[0]
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_codex_injects_reasoning_effort_before_exec(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, effort
+):
+    """Codex -c / --config is only honored as a top-level flag BEFORE the subcommand."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, effort)
+
+    assert cmd[0] == "/bin/codex"
+    assert "-c" in cmd
+    flag_idx = cmd.index("-c")
+    exec_idx = cmd.index("exec")
+    assert flag_idx < exec_idx, f"-c must precede 'exec' (got {cmd})"
+    assert cmd[flag_idx + 1] == f"model_reasoning_effort={effort}"
+
+
+def test_codex_without_effort_env_unchanged(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Unset PDD_REASONING_EFFORT -> argv has no -c flag (preserves prior behavior)."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, None)
+    assert "-c" not in cmd
+    assert "model_reasoning_effort" not in " ".join(cmd)
+
+
+def test_codex_invalid_effort_value_ignored(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Values outside {low,medium,high} are rejected so bad env cannot poison argv."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, "ultra")
+    assert "-c" not in cmd
+
+
+def test_anthropic_with_effort_does_not_modify_argv(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Claude Code CLI has no reasoning flag today — argv must stay identical."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    # No reasoning-effort related token should have leaked into the Claude argv
+    joined = " ".join(cmd)
+    assert "reasoning_effort" not in joined
+    assert "reasoning-effort" not in joined
+
+
+def test_google_with_effort_does_not_modify_argv(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Gemini CLI has no reasoning flag today — argv must stay identical."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/gemini"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "response": "ok",
+        "stats": {"models": {"gemini-2.5-pro": {"tokens": {"prompt": 1, "candidates": 1}}}},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("google", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    joined = " ".join(cmd)
+    assert "reasoning_effort" not in joined
+    assert "reasoning-effort" not in joined
+
+
+@pytest.mark.parametrize("raw", ["  High  ", "HIGH", "High", "high\n"])
+def test_codex_effort_env_is_case_and_whitespace_tolerant(
+    raw, mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """`PDD_REASONING_EFFORT` arrives from many sources (shell, GitHub App,
+    env files). Tolerate mixed case and leading/trailing whitespace so a
+    harmless formatting difference does not silently drop the signal."""
+    cmd = _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, raw)
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+def test_claude_always_prints_effort_notice_when_not_quiet(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """Silent-failure guard: dropping the user's reasoning request with no
+    feedback generates support tickets. The notice fires regardless of
+    --verbose, gated only by --quiet."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=False)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    captured = capsys.readouterr()
+    assert "PDD_REASONING_EFFORT=high" in captured.out
+    assert "Claude Code CLI" in captured.out
+
+
+def test_claude_suppresses_effort_notice_when_quiet(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """--quiet must stay quiet. The notice is informational, not diagnostic."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"response": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    try:
+        _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    captured = capsys.readouterr()
+    assert "PDD_REASONING_EFFORT" not in captured.out
+
+
+# ---------------------------------------------------------------------------
+# reasoning_time kwarg threading (complements the PDD_REASONING_EFFORT env path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "reasoning_time, expected_effort",
+    [(0.2, "low"), (0.5, "medium"), (0.85, "high"), (0.0, "low"), (1.0, "high")],
+)
+def test_codex_injects_reasoning_effort_from_time_kwarg(
+    reasoning_time, expected_effort,
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess,
+):
+    """Explicit ``reasoning_time`` kwarg on _run_with_provider takes
+    precedence over (or works in the absence of) PDD_REASONING_EFFORT and
+    produces the correct Codex argv token. Greg's review #3 asks for
+    "tests that assert the effective provider command/env changes" — this
+    is that assertion for the kwarg-threaded path."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    # Env var intentionally left UNSET — kwarg alone must drive the argv.
+    os.environ.pop("PDD_REASONING_EFFORT", None)
+    _run_with_provider(
+        "openai", prompt_file, mock_cwd,
+        verbose=False, quiet=True, reasoning_time=reasoning_time,
+    )
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == f"model_reasoning_effort={expected_effort}"
+    assert cmd.index("-c") < cmd.index("exec")
+
+
+def test_reasoning_time_kwarg_overrides_env_var(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess,
+):
+    """When both signals are present, the explicit kwarg wins. Prevents a
+    stale env var from silently overriding per-call choices made by the
+    command layer reading ctx.obj["time"]."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "low"  # env says low
+    try:
+        _run_with_provider(
+            "openai", prompt_file, mock_cwd,
+            verbose=False, quiet=True, reasoning_time=0.85,  # kwarg says high
+        )
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+def test_run_agentic_task_forwards_reasoning_time_to_provider(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess,
+):
+    """run_agentic_task must forward its ``reasoning_time`` kwarg to
+    _run_with_provider. Covers the middle seam that Greg's review #3
+    called out: "run_agentic_task has no reasoning/time input" — the
+    new kwarg fills that gap."""
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "Codex output.",
+        "usage": {"input_tokens": 1, "output_tokens": 1, "cached_input_tokens": 0},
+    })
+
+    os.environ.pop("PDD_REASONING_EFFORT", None)
+    run_agentic_task("instruction", mock_cwd, reasoning_time=0.85)
+
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+# ---------------------------------------------------------------------------
+# CODEX_REASONING_EFFORT precedence (cloud signal for GPT-5.4 routing)
+# Greg's PR #1293 review B2: cloud sets CODEX_REASONING_EFFORT=xhigh and the
+# legacy signal must survive alongside the generic PDD_REASONING_EFFORT path.
+# ---------------------------------------------------------------------------
+
+
+def _codex_cmd_with_codex_env(
+    mock_cwd, mock_subprocess, mock_shutil_which, codex_value, pdd_value=None, kwarg_time=None
+):
+    """Helper: invoke _run_with_provider for openai with CODEX_REASONING_EFFORT
+    set (and optionally PDD_REASONING_EFFORT and a reasoning_time kwarg) and
+    return argv."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result", "output": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 10, "cached_input_tokens": 0},
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    prev_codex = os.environ.get("CODEX_REASONING_EFFORT")
+    prev_pdd = os.environ.get("PDD_REASONING_EFFORT")
+    if codex_value is None:
+        os.environ.pop("CODEX_REASONING_EFFORT", None)
+    else:
+        os.environ["CODEX_REASONING_EFFORT"] = codex_value
+    if pdd_value is None:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+    else:
+        os.environ["PDD_REASONING_EFFORT"] = pdd_value
+
+    try:
+        _run_with_provider(
+            "openai", prompt_file, mock_cwd,
+            verbose=False, quiet=True, reasoning_time=kwarg_time,
+        )
+    finally:
+        for var, prev in (("CODEX_REASONING_EFFORT", prev_codex), ("PDD_REASONING_EFFORT", prev_pdd)):
+            if prev is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = prev
+
+    args, _ = mock_subprocess.call_args
+    return args[0]
+
+
+@pytest.mark.parametrize("codex_effort", ["low", "medium", "high", "xhigh"])
+def test_codex_reasoning_effort_env_accepts_xhigh_for_gpt54(
+    codex_effort, mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Codex argv must accept ``xhigh`` (in addition to low/medium/high) so
+    the cloud worker can promote GPT-5.4 to extra-high reasoning regardless
+    of the user's --time. The generic PDD_REASONING_EFFORT only allows the
+    standard three levels."""
+    cmd = _codex_cmd_with_codex_env(mock_cwd, mock_subprocess, mock_shutil_which, codex_effort)
+    assert "-c" in cmd
+    assert cmd[cmd.index("-c") + 1] == f"model_reasoning_effort={codex_effort}"
+
+
+def test_codex_env_takes_precedence_over_pdd_env(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """When both env vars are set, CODEX_REASONING_EFFORT (provider-specific)
+    wins over PDD_REASONING_EFFORT (generic). Otherwise the generic env would
+    silently downgrade an explicit cloud xhigh to high."""
+    cmd = _codex_cmd_with_codex_env(
+        mock_cwd, mock_subprocess, mock_shutil_which,
+        codex_value="xhigh", pdd_value="low",
+    )
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=xhigh"
+
+
+def test_codex_env_takes_precedence_over_kwarg(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """An explicit reasoning_time kwarg (forwarded from --time) must NOT
+    override a cloud-side CODEX_REASONING_EFFORT=xhigh — the cloud sets the
+    Codex-specific signal precisely because it knows the routed model
+    benefits from it. This locks in the precedence ordering."""
+    cmd = _codex_cmd_with_codex_env(
+        mock_cwd, mock_subprocess, mock_shutil_which,
+        codex_value="xhigh", kwarg_time=0.5,  # kwarg would map to 'medium'
+    )
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=xhigh"
+
+
+def test_codex_invalid_codex_env_falls_through_to_generic(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """An invalid CODEX_REASONING_EFFORT value (not in {low,medium,high,xhigh})
+    is ignored, and PDD_REASONING_EFFORT becomes the effective source."""
+    cmd = _codex_cmd_with_codex_env(
+        mock_cwd, mock_subprocess, mock_shutil_which,
+        codex_value="ultra", pdd_value="medium",
+    )
+    assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=medium"
+
+
+def test_codex_invalid_codex_env_with_no_fallback_yields_no_flag(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """No flag is injected when CODEX_REASONING_EFFORT is invalid AND no
+    other source provides a signal — preserves prior behavior."""
+    cmd = _codex_cmd_with_codex_env(
+        mock_cwd, mock_subprocess, mock_shutil_which,
+        codex_value="ultra",
+    )
+    assert "-c" not in cmd

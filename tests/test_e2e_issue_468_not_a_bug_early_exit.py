@@ -63,7 +63,7 @@ class TestIssue468NotABugEarlyExitE2E:
 
         steps_executed = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM execution that returns NOT_A_BUG for Step 3."""
             match = re.search(r"step(\d+)", label)
             if match:
@@ -135,7 +135,7 @@ class TestIssue468NotABugEarlyExitE2E:
 
         steps_executed = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM with verbose NOT_A_BUG response for Step 3."""
             match = re.search(r"step(\d+)", label)
             if match:
@@ -208,7 +208,7 @@ class TestIssue468NotABugEarlyExitE2E:
 
         steps_executed = []
 
-        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries):
+        def mock_run_agentic_task(instruction, cwd, verbose, quiet, timeout, label, max_retries, **kwargs):
             """Mock LLM with CODE_BUG response for Step 3."""
             match = re.search(r"step(\d+)", label)
             if match:

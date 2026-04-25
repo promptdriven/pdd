@@ -244,6 +244,7 @@ def bug(
                 quiet=obj.get("quiet", False),
                 timeout_adder=timeout_adder,
                 use_github_state=not no_github_state,
+                reasoning_time=obj.get("time") if obj.get("time_explicit") else None,
             )
             
             result_str = f"Success: {success}\nMessage: {message}\nChanged Files: {changed_files}"

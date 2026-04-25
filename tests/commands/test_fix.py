@@ -136,7 +136,9 @@ def test_agentic_mode_passes_all_options(runner: CliRunner, mock_deps) -> None:
     assert "Agentic fix completed" in result.output
 
     kwargs = mock_deps["run_agentic_e2e_fix"].call_args.kwargs
-    assert kwargs == {
+    # Assert superset so additive kwargs (reasoning_time for the --time
+    # plumbing) don't force this test to enumerate every future option.
+    expected = {
         "issue_url": issue_url,
         "timeout_adder": 10.0,
         "max_cycles": 7,
@@ -150,6 +152,11 @@ def test_agentic_mode_passes_all_options(runner: CliRunner, mock_deps) -> None:
         "skip_ci": True,
         "skip_cleanup": False,
     }
+    assert expected.items() <= kwargs.items(), (
+        f"missing or mismatched: {set(expected.items()) - set(kwargs.items())}"
+    )
+    # No --time was passed, so reasoning_time forwards as None.
+    assert kwargs.get("reasoning_time") is None
 
 
 def test_agentic_failure_prints_failure_message(runner: CliRunner, mock_deps) -> None:

@@ -763,6 +763,7 @@ def run_agentic_task(
     retry_delay: float = DEFAULT_RETRY_DELAY,
     deadline: Optional[float] = None,
     use_playwright: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Runs an agentic task using available providers in preference order.
@@ -778,6 +779,10 @@ def run_agentic_task(
         retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
         deadline: Optional Unix timestamp for job-level time budgeting
         use_playwright: Enable constrained tool access mode for browser-based testing
+        time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
+            top-level ``pdd --time`` flag. When provided, overrides the
+            ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
+            means "fall back to env" so unplumbed call sites keep working.
 
     Returns:
         (success, output_text, cost_usd, provider_used)
@@ -867,6 +872,7 @@ def run_agentic_task(
                 success, output, cost = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
+                    reasoning_time=reasoning_time,
                 )
                 last_output = output
 
@@ -1091,6 +1097,7 @@ def _run_with_provider(
     cli_path: Optional[str] = None,
     label: str = "",
     use_playwright: bool = False,
+    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float]:
     """
     Internal helper to run a specific provider's CLI.
@@ -1106,6 +1113,11 @@ def _run_with_provider(
         cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
         label: Task label for heartbeat messages
         use_playwright: Enable constrained tool access for browser testing
+        time: Reasoning-allocation float in [0.0, 1.0]. When provided,
+            takes precedence over the ``PDD_REASONING_EFFORT`` env var.
+            ``None`` means "fall back to env" so unplumbed call sites
+            keep receiving the signal via the global variable set by
+            ``pdd/core/cli.py``.
     """
 
     # Prepare Environment
@@ -1134,6 +1146,28 @@ def _run_with_provider(
     # Read prompt content for providers that pipe via stdin
     prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
 
+    # Reasoning-effort plumbing. Three input paths converge here, in
+    # precedence order:
+    # 1. ``CODEX_REASONING_EFFORT`` env var — Codex-specific override, accepts
+    #    ``low|medium|high|xhigh`` (xhigh is Codex-only, used by the cloud
+    #    worker for GPT-5.4 routing). Only consulted when provider == "openai".
+    # 2. Explicit ``reasoning_time`` kwarg threaded down from a command that
+    #    saw ``--time`` on argv (cli.py only forwards when ``time_explicit`` is
+    #    True, so a default ``ctx.obj["time"]`` does NOT reach here).
+    # 3. ``PDD_REASONING_EFFORT`` env var set by pdd/core/cli.py for call
+    #    sites that don't thread the kwarg (sync, split, test_generate,
+    #    update, verify, crash, etc.).
+    # ``CODEX_REASONING_EFFORT`` only fires for the openai branch below; the
+    # generic ``reasoning_effort`` resolved here covers paths 2 and 3 and is
+    # what the anthropic/gemini logging notices read.
+    if reasoning_time is not None:
+        from .reasoning import time_to_effort_level
+        reasoning_effort = time_to_effort_level(reasoning_time)
+    else:
+        reasoning_effort = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        if reasoning_effort not in {"low", "medium", "high"}:
+            reasoning_effort = ""
+
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         # Use -p - to pipe prompt as direct user message via stdin.
@@ -1159,6 +1193,17 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
+        if reasoning_effort and not quiet:
+            # Always surface outside --quiet mode — silently dropping the user's
+            # reasoning signal is a support-ticket generator. The Claude Code CLI
+            # has no --reasoning-effort flag today, so clarify that the effort
+            # applies to LiteLLM-invoked steps (analysis/verification) but not
+            # to this code-writing subprocess.
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
+                "has no reasoning-effort flag; applies to llm_invoke steps only, "
+                "not this subprocess.[/dim]"
+            )
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
         # so passing a file path gives Gemini the path string instead of content.
@@ -1174,19 +1219,42 @@ def _run_with_provider(
         gemini_model = env.get("GEMINI_MODEL")
         if gemini_model:
             cmd.extend(["--model", gemini_model])
+        if reasoning_effort and not quiet:
+            # See Claude Code branch above for rationale — same constraint applies.
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
+                "has no reasoning-effort flag; applies to llm_invoke steps only, "
+                "not this subprocess.[/dim]"
+            )
     elif provider == "openai":
         # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
         # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
         # container IS the sandbox boundary, use danger-full-access instead.
         # Ref: https://github.com/openai/codex/issues/6828
         sandbox_mode = env.get("CODEX_SANDBOX_MODE", "danger-full-access")
-        cmd = [
-            cli_path,
+        cmd = [cli_path]
+        # Codex accepts -c / --config only as a top-level flag before the
+        # subcommand; appending after "exec" is silently ignored.
+        # Codex-specific override: CODEX_REASONING_EFFORT takes precedence
+        # over the generic reasoning_effort (kwarg / PDD_REASONING_EFFORT)
+        # and additionally accepts ``xhigh`` for GPT-5.4 routing — the
+        # cloud worker sets this env var directly when promoting Codex to
+        # an extra-high reasoning budget regardless of the user's --time.
+        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+        if codex_effort in {"low", "medium", "high", "xhigh"}:
+            effective_codex_effort: Optional[str] = codex_effort
+        elif reasoning_effort:
+            effective_codex_effort = reasoning_effort
+        else:
+            effective_codex_effort = None
+        if effective_codex_effort:
+            cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
+        cmd.extend([
             "exec",
             "--sandbox", sandbox_mode,
             "--json",
             str(prompt_path)
-        ]
+        ])
         # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
         codex_model = env.get("CODEX_MODEL")
         if codex_model:
