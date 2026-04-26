@@ -50,6 +50,25 @@ def _parse_issue_url(url: str) -> Optional[Tuple[str, str, int]]:
     return None
 
 
+def _parse_pr_url(url: str) -> Optional[Tuple[str, str, int]]:
+    """
+    Parse a GitHub pull-request URL to extract owner, repo, and PR number.
+
+    Supported formats:
+    - https://github.com/{owner}/{repo}/pull/{number}
+    - https://www.github.com/{owner}/{repo}/pull/{number}
+    - github.com/{owner}/{repo}/pull/{number}
+
+    Returns:
+        Tuple of (owner, repo, pr_number) if successful, else None.
+    """
+    pattern = r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/pull/(\d+)"
+    match = re.search(pattern, url)
+    if match:
+        return match.group(1), match.group(2), int(match.group(3))
+    return None
+
+
 def _run_gh_command(args: List[str], timeout: Optional[int] = None) -> Tuple[bool, str]:
     """
     Execute a gh CLI command.

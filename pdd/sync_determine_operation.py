@@ -156,8 +156,9 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
             break
 
     joined = prompts_root.joinpath(*arch_parts[overlap:])
-    if joined.exists():
-        return joined
+    resolved_joined = _case_insensitive_path_lookup(joined)
+    if resolved_joined:
+        return resolved_joined
 
     # Recursive search for the filename under prompts_root. Collect all matches
     # and pick the shallowest deterministically to avoid platform-dependent
@@ -177,13 +178,20 @@ def _resolve_prompt_path_from_architecture(prompts_root: Path, architecture_file
 
 def _case_insensitive_path_lookup(candidate: Path) -> Optional[Path]:
     """Return the on-disk path for ``candidate`` with case-insensitive filename matching."""
-    if candidate.exists():
-        return candidate
     if candidate.parent.is_dir():
         target_lower = candidate.name.lower()
+        fallback_match = None
         for sibling in candidate.parent.iterdir():
-            if sibling.is_file() and sibling.name.lower() == target_lower:
+            if not sibling.is_file():
+                continue
+            if sibling.name == candidate.name:
                 return sibling
+            if fallback_match is None and sibling.name.lower() == target_lower:
+                fallback_match = sibling
+        if fallback_match is not None:
+            return fallback_match
+    if candidate.exists():
+        return candidate
     return None
 
 
@@ -347,8 +355,9 @@ def _find_prompt_file(
         if arch_filename:
             # 3a: Direct join (handles architecture filenames with subdirectory paths)
             joined = _resolve_prompt_path_from_architecture(prompts_root, arch_filename)
-            if joined.exists():
-                return joined
+            resolved_joined = _case_insensitive_path_lookup(joined)
+            if resolved_joined:
+                return resolved_joined
             # 3b: Case-insensitive in the joined parent directory
             if joined.parent.is_dir():
                 joined_lower = joined.name.lower()

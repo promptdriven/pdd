@@ -19,6 +19,7 @@ from .agentic_change import (
     _check_gh_cli,
     _escape_format_braces,
     _parse_issue_url,
+    _parse_pr_url,
     _run_gh_command,
 )
 from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
@@ -150,6 +151,7 @@ def run_agentic_checkup(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
+    pr_url: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -160,6 +162,9 @@ def run_agentic_checkup(
         no_fix: Report only, don't apply fixes.
         timeout_adder: Additional seconds to add to each step timeout.
         use_github_state: Whether to persist state to GitHub comments.
+        pr_url: When set, verify this existing PR against ``issue_url`` instead
+            of creating a new branch/PR. Step 8 (create_pr) is skipped and the
+            worktree is based on the PR's head branch.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -179,6 +184,16 @@ def run_agentic_checkup(
         return False, f"Invalid GitHub issue URL: {issue_url}", 0.0, ""
 
     owner, repo, issue_number = parsed
+
+    # Parse PR URL once up-front so invalid PR mode fails before any API calls.
+    pr_owner: Optional[str] = None
+    pr_repo: Optional[str] = None
+    pr_number: Optional[int] = None
+    if pr_url is not None:
+        pr_parsed = _parse_pr_url(pr_url)
+        if not pr_parsed:
+            return False, f"Invalid GitHub PR URL: {pr_url}", 0.0, ""
+        pr_owner, pr_repo, pr_number = pr_parsed
 
     if not quiet:
         console.print(f"[bold]Fetching issue #{issue_number} from {owner}/{repo}...[/bold]")
@@ -240,6 +255,10 @@ def run_agentic_checkup(
             timeout_adder=timeout_adder,
             use_github_state=use_github_state,
             reasoning_time=reasoning_time,
+            pr_url=pr_url,
+            pr_owner=pr_owner,
+            pr_repo=pr_repo,
+            pr_number=pr_number,
         )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"

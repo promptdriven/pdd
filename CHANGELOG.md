@@ -1,3 +1,22 @@
+## v0.0.219 (2026-04-25)
+
+### Feat
+
+- **checkup**: add --pr mode for verifying existing PRs
+
+### Fix
+
+- align sync prompt architecture dependencies
+- preserve sync prompt path casing
+- preserve existing prompt path casing
+- declare ci drift heal agentic common dependency
+- block checkpoints with skipped auto-heal modules
+- bound auto-deps healing in CI
+- recognize symlinked prompt changes in auto-heal
+- force auto-heal pdd subprocesses
+- mark successful auto-heal checkpoints
+- make PR auto-heal incremental after bot heals
+
 ## v0.0.218 (2026-04-24)
 
 ### Feat

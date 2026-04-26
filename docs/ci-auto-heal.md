@@ -29,6 +29,7 @@ PR trigger behavior:
 - Draft PRs still start Cloud Build, but the in-build `draft-guard` step now short-circuits them before fetch/heal work.
 - The PR trigger should be configured with Cloud Build comment control enabled, so auto-heal only starts after `/gcbrun`.
 - A PR build starts when `/gcbrun` is present in the PR description from a writer, or when a writer comments `/gcbrun` on the PR.
+- The first PR auto-heal run uses `origin/main...HEAD` as the diff base. Later PR auto-heal runs on the same branch use the most recent successful auto-heal checkpoint commit as the incremental diff base, so repeated `/gcbrun` runs do not re-heal the entire PR history. Checkpoints are bot commits whose subject starts with `chore: auto-heal prompt/example drift for ` and whose body contains `PDD-Auto-Heal-Checkpoint: success`.
 - Because GCB has no trigger-level draft filter, the first guaranteed full run after marking a PR ready is the next pushed commit or a manual rerun after `/gcbrun`. If GitHub emits a PR update build for `ready_for_review`, that build will also pass the guard once the manual gate has been satisfied.
 
 ## Auth
