@@ -99,18 +99,34 @@ def _run_pdd_sync(project: Path, extra_args: Optional[List[str]] = None) -> subp
 
 # =========================================================================
 # Section S: LiteLLM path (PDD_RUN_REAL_LLM_TESTS=1)
+#
+# One `pdd sync greeter` run, many assertions. Checks trace structure,
+# model field, log location, fingerprint, example traces, and orphaned
+# call detection all from a single sync.
 # =========================================================================
 
 class TestLiteLLMPath:
-    """Section S: LiteLLM-based sync produces traces in new location."""
+    """Section S: one real pdd sync, verify all LiteLLM trace behavior."""
 
-    def test_generate_writes_traces_to_new_location(self, tmp_path):
+    def test_litellm_sync_traces(self, tmp_path):
+        """Single pdd sync on a fresh project. Checks everything about the
+        LiteLLM trace path from one run."""
         _skip_unless_real_llm()
         project = _create_minimal_pdd_project(tmp_path)
         result = _run_pdd_sync(project)
+
+        # --- Sync log lands in .pdd/logs/, not .pdd/meta/ ---
         log_path = project / ".pdd" / "logs" / "greeter_python_sync.log"
-        assert log_path.exists(), f"Expected log at {log_path}. stdout: {result.stdout[:500]}"
+        assert log_path.exists(), (
+            f"Expected log at {log_path}. stdout: {result.stdout[:500]}"
+        )
+        meta_dir = project / ".pdd" / "meta"
+        sync_logs_in_meta = list(meta_dir.glob("*_sync.log")) if meta_dir.exists() else []
+        assert len(sync_logs_in_meta) == 0, "Sync log should not be in .pdd/meta/"
+
         entries = _read_sync_log(project)
+
+        # --- generate entry has llm_traces with valid structure ---
         gen_entries = [e for e in entries if e.get("operation") == "generate"]
         assert len(gen_entries) >= 1
         gen = gen_entries[0]
@@ -122,42 +138,33 @@ class TestLiteLLMPath:
             assert isinstance(item["model"], str) and item["model"]
             assert item["thinking"] is None or isinstance(item["thinking"], str)
 
-    def test_example_operation_has_traces(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        entries = _read_sync_log(project)
+        # --- example entry has llm_traces (if example was generated) ---
         ex_entries = [e for e in entries if e.get("operation") == "example"]
         if ex_entries:
             assert "llm_traces" in ex_entries[0]
             assert len(ex_entries[0]["llm_traces"]) >= 1
 
-    def test_trace_model_field(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        entries = _read_sync_log(project)
+        # --- model field contains a recognizable model name ---
         for entry in entries:
             if "llm_traces" in entry:
                 for item in entry["llm_traces"]:
                     model = item["model"]
                     assert isinstance(model, str) and model
-                    # Should contain a recognizable model name
-                    assert any(k in model.lower() for k in ("gemini", "gpt", "claude", "o1", "o3", "o4"))
+                    assert any(k in model.lower() for k in (
+                        "gemini", "gpt", "claude", "o1", "o3", "o4",
+                    )), f"Unrecognized model: {model}"
 
-    def test_no_sync_log_in_meta(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        meta_dir = project / ".pdd" / "meta"
-        sync_logs = list(meta_dir.glob("*_sync.log")) if meta_dir.exists() else []
-        assert len(sync_logs) == 0
+        # --- every entry with llm_traces has >= 2 items (no orphaned calls) ---
+        for entry in entries:
+            if "llm_traces" in entry:
+                assert len(entry["llm_traces"]) >= 2, (
+                    f"Operation {entry.get('operation')} has only "
+                    f"{len(entry['llm_traces'])} trace(s) — expected >= 2. "
+                    f"set_current_operation may be called too late or "
+                    f"pop_all_pairs too early."
+                )
 
-    def test_fingerprint_untouched(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        meta_dir = project / ".pdd" / "meta"
+        # --- fingerprint still exists and is valid JSON ---
         fp_files = list(meta_dir.glob("greeter_python.json"))
         assert len(fp_files) == 1
         data = json.loads(fp_files[0].read_text(encoding="utf-8"))
@@ -325,38 +332,43 @@ class TestCrashAgenticFallback:
 
 
 # =========================================================================
-# Section V: Skips (PDD_RUN_REAL_LLM_TESTS=1)
+# Section V+W: Skip, dry-run, core-dump (PDD_RUN_REAL_LLM_TESTS=1)
+#
+# One pdd sync to generate, then a second sync (skips), then dry-run
+# and core-dump on the same project. 2 LLM sync runs total (second is
+# instant because everything skips).
 # =========================================================================
 
-class TestSkips:
-    """Section V: skip entries have no traces."""
+class TestSkipDryRunCoreDump:
+    """Sections V+W: sync twice, then dry-run and core-dump on same project."""
 
-    def test_skip_entries_no_traces(self, tmp_path):
+    def test_skip_dryrun_coredump(self, tmp_path):
+        """First sync generates. Second sync skips. Then check dry-run and core-dump."""
         _skip_unless_real_llm()
         project = _create_minimal_pdd_project(tmp_path)
-        # First sync to generate
+
+        # First sync — generates code, tests, example
         _run_pdd_sync(project)
-        # Second sync — should skip
+
+        # Second sync — should skip everything
         _run_pdd_sync(project)
         entries = _read_sync_log(project)
+
+        # --- Skip entries have no traces ---
         skip_entries = [e for e in entries if str(e.get("operation", "")).startswith("skip")]
         for entry in skip_entries:
             assert "llm_traces" not in entry
             assert "agentic_trace" not in entry
 
-
-# =========================================================================
-# Section W: Core dump and dry-run (PDD_RUN_REAL_LLM_TESTS=1)
-# =========================================================================
-
-class TestCoreDumpAndDryRun:
-    """Section W: core dump and dry-run E2E."""
-
-    def test_core_dump_has_sync_log_refs(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
+        # --- Dry-run shows operation history ---
         result = subprocess.run(
+            ["pdd", "sync", "greeter", "--dry-run"],
+            cwd=project, capture_output=True, text=True, timeout=60,
+        )
+        assert "generate" in result.stdout.lower() or "test" in result.stdout.lower()
+
+        # --- Core dump has sync_log_refs pointing to .pdd/logs/ ---
+        subprocess.run(
             ["pdd", "sync", "greeter", "--core-dump"],
             cwd=project, capture_output=True, text=True, timeout=300,
         )
@@ -367,19 +379,11 @@ class TestCoreDumpAndDryRun:
                 for ref in dump["sync_log_refs"]:
                     assert ref["path"].startswith(".pdd/logs/")
 
-    def test_dry_run_shows_history(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        result = subprocess.run(
-            ["pdd", "sync", "greeter", "--dry-run"],
-            cwd=project, capture_output=True, text=True, timeout=60,
-        )
-        assert "generate" in result.stdout.lower() or "test" in result.stdout.lower()
-
 
 # =========================================================================
 # Section X: Migration (PDD_RUN_REAL_LLM_TESTS=1)
+#
+# Needs its own project because it plants a legacy file before syncing.
 # =========================================================================
 
 class TestMigration:
@@ -402,24 +406,3 @@ class TestMigration:
         entries = _read_sync_log(project)
         ops = [e.get("operation") for e in entries]
         assert "old_generate" in ops  # old entry preserved
-
-
-# =========================================================================
-# Section Y: No orphaned LLM calls (PDD_RUN_REAL_LLM_TESTS=1)
-# =========================================================================
-
-class TestNoOrphanedCalls:
-    """Section Y: every LLM-using operation captures all its traces."""
-
-    def test_every_llm_operation_has_traces(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        entries = _read_sync_log(project)
-        for entry in entries:
-            if "llm_traces" in entry:
-                assert len(entry["llm_traces"]) >= 2, (
-                    f"Operation {entry.get('operation')} has only {len(entry['llm_traces'])} "
-                    f"trace(s) — expected >= 2. This may indicate set_current_operation is "
-                    f"called too late or pop_all_pairs too early."
-                )
