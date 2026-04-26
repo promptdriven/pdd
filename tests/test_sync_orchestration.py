@@ -1837,14 +1837,14 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
     def capture_append(_b, _l, entry):
         seen_entries.append(entry)
 
-    # Pretend llm trace was recorded for this op (without calling real llm).
-    fake_trace = {"prompt": "P", "response": "R", "model": "m"}
+    # Pretend llm traces were recorded for this op (without calling real llm).
+    fake_traces = [{"prompt": "P", "response": "R", "model": "m", "thinking": None}]
 
     with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
          patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
          patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
          patch("pdd.sync_orchestration.code_generator_main", return_value=(None, False, 0.01, "m")), \
-         patch("pdd.sync_orchestration.pop_last_pair", return_value=fake_trace), \
+         patch("pdd.sync_orchestration.pop_all_pairs", return_value=fake_traces), \
          patch("pdd.sync_orchestration.append_log_entry", side_effect=capture_append), \
          patch("pdd.sync_orchestration.log_event"):
 
@@ -1855,8 +1855,7 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
     assert res["success"] is False
     gen_entries = [e for e in seen_entries if e.get("operation") == "generate"]
     assert gen_entries, f"No generate entry: {seen_entries}"
-    details = gen_entries[0].get("details") or {}
-    assert details.get("llm_trace") == fake_trace
+    assert gen_entries[0].get("llm_traces") == fake_traces
 
 # --- Coverage Target Selection Regression Tests ---
 
