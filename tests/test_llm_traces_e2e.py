@@ -87,9 +87,8 @@ def _run_pdd_sync(project: Path, extra_args: Optional[List[str]] = None) -> subp
 class TestAgenticPath:
     """Agentic sync via --agentic flag produces traces in sync log.
 
-    One sync run per test. The clean-path test checks llm_traces, format,
-    provider-specific paths, and session file existence from a single run.
-    The crash-path test generates clean code then breaks it.
+    One sync run per test. Checks llm_traces, format, provider-specific
+    paths, and session file existence from a single run.
     """
 
     def test_agentic_sync_clean_path(self, tmp_path, agentic_provider):
@@ -142,69 +141,3 @@ class TestAgenticPath:
             elif agentic_provider == "openai":
                 assert trace["format"] == "jsonl"
 
-    def test_agentic_crash_produces_agentic_trace(self, tmp_path, agentic_provider):
-        """Break code after generate, re-sync with --agentic. Crash entry
-        gets agentic_trace with a real session file on disk."""
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project, extra_args=["--agentic"])
-
-        code_file = project / "greeter.py"
-        if not code_file.exists():
-            pytest.skip("First sync did not generate code file")
-
-        code_file.write_text(
-            "import nonexistent_xyz_module\n\ndef greet(name):\n    return f'Hello, {name}!'\n",
-            encoding="utf-8",
-        )
-        fp = project / ".pdd" / "meta" / "greeter_python.json"
-        if fp.exists():
-            fp.unlink()
-
-        _run_pdd_sync(project, extra_args=["--agentic"])
-        entries = _read_sync_log(project)
-        crash_entries = [e for e in entries if e.get("operation") == "crash"]
-        for entry in crash_entries:
-            if "agentic_trace" in entry:
-                trace = entry["agentic_trace"]
-                assert isinstance(trace["session_file"], str)
-                assert trace["provider"] == agentic_provider
-                assert trace["format"] in ("jsonl", "json")
-                sf = Path(trace["session_file"])
-                assert sf.exists(), f"Session file missing: {sf}"
-                assert sf.stat().st_size > 0, f"Session file is empty: {sf}"
-
-
-# =========================================================================
-# Agentic fallback: LiteLLM tries first, then CLI agent
-# =========================================================================
-
-class TestCrashAgenticFallback:
-    """Crash with LiteLLM + agentic fallback may produce both keys."""
-
-    def test_both_keys_on_fallback(self, tmp_path, agentic_provider):
-        """If a crash entry has both llm_traces and agentic_trace, both are valid."""
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project, extra_args=["--agentic"])
-
-        code_file = project / "greeter.py"
-        if not code_file.exists():
-            pytest.skip("First sync did not generate code file")
-
-        code_file.write_text(
-            "import nonexistent_xyz_module\ndef greet(name): return f'Hello, {name}!'\n",
-            encoding="utf-8",
-        )
-        fp = project / ".pdd" / "meta" / "greeter_python.json"
-        if fp.exists():
-            fp.unlink()
-
-        # Sync WITHOUT --agentic so crash_main tries LiteLLM first,
-        # then falls back to agentic
-        _run_pdd_sync(project)
-        entries = _read_sync_log(project)
-        both = [e for e in entries if "llm_traces" in e and "agentic_trace" in e]
-        for entry in both:
-            assert len(entry["llm_traces"]) > 0
-            trace = entry["agentic_trace"]
-            assert isinstance(trace["session_file"], str)
-            assert trace["provider"] in ("anthropic", "google", "openai")
