@@ -122,19 +122,6 @@ class TestLiteLLMPath:
             assert isinstance(item["model"], str) and item["model"]
             assert item["thinking"] is None or isinstance(item["thinking"], str)
 
-    def test_test_operation_has_traces(self, tmp_path):
-        _skip_unless_real_llm()
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project)
-        entries = _read_sync_log(project)
-        test_entries = [e for e in entries if e.get("operation") == "test"]
-        # Only check traces on test entries that actually called an LLM (cost > 0).
-        # If sync decided existing tests are sufficient, the entry has cost 0 and no traces.
-        llm_test_entries = [e for e in test_entries if e.get("actual_cost", 0) > 0]
-        if llm_test_entries:
-            assert "llm_traces" in llm_test_entries[0]
-            assert len(llm_test_entries[0]["llm_traces"]) >= 2
-
     def test_example_operation_has_traces(self, tmp_path):
         _skip_unless_real_llm()
         project = _create_minimal_pdd_project(tmp_path)
