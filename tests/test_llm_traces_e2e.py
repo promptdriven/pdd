@@ -128,9 +128,12 @@ class TestLiteLLMPath:
         _run_pdd_sync(project)
         entries = _read_sync_log(project)
         test_entries = [e for e in entries if e.get("operation") == "test"]
-        if test_entries:
-            assert "llm_traces" in test_entries[0]
-            assert len(test_entries[0]["llm_traces"]) >= 2
+        # Only check traces on test entries that actually called an LLM (cost > 0).
+        # If sync decided existing tests are sufficient, the entry has cost 0 and no traces.
+        llm_test_entries = [e for e in test_entries if e.get("actual_cost", 0) > 0]
+        if llm_test_entries:
+            assert "llm_traces" in llm_test_entries[0]
+            assert len(llm_test_entries[0]["llm_traces"]) >= 2
 
     def test_example_operation_has_traces(self, tmp_path):
         _skip_unless_real_llm()
