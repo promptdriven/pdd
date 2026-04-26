@@ -17,6 +17,8 @@ from rich.table import Table
 
 console = Console()
 _ROLLBACK_PATHS = (".pdd/meta", "project_dependencies.csv")
+_AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
+_PDD_FLAGS_WITH_VALUES = {"--strength", "--time"}
 
 # Change-magnitude gate threshold. Motivation: PR gltanaka/pdd#1187 autohealed
 # a 1-line code fix (`ad98ea17`) into a 176-line prompt rewrite — a 1:176 ratio.
@@ -53,6 +55,25 @@ def _get_git_changed_files(diff_base: str) -> set:
         return set()
     except Exception:
         return set()
+
+
+def _git_relative_path_candidates(path: Optional[Path], repo_root: Path) -> set:
+    """Return repo-relative path spellings that Git may report for path."""
+    if not path:
+        return set()
+
+    candidates = set()
+    try:
+        candidates.add(str(path.relative_to(repo_root)))
+    except ValueError:
+        candidates.add(str(path))
+
+    try:
+        candidates.add(str(path.resolve().relative_to(repo_root.resolve())))
+    except Exception:
+        pass
+
+    return {candidate for candidate in candidates if candidate}
 
 
 @dataclass
@@ -100,6 +121,25 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     return env
 
 
+def _first_pdd_subcommand(cmd: List[str]) -> Optional[str]:
+    """Return the first pdd subcommand after top-level flags."""
+    if not cmd or cmd[0] != "pdd":
+        return None
+
+    idx = 1
+    while idx < len(cmd):
+        token = cmd[idx]
+        if not token.startswith("--"):
+            return token
+        if "=" in token:
+            idx += 1
+        elif token in _PDD_FLAGS_WITH_VALUES:
+            idx += 2
+        else:
+            idx += 1
+    return None
+
+
 def _capture_rollback_state(cmd: List[str], env: Dict[str, str]) -> Optional[bool]:
     """Return True when protected paths started clean and should be restorable.
 
@@ -111,12 +151,8 @@ def _capture_rollback_state(cmd: List[str], env: Dict[str, str]) -> Optional[boo
         return None
     if not cmd or cmd[0] != "pdd":
         return None
-    # Allow `--strength X` (or other top-level flags with values) before the
-    # subcommand by scanning cmd[1:] for the first non-flag token.
-    idx = 1
-    while idx < len(cmd) and cmd[idx].startswith("--"):
-        idx += 2  # skip flag and its value
-    if idx >= len(cmd) or cmd[idx] not in {"sync", "update"}:
+    # Allow top-level flags like `--force --strength 0.5` before the subcommand.
+    if _first_pdd_subcommand(cmd) not in {"sync", "update"}:
         return None
 
     try:
@@ -298,30 +334,26 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 paths = get_pdd_file_paths(basename, language)
                 # get_pdd_file_paths returns absolute Path objects but git diff
                 # returns repo-relative paths.  Convert to relative for comparison.
-                repo_root = Path.cwd()
+                repo_root = Path.cwd().resolve()
                 code_file_abs = paths.get("code")
                 prompt_file_abs = paths.get("prompt")
 
-                def _to_relative(p: Optional[Path]) -> str:
-                    if not p:
-                        return ""
-                    try:
-                        return str(p.relative_to(repo_root))
-                    except ValueError:
-                        return str(p)
+                code_file_paths = _git_relative_path_candidates(code_file_abs, repo_root)
+                prompt_file_paths = _git_relative_path_candidates(prompt_file_abs, repo_root)
 
-                code_file_path = _to_relative(code_file_abs)
-                prompt_file_path = _to_relative(prompt_file_abs)
-
-                code_changed = code_file_path in git_changed
-                prompt_changed = prompt_file_path in git_changed
+                code_changed = bool(code_file_paths & git_changed)
+                prompt_changed = bool(prompt_file_paths & git_changed)
 
                 if code_changed and not prompt_changed:
                     console.print(
                         f"[blue]↑ Reclassifying {basename}: code changed but prompt "
                         f"unchanged → prompt (update) drift[/blue]"
                     )
-                    code_path = str(code_file_abs) if code_file_abs else code_file_path
+                    code_path = (
+                        str(code_file_abs)
+                        if code_file_abs
+                        else next(iter(code_file_paths), "")
+                    )
                     decision = type(decision)(
                         operation="update",
                         reason="Code changed but prompt unchanged (git-based detection)",
@@ -356,16 +388,12 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
             )
         else:
             # Preserve the original operation so heal_module can dispatch
-            # correctly. Only `operation == "example"` uses the cheap
-            # `pdd example` path; other operations (verify, generate,
-            # auto-deps, test, crash) still run through `pdd sync` so
-            # sync_determine_operation can do its smart dispatch — using
-            # `pdd example` for them would either overwrite user edits
-            # (verify), skip required code regeneration (generate), or
-            # save a stale fingerprint that hides drift on the next run.
+            # correctly. `example` and `auto-deps` have direct, bounded
+            # command paths; generate/verify/test/crash still run through
+            # `pdd sync` so sync_determine_operation can do its smart dispatch.
             example_prompt_path: Optional[str] = None
             example_code_path: Optional[str] = None
-            if decision.operation == "example":
+            if decision.operation in {"example", "auto-deps"}:
                 try:
                     paths = get_pdd_file_paths(basename, language)
                     prompt_file_abs = paths.get("prompt")
@@ -839,11 +867,24 @@ def _revert_prompt_file(drift: DriftInfo) -> None:
 _HEAL_STRENGTH = "0.5"
 """CLI `--strength` value passed to every heal subprocess.
 
-Must be passed explicitly because `.pddrc` context strengths (often 0.75–0.9)
+Must be passed explicitly because `.pddrc` context strengths (often 0.75-0.9)
 otherwise take precedence over `PDD_STRENGTH_DEFAULT` and push model selection
 up the ELO ladder into Sonnet/Opus territory. `.5` keeps the selector pinned
 to `PDD_MODEL_DEFAULT` without interpolating above it.
 """
+
+
+def _pdd_heal_command(*args: str) -> List[str]:
+    """Build noninteractive pdd command used by CI auto-heal subprocesses."""
+    return ["pdd", "--force", "--strength", _HEAL_STRENGTH, *args]
+
+
+def _auto_deps_directory() -> str:
+    """Return the dependency-scan directory for CI auto-deps."""
+    for candidate in ("context", "examples"):
+        if Path(candidate).is_dir():
+            return candidate
+    return "."
 
 
 def _resolve_prompt_path_after_update(drift: DriftInfo) -> Optional[str]:
@@ -909,7 +950,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             )
             return False
 
-        update_cmd = ["pdd", "--strength", _HEAL_STRENGTH, "update", drift.code_path]
+        update_cmd = _pdd_heal_command("update", drift.code_path)
         if not _run_pdd_command(update_cmd, env, f"Healing {drift.basename} (update)"):
             return False
 
@@ -962,8 +1003,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             return True
 
         example_cmd = [
-            "pdd", "--strength", _HEAL_STRENGTH,
-            "example", drift.prompt_path, drift.code_path,
+            *_pdd_heal_command("example", drift.prompt_path, drift.code_path)
         ]
         if not _run_pdd_command(example_cmd, env, f"Regenerating example for {drift.basename}"):
             # Update succeeded but example regeneration failed. Revert the
@@ -994,12 +1034,40 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             )
             return None
         return _run_pdd_command(
-            ["pdd", "--strength", _HEAL_STRENGTH, "example", drift.prompt_path, drift.code_path],
+            _pdd_heal_command("example", drift.prompt_path, drift.code_path),
             env,
             f"Regenerating example for {drift.basename}",
         )
 
-    elif drift.operation in {"verify", "generate", "auto-deps", "test", "crash"}:
+    elif drift.operation == "auto-deps":
+        if not drift.prompt_path:
+            console.print(
+                f"[red]✗ Refusing to heal {drift.basename} (auto-deps): "
+                "prompt_path is unresolved.[/red]"
+            )
+            return False
+        skip_reason = _get_heal_sync_skip_reason(drift.basename)
+        if skip_reason:
+            console.print(
+                f"[yellow]⚠ Skipping auto-heal auto-deps for {drift.basename}: "
+                f"{skip_reason}.[/yellow]"
+            )
+            return None
+        return _run_pdd_command(
+            _pdd_heal_command(
+                "auto-deps",
+                drift.prompt_path,
+                _auto_deps_directory(),
+                "--output",
+                drift.prompt_path,
+                "--csv",
+                "project_dependencies.csv",
+            ),
+            env,
+            f"Healing {drift.basename} (operation=auto-deps)",
+        )
+
+    elif drift.operation in {"verify", "generate", "test", "crash"}:
         # Non-update, non-example operations: fall back to `pdd sync` so
         # sync_determine_operation can dispatch through the correct flow
         # (verify preserves user edits, generate regenerates code, etc.).
@@ -1013,7 +1081,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             )
             return None
         return _run_pdd_command(
-            ["pdd", "--strength", _HEAL_STRENGTH, "sync", drift.basename],
+            _pdd_heal_command("sync", drift.basename),
             env,
             f"Healing {drift.basename} (operation={drift.operation})",
         )
@@ -1024,12 +1092,18 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         return False
 
 
-def commit_and_push(healed_modules: List[str], skip_ci: bool = False) -> bool:
+def commit_and_push(
+    healed_modules: List[str],
+    skip_ci: bool = False,
+    checkpoint: bool = False,
+) -> bool:
     """Stage, commit, and push healed changes.
 
     Args:
         healed_modules: List of module basenames that were healed.
         skip_ci: If True, prepend [skip ci] to commit message.
+        checkpoint: If True, mark the commit as a successful PR auto-heal
+            checkpoint for later incremental PR runs.
 
     Returns:
         True if commit and push succeeded, False otherwise.
@@ -1070,8 +1144,11 @@ def commit_and_push(healed_modules: List[str], skip_ci: bool = False) -> bool:
 
     # Commit
     try:
+        commit_cmd = ["git", "commit", "-m", commit_msg]
+        if checkpoint:
+            commit_cmd.extend(["-m", _AUTO_HEAL_SUCCESS_TRAILER])
         commit_result = subprocess.run(
-            ["git", "commit", "-m", commit_msg],
+            commit_cmd,
             capture_output=True,
             text=True,
         )
@@ -1198,20 +1275,31 @@ def main(
                     f"(cumulative: ${cumulative_cost:.4f})"
                 )
 
+            # `update` can succeed while explicitly skipping its follow-up
+            # example step. Treat that as healed for push-to-main commits, but
+            # also skipped so PR mode cannot create a success checkpoint.
+            update_followup_skipped = (
+                success is True
+                and drift.operation == "update"
+                and _get_heal_sync_skip_reason(drift.basename) is not None
+            )
+
             if success is None:
                 skipped_modules.append(drift.basename)
             elif success:
                 healed_modules.append(drift.basename)
+                if update_followup_skipped:
+                    skipped_modules.append(drift.basename)
             else:
                 if not revert_failed or drift.basename not in failed_modules:
                     failed_modules.append(drift.basename)
                 any_failure = True
 
-        # Print skipped modules warning
+        # Print skipped modules warning. Skips can be caused by the budget cap
+        # or explicit operator policy (PDD_HEAL_SYNC_SKIP_MODULES).
         if skipped_modules:
             console.print(
-                f"\n[yellow]⚠ Budget exceeded. Skipped modules: "
-                f"{', '.join(skipped_modules)}[/yellow]"
+                f"\n[yellow]⚠ Skipped modules: {', '.join(skipped_modules)}[/yellow]"
             )
 
     finally:
@@ -1234,9 +1322,25 @@ def main(
             "\n[red]✗ Skipping commit phase because a failed heal could not be "
             "safely reverted.[/red]"
         )
+    elif (any_failure or skipped_modules) and healed_modules and not skip_ci:
+        reason_parts = []
+        if any_failure:
+            reason_parts.append("at least one module failed")
+        if skipped_modules:
+            reason_parts.append("at least one module was skipped")
+        reason = " and ".join(reason_parts)
+        console.print(
+            f"\n[yellow]Healed modules are present, but {reason}. Skipping PR "
+            "commit so a partial heal is not used as a future incremental "
+            "checkpoint.[/yellow]"
+        )
     elif healed_modules:
         console.print("\n[bold]Phase 3: Committing changes...[/bold]\n")
-        commit_success = commit_and_push(healed_modules, skip_ci)
+        commit_success = commit_and_push(
+            healed_modules,
+            skip_ci,
+            checkpoint=not skip_ci and not any_failure and not skipped_modules,
+        )
         if not commit_success:
             any_failure = True
     else:

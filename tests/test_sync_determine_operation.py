@@ -4371,7 +4371,48 @@ class TestIssue1048GlobEscapingInDetermineOperation:
 # Issue #1169: get_pdd_file_paths fails for nested subdirectories + case mismatch
 # ============================================================================
 
-from pdd.sync_determine_operation import _resolve_prompt_path_from_architecture
+from pdd.sync_determine_operation import (
+    _case_insensitive_path_lookup,
+    _resolve_prompt_path_from_architecture,
+)
+
+
+def test_case_insensitive_path_lookup_returns_on_disk_casing_when_alias_exists(tmp_path, monkeypatch):
+    """Case-insensitive filesystems must not preserve the caller's wrong casing."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    actual_prompt = prompts_dir / "api_pipeline_compositions_route_TypeScript.prompt"
+    actual_prompt.write_text("Generate API route")
+    lower_candidate = prompts_dir / "api_pipeline_compositions_route_typescript.prompt"
+
+    original_exists = Path.exists
+
+    def fake_exists(path):
+        if path == lower_candidate:
+            return True
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    assert _case_insensitive_path_lookup(lower_candidate) == actual_prompt
+
+
+def test_get_pdd_file_paths_preserves_existing_mixed_case_prompt_suffix(tmp_path, monkeypatch):
+    """CI drift path should return the Git-tracked mixed-case prompt path."""
+    monkeypatch.chdir(tmp_path)
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    actual_prompt = prompts_dir / "api_pipeline_compositions_route_TypeScript.prompt"
+    actual_prompt.write_text("Generate API route")
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    paths = get_pdd_file_paths(
+        "api_pipeline_compositions_route", "typescript", "prompts"
+    )
+
+    assert paths["prompt"] == actual_prompt.relative_to(tmp_path)
 
 
 def test_get_pdd_file_paths_nested_subdir_case_mismatch(tmp_path, monkeypatch):

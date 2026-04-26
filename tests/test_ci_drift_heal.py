@@ -12,7 +12,9 @@ from pdd.ci_drift_heal import (
     DriftInfo,
     HealResult,
     PromptRevertError,
+    _AUTO_HEAL_SUCCESS_TRAILER,
     _capture_rollback_state,
+    _git_relative_path_candidates,
     _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
@@ -230,6 +232,19 @@ class TestGetGitChangedFiles:
             result = _get_git_changed_files("origin/main...HEAD")
         assert result == {"pdd/auth.py", "pdd/api.py"}
 
+    def test_relative_path_candidates_include_symlink_target(self, tmp_path):
+        """Prompt paths may come through the prompts/ symlink while Git reports pdd/prompts/."""
+        prompt_dir = tmp_path / "pdd" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (tmp_path / "prompts").symlink_to("pdd/prompts")
+        prompt_path = tmp_path / "prompts" / "auth_python.prompt"
+        prompt_path.write_text("prompt", encoding="utf-8")
+
+        candidates = _git_relative_path_candidates(prompt_path, tmp_path)
+
+        assert "prompts/auth_python.prompt" in candidates
+        assert "pdd/prompts/auth_python.prompt" in candidates
+
 
 # ---------------------------------------------------------------------------
 # detect_drift with diff_base (git-based reclassification) tests
@@ -273,7 +288,10 @@ class TestDetectDriftWithDiffBase:
         """When both code and prompt changed, stays as example drift."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
         files, infer, sync = self._setup_mocks({"auth": decision})
-        changed_files = {"pdd/auth.py", "prompts/auth_python.prompt"}
+        # Git reports prompt files via their canonical path (`pdd/prompts/...`)
+        # even though the repo exposes them through a `prompts -> pdd/prompts`
+        # symlink and `get_pdd_file_paths` returns the symlinked form.
+        changed_files = {"pdd/auth.py", "pdd/prompts/auth_python.prompt"}
         mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
@@ -323,7 +341,7 @@ class TestDetectDriftWithDiffBase:
         """When only prompt changed (not code), stays as example drift."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
         files, infer, sync = self._setup_mocks({"auth": decision})
-        changed_files = {"prompts/auth_python.prompt"}
+        changed_files = {"pdd/prompts/auth_python.prompt"}
         mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
@@ -357,6 +375,46 @@ class TestDetectDriftWithDiffBase:
 
         mock_git.assert_called_once_with("origin/main...HEAD")
 
+    def test_symlinked_prompt_path_resolves_to_canonical_form(self, tmp_path, monkeypatch):
+        """Prompt paths from `prompts/` symlink resolve to git's `pdd/prompts/` form.
+
+        Regression for PR #1292 auto-heal failure: `get_pdd_file_paths` returns
+        prompt paths under the `prompts -> pdd/prompts` symlink, but `git diff`
+        reports the canonical `pdd/prompts/...` path. Without symlink resolution
+        the membership check would miss, falsely flagging the prompt as
+        unchanged and reclassifying real prompt-edit PRs as code-only drift.
+        """
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "prompts").symlink_to(tmp_path / "pdd" / "prompts")
+        prompt_file = tmp_path / "pdd" / "prompts" / "auth_python.prompt"
+        prompt_file.write_text("% prompt\n")
+        code_file = tmp_path / "pdd" / "auth.py"
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("def foo(): pass\n")
+        monkeypatch.chdir(tmp_path)
+
+        decision = MagicMock(operation="auto-deps", reason="deps")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        # Both paths absolute; prompt accessed via the symlink, mirroring what
+        # `get_pdd_file_paths` returns in CI.
+        mock_paths = {
+            "code": code_file,
+            "prompt": tmp_path / "prompts" / "auth_python.prompt",
+        }
+        # Git-canonical paths (what `git diff --name-only` actually emits).
+        changed_files = {"pdd/auth.py", "pdd/prompts/auth_python.prompt"}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        # Both code AND prompt changed → must NOT reclassify as prompt drift.
+        assert len(prompt_drifts) == 0
+        assert len(example_drifts) == 1
+
     def test_get_pdd_file_paths_failure_falls_back_to_example(self):
         """If get_pdd_file_paths raises, drift stays as example."""
         decision = MagicMock(operation="auto-deps", reason="deps")
@@ -383,7 +441,7 @@ class TestHealModule:
         return {"PDD_FORCE": "1", "CI": "1", "NO_COLOR": "1", "PDD_OUTPUT_COST_PATH": "/tmp/c.csv"}
 
     def test_update_runs_update_then_example_with_strength_override(self):
-        """Update drift runs `pdd --strength 0.5 update` then `pdd --strength 0.5 example`.
+        """Update drift runs forced pdd update/example commands.
 
         Passes `--strength 0.5` explicitly so the command overrides any
         `.pddrc` context strength (e.g. 0.818) that would otherwise push
@@ -406,9 +464,10 @@ class TestHealModule:
         assert result is True
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         assert pdd_cmds == [
-            ["pdd", "--strength", "0.5", "update", "/repo/auth.py"],
+            ["pdd", "--force", "--strength", "0.5", "update", "/repo/auth.py"],
             [
                 "pdd",
+                "--force",
                 "--strength",
                 "0.5",
                 "example",
@@ -576,9 +635,10 @@ class TestHealModule:
         assert result is True
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         assert pdd_cmds == [
-            ["pdd", "--strength", "0.5", "update", "/repo/agentic_change_orchestrator.py"],
+            ["pdd", "--force", "--strength", "0.5", "update", "/repo/agentic_change_orchestrator.py"],
             [
                 "pdd",
+                "--force",
                 "--strength",
                 "0.5",
                 "example",
@@ -609,11 +669,11 @@ class TestHealModule:
         assert result is True
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         assert pdd_cmds == [
-            ["pdd", "--strength", "0.5", "update", "/repo/agentic_change_orchestrator.py"],
+            ["pdd", "--force", "--strength", "0.5", "update", "/repo/agentic_change_orchestrator.py"],
         ]
 
     def test_example_drift_runs_pdd_example(self):
-        """example drift runs `pdd --strength 0.5 example <prompt> <code>`."""
+        """example drift runs `pdd --force --strength 0.5 example <prompt> <code>`."""
         drift = DriftInfo(
             "api",
             "python",
@@ -631,6 +691,7 @@ class TestHealModule:
         assert len(mock_run.call_args_list) == 1
         assert mock_run.call_args[0][0] == [
             "pdd",
+            "--force",
             "--strength",
             "0.5",
             "example",
@@ -660,7 +721,7 @@ class TestHealModule:
 
         assert result is True
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
-        assert pdd_cmds == [["pdd", "--strength", "0.5", "sync", "api"]]
+        assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "api"]]
 
     def test_generate_drift_runs_pdd_sync_to_preserve_semantics(self):
         """operation=='generate' (prompt changed, code needs regen) must run pdd sync.
@@ -681,19 +742,46 @@ class TestHealModule:
 
         assert result is True
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
-        assert pdd_cmds == [["pdd", "--strength", "0.5", "sync", "api"]]
+        assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "api"]]
+
+    def test_auto_deps_drift_runs_bounded_auto_deps_command(self):
+        """operation=='auto-deps' should not fall through to full sync/generate/crash."""
+        drift = DriftInfo(
+            "api", "python", "auto-deps", "prompt dependencies changed",
+            prompt_path="/repo/prompts/api_python.prompt",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.ci_drift_heal._auto_deps_directory", return_value="context"):
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [[
+            "pdd",
+            "--force",
+            "--strength",
+            "0.5",
+            "auto-deps",
+            "/repo/prompts/api_python.prompt",
+            "context",
+            "--output",
+            "/repo/prompts/api_python.prompt",
+            "--csv",
+            "project_dependencies.csv",
+        ]]
 
     def test_sync_fallback_ops_do_not_require_paths(self):
-        """verify/generate/auto-deps/test/crash operations work even when
-        prompt_path/code_path aren't pre-resolved — pdd sync resolves them."""
-        for op in ("verify", "generate", "auto-deps", "test", "crash"):
+        """verify/generate/test/crash work without paths because pdd sync resolves them."""
+        for op in ("verify", "generate", "test", "crash"):
             drift = DriftInfo("mod", "python", op, f"{op} needed")
             mock_result = MagicMock(returncode=0, stderr="")
             with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
                 result = heal_module(drift, self._make_env())
             assert result is True, f"failed for op={op}"
             pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
-            assert pdd_cmds == [["pdd", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
+            assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
 
     def test_update_without_prompt_path_resolves_after_update(self):
         """Code-without-prompt flow: pdd update creates the prompt, then we
@@ -728,9 +816,10 @@ class TestHealModule:
         assert result is True
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         # pdd update runs first; pdd example runs with the freshly-resolved prompt path
-        assert pdd_cmds[0] == ["pdd", "--strength", "0.5", "update", "/repo/newmod.py"]
+        assert pdd_cmds[0] == ["pdd", "--force", "--strength", "0.5", "update", "/repo/newmod.py"]
         assert pdd_cmds[1] == [
             "pdd",
+            "--force",
             "--strength",
             "0.5",
             "example",
@@ -795,7 +884,7 @@ class TestHealModule:
         # other modules' commits.
         assert result is False
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
-        assert pdd_cmds == [["pdd", "--strength", "0.5", "update", "/repo/auth.py"]]
+        assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "update", "/repo/auth.py"]]
 
     def test_example_skip_env_returns_none_without_running(self):
         """Explicit skip env bypasses a module's heal step without failing CI."""
@@ -880,7 +969,7 @@ class TestCaptureRollbackState:
         clean = MagicMock(returncode=0, stdout="", stderr="")
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=clean):
             result = _capture_rollback_state(
-                ["pdd", "--strength", "0.5", "update", "/repo/foo.py"],
+                ["pdd", "--force", "--strength", "0.5", "update", "/repo/foo.py"],
                 self._ENV,
             )
         assert result is True  # clean state, rollback-eligible
@@ -889,7 +978,7 @@ class TestCaptureRollbackState:
         clean = MagicMock(returncode=0, stdout="", stderr="")
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=clean):
             result = _capture_rollback_state(
-                ["pdd", "--strength", "0.5", "sync", "mod"],
+                ["pdd", "--force", "--strength", "0.5", "sync", "mod"],
                 self._ENV,
             )
         assert result is True
@@ -897,7 +986,7 @@ class TestCaptureRollbackState:
     def test_ignores_pdd_example(self):
         """pdd example isn't tracked by the rollback mechanism."""
         result = _capture_rollback_state(
-            ["pdd", "--strength", "0.5", "example", "p.prompt", "c.py"],
+            ["pdd", "--force", "--strength", "0.5", "example", "p.prompt", "c.py"],
             self._ENV,
         )
         assert result is None
@@ -933,6 +1022,17 @@ class TestCommitAndPush:
         assert "auth" in msg
         assert "api" in msg
         assert "chore: auto-heal" in msg
+
+    def test_checkpoint_adds_success_trailer(self):
+        """Successful PR checkpoints get an explicit commit body marker."""
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=self._mock_run_success) as mock_run, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True):
+            commit_and_push(["auth"], checkpoint=True)
+
+        commit_calls = [c for c in mock_run.call_args_list if c[0][0][0:2] == ["git", "commit"]]
+        assert len(commit_calls) == 1
+        commit_cmd = commit_calls[0][0][0]
+        assert commit_cmd[-2:] == ["-m", _AUTO_HEAL_SUCCESS_TRAILER]
 
     def test_skip_ci_flag(self):
         """skip_ci=True prepends [skip ci] to commit message."""
@@ -1062,7 +1162,7 @@ class TestMain:
 
         with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
              patch("pdd.ci_drift_heal.heal_module", return_value=True), \
-             patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True) as mock_commit, \
              patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
              patch("pdd.ci_drift_heal.os.close"), \
              patch("pdd.ci_drift_heal.os.unlink"), \
@@ -1070,6 +1170,7 @@ class TestMain:
             result = main()
 
         assert result == 0
+        mock_commit.assert_called_once_with(["auth"], False, checkpoint=True)
 
     def test_heal_failure_returns_one(self):
         """Failed heal returns 1."""
@@ -1122,7 +1223,7 @@ class TestMain:
         with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
              patch("pdd.ci_drift_heal.heal_module", side_effect=track_heal), \
              patch("pdd.ci_drift_heal._parse_cost_from_csv", side_effect=high_cost), \
-             patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True) as mock_commit, \
              patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
              patch("pdd.ci_drift_heal.os.close"), \
              patch("pdd.ci_drift_heal.os.unlink"), \
@@ -1131,6 +1232,7 @@ class TestMain:
 
         # mod1 healed, mod2 skipped due to budget
         assert heal_calls == ["mod1"]
+        mock_commit.assert_not_called()
         assert result == 0
 
     def test_skip_ci_passed_to_commit(self):
@@ -1146,7 +1248,7 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(["auth"], True)
+        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
 
     def test_no_healed_modules_skips_commit(self):
         """If all modules fail healing, commit phase is skipped."""
@@ -1163,6 +1265,138 @@ class TestMain:
 
         mock_commit.assert_not_called()
         assert result == 1
+
+    def test_pr_partial_failure_skips_commit_even_after_success(self):
+        """PR mode must not checkpoint a run with any failed module."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+                DriftInfo("api", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=[True, False]), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=False)
+
+        mock_commit.assert_not_called()
+        assert result == 1
+
+    def test_push_partial_failure_can_commit_without_checkpoint(self):
+        """Push-to-main mode remains advisory but never creates a PR checkpoint."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+                DriftInfo("api", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=[True, False]), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True) as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        assert result == 0
+
+    def test_pr_skipped_module_after_success_skips_commit_checkpoint(self):
+        """PR mode must not checkpoint when any requested module was skipped."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+                DriftInfo("api", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=[True, None]), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=False)
+
+        mock_commit.assert_not_called()
+        assert result == 0
+
+    def test_pr_update_followup_skip_after_success_skips_commit_checkpoint(self):
+        """An update with skipped follow-up example is not checkpointable in PR mode."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch.dict(os.environ, {"PDD_HEAL_SYNC_SKIP_MODULES": "auth"}, clear=False), \
+             patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", return_value=True), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=False)
+
+        mock_commit.assert_not_called()
+        assert result == 0
+
+    def test_push_skipped_module_after_success_can_commit_without_checkpoint(self):
+        """Push-to-main mode may commit healed work but never creates a PR checkpoint."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+                DriftInfo("api", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=[True, None]), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True) as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        assert result == 0
+
+    def test_push_update_followup_skip_after_success_commits_without_checkpoint(self):
+        """Push-to-main mode may publish an update whose follow-up example was skipped."""
+        drifts = (
+            [
+                DriftInfo("auth", "python", "update", "changed"),
+            ],
+            [],
+        )
+
+        with patch.dict(os.environ, {"PDD_HEAL_SYNC_SKIP_MODULES": "auth"}, clear=False), \
+             patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", return_value=True), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True) as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        assert result == 0
 
     def test_prompt_revert_failure_blocks_commit_even_after_other_success(self):
         """A failed revert makes the whole run unsafe to commit."""
@@ -1258,10 +1492,10 @@ class TestMain:
         )
 
         def run_pdd_side_effect(cmd, env, label):
-            if cmd == ["pdd", "--strength", "0.5", "update", str(code_path)]:
+            if cmd == ["pdd", "--force", "--strength", "0.5", "update", str(code_path)]:
                 prompt_path.write_text(updated_prompt, encoding="utf-8")
                 return True
-            if cmd == ["pdd", "--strength", "0.5", "example", str(prompt_path), str(code_path)]:
+            if cmd == ["pdd", "--force", "--strength", "0.5", "example", str(prompt_path), str(code_path)]:
                 return False
             raise AssertionError(f"Unexpected command: {cmd}")
 

@@ -295,6 +295,23 @@ def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: st
     return str(pddrc_parent / expanded)
 
 
+def _resolve_existing_prompt_path_case_insensitive(prompt_path: Path) -> Path:
+    """Return an existing prompt path using its on-disk filename casing."""
+    parent = prompt_path.parent
+    if not parent.exists():
+        return prompt_path
+
+    target_name = prompt_path.name.lower()
+    try:
+        for candidate in parent.iterdir():
+            if candidate.is_file() and candidate.name.lower() == target_name:
+                return candidate
+    except OSError:
+        return prompt_path
+
+    return prompt_path
+
+
 def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None, create_missing: bool = True) -> Tuple[str, str]:
     """
     Derives the corresponding prompt file path from a code file path.
@@ -342,7 +359,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     if not output_dir:
         template_path = _resolve_prompt_from_pddrc(code_file_path, repo_root, language)
         if template_path:
-            prompt_path = Path(template_path)
+            prompt_path = _resolve_existing_prompt_path_case_insensitive(Path(template_path))
             if create_missing:
                 if not prompt_path.parent.exists():
                     try:
@@ -355,9 +372,9 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
                     try:
                         prompt_path.touch()
                         if not quiet:
-                            console.print(f"[success]Created missing prompt file:[/success] [path]{template_path}[/path]")
+                            console.print(f"[success]Created missing prompt file:[/success] [path]{prompt_path}[/path]")
                     except OSError as e:
-                        console.print(f"[error]Failed to create file {template_path}: {e}[/error]")
+                        console.print(f"[error]Failed to create file {prompt_path}: {e}[/error]")
             return str(prompt_path), code_file_path
 
     # Determine the base prompts directory
@@ -400,7 +417,8 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     # Construct the prompt filename in the determined directory
     prompt_filename = f"{base_name}_{language.lower()}.prompt"
     prompt_path_str = os.path.join(final_prompts_dir, prompt_filename)
-    prompt_path = Path(prompt_path_str)
+    prompt_path = _resolve_existing_prompt_path_case_insensitive(Path(prompt_path_str))
+    prompt_path_str = str(prompt_path)
 
     # Create directory and empty prompt file only when requested
     if create_missing:

@@ -1377,6 +1377,50 @@ class TestLanguageCasingPreservation:
 
         assert prompt_path.endswith("page_typescriptreact.prompt")
 
+    def test_resolve_prompt_code_pair_preserves_existing_mixed_case_prompt_suffix(self, tmp_path, monkeypatch):
+        """Existing prompt files should be returned with their on-disk casing."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        prompts_dir = repo_path / "prompts"
+        prompts_dir.mkdir()
+        code_file = repo_path / "api_pipeline_compositions_route.ts"
+        code_file.write_text("export const route = () => null;")
+        existing_prompt = prompts_dir / "api_pipeline_compositions_route_TypeScript.prompt"
+        existing_prompt.write_text("% Existing prompt\n")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "TypeScript"
+            prompt_path, _ = resolve_prompt_code_pair(
+                str(code_file), quiet=True, create_missing=False
+            )
+
+        assert Path(prompt_path) == existing_prompt
+
+    def test_find_and_resolve_all_pairs_preserves_existing_mixed_case_prompt_suffix(self, tmp_path, monkeypatch):
+        """Repo scans should pair code with an existing mixed-case prompt path."""
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        prompts_dir = repo_path / "prompts"
+        prompts_dir.mkdir()
+        code_file = repo_path / "api_pipeline_compositions_route.ts"
+        code_file.write_text("export const route = () => null;")
+        existing_prompt = prompts_dir / "api_pipeline_compositions_route_TypeScript.prompt"
+        existing_prompt.write_text("% Existing prompt\n")
+
+        monkeypatch.chdir(repo_path)
+        git.Repo.init(repo_path)
+
+        with patch("pdd.update_main.get_language") as mock_lang:
+            mock_lang.return_value = "TypeScript"
+            pairs = find_and_resolve_all_pairs(
+                str(repo_path), quiet=True, extensions=".ts"
+            )
+
+        assert (str(existing_prompt), str(code_file)) in pairs
+
     def test_resolve_prompt_code_pair_unknown_language_fallback(self, tmp_path, monkeypatch):
         """Unknown extension should fall back to 'unknown' language suffix."""
         repo_path = tmp_path / "repo"

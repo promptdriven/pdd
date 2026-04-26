@@ -30,11 +30,32 @@
     - Maintain consistent style with existing tests (fixtures, naming conventions)
     - Focus on testing functionality NOT already covered by existing tests
 
+% REPO PROMPTING GUIDE (optional; use it only to infer repo-specific filename, metadata tag, dependency, and include conventions when present):
+<include optional select="lines:299-307,lines:385-406">docs/prompting_guide.md</include>
+
 % Follow these rules:
-    - CRITICAL: You MUST analyze the actual code provided in code_under_test and generate tests for the EXACT functions defined in that code
-    - CRITICAL: Import statements must use the ACTUAL module name from the code file path, not generic names. Include the necessary code/path info to import the code under test.
-    - CRITICAL: Test the ACTUAL function names, parameters, and behavior shown in the provided code
-    - The module name for the code under test will have the same name as the function name
+    - CRITICAL: You MUST analyze the actual code provided in code_under_test and generate tests for the EXACT public functions/classes defined in that code.
+    - CRITICAL: Import statements must use the ACTUAL Python import path implied by source_file_path, not a generic or bare filename guess. For Python, derive the import path by stripping `.py` and replacing `/` with `.` relative to the package root. Example: `src/package/module.py` -> `package.module`.
+    - CRITICAL: If source_file_path is inside a package directory, preserve the package prefix in imports. For example, `pdd/generate_output_paths.py` must be imported as `pdd.generate_output_paths`, not `generate_output_paths`. A bare import can accidentally load an installed or unrelated module instead of the code under test.
+    - CRITICAL: If the code under test uses relative imports like `from .foo import bar`, import it via its package path, NEVER as a bare top-level module.
+    - CRITICAL: Test the ACTUAL function names, parameters, return values, and observable behavior shown in the provided code.
+    - CRITICAL: Test only public APIs. NEVER import, call, or assert directly on names starting with `_`.
+    - CRITICAL: Only mock or monkeypatch symbols that are explicitly visible in the provided code as top-level module attributes/imported names, or symbols that clearly belong to an external dependency. Before writing any `patch(...)` or `monkeypatch.setattr(...)`, verify the target exists at that module path. NEVER patch imagined attributes.
+    - CRITICAL: Function-local imports are not module attributes. If a collaborator is imported inside a function body, do NOT monkeypatch it on the module under test as though it were a module global. Prefer black-box tests with real inputs; if patching is necessary, patch the collaborator on its real defining module path only when that path is clear from the import statement.
+    - CRITICAL: Preserve the real conventions shown by code_under_test, prompt_that_generated_code, source_file_path, existing_tests, and included documentation. Infer exact filename formats, metadata tags, path roots, identifier formats, and warning normalization from those sources; do not invent simplified conventions.
+    - CRITICAL: When behavior depends on filename conventions, path parsing, include parsing, metadata parsing, dependency graphs, or set-difference logic, prefer realistic temp files and production parsers over monkeypatching helper functions that define the business rule.
+    - CRITICAL: Same-package modules that parse, extract, normalize, or validate project artifacts are INTERNAL business logic, not external dependencies. Do not mock them as parser services; exercise them through realistic files and inputs.
+    - CRITICAL: If a function emits warnings or branches based on whether referenced files exist, create every prerequisite file implied by the scenario unless the test is specifically about a missing-file path. Do not accidentally trigger unrelated file-not-found warnings.
+    - CRITICAL: Avoid asserting an exact warning count when unrelated fixture issues could add warnings. Prefer asserting that the intended warning substring is present, and construct fixtures to avoid unrelated warnings.
+    - CRITICAL: Public collection/discovery wrappers should be tested only when the code clearly shows the discovery boundary, skip policy, and expected directory layout. Do not invent discovery/skip semantics just to cover wrapper functions; focus on public core behavior using realistic fixtures when wrapper semantics are ambiguous.
+    - CRITICAL: For wrapper/discovery warnings, do not assert exact discovered architecture paths, sample directory paths, or wrapper-added location text unless the code explicitly formats those strings. Assert the substantive validation warning instead.
+    - CRITICAL: For output path or file path generation, preserve the exact file-versus-directory rules shown in the code/prompt. Do not assume a configured path is a directory unless it has a trailing separator, already exists as a directory in the test fixture, or the code explicitly appends a default filename. A string like `/project/src` or `build/src` does not prove directory semantics by name alone; use `/project/src/` or create the directory when the test needs directory behavior.
+    - CRITICAL: Do not assert that basename/default filename is appended to a non-existing relative config/env path without a trailing separator. If the test expects directory behavior for a relative path, use `relative_src/` or create `relative_src` as a directory; otherwise assert the path exactly as an explicit file path.
+    - CRITICAL: In `.pddrc` or context_config path tests, `build/src` means an explicit path unless the code sees a trailing slash or existing directory. Do not expect `build/src/calc_python.py`; either expect `build/src` exactly or use `build/src/` for directory behavior.
+    - CRITICAL: If code says an explicit output/config/env directory suppresses directory prefixes from a basename, assert the basename's file component only under that directory. For example, when `core/calculator` is sent to explicit directory `src/`, expect `src/calculator.py` if the code strips the `core/` prefix for explicit directories.
+    - CRITICAL: When code distinguishes a scalar fallback parameter from a per-key mapping parameter, exercise the exact parameter required by the branch under test. Do not assume `input_file_dir` applies to every output key when the code checks `input_file_dirs[output_key]`.
+    - CRITICAL: If the code reads environment variables, every test that asserts default, config, or input-file-directory path behavior must clear relevant environment variables first, either with an autouse fixture or by explicitly requesting the cleanup fixture. Do not let an environment variable set in one test influence later path tests.
+    - CRITICAL: When using a shared kwargs fixture or dictionary, do not pass duplicate keyword arguments by unpacking the fixture and then overriding a key already present in it. Build a fresh dict without the overridden key, or call the function with explicit arguments for that test.
     - The unit test should be in {language}. If Python, use pytest.
     - Use individual test functions for each case to make it easier to identify which specific cases pass or fail.
     - Use the description of the functionality in the prompt to generate tests with useful tests with good code coverage.
@@ -44,11 +65,28 @@
     - Setup and teardown methods should only use public APIs and environment variables, never reset internal module state directly.
     - Design tests to be independent of implementation details that might change when code is regenerated.
     - For test isolation, use fixtures and mocking of external dependencies rather than manipulating internal module state.
+    - Prefer black-box tests with real temp files / temp directories for path resolution, prompt parsing, include extraction, and set-difference logic instead of mocking internal collaborators.
     - MOCKING RULE: Mock at external boundaries, test internal logic directly.
       - ALWAYS mock: HTTP clients, database connections, auth providers, third-party SDKs, message queues, file storage
       - NEVER mock: The function under test, pure computation, data validation, business logic
-      - Mock return values MUST match the real return type from the source code — do not invent response shapes
+      - Mock return values MUST match the real return type from the source code - do not invent response shapes
     - The goal: test as much of YOUR code as possible while isolating external services that need credentials.
+    - Do NOT include a long test-plan essay or docstring. If comments are needed, keep them short and local to the relevant test.
+
+% CONDITIONAL PROMPT-DRIVEN REPO RULES:
+% Apply these only when the provided code, prompt, existing tests, or docs show that this repo validates prompt files, metadata tags, dependency declarations, architecture entries, or include relationships.
+    - CRITICAL: Use the repo's documented prompt filename and dependency identifier convention exactly. If docs show language-specific prompt filenames such as `*_python.prompt`, do not use bare `module.prompt` fixtures unless the production parser/docs prove bare names are valid.
+    - CRITICAL: A code comment or condition that checks only for `.prompt` is not proof that bare prompt filenames are valid when module-name extraction is delegated to another helper. Follow the parser's documented recognized filename pattern.
+    - CRITICAL: For Python prompt-driven dependency/include validation, do not use synthetic bare names such as `a.prompt`, `b.prompt`, `auth.prompt`, `log.prompt`, `module_a.prompt`, `module_b.prompt`, or `missing.prompt` unless the production parser/docs prove those names are valid module prompts. Use names such as `auth_python.prompt`, `log_python.prompt`, `module_a_python.prompt`, `module_b_python.prompt`, or `missing_python.prompt` when the repo convention is language-specific.
+    - CRITICAL: This valid-filename rule applies to every architecture/dependency fixture, including collection, skip-directory, strict-mode, and missing-file tests. Do not put `a.prompt` or `missing.prompt` in architecture data if the parser expects language-specific prompt filenames.
+    - If the repo documents metadata dependency tags such as `<pdd-dependency>`, write those tags into real prompt fixture files instead of mocking the tag parser.
+    - CRITICAL: Missing-file scenarios must still use syntactically valid artifact names for that repo. For a Python prompt convention, use examples such as `missing_python.prompt` or `ghost_module_python.prompt`, not `missing.prompt` or `ghost.prompt`.
+    - CRITICAL: Dependency/include fixtures must include every node needed by the production mapping logic and must use the identifier type the code expects, such as prompt filenames versus normalized module names.
+    - In forward-mismatch tests, keep the dependency target entry/file present when the scenario is about a missing include or metadata tag. Remove only the relationship being tested.
+    - When production parsing normalizes fixture filenames to module names, assert the normalized user-facing value in warning text. For example, a Python prompt filename like `db_service_python.prompt` may normalize to module `db_service`.
+    - CRITICAL: In warning assertions containing phrases such as `declares dependency on module ...` or `<include>s module ...`, assert the normalized module name, not the raw language-suffixed filename stem. For example, assert `declares dependency on module 'log'`, not `declares dependency on module 'log_python'`; assert `<include>s module 'secret'`, not `<include>s module 'secret_python'`.
+    - For include/dependency validators, add edge-case tests for ignored non-target includes, self-includes/self-dependencies when the code excludes self references, and already-rooted path prefixes such as `prompts/...` so path resolution is not double-prefixed.
+    - If a test writes real metadata/include/dependency tags into a fixture file, do not also mock the parser for those tags.
 
 % TEST ISOLATION PRINCIPLE:
 % CRITICAL: Each test MUST be isolated and not pollute state for other tests.
@@ -71,16 +109,33 @@
 
 <instructions>
     1. FIRST: Carefully analyze the ACTUAL code provided in code_under_test:
-        - Identify the EXACT function names defined in the code
+        - Identify the public functions/classes that should actually be tested
+        - Derive the correct Python import path from source_file_path
+        - Identify real filename, path, metadata, and identifier conventions from the code, prompt, existing tests, and included docs
+        - Choose concrete fixture examples that follow those observed conventions exactly
+        - Identify lazy imports and external boundaries; use real inputs where feasible, or patch only clear defining module paths
+        - Identify path rules that distinguish explicit files from directories, including trailing-slash and existing-directory behavior
+        - Identify exact precedence branches and parameter names, especially per-key mappings versus scalar fallbacks
+        - Identify whether user-facing warnings normalize filenames or identifiers and match assertions to that normalized form
         - Identify the EXACT parameters and their types
         - Identify the EXACT return values and behavior
         - Identify any error conditions or edge cases
     2. SECOND: Analyze the prompt that generated the code to understand the intended functionality and edge cases.
-    3. THIRD: For each edge case explain whether it is better to do the test using Z3 formal verification or unit tests.
-    4. FOURTH: Develop a detailed test plan that will ensure the code under test is correct. This should involve both Z3 formal verification and unit tests.
+    3. THIRD: Classify each target behavior as either:
+        - FORMAL_CANDIDATE: pure, deterministic, finite-state logic that can be encoded faithfully
+        - RUNTIME_TEST_ONLY: filesystem behavior, imports, framework wiring, network, auth providers, time, randomness, or anything that depends on environment interaction
+    4. FOURTH: Generate Z3-based proof tests ONLY for FORMAL_CANDIDATE properties such as invariants, forbidden states, or small algebraic/set properties.
+        - Prefer proving properties over re-implementing the code in Z3
+        - If a check is only over a bounded domain, label it as a bounded check in a short comment
+        - If the property cannot be encoded cleanly, skip Z3 and use ordinary unit tests
     5. FIFTH: Write the test file with:
-        a) The first part of the test file should be the detailed test plan from step 4 above in comments. 
-        b) Import statements using the ACTUAL module name from the code file path (e.g., if code is in "my_function.py", use "from my_function import function_name")
-        c) Tests for the ACTUAL function names and behavior shown in the provided code
-        d) Z3 formal verification tests that are runnable as unit tests.
+        a) Import statements using the ACTUAL package-aware import path from source_file_path
+        b) Behavioral tests for the ACTUAL function names and observable behavior shown in the provided code
+        c) Preserve real filename/path conventions from the code instead of stubbing parser semantics
+        d) Create all prerequisite files needed by each scenario unless the scenario is explicitly testing a missing-file branch
+        e) Use only public entry points; do not import underscored helpers or patch non-existent module attributes
+        f) Prefer real files and real project metadata over patch-heavy fixtures for parser/file-validation modules
+        g) When asserting warning text, prefer stable substrings that reflect the production normalization rules instead of brittle verbatim strings
+        h) Only short local comments where necessary; no long preamble or test-plan block
+        i) Formal verification tests only when they are truly justified and runnable as unit tests
 </instructions>

@@ -226,6 +226,138 @@ def _copy_uncommitted_changes(
             console.print("[yellow]Warning: Could not copy untracked files to worktree[/yellow]")
 
 
+def _resolve_pr_remote(
+    git_root: Path,
+    pr_owner: str,
+    pr_repo: str,
+) -> Optional[str]:
+    """Find a configured git remote whose URL points at ``pr_owner/pr_repo``.
+
+    Walks ``git remote -v`` looking for a remote URL containing the PR's
+    owner/repo path. Returns the remote NAME (e.g. ``"upstream"``), or
+    ``None`` if no configured remote matches — in which case callers should
+    fall back to fetching directly from the explicit GitHub URL.
+
+    Why this exists: a clone of ``myfork/repo`` cannot fetch
+    ``pull/N/head`` from ``origin`` when the PR lives on ``upstream/repo``.
+    Hardcoding ``origin`` was the bug the reviewer flagged.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "remote", "-v"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+    needle = f"{pr_owner.lower()}/{pr_repo.lower()}"
+    # Match `.git` and non-`.git` suffixes, http(s) and ssh forms.
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
+        # Each line: "<name>\t<url> (<fetch|push>)"
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        name, url = parts[0], parts[1].lower()
+        if name in seen:
+            continue
+        # Strip optional ``.git`` for comparison.
+        if url.endswith(".git"):
+            url = url[:-4]
+        if needle in url:
+            return name
+        seen.add(name)
+    return None
+
+
+def _setup_pr_worktree(
+    cwd: Path,
+    pr_owner: str,
+    pr_repo: str,
+    pr_number: int,
+    quiet: bool,
+    resume_existing: bool = False,
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Create an isolated worktree checked out to an existing PR's head branch.
+
+    Used by ``pdd checkup --pr`` so that verification runs against the code the
+    PR actually proposes (not a fresh branch off HEAD). Resolves the PR's
+    source remote via ``pr_owner``/``pr_repo`` instead of hardcoding
+    ``origin`` — this is what makes fork-PR verification work when the
+    local clone's ``origin`` is not the upstream PR repo.
+
+    Returns ``(worktree_path, error_message)``.
+    """
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return None, "Current directory is not a git repository."
+
+    worktree_rel_path = Path(".pdd") / "worktrees" / f"checkup-pr-{pr_number}"
+    worktree_path = git_root / worktree_rel_path
+    branch_name = f"checkup/pr-{pr_number}"
+
+    # 1. Clean up existing worktree at path
+    if worktree_path.exists():
+        if _worktree_exists(git_root, worktree_path):
+            if not quiet:
+                console.print(f"[yellow]Removing existing worktree at {worktree_path}[/yellow]")
+            success, err = _remove_worktree(git_root, worktree_path)
+            if not success:
+                return None, f"Failed to remove existing worktree: {err}"
+        else:
+            if not quiet:
+                console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
+            shutil.rmtree(worktree_path)
+
+    # 2. Fetch the PR's head into a local branch.
+    #    Always refresh (force) so a re-run picks up new pushes to the PR.
+    if _branch_exists(git_root, branch_name) and not resume_existing:
+        _delete_branch(git_root, branch_name)
+
+    # Resolve which remote actually has this PR. Prefer a configured remote
+    # (uses the user's auth + caching); fall back to the explicit GitHub URL
+    # so fork-PR verification works even when no matching remote is wired.
+    remote_target = _resolve_pr_remote(git_root, pr_owner, pr_repo)
+    if remote_target is None:
+        remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
+
+    try:
+        subprocess.run(
+            ["git", "fetch", remote_target, f"pull/{pr_number}/head:{branch_name}", "--force"],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+        return None, (
+            f"Failed to fetch PR #{pr_number} from {remote_target}: {err_msg.strip()}. "
+            f"Confirm the PR exists and you have read access to "
+            f"{pr_owner}/{pr_repo}."
+        )
+
+    # 3. Create worktree on the fetched branch.
+    try:
+        worktree_path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["git", "worktree", "add", str(worktree_path), branch_name],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+        return None, f"Failed to create PR worktree: {err_msg}"
+
+    # Do NOT copy uncommitted changes here — PR-mode must reflect the PR's
+    # actual state, not the developer's local edits.
+
+    return worktree_path, None
+
+
 def _setup_worktree(
     cwd: Path,
     issue_number: int,
@@ -390,12 +522,23 @@ def run_agentic_checkup_orchestrator(
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
+    pr_url: Optional[str] = None,
+    pr_owner: Optional[str] = None,
+    pr_repo: Optional[str] = None,
+    pr_number: Optional[int] = None,
 ) -> Tuple[bool, str, float, str]:
     """Orchestrate the 8-step agentic checkup workflow.
+
+    When ``pr_url`` is provided, the workflow runs in PR-verification mode:
+    the worktree is based on the PR's head branch, step 8 (create PR) is
+    skipped, and step 7's context is augmented with issue-alignment signals
+    so the verify step can report whether the PR actually resolves the
+    source issue.
 
     Returns:
         (success, final_message, total_cost, model_used)
     """
+    pr_mode = pr_url is not None and pr_number is not None
     if not quiet:
         console.print(f"[bold]Running checkup for issue #{issue_number}: \"{issue_title}\"[/bold]")
 
@@ -411,6 +554,13 @@ def run_agentic_checkup_orchestrator(
         "pddrc_content": pddrc_content,
         "project_root": str(cwd),
         "no_fix": "true" if no_fix else "false",
+        # PR-mode signals (empty strings when not in PR mode so .format()
+        # substitution never KeyErrors on a prompt that references them).
+        "pr_mode": "true" if pr_mode else "false",
+        "pr_url": pr_url or "",
+        "pr_owner": pr_owner or "",
+        "pr_repo": pr_repo or "",
+        "pr_number": str(pr_number) if pr_number is not None else "",
     }
 
     total_cost = 0.0
@@ -436,6 +586,51 @@ def run_agentic_checkup_orchestrator(
     last_completed_step = 0
     fix_verify_iteration = 0
     previous_fixes = ""
+
+    if state is not None:
+        # State-identity guard. A state from a prior run on the same
+        # issue_number must match the current invocation across THREE
+        # axes before reuse:
+        #   (a) mode (issue vs pr) — different worktree paths
+        #   (b) pr_number — same issue can verify different PRs over time
+        #   (c) pr_owner/pr_repo — fork-PR identity (same pr_number could
+        #       refer to different upstream/fork combos)
+        # Any mismatch carries stale step outputs and a stale
+        # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
+        # silently running all subsequent steps against the wrong code.
+        cached_mode = state.get("mode", "issue")
+        current_mode = "pr" if pr_mode else "issue"
+        identity_mismatch_reasons: list[str] = []
+        if cached_mode != current_mode:
+            identity_mismatch_reasons.append(
+                f"mode (cached={cached_mode}, current={current_mode})"
+            )
+        if current_mode == "pr":
+            cached_pr_number = state.get("pr_number")
+            if cached_pr_number != pr_number:
+                identity_mismatch_reasons.append(
+                    f"pr_number (cached={cached_pr_number}, current={pr_number})"
+                )
+            cached_pr_owner = state.get("pr_owner")
+            cached_pr_repo = state.get("pr_repo")
+            if (
+                cached_pr_owner is not None
+                and cached_pr_repo is not None
+                and (cached_pr_owner, cached_pr_repo) != (pr_owner, pr_repo)
+            ):
+                identity_mismatch_reasons.append(
+                    f"pr_repo "
+                    f"(cached={cached_pr_owner}/{cached_pr_repo}, "
+                    f"current={pr_owner}/{pr_repo})"
+                )
+        if identity_mismatch_reasons:
+            if not quiet:
+                console.print(
+                    f"[yellow]State identity mismatch — discarding cached "
+                    f"state to avoid running in the wrong worktree. "
+                    f"Reasons: {'; '.join(identity_mismatch_reasons)}[/yellow]"
+                )
+            state = None
 
     if state is not None:
         last_completed_step = state.get("last_completed_step", 0)
@@ -484,8 +679,20 @@ def run_agentic_checkup_orchestrator(
             if worktree_path.exists():
                 current_cwd = worktree_path
             else:
-                # Recreate worktree with existing branch
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
+                # Recreate worktree with existing branch — use the right
+                # setup helper for the mode. PR-mode worktrees check out
+                # the PR's head ref via _setup_pr_worktree; reusing
+                # _setup_worktree here would silently re-create a fresh
+                # issue-mode worktree from HEAD instead of the PR's code,
+                # so all subsequent verification steps would run against
+                # the wrong tree.
+                if pr_mode:
+                    assert pr_number is not None and pr_owner is not None and pr_repo is not None
+                    wt_path, err = _setup_pr_worktree(
+                        cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=True
+                    )
+                else:
+                    wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
                 if err:
                     return False, f"Failed to recreate worktree on resume: {err}", total_cost, last_model_used
                 worktree_path = wt_path
@@ -536,6 +743,10 @@ def run_agentic_checkup_orchestrator(
             changed_files, worktree_path,
             fix_verify_iteration=fix_verify_iteration,
             previous_fixes=previous_fixes,
+            mode="pr" if pr_mode else "issue",
+            pr_number=pr_number,
+            pr_owner=pr_owner,
+            pr_repo=pr_repo,
         )
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
@@ -610,6 +821,29 @@ def run_agentic_checkup_orchestrator(
         return None
 
     # ==================================================================
+    # PR mode: create the PR-branch worktree up-front. All subsequent steps
+    # (including no-fix verification) then see the PR's code, not HEAD.
+    # ==================================================================
+    if pr_mode and worktree_path is None and start_step <= 7:
+        assert pr_number is not None  # mypy — pr_mode guarantees this
+        assert pr_owner is not None and pr_repo is not None
+        wt_path, err = _setup_pr_worktree(
+            cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False
+        )
+        if not wt_path:
+            return False, f"Failed to set up PR worktree: {err}", total_cost, last_model_used
+        worktree_path = wt_path
+        current_cwd = worktree_path
+        context["worktree_path"] = str(worktree_path)
+
+        if not quiet:
+            console.print(
+                f"[blue]PR-mode worktree (PR #{pr_number}): {worktree_path}[/blue]"
+            )
+
+        _save_state()
+
+    # ==================================================================
     # Section 1: Steps 1-2 (linear, run once)
     # ==================================================================
 
@@ -621,9 +855,13 @@ def run_agentic_checkup_orchestrator(
         if not quiet:
             console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
 
+        # PR-mode runs discovery in the PR worktree so project-shape matches
+        # the PR's code (e.g. new files appear, deleted files don't).
+        step_cwd_12 = current_cwd if pr_mode and worktree_path else cwd
+
         result = _run_single_step(
             step_num, name, context,
-            cwd=cwd, step_cwd=cwd,
+            cwd=cwd, step_cwd=step_cwd_12,
             verbose=verbose, quiet=quiet,
             label=f"step{step_num}",
             timeout_adder=timeout_adder,
@@ -656,6 +894,8 @@ def run_agentic_checkup_orchestrator(
 
     if no_fix:
         # --no-fix: run steps 3, 4, 5 linearly, skip 6, run 7, skip 8.
+        # In PR mode the linear steps run inside the PR worktree.
+        nofix_step_cwd = current_cwd if pr_mode and worktree_path else cwd
         for step_num in (3, 4, 5):
             if step_num < start_step:
                 continue
@@ -665,7 +905,7 @@ def run_agentic_checkup_orchestrator(
 
             result = _run_single_step(
                 step_num, name, context,
-                cwd=cwd, step_cwd=cwd,
+                cwd=cwd, step_cwd=nofix_step_cwd,
                 verbose=verbose, quiet=quiet,
                 label=f"step{step_num}",
                 timeout_adder=timeout_adder,
@@ -712,7 +952,7 @@ def run_agentic_checkup_orchestrator(
 
             result = _run_single_step(
                 7, name7, context,
-                cwd=cwd, step_cwd=cwd,
+                cwd=cwd, step_cwd=nofix_step_cwd,
                 verbose=verbose, quiet=quiet,
                 label="step7",
                 timeout_adder=timeout_adder,
@@ -741,8 +981,9 @@ def run_agentic_checkup_orchestrator(
     else:
         # --- Fix mode: iterative loop over steps 3-7 ---
 
-        # Create worktree before first loop iteration.
-        if worktree_path is None and start_step <= 7:
+        # Create worktree before first loop iteration. In PR mode the worktree
+        # was already created above; skip this issue-based setup.
+        if not pr_mode and worktree_path is None and start_step <= 7:
             wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
             if not wt_path:
                 return False, f"Failed to create worktree: {err}", total_cost, last_model_used
@@ -858,9 +1099,23 @@ def run_agentic_checkup_orchestrator(
 
         # ==============================================================
         # Section 3: Step 8 (create PR) — after the loop
+        # In PR mode we SKIP step 8 entirely — the PR already exists; our
+        # job was to verify it (and optionally push fix commits, not open a
+        # new PR).
         # ==============================================================
 
-        if 8 >= start_step or fix_verify_iteration > 0:
+        if pr_mode:
+            if 8 >= start_step:
+                if not quiet:
+                    console.print(
+                        f"[bold][Step 8/{TOTAL_STEPS}][/bold] Skipped "
+                        f"(PR-mode: verifying existing PR #{pr_number})"
+                    )
+                step_outputs["8"] = f"Skipped: PR-mode verification of PR #{pr_number}"
+                context["step8_output"] = step_outputs["8"]
+                last_completed_step_to_save = 8
+                _save_state()
+        elif 8 >= start_step or fix_verify_iteration > 0:
             name8, desc8 = step_map[8]
             step_cwd_8 = current_cwd if worktree_path else cwd
 
@@ -920,8 +1175,21 @@ def _build_state(
     worktree_path: Optional[Path] = None,
     fix_verify_iteration: int = 0,
     previous_fixes: str = "",
+    mode: str = "issue",
+    pr_number: Optional[int] = None,
+    pr_owner: Optional[str] = None,
+    pr_repo: Optional[str] = None,
 ) -> Dict:
-    """Build a serialisable state dict for persistence."""
+    """Build a serialisable state dict for persistence.
+
+    ``mode`` is "issue" (default — TARGET-driven invocations) or "pr"
+    (--pr/--issue invocations). The resume path validates that a loaded
+    state's mode matches the current invocation; mismatches are treated
+    as stale and force a fresh worktree setup. Without this tag, an
+    issue-mode worktree could be silently reused by a subsequent PR-mode
+    run on the same issue_number (or vice versa) and all steps would
+    execute against the wrong code.
+    """
     return {
         "workflow": "checkup",
         "issue_number": issue_number,
@@ -935,4 +1203,8 @@ def _build_state(
         "worktree_path": str(worktree_path) if worktree_path else None,
         "fix_verify_iteration": fix_verify_iteration,
         "previous_fixes": previous_fixes,
+        "mode": mode,
+        "pr_number": pr_number,
+        "pr_owner": pr_owner,
+        "pr_repo": pr_repo,
     }
