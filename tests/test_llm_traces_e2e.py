@@ -190,10 +190,17 @@ class TestLiteLLMPath:
 # =========================================================================
 
 class TestAgenticPath:
-    """Section T: agentic sync via --agentic flag produces traces in sync log."""
+    """Section T: agentic sync via --agentic flag produces traces in sync log.
 
-    def test_agentic_sync_writes_llm_traces(self, tmp_path, agentic_provider):
-        """--agentic still goes through sync_orchestration; generate uses LiteLLM."""
+    Uses a single `pdd sync --agentic` run per test method to avoid redundant
+    LLM calls (~90s each). The clean-path test checks llm_traces, format,
+    provider-specific paths, and session file existence all from one run.
+    The crash-path test runs a second sync with broken code.
+    """
+
+    def test_agentic_sync_clean_path(self, tmp_path, agentic_provider):
+        """Single pdd sync --agentic run: verify llm_traces, agentic_trace structure,
+        format, provider-specific paths, and session file on disk."""
         project = _create_minimal_pdd_project(tmp_path)
         result = _run_pdd_sync(project, extra_args=["--agentic"])
         log_path = project / ".pdd" / "logs" / "greeter_python_sync.log"
@@ -203,7 +210,8 @@ class TestAgenticPath:
         )
         entries = _read_sync_log(project)
         assert len(entries) >= 1, "Expected at least one sync log entry"
-        # generate is always LiteLLM, so it should have llm_traces
+
+        # --- generate is always LiteLLM, so it should have llm_traces ---
         gen_entries = [e for e in entries if e.get("operation") == "generate"]
         assert len(gen_entries) >= 1, (
             f"No generate entry. Operations: {[e.get('operation') for e in entries]}"
@@ -214,87 +222,73 @@ class TestAgenticPath:
         )
         assert len(gen["llm_traces"]) >= 1
 
-    def test_agentic_crash_produces_agentic_trace(self, tmp_path, agentic_provider):
-        """When crash fires with --agentic, the crash entry gets agentic_trace.
+        # --- Check all agentic_trace entries (if any operations used agent) ---
+        for entry in entries:
+            if "agentic_trace" not in entry:
+                continue
+            trace = entry["agentic_trace"]
 
-        We force a crash by writing broken code after generate, then re-syncing.
-        With --agentic, crash skips LiteLLM retries and goes straight to CLI agent.
-        """
+            # Structure
+            assert isinstance(trace["session_file"], str)
+            assert trace["provider"] == agentic_provider
+            assert trace["format"] in ("jsonl", "json")
+
+            # Session file actually exists on disk with content
+            sf = Path(trace["session_file"])
+            assert sf.exists(), f"Session file missing: {sf}"
+            assert sf.stat().st_size > 0, f"Session file is empty: {sf}"
+
+            # Format matches file extension
+            if agentic_provider == "anthropic":
+                assert trace["format"] == "jsonl"
+                assert sf.suffix == ".jsonl"
+            elif agentic_provider == "openai":
+                assert trace["format"] == "jsonl"
+            # gemini can be json or jsonl
+
+            # Provider-specific path structure
+            if agentic_provider == "anthropic":
+                assert "/.claude/projects/" in str(sf)
+                slug = str(project).replace("/", "-")
+                assert slug in str(sf)
+            elif agentic_provider == "google":
+                assert "/.gemini/tmp/" in str(sf)
+                assert "/chats/" in str(sf)
+
+    def test_agentic_crash_produces_agentic_trace(self, tmp_path, agentic_provider):
+        """Force a crash, re-sync with --agentic. Crash entry gets agentic_trace
+        with a real session file on disk."""
         project = _create_minimal_pdd_project(tmp_path)
         # First sync: generate clean code
         _run_pdd_sync(project, extra_args=["--agentic"])
 
         # Break the code to force a crash on next sync
         code_file = project / "greeter.py"
-        if code_file.exists():
-            code_file.write_text(
-                "import nonexistent_xyz_module\n\ndef greet(name):\n    return f'Hello, {name}!'\n",
-                encoding="utf-8",
-            )
-            # Clear fingerprint so sync re-runs
-            fp = project / ".pdd" / "meta" / "greeter_python.json"
-            if fp.exists():
-                fp.unlink()
+        if not code_file.exists():
+            pytest.skip("First sync did not generate code file")
 
-            result = _run_pdd_sync(project, extra_args=["--agentic"])
-            entries = _read_sync_log(project)
-            crash_entries = [e for e in entries if e.get("operation") == "crash"]
-            for entry in crash_entries:
-                if "agentic_trace" in entry:
-                    trace = entry["agentic_trace"]
-                    assert isinstance(trace["session_file"], str)
-                    assert trace["provider"] == agentic_provider
-                    assert trace["format"] in ("jsonl", "json")
-                    # Session file should exist on disk
-                    sf = Path(trace["session_file"])
-                    assert sf.exists(), f"Session file missing: {sf}"
-                    assert sf.stat().st_size > 0
+        code_file.write_text(
+            "import nonexistent_xyz_module\n\ndef greet(name):\n    return f'Hello, {name}!'\n",
+            encoding="utf-8",
+        )
+        # Clear fingerprint so sync re-runs
+        fp = project / ".pdd" / "meta" / "greeter_python.json"
+        if fp.exists():
+            fp.unlink()
 
-    def test_format_matches_provider(self, tmp_path, agentic_provider):
-        """agentic_trace.format matches the provider's expected format."""
-        project = _create_minimal_pdd_project(tmp_path)
         _run_pdd_sync(project, extra_args=["--agentic"])
         entries = _read_sync_log(project)
-        for entry in entries:
-            if "agentic_trace" not in entry:
-                continue
-            trace = entry["agentic_trace"]
-            sf = trace["session_file"]
-            if agentic_provider == "anthropic":
-                assert trace["format"] == "jsonl"
-                assert sf.endswith(".jsonl")
-            elif agentic_provider == "openai":
-                assert trace["format"] == "jsonl"
-            # gemini can be json or jsonl
-
-    def test_claude_path_from_session_id(self, tmp_path, agentic_provider):
-        """Claude session file path matches ~/.claude/projects/{slug}/{id}.jsonl."""
-        if agentic_provider != "anthropic":
-            pytest.skip("Claude-specific test")
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project, extra_args=["--agentic"])
-        entries = _read_sync_log(project)
-        slug = str(project).replace("/", "-")
-        for entry in entries:
-            if "agentic_trace" not in entry:
-                continue
-            sf = entry["agentic_trace"]["session_file"]
-            assert "/.claude/projects/" in sf
-            assert slug in sf
-
-    def test_gemini_path_by_prefix(self, tmp_path, agentic_provider):
-        """Gemini session file is inside ~/.gemini/tmp/{slug}/chats/."""
-        if agentic_provider != "google":
-            pytest.skip("Gemini-specific test")
-        project = _create_minimal_pdd_project(tmp_path)
-        _run_pdd_sync(project, extra_args=["--agentic"])
-        entries = _read_sync_log(project)
-        for entry in entries:
-            if "agentic_trace" not in entry:
-                continue
-            sf = entry["agentic_trace"]["session_file"]
-            assert "/.gemini/tmp/" in sf
-            assert "/chats/" in sf
+        crash_entries = [e for e in entries if e.get("operation") == "crash"]
+        for entry in crash_entries:
+            if "agentic_trace" in entry:
+                trace = entry["agentic_trace"]
+                assert isinstance(trace["session_file"], str)
+                assert trace["provider"] == agentic_provider
+                assert trace["format"] in ("jsonl", "json")
+                # Session file exists on disk with content
+                sf = Path(trace["session_file"])
+                assert sf.exists(), f"Session file missing: {sf}"
+                assert sf.stat().st_size > 0, f"Session file is empty: {sf}"
 
 
 # =========================================================================
