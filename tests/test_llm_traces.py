@@ -209,47 +209,123 @@ class TestLLMTraceStructure:
 # =========================================================================
 
 class TestAgenticTraceStructure:
-    """Section C: agentic_trace structure."""
+    """Section C: agentic_trace structure — tests actual discovery functions."""
 
-    def test_agentic_only_operation(self):
-        """agentic_trace has session_file, provider, format."""
-        trace = {
-            "session_file": "/home/user/.claude/projects/-test/abc123.jsonl",
-            "provider": "anthropic",
-            "format": "jsonl",
+    def test_claude_discovery_returns_correct_schema(self, tmp_path, monkeypatch):
+        """_discover_claude_session returns dict with session_file, provider, format."""
+        from pdd.agentic_common import _discover_claude_session
+        cwd = tmp_path / "proj"
+        cwd.mkdir()
+        slug = str(cwd).replace("/", "-")
+        session_dir = tmp_path / ".claude" / "projects" / slug
+        session_dir.mkdir(parents=True)
+        sf = session_dir / "sess-1.jsonl"
+        sf.write_text('{"ok":true}\n', encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        trace = _discover_claude_session("sess-1", cwd)
+        assert trace is not None
+        assert set(trace.keys()) == {"session_file", "provider", "format"}
+        assert trace["provider"] == "anthropic"
+        assert trace["format"] == "jsonl"
+
+    def test_gemini_discovery_returns_json_format(self, tmp_path, monkeypatch):
+        """_discover_gemini_session sets format='json' for .json files."""
+        from pdd.agentic_common import _discover_gemini_session
+        cwd = tmp_path / "proj"
+        cwd.mkdir()
+        gemini_home = tmp_path / ".gemini"
+        projects_json = gemini_home / "projects.json"
+        projects_json.parent.mkdir(parents=True)
+        projects_json.write_text(
+            json.dumps({"projects": {str(cwd): "my-slug"}}), encoding="utf-8"
+        )
+        chats_dir = gemini_home / "tmp" / "my-slug" / "chats"
+        chats_dir.mkdir(parents=True)
+        session_id = "abcdef12-full-uuid"
+        sf = chats_dir / f"{session_id}.json"
+        sf.write_text('{"ok":true}\n', encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        trace = _discover_gemini_session(session_id, cwd)
+        assert trace is not None
+        assert trace["provider"] == "google"
+        assert trace["format"] == "json"
+
+    def test_codex_discovery_returns_correct_schema(self, tmp_path, monkeypatch):
+        """_discover_codex_session returns dict with provider='openai' and format='jsonl'."""
+        from pdd.agentic_common import _discover_codex_session
+        sessions_dir = tmp_path / ".codex" / "sessions" / "2026" / "04" / "25"
+        sessions_dir.mkdir(parents=True)
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+        # pre-snapshot is empty; one new file appears
+        new_file = sessions_dir / "rollout-new.jsonl"
+        new_file.write_text('{"step":1}\n', encoding="utf-8")
+
+        trace = _discover_codex_session(set(), tmp_path)
+        assert trace is not None
+        assert set(trace.keys()) == {"session_file", "provider", "format"}
+        assert trace["provider"] == "openai"
+        assert trace["format"] == "jsonl"
+
+    def test_both_llm_traces_and_agentic_trace_on_same_entry(self, tmp_path, monkeypatch):
+        """sync_orchestration can attach both llm_traces and agentic_trace to one entry."""
+        from unittest.mock import patch as _patch
+        from pdd.sync_determine_operation import SyncDecision
+        import pdd.agentic_common as ac
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "context").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+        prompt = tmp_path / "prompts" / "demo_python.prompt"
+        code = tmp_path / "src" / "demo.py"
+        example = tmp_path / "context" / "demo_example.py"
+        test_file = tmp_path / "tests" / "test_demo.py"
+        prompt.write_text("Create demo", encoding="utf-8")
+        code.write_text("print('x')\n", encoding="utf-8")
+        example.write_text("print('example')\n", encoding="utf-8")
+        test_file.write_text("def test_ok(): assert True\n", encoding="utf-8")
+
+        fake_paths = {
+            "prompt": prompt, "code": code, "example": example,
+            "test": test_file, "test_files": [test_file],
         }
-        assert "session_file" in trace
-        assert "provider" in trace
-        assert "format" in trace
+        decisions = [
+            SyncDecision(operation="generate", reason="force"),
+            SyncDecision(operation="error", reason="stop"),
+        ]
 
-    def test_provider_from_model_string(self):
-        """agentic-anthropic → anthropic, etc."""
-        for model, expected in [
-            ("agentic-anthropic", "anthropic"),
-            ("agentic-google", "google"),
-            ("agentic-openai", "openai"),
-        ]:
-            provider = model.split("-", 1)[1] if model.startswith("agentic-") else None
-            assert provider == expected
+        seen_entries = []
+        fake_traces = [{"prompt": "P", "response": "R", "model": "m", "thinking": None}]
+        fake_agentic = {"session_file": "/path/sess.jsonl", "provider": "anthropic", "format": "jsonl"}
 
-    def test_format_matches_extension(self):
-        """session path .jsonl → format jsonl, .json → format json."""
-        for path, expected in [
-            ("/path/to/session.jsonl", "jsonl"),
-            ("/path/to/session.json", "json"),
-        ]:
-            fmt = "jsonl" if path.endswith(".jsonl") else "json"
-            assert fmt == expected
+        # Simulate _run_with_provider setting the trace DURING the operation
+        # (after the pre-op drain, before the post-op read).
+        real_code_gen = None
+        def fake_code_gen(*args, **kwargs):
+            ac._last_agentic_trace.set(fake_agentic)
+            return (None, False, 0.01, "m")
 
-    def test_both_keys_on_agentic_fallback(self):
-        """Entry can have both llm_traces and agentic_trace."""
-        entry = {
-            "operation": "crash",
-            "llm_traces": [{"prompt": "p", "response": "r", "model": "m", "thinking": None}] * 4,
-            "agentic_trace": {"session_file": "/path", "provider": "anthropic", "format": "jsonl"},
-        }
-        assert len(entry["llm_traces"]) == 4
-        assert "agentic_trace" in entry
+        with _patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+             _patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             _patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
+             _patch("pdd.sync_orchestration.code_generator_main", side_effect=fake_code_gen), \
+             _patch("pdd.sync_orchestration.pop_all_pairs", return_value=fake_traces), \
+             _patch("pdd.sync_orchestration.append_log_entry", side_effect=lambda _b, _l, e: seen_entries.append(e)), \
+             _patch("pdd.sync_orchestration.log_event"):
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+            from pdd.sync_orchestration import sync_orchestration
+            sync_orchestration(basename="demo", language="python", quiet=True, prompts_dir="prompts")
+
+        gen_entries = [e for e in seen_entries if e.get("operation") == "generate"]
+        assert gen_entries, f"No generate entry found in {seen_entries}"
+        assert gen_entries[0].get("llm_traces") == fake_traces
+        assert gen_entries[0].get("agentic_trace") == fake_agentic
 
 
 # =========================================================================
@@ -257,25 +333,87 @@ class TestAgenticTraceStructure:
 # =========================================================================
 
 class TestEntriesWithoutTraces:
-    """Section D: skip/event/error entries have no trace keys."""
+    """Section D: skip/event/error entries have no trace keys via sync_orchestration."""
 
-    def test_skip_no_trace_keys(self):
-        """skip:verify entry has no llm_traces or agentic_trace."""
-        entry = {"operation": "skip:verify", "success": True, "model": "skipped"}
-        assert "llm_traces" not in entry
-        assert "agentic_trace" not in entry
+    @staticmethod
+    def _run_sync_with_decisions(tmp_path, monkeypatch, decisions):
+        """Helper: run sync_orchestration with mocked decisions, return logged entries."""
+        from unittest.mock import patch as _patch
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "context").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
 
-    def test_event_no_trace_keys(self):
-        """sync_start event has no trace keys."""
-        entry = {"type": "event", "event_type": "sync_start"}
-        assert "llm_traces" not in entry
-        assert "agentic_trace" not in entry
+        prompt = tmp_path / "prompts" / "demo_python.prompt"
+        code = tmp_path / "src" / "demo.py"
+        example = tmp_path / "context" / "demo_example.py"
+        test_file = tmp_path / "tests" / "test_demo.py"
+        prompt.write_text("Create demo", encoding="utf-8")
+        code.write_text("print('x')\n", encoding="utf-8")
+        example.write_text("print('example')\n", encoding="utf-8")
+        test_file.write_text("def test_ok(): assert True\n", encoding="utf-8")
 
-    def test_error_no_trace_keys(self):
-        """Error entry has no trace keys."""
-        entry = {"operation": "generate", "success": False, "error": "no prompt file found"}
-        assert "llm_traces" not in entry
-        assert "agentic_trace" not in entry
+        fake_paths = {
+            "prompt": prompt, "code": code, "example": example,
+            "test": test_file, "test_files": [test_file],
+        }
+
+        seen_entries = []
+        seen_events = []
+
+        with _patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+             _patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             _patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
+             _patch("pdd.sync_orchestration.append_log_entry", side_effect=lambda _b, _l, e: seen_entries.append(e)), \
+             _patch("pdd.sync_orchestration.log_event", side_effect=lambda _b, _l, *a, **kw: seen_events.append(a)):
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+            from pdd.sync_orchestration import sync_orchestration
+            sync_orchestration(basename="demo", language="python", quiet=True, prompts_dir="prompts",
+                               skip_verify=True, skip_tests=True)
+
+        return seen_entries, seen_events
+
+    def test_skip_entry_has_no_trace_keys(self, tmp_path, monkeypatch):
+        """When sync_orchestration skips verify, the logged entry has no llm_traces or agentic_trace."""
+        from pdd.sync_determine_operation import SyncDecision
+        decisions = [
+            SyncDecision(operation="verify", reason="check"),
+            SyncDecision(operation="all_synced", reason="done"),
+        ]
+        entries, _ = self._run_sync_with_decisions(tmp_path, monkeypatch, decisions)
+        verify_entries = [e for e in entries if "verify" in e.get("operation", "")]
+        assert verify_entries, f"No verify entry: {entries}"
+        for e in verify_entries:
+            assert "llm_traces" not in e
+            assert "agentic_trace" not in e
+
+    def test_error_decision_entry_has_no_trace_keys(self, tmp_path, monkeypatch):
+        """When sync_determine_operation returns 'error', the logged entry has no trace keys."""
+        from pdd.sync_determine_operation import SyncDecision
+        decisions = [SyncDecision(operation="error", reason="something broke")]
+        entries, _ = self._run_sync_with_decisions(tmp_path, monkeypatch, decisions)
+        error_entries = [e for e in entries if e.get("operation") == "error"]
+        assert error_entries, f"No error entry: {entries}"
+        for e in error_entries:
+            assert "llm_traces" not in e
+            assert "agentic_trace" not in e
+
+    def test_event_logged_via_log_event_has_no_trace_keys(self, tmp_path, monkeypatch):
+        """log_event() produces entries without trace keys (events go through a different path)."""
+        from pdd.operation_log import log_event
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".pdd" / "logs").mkdir(parents=True)
+        log_event("demo", "python", "sync_start", {"modules": ["demo"]})
+
+        from pdd.operation_log import load_operation_log
+        entries = load_operation_log("demo", "python")
+        assert len(entries) == 1
+        assert entries[0]["type"] == "event"
+        assert "llm_traces" not in entries[0]
+        assert "agentic_trace" not in entries[0]
 
 
 # =========================================================================
@@ -748,13 +886,57 @@ class TestSessionDiscoveryShared:
         for record in caplog.records:
             assert record.levelno < logging.WARNING
 
-    def test_failed_discovery_does_not_block_logging(self):
-        """None trace means entry is written without agentic_trace."""
-        entry = {"operation": "generate", "success": True}
-        trace = None
-        if trace:
-            entry["agentic_trace"] = trace
-        assert "agentic_trace" not in entry
+    def test_failed_discovery_does_not_block_logging(self, tmp_path, monkeypatch):
+        """When discovery returns None, sync_orchestration writes the entry without agentic_trace."""
+        from unittest.mock import patch as _patch
+        from pdd.sync_determine_operation import SyncDecision
+        import pdd.agentic_common as ac
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "src").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "context").mkdir()
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+
+        prompt = tmp_path / "prompts" / "demo_python.prompt"
+        code = tmp_path / "src" / "demo.py"
+        example = tmp_path / "context" / "demo_example.py"
+        test_file = tmp_path / "tests" / "test_demo.py"
+        prompt.write_text("Create demo", encoding="utf-8")
+        code.write_text("print('x')\n", encoding="utf-8")
+        example.write_text("print('example')\n", encoding="utf-8")
+        test_file.write_text("def test_ok(): assert True\n", encoding="utf-8")
+
+        fake_paths = {
+            "prompt": prompt, "code": code, "example": example,
+            "test": test_file, "test_files": [test_file],
+        }
+        decisions = [
+            SyncDecision(operation="generate", reason="force"),
+            SyncDecision(operation="error", reason="stop"),
+        ]
+
+        seen_entries = []
+        # Ensure no agentic trace is set (discovery "failed")
+        ac._last_agentic_trace.set(None)
+
+        with _patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
+             _patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
+             _patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
+             _patch("pdd.sync_orchestration.code_generator_main", return_value=("code", True, 0.01, "m")), \
+             _patch("pdd.sync_orchestration.pop_all_pairs", return_value=[]), \
+             _patch("pdd.sync_orchestration.append_log_entry", side_effect=lambda _b, _l, e: seen_entries.append(e)), \
+             _patch("pdd.sync_orchestration.log_event"):
+            mock_lock.return_value.__enter__.return_value = mock_lock
+            mock_lock.return_value.__exit__.return_value = None
+            from pdd.sync_orchestration import sync_orchestration
+            sync_orchestration(basename="demo", language="python", quiet=True, prompts_dir="prompts")
+
+        gen_entries = [e for e in seen_entries if e.get("operation") == "generate"]
+        assert gen_entries, f"No generate entry: {seen_entries}"
+        # Entry was written successfully, without agentic_trace
+        assert "agentic_trace" not in gen_entries[0]
 
     def test_run_with_provider_sets_last_agentic_trace(self, tmp_path, monkeypatch):
         """_run_with_provider stores trace in module state; get_last_agentic_trace returns and clears it."""
@@ -1169,3 +1351,117 @@ class TestThinkingNormalization:
         record_llm_pair(prompt="p", response="r", model="m", thinking=None)
         pairs = pop_all_pairs("q_none")
         assert pairs[0]["thinking"] is None
+
+
+# =========================================================================
+# Section R: JSON-quoted secret redaction
+# =========================================================================
+
+class TestJsonQuotedSecretRedaction:
+    """Section R: secrets in JSON-style quoted values must be redacted."""
+
+    def test_json_api_key_redacted(self):
+        """'\"api_key\": \"sk-ant-abc123...\"' must be scrubbed."""
+        from pdd.core.llm_trace import set_current_operation, record_llm_pair, pop_all_pairs
+        set_current_operation("r_json_key")
+        prompt = '{"api_key": "sk-ant-abc123secretvalue"}'
+        record_llm_pair(prompt=prompt, response="r", model="m")
+        pairs = pop_all_pairs("r_json_key")
+        assert "sk-ant-abc123secretvalue" not in pairs[0]["prompt"]
+        assert "<redacted>" in pairs[0]["prompt"]
+
+    def test_json_token_redacted(self):
+        """'\"token\": \"eyJhbGciOi...\"' must be scrubbed."""
+        from pdd.core.llm_trace import set_current_operation, record_llm_pair, pop_all_pairs
+        set_current_operation("r_json_tok")
+        prompt = '{"token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"}'
+        record_llm_pair(prompt=prompt, response="r", model="m")
+        pairs = pop_all_pairs("r_json_tok")
+        assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in pairs[0]["prompt"]
+
+    def test_json_secret_in_response(self):
+        """JSON-quoted secrets in response field also redacted."""
+        from pdd.core.llm_trace import set_current_operation, record_llm_pair, pop_all_pairs
+        set_current_operation("r_json_resp")
+        response = '{"password": "super_secret_pass_123"}'
+        record_llm_pair(prompt="p", response=response, model="m")
+        pairs = pop_all_pairs("r_json_resp")
+        assert "super_secret_pass_123" not in pairs[0]["response"]
+
+    def test_json_secret_in_thinking(self):
+        """JSON-quoted secrets in thinking field also redacted."""
+        from pdd.core.llm_trace import set_current_operation, record_llm_pair, pop_all_pairs
+        set_current_operation("r_json_think")
+        thinking = 'The config has "secret": "my_top_secret_value" set'
+        record_llm_pair(prompt="p", response="r", model="m", thinking=thinking)
+        pairs = pop_all_pairs("r_json_think")
+        assert "my_top_secret_value" not in pairs[0]["thinking"]
+
+
+# =========================================================================
+# Section S: Agentic trace thread safety (ContextVar)
+# =========================================================================
+
+class TestAgenticTraceThreadSafety:
+    """Section S: _last_agentic_trace uses ContextVar, not a plain global."""
+
+    def test_agentic_trace_is_context_var(self):
+        """_last_agentic_trace should be a ContextVar for thread safety."""
+        from contextvars import ContextVar
+        import pdd.agentic_common as ac
+        assert isinstance(ac._last_agentic_trace, ContextVar)
+
+    def test_agentic_trace_isolated_across_threads(self):
+        """Traces set in one thread are not visible in another."""
+        import threading
+        import pdd.agentic_common as ac
+
+        trace_a = {"session_file": "/a", "provider": "anthropic", "format": "jsonl"}
+
+        # Set trace in main thread
+        ac._last_agentic_trace.set(trace_a)
+
+        seen_in_thread = []
+        def worker():
+            # New thread should NOT see main thread's trace
+            seen_in_thread.append(ac.get_last_agentic_trace())
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert seen_in_thread[0] is None, "Thread saw main thread's trace — not isolated"
+        # Main thread's trace should still be there
+        assert ac.get_last_agentic_trace() == trace_a
+
+
+# =========================================================================
+# Section T: Append migration newline boundary
+# =========================================================================
+
+class TestAppendMigrationNewlineBoundary:
+    """Section T: merge migration must not corrupt JSONL at the join point."""
+
+    def test_append_migration_preserves_newline_boundary(self, tmp_path, monkeypatch):
+        """When both old and new files exist, appended content starts on a new line."""
+        monkeypatch.chdir(tmp_path)
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        logs_dir = tmp_path / ".pdd" / "logs"
+        logs_dir.mkdir(parents=True)
+
+        # Write new file WITHOUT trailing newline (simulates interrupted write)
+        new_path = logs_dir / "mymod_python_sync.log"
+        new_path.write_bytes(b'{"line": 1}')  # no trailing \n
+
+        old_path = meta_dir / "mymod_python_sync.log"
+        old_path.write_bytes(b'{"line": 2}\n')
+
+        from pdd.operation_log import get_log_path
+        result = get_log_path("mymod", "python")
+
+        # Each JSON line should be parseable individually
+        lines = [l for l in result.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(lines) == 2, f"Expected 2 JSONL lines, got {len(lines)}: {lines}"
+        for line in lines:
+            json.loads(line)  # should not raise

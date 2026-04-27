@@ -13,6 +13,7 @@ import re
 import random
 from datetime import datetime
 from pathlib import Path
+from contextvars import ContextVar
 from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
 
@@ -1007,16 +1008,17 @@ import logging as _session_logging
 _session_logger = _session_logging.getLogger(__name__ + ".session_discovery")
 
 # Module-level storage for the last agentic trace (set by _run_with_provider,
-# read by sync_orchestration after each operation). This avoids threading
-# the trace through every intermediate caller in the chain.
-_last_agentic_trace: Optional[Dict[str, Any]] = None
+# read by sync_orchestration after each operation). Uses ContextVar so
+# concurrent threads/async tasks don't cross-contaminate traces.
+_last_agentic_trace: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "pdd_last_agentic_trace", default=None
+)
 
 
 def get_last_agentic_trace() -> Optional[Dict[str, Any]]:
     """Return and clear the last agentic trace captured by _run_with_provider."""
-    global _last_agentic_trace
-    trace = _last_agentic_trace
-    _last_agentic_trace = None
+    trace = _last_agentic_trace.get()
+    _last_agentic_trace.set(None)
     return trace
 
 
@@ -1446,7 +1448,6 @@ def _run_with_provider(
             )
 
         # Session discovery (best-effort, never raises)
-        global _last_agentic_trace
         agentic_trace: Optional[Dict[str, Any]] = None
         try:
             if provider == "anthropic":
@@ -1462,7 +1463,7 @@ def _run_with_provider(
         except Exception:
             pass
 
-        _last_agentic_trace = agentic_trace
+        _last_agentic_trace.set(agentic_trace)
         return success, text, cost, agentic_trace
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)

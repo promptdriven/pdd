@@ -67,7 +67,7 @@ from .get_run_command import get_run_command_for_file
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
 from .core.errors import record_core_dump_error
-from .core.llm_trace import set_current_operation, pop_all_pairs, pop_last_pair
+from .core.llm_trace import set_current_operation, pop_all_pairs
 
 
 def _truncate_text(text: str, limit_chars: int) -> str:
@@ -2169,6 +2169,13 @@ def sync_orchestration(
                     # Drop any stale LLM traces for this operation key so we only
                     # attach pairs from the current attempt.
                     pop_all_pairs(operation)
+                    # Also drain any stale agentic trace from a prior operation
+                    # that may not have been consumed (e.g. exception path).
+                    try:
+                        from .agentic_common import get_last_agentic_trace
+                        get_last_agentic_trace()
+                    except ImportError:
+                        pass
                     with AtomicStateUpdate(basename, language) as atomic_state:
 
                         # --- Execute Operation ---

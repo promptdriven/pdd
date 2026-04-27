@@ -26,6 +26,8 @@ _SENSITIVE_PATTERNS = [
     # Common bearer tokens / API keys
     re.compile(r"(?i)\b(bearer)\s+[a-z0-9\-_\.=:+/]{10,}"),
     re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\b\s*[:=]\s*[^\s\"']{6,}"),
+    # JSON-style quoted values: "api_key": "sk-..." or "token": "eyJ..."
+    re.compile(r'(?i)"(api[_-]?key|token|secret|password)"\s*:\s*"([^"]{6,})"'),
 ]
 
 

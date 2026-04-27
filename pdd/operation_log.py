@@ -63,6 +63,10 @@ def get_log_path(basename: str, language: str) -> Path:
         try:
             old_content = old_path.read_bytes()
             with open(new_path, 'ab') as f:
+                # Ensure we start on a new line so JSONL entries don't merge
+                existing = new_path.read_bytes()
+                if existing and not existing.endswith(b'\n'):
+                    f.write(b'\n')
                 f.write(old_content)
             old_path.unlink()
         except Exception:
