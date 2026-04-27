@@ -24,5 +24,5 @@ done</shell>
 % Do the following:
  - Analyze the {module} MCP tool's responsibilities from the README, the io_dependencies CSV, and the existing backend prompts
  - Identify any difficulties the downstream code generation might encounter (e.g. MCP protocol compliance, tool-schema validation, stdio transport edge cases, async contract mismatches) and state mitigation strategies tailored to the MCP Server stack
- - Place the direct code-generation instruction for {module} inside xml tags called prompt. The content inside `<prompt>...</prompt>` must instruct the code-generating LLM to produce the Python implementation — it must NOT instruct the LLM to produce further prompt text about the module.
+ - Place the direct code-generation instruction for {module} inside xml tags called prompt. The content inside `<prompt>...</prompt>` must instruct the code-generating LLM to produce the Python implementation - it must NOT instruct the LLM to produce further prompt text about the module.
     - Any dependencies that are needed for this prompt will have the filepath in between two include angle bracket xml tags, surrounded by xml tags [dependency_name]_example. The dependencies will be in the context folder so you can assume the filepath will be context/[dependency_name]_example.py.

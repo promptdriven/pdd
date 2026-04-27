@@ -17,7 +17,7 @@
 </pdd.agentic_test_orchestrator>
 
 % Goal
-Design the `agentic_e2e_fix_orchestrator` for the 9‑step E2E‑fix workflow.
+Design the `agentic_e2e_fix_orchestrator` for the 9-step E2E-fix workflow.
 
 % Loop Control & Status Tokens
 The orchestrator must interpret special status markers in step outputs:
@@ -25,7 +25,7 @@ The orchestrator must interpret special status markers in step outputs:
 - CONTINUE_CYCLE
 - NOT_A_BUG
 
-The orchestrator must treat NOT_A_BUG as a first‑class loop‑control token, alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
+The orchestrator must treat NOT_A_BUG as a first-class loop-control token, alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
 
 % Environment Safety: _check_e2e_environment
 Before running any E2E workflow, the orchestrator must explicitly call the `_check_e2e_environment` helper function.
@@ -42,7 +42,7 @@ This behavior is called `skipped_steps_memory`: even skipped steps contribute th
 The skipped_steps (or equivalent) state persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
 
 % Independent Verification Safety (Issues #953, #1010, #1031, #1155)
-- _verify_tests_independently MUST enforce an overall timeout via a module-level constant VERIFY_TIMEOUT_SECONDS = 600. Before starting each test file, check elapsed time and stop with a TIMEOUT message if exceeded. On timeout, verification MUST fail closed (all_passed = False) — a partial run cannot count as verified.
+- _verify_tests_independently MUST enforce an overall timeout via a module-level constant VERIFY_TIMEOUT_SECONDS = 600. Before starting each test file, check elapsed time and stop with a TIMEOUT message if exceeded. On timeout, verification MUST fail closed (all_passed = False) - a partial run cannot count as verified.
 - _extract_test_files fallback scan MUST cap results at MAX_FALLBACK_TEST_FILES = 20 files to prevent stalling on large repos. When the cap triggers, the module-level flag _fallback_scan_was_capped MUST be set to True so callers can fail closed instead of treating partial verification as ALL_TESTS_PASS.
 - _get_modified_and_untracked MUST try "origin/main" and "origin/master" as additional fallback refs for git merge-base in shallow clones (i.e., iterate over "main", "master", "origin/main", "origin/master").
 - All subprocess.run git calls in _get_modified_and_untracked MUST include timeout=30 and be wrapped in try/except subprocess.TimeoutExpired.
@@ -52,7 +52,7 @@ Empty dev-units short-circuit: when Step 5 yields no dev-units, the orchestrator
 
 Per-cycle file-hash comparison: compare file hashes each cycle so unchanged files are not mistaken for fresh changes; use per-cycle file-hash snapshots to decide whether dev-units or code actually moved.
 
-% NOT_A_BUG Guard — Direct Edits & Noise Filter (Issue #1206)
+% NOT_A_BUG Guard - Direct Edits & Noise Filter (Issue #1206)
 The Step 3 NOT_A_BUG early-exit guard MUST NOT fire when a fix has already been applied via a direct edit to a non-PDD-managed module (one with no `.prompt` file). `dev_unit_states` is only populated at Step 8 for PDD-managed modules, so a direct edit would otherwise be invisible to the guard and cause a false "Issue determined to be not a bug." exit.
 
 - Both the inner-loop guard and the outer-loop guard MUST consult `_detect_meaningful_changes(cwd, initial_file_hashes)` in addition to `dev_unit_states`. If either reports progress (`has_fixed_units or has_direct_edits`), NOT_A_BUG must be suppressed.

@@ -409,7 +409,7 @@ class FirebaseAuthenticator:
             )
             if timed_out:
                 logger.warning(
-                    "Keyring set_password timed out — refresh token not cached. "
+                    "Keyring set_password timed out - refresh token not cached. "
                     "This typically happens in headless CI/SSH environments."
                 )
                 return False
@@ -450,7 +450,7 @@ class FirebaseAuthenticator:
         )
         if timed_out:
             logger.warning(
-                "Keyring get_password timed out — proceeding without cached refresh token."
+                "Keyring get_password timed out - proceeding without cached refresh token."
             )
             return None
         if exc is not None:
@@ -476,7 +476,7 @@ class FirebaseAuthenticator:
         )
         if timed_out:
             logger.warning(
-                "Keyring delete_password timed out — token may remain on disk."
+                "Keyring delete_password timed out - token may remain on disk."
             )
             return False
         if exc is None:
