@@ -932,11 +932,12 @@ pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
 
 **The `.pdd` Directory**:
 PDD uses a `.pdd` directory in your project root to store various metadata and configuration files:
-- `.pdd/meta/` - Contains fingerprint files, run reports, and sync logs
+- `.pdd/meta/` - Contains fingerprint files and run reports
+- `.pdd/logs/` - Contains sync logs with LLM traces (gitignored)
 - `.pdd/locks/` - Stores lock files to prevent concurrent operations
 - `.pdd/llm_model.csv` - Project-specific LLM model configuration (optional)
 
-This directory should typically be added to version control (except for lock files), as it contains important project state information.
+This directory should typically be added to version control (except for lock files and logs), as it contains important project state information.
 
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
