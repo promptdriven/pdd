@@ -17,8 +17,8 @@ class LLMTracePair:
 
 
 _current_operation: ContextVar[Optional[str]] = ContextVar("pdd_current_operation", default=None)
-_pairs_by_operation: ContextVar[Dict[str, List[LLMTracePair]]] = ContextVar(
-    "pdd_llm_pairs_by_operation", default={}
+_pairs_by_operation: ContextVar[Optional[Dict[str, List[LLMTracePair]]]] = ContextVar(
+    "pdd_llm_pairs_by_operation", default=None
 )
 
 
@@ -138,12 +138,15 @@ def pop_all_pairs(operation: str) -> List[Dict[str, Any]]:
     return [asdict(p) for p in pairs]
 
 
-# Backwards compatibility alias
+# Backwards compatibility alias — non-destructive peek
 def pop_last_pair(operation: str) -> Optional[Dict[str, Any]]:
-    """Pop and return the last recorded pair for an operation (as a dict).
+    """Return the last recorded pair for an operation without draining the list.
 
-    Deprecated: use pop_all_pairs() instead. Kept for callers that only
-    need the most recent pair.
+    Deprecated: use pop_all_pairs() to consume all pairs. This function
+    peeks at the most recent pair so that callers who only need one item
+    don't accidentally destroy the full trace list that pop_all_pairs
+    expects to collect later.
     """
-    all_pairs = pop_all_pairs(operation)
-    return all_pairs[-1] if all_pairs else None
+    current = _pairs_by_operation.get() or {}
+    pairs = current.get(operation, [])
+    return asdict(pairs[-1]) if pairs else None

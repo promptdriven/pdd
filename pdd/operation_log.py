@@ -45,32 +45,61 @@ def get_log_path(basename: str, language: str) -> Path:
 
     Returns the path under .pdd/logs/. If a legacy sync log exists under
     .pdd/meta/, it is migrated (moved) to the new location first.
+
+    Migration is best-effort and safe under concurrent access:
+    - Simple move uses os.rename (atomic on POSIX); if it fails because
+      new_path appeared between the check and the rename, we fall through
+      to the append path.
+    - Append path reads old content, appends under a single open() call
+      that also checks the trailing newline in one shot, then unlinks.
+      If the unlink races with another process, the worst case is a
+      duplicate append (idempotent JSONL lines).
     """
     _ensure_logs_dir()
     filename = f"{_safe_basename(basename)}_{language}_sync.log"
     new_path = Path(LOGS_DIR) / filename
     old_path = Path(META_DIR) / filename
 
-    # Migrate on both read and write
-    if old_path.exists() and not new_path.exists():
+    if not old_path.exists():
+        return new_path
+
+    # Fast path: atomic rename when new_path doesn't exist yet.
+    # os.rename raises FileExistsError / OSError on Windows if dest exists,
+    # and on POSIX it atomically replaces — but we only attempt when new_path
+    # is absent to avoid clobbering a file another process just created.
+    if not new_path.exists():
         try:
-            import shutil
-            shutil.move(str(old_path), str(new_path))
-        except Exception:
-            pass
-    elif old_path.exists() and new_path.exists():
-        # Both exist (unlikely but defensive) — append old to new, delete old
-        try:
-            old_content = old_path.read_bytes()
-            with open(new_path, 'ab') as f:
-                # Ensure we start on a new line so JSONL entries don't merge
-                existing = new_path.read_bytes()
-                if existing and not existing.endswith(b'\n'):
-                    f.write(b'\n')
+            os.rename(str(old_path), str(new_path))
+            return new_path
+        except FileNotFoundError:
+            # old_path vanished (another process moved it) — nothing to do
+            return new_path
+        except OSError:
+            # new_path appeared between our check and rename, fall through
+            # to the append path below.
+            if not old_path.exists():
+                return new_path
+
+    # Slow path: both files exist — append old content to new, then remove old.
+    try:
+        old_content = old_path.read_bytes()
+        if old_content:
+            with open(new_path, 'r+b') as f:
+                # Check the last byte of the existing file to avoid merging
+                # two JSONL lines. Using a single file handle avoids TOCTOU.
+                f.seek(0, 2)  # seek to end
+                pos = f.tell()
+                if pos > 0:
+                    f.seek(pos - 1)
+                    if f.read(1) != b'\n':
+                        f.write(b'\n')
                 f.write(old_content)
-            old_path.unlink()
-        except Exception:
-            pass
+        old_path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        # old_path vanished between read and unlink — another process handled it
+        pass
+    except Exception:
+        pass
 
     return new_path
 

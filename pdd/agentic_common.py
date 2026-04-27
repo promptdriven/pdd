@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import sys
@@ -898,8 +899,7 @@ def run_agentic_task(
                 pass
 
 
-import logging as _logging
-_scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
+_scope_guard_logger = logging.getLogger(__name__ + ".scope_guard")
 
 
 def _revert_out_of_scope_changes(
@@ -1004,8 +1004,7 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
     return result
 
 
-import logging as _session_logging
-_session_logger = _session_logging.getLogger(__name__ + ".session_discovery")
+_session_logger = logging.getLogger(__name__ + ".session_discovery")
 
 # Module-level storage for the last agentic trace (set by _run_with_provider,
 # read by sync_orchestration after each operation). Uses ContextVar so
