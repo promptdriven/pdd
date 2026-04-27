@@ -98,8 +98,8 @@ def get_log_path(basename: str, language: str) -> Path:
     except FileNotFoundError:
         # old_path vanished between read and unlink — another process handled it
         pass
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to migrate legacy sync log %s -> %s: %s", old_path, new_path, exc)
 
     return new_path
 

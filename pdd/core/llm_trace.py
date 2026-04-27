@@ -27,7 +27,7 @@ _SENSITIVE_PATTERNS = [
     re.compile(r"(?i)\b(bearer)\s+[a-z0-9\-_\.=:+/]{10,}"),
     re.compile(r"(?i)\b(api[_-]?key|token|secret|password)\b\s*[:=]\s*[^\s\"']{6,}"),
     # JSON-style quoted values: "api_key": "sk-..." or "token": "eyJ..."
-    re.compile(r'(?i)"(api[_-]?key|token|secret|password)"\s*:\s*"([^"]{6,})"'),
+    re.compile(r'(?i)("(?:api[_-]?key|token|secret|password)")\s*:\s*"[^"]{6,}"'),
 ]
 
 
@@ -57,7 +57,10 @@ def _redact(text: str) -> str:
         return text
     redacted = text
     for pat in _SENSITIVE_PATTERNS:
-        redacted = pat.sub("<redacted>", redacted)
+        if pat.groups >= 1 and pat.pattern.startswith('(?i)(\"'):
+            redacted = pat.sub(r'\1: "<redacted>"', redacted)
+        else:
+            redacted = pat.sub("<redacted>", redacted)
     return redacted
 
 
@@ -82,7 +85,7 @@ def _normalize_thinking(thinking: Any) -> Optional[str]:
                     parts.append(str(text))
             else:
                 parts.append(str(item))
-        return "\n".join(parts)
+        return "\n".join(parts) or None
     return str(thinking)
 
 
