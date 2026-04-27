@@ -39,12 +39,15 @@ def example_first_pending_command():
     """
     Demonstrate _first_pending_command function.
     
-    This function extracts the first subcommand from a Click context's
-    protected_args list, skipping any option flags (args starting with '-').
+    This function resolves the best available subcommand name from a Click
+    context. It first checks pending protected_args, then falls back to
+    ctx.invoked_subcommand and the command list recorded in ctx.obj.
     
     Parameters (via ctx):
-        ctx (click.Context): A Click context object with protected_args attribute.
+        ctx (click.Context): A Click context object with command-tracking state.
             - protected_args (list[str]): List of arguments passed to the CLI.
+            - invoked_subcommand (Optional[str]): Command Click resolved.
+            - obj["invoked_subcommands"] (list[str]): Commands tracked by @track_cost.
     
     Returns:
         Optional[str]: The first non-option argument (subcommand name), or None
@@ -53,17 +56,20 @@ def example_first_pending_command():
     Example protected_args scenarios:
         ['--verbose', 'generate', 'file.prompt'] -> returns 'generate'
         ['sync', '--force'] -> returns 'sync'
-        ['--help'] -> returns None
+        ['--help'] with no fallbacks -> returns None
+        protected_args consumed, invoked_subcommand='auth' -> returns 'auth'
     """
     print("=" * 60)
     print("Example: _first_pending_command")
     print("=" * 60)
     
-    # Create a mock Click context with various protected_args scenarios
+    # Create a mock Click context with various command-resolution scenarios
     
     # Scenario 1: Options followed by a subcommand
     mock_ctx_1 = MagicMock()
     mock_ctx_1.protected_args = ['--verbose', '--force', 'generate', 'myfile.prompt']
+    mock_ctx_1.invoked_subcommand = None
+    mock_ctx_1.obj = {}
     result_1 = _first_pending_command(mock_ctx_1)
     print(f"protected_args: {mock_ctx_1.protected_args}")
     print(f"First pending command: {result_1}")  # Expected: 'generate'
@@ -72,6 +78,8 @@ def example_first_pending_command():
     # Scenario 2: Subcommand first
     mock_ctx_2 = MagicMock()
     mock_ctx_2.protected_args = ['sync', '--budget', '5.0']
+    mock_ctx_2.invoked_subcommand = None
+    mock_ctx_2.obj = {}
     result_2 = _first_pending_command(mock_ctx_2)
     print(f"protected_args: {mock_ctx_2.protected_args}")
     print(f"First pending command: {result_2}")  # Expected: 'sync'
@@ -80,17 +88,32 @@ def example_first_pending_command():
     # Scenario 3: Only options, no subcommand
     mock_ctx_3 = MagicMock()
     mock_ctx_3.protected_args = ['--help', '--version']
+    mock_ctx_3.invoked_subcommand = None
+    mock_ctx_3.obj = {}
     result_3 = _first_pending_command(mock_ctx_3)
     print(f"protected_args: {mock_ctx_3.protected_args}")
     print(f"First pending command: {result_3}")  # Expected: None
     print()
     
-    # Scenario 4: Empty args
+    # Scenario 4: Empty args after Click has resolved a subcommand
     mock_ctx_4 = MagicMock()
     mock_ctx_4.protected_args = []
+    mock_ctx_4.invoked_subcommand = 'auth'
+    mock_ctx_4.obj = {}
     result_4 = _first_pending_command(mock_ctx_4)
     print(f"protected_args: {mock_ctx_4.protected_args}")
-    print(f"First pending command: {result_4}")  # Expected: None
+    print(f"invoked_subcommand: {mock_ctx_4.invoked_subcommand}")
+    print(f"First pending command: {result_4}")  # Expected: 'auth'
+    print()
+
+    # Scenario 5: Fallback to @track_cost recorded command list
+    mock_ctx_5 = MagicMock()
+    mock_ctx_5.protected_args = []
+    mock_ctx_5.invoked_subcommand = None
+    mock_ctx_5.obj = {'invoked_subcommands': ['generate', 'test']}
+    result_5 = _first_pending_command(mock_ctx_5)
+    print(f"ctx.obj invoked_subcommands: {mock_ctx_5.obj['invoked_subcommands']}")
+    print(f"First pending command: {result_5}")  # Expected: 'test'
     print()
 
 

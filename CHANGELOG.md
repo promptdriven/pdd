@@ -1,21 +1,43 @@
+## v0.0.220 (2026-04-26)
+
+### Feat
+
+- add PR-verification mode to checkup and overhaul test generation prompt; fix CI auto-heal drift, incremental checkpointing, and path casing issues.
+
+### Fix
+
+- align core prompt specs with CLI exit handling (#1307)
+- sync agentic dependency prompt contracts
+
 ## v0.0.219 (2026-04-25)
 
 ### Feat
 
-- **checkup**: add --pr mode for verifying existing PRs
+- **`pdd checkup --pr <pr-url> --issue <issue-url>` mode**: new PR-verification entry point that runs the agentic checkup workflow against an existing pull request's actual code instead of creating a new branch. New helper `_parse_pr_url` in `pdd/agentic_change.py` parses GitHub PR URLs; `pdd/agentic_checkup.py` and `pdd/agentic_checkup_orchestrator.py` thread `pr_url`/`pr_owner`/`pr_repo`/`pr_number` through the orchestrator. New `_setup_pr_worktree` fetches `pull/N/head` into an isolated `.pdd/worktrees/checkup-pr-N` worktree on a `checkup/pr-N` branch; `_resolve_pr_remote` walks `git remote -v` to find a remote whose URL matches the PR's owner/repo before falling back to fetching directly from the explicit GitHub URL — fixes fork-PR verification where the local clone's `origin` is not the upstream PR repo. Step 8 (create-PR) is skipped in PR mode and step 7's verify prompt (`agentic_checkup_step7_verify_LLM.prompt`) gains a `pr_mode`/`pr_url`/`pr_owner`/`pr_repo`/`pr_number` substitution block plus a new top-level `issue_aligned` boolean (required in PR mode, omitted/null in issue mode) so downstream consumers like `pdd_cloud`'s `checkup_verifier` adapter can gate a terminal-fail on PR-vs-issue misalignment. Push-back to the PR is not yet implemented, so `--pr` forces `--no-fix` with a warning. The new state-identity guard in the orchestrator validates `mode` (issue vs pr), `pr_number`, and `pr_owner`/`pr_repo` against the cached state before reuse so a verification of PR B can never silently inherit PR A's worktree path or step outputs. New `tests/test_checkup_pr_mode.py` (~720 lines) covers CLI argument validation, worktree setup, fork-remote resolution, state-identity guard, and the PR-mode prompt context wiring
+- **`generate_test_LLM.prompt` overhaul + formal-test-generation benchmark**: replaces the old "write a Z3 plan, then tests" instruction with a formal-vs-runtime classification step (FORMAL_CANDIDATE vs RUNTIME_TEST_ONLY) and ~25 new CRITICAL guardrails for: package-aware imports derived from `source_file_path` (`pdd/foo.py` → `pdd.foo`, never bare `foo`), public-API-only testing (no underscored helpers), refusing to monkeypatch symbols not visible as module attributes, refusing to patch function-local imports as module globals, exercising real parsers over mocking same-package internals, language-specific prompt fixture filenames (e.g. `module_a_python.prompt`, never bare `a.prompt`), normalized-warning-string assertions (`'log'` not `'log_python'`), file-vs-directory rules with trailing-slash semantics, env-var hygiene for path tests, and avoiding decorative test-plan docstrings. New `experiments/formal_test_generation_benchmark/` harness (gitignored `results/`, README, BENCHMARK_RESULTS, two runner scripts) measures generated-test quality on `architecture_include_validation` and `generate_output_paths` against seeded mutants. Mutation kill score moved from "invalid (baseline failed)" → 75% (3/4) and 100% (4/4) after the prompt update; the new prompt also drops decorative Z3 imports while preserving formal verification when truly justified
 
 ### Fix
 
-- align sync prompt architecture dependencies
-- preserve sync prompt path casing
-- preserve existing prompt path casing
-- declare ci drift heal agentic common dependency
-- block checkpoints with skipped auto-heal modules
-- bound auto-deps healing in CI
-- recognize symlinked prompt changes in auto-heal
-- force auto-heal pdd subprocesses
-- mark successful auto-heal checkpoints
-- make PR auto-heal incremental after bot heals
+- **`ci_drift_heal` — direct `pdd auto-deps` dispatch instead of full `pdd sync`**: `auto-deps` drifts now run `pdd --force --strength 0.5 auto-deps <prompt> <dep-dir> --output <prompt> --csv project_dependencies.csv` as a bounded single-step heal. New `_auto_deps_directory()` picks `context/`, `examples/`, or `.` based on which exists. Routing through `pdd sync` was unsafe because sync can continue past dependency insertion into generate/crash flows; the cheap `pdd example` path was also wrong because it skips dependency-graph updates entirely (#1299)
+- **`ci_drift_heal` — incremental PR auto-heal**: `commit_and_push` now accepts `checkpoint=bool`; when true (every module healed cleanly, no failures, no skips, not `--skip-ci`) the commit appends `_AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"` as a second `-m` line. Subsequent PR runs detect the checkpoint and only heal modules that drifted *since* the bot's last successful pass, instead of re-healing every module from scratch every push. A partial heal (any failure, any skip from budget cap or `PDD_HEAL_SYNC_SKIP_MODULES`) suppresses the commit entirely in PR mode so a partial result can never become a future incremental baseline (#1299)
+- **`ci_drift_heal` — block checkpoint when `update` follow-up was skipped**: `update` operations whose follow-up `pdd example` is skipped via `PDD_HEAL_SYNC_SKIP_MODULES` now appear in *both* `healed_modules` (the `pdd update` itself succeeded) and `skipped_modules`, which prevents PR mode from creating a success checkpoint for an only-half-healed module. Skipped-modules warning text drops the misleading "Budget exceeded" prefix because skips can also come from operator policy
+- **`ci_drift_heal` — `_first_pdd_subcommand` correctly parses both flag shapes**: the prior protected-paths rollback gate scanned with `idx += 2` after every `--`, which double-skipped valueless flags like `--force`. New helper recognizes `_PDD_FLAGS_WITH_VALUES = {"--strength", "--time"}` and the `--flag=value` shape, so the new heal command `pdd --force --strength 0.5 sync …` is correctly identified as a `sync` invocation eligible for `.pdd/meta` / `project_dependencies.csv` rollback on failure
+- **`ci_drift_heal` — every heal subprocess passes `--force`**: new `_pdd_heal_command(*args)` builds `["pdd", "--force", "--strength", _HEAL_STRENGTH, *args]`. Without `--force`, CI auto-heal would hit interactive overwrite prompts on file-already-exists checks and hang. Used by every heal path: `update`, `update`-then-`example`, standalone `example`, `auto-deps`, and the `verify`/`generate`/`test`/`crash` → `sync` fallback
+- **`ci_drift_heal` — recognize symlinked prompt changes in git-based reclassification**: new `_git_relative_path_candidates(path, repo_root)` returns *both* the lexical and the `.resolve()`-d repo-relative spellings of a path. `detect_drift` intersects each set against `git_changed` (resolves `repo_root` once via `Path.cwd().resolve()`), so a prompt at `prompts/foo.prompt` symlinked into the repo from elsewhere is correctly seen as changed when git reports the resolved path
+- **`ci_drift_heal_python.prompt` — declare `agentic_common` as a dependency**: the prompt header was missing `<pdd-dependency>agentic_common_python.prompt</pdd-dependency>` and the matching `<pdd.agentic_common>` include block, even though `_run_pdd_command` and the cost-CSV plumbing in the implementation depend on shared agentic helpers. Auto-heal couldn't see the relationship and would re-heal `ci_drift_heal` whenever `agentic_common` drifted unrelatedly
+- **`sync_determine_operation` / `update_main` — preserve existing prompt-path casing on case-insensitive filesystems (#1303)**: `_case_insensitive_path_lookup` now prefers an exact-case sibling before falling back to the lowercase scan, and `_resolve_prompt_path_from_architecture` + `_find_prompt_file` route every architecture-derived path through it. `update_main.resolve_prompt_code_pair` gains `_resolve_existing_prompt_path_case_insensitive`, which scans the parent directory once for a case-insensitive name match before assuming the configured template path is the canonical spelling. Without these, `pdd update` on macOS/Windows would silently materialize `foo_python.prompt` next to an existing `Foo_Python.prompt`, breaking subsequent dispatch. Heal subprocesses also use the discovered casing in console output instead of the configured template string
+- **`agentic_checkup_orchestrator` — state-identity guard for cached runs**: a state from a prior run on the same `issue_number` is now required to match across (a) `mode` (issue vs pr), (b) `pr_number`, and (c) `pr_owner`/`pr_repo` before reuse. Without this, an issue-mode run could pick up a stale `.pdd/worktrees/checkup-pr-N` path and re-execute every later step against the wrong code
+
+### Build
+
+- auto-healed prompt/example drift across `ci_drift_heal`, `agentic_change`, `agentic_checkup_orchestrator`, `agentic_checkup`, `commands/checkup`, `sync_determine_operation`, `update_main`
+- refresh `ci/cloud-batch/test-durations.json` benchmarks and `.cloud-image-hash`
+- update `cloudbuild-auto-heal.yaml`
+
+### Docs
+
+- remove obsolete `docs/GENERATIVE_VIDEO_STUDIO_MIGRATION.md`
+- minor update to `docs/ci-auto-heal.md`
 
 ## v0.0.218 (2026-04-24)
 
