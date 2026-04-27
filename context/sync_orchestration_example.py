@@ -28,8 +28,9 @@ def setup_example_project(root_dir: Path):
     (prompts_dir / "calculator_python.prompt").write_text(prompt_content)
     print(f"Created mock project structure in: {root_dir.resolve()}")
 
-    # The sync orchestrator uses a '.pdd/meta' directory in the CWD for logs and locks.
-    # We ensure it exists for the example run.
+    # The sync orchestrator uses '.pdd/meta' for fingerprints and run reports,
+    # and '.pdd/logs' for sync logs (gitignored). We ensure meta exists for the
+    # example run; the logs directory is created automatically by get_log_path().
     META_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Ensured PDD metadata directory exists at: {META_DIR.resolve()}")
 

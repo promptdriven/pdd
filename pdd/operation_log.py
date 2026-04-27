@@ -18,11 +18,17 @@ logger = logging.getLogger(__name__)
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
+LOGS_DIR = os.path.join(PDD_DIR, "logs")
 
 
 def ensure_meta_dir() -> None:
     """Ensure the .pdd/meta directory exists."""
     os.makedirs(META_DIR, exist_ok=True)
+
+
+def _ensure_logs_dir() -> None:
+    """Ensure the .pdd/logs directory exists."""
+    os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 def _safe_basename(basename: str) -> str:
@@ -35,9 +41,67 @@ def _safe_basename(basename: str) -> str:
 
 
 def get_log_path(basename: str, language: str) -> Path:
-    """Get the path to the sync log for a specific module."""
-    ensure_meta_dir()
-    return Path(META_DIR) / f"{_safe_basename(basename)}_{language}_sync.log"
+    """Get the path to the sync log for a specific module.
+
+    Returns the path under .pdd/logs/. If a legacy sync log exists under
+    .pdd/meta/, it is migrated (moved) to the new location first.
+
+    Migration is best-effort and safe under concurrent access:
+    - Simple move uses os.rename (atomic on POSIX); if it fails because
+      new_path appeared between the check and the rename, we fall through
+      to the append path.
+    - Append path reads old content, appends under a single open() call
+      that also checks the trailing newline in one shot, then unlinks.
+      If the unlink races with another process, the worst case is a
+      duplicate append (idempotent JSONL lines).
+    """
+    _ensure_logs_dir()
+    filename = f"{_safe_basename(basename)}_{language}_sync.log"
+    new_path = Path(LOGS_DIR) / filename
+    old_path = Path(META_DIR) / filename
+
+    if not old_path.exists():
+        return new_path
+
+    # Fast path: atomic rename when new_path doesn't exist yet.
+    # os.rename raises FileExistsError / OSError on Windows if dest exists,
+    # and on POSIX it atomically replaces — but we only attempt when new_path
+    # is absent to avoid clobbering a file another process just created.
+    if not new_path.exists():
+        try:
+            os.rename(str(old_path), str(new_path))
+            return new_path
+        except FileNotFoundError:
+            # old_path vanished (another process moved it) — nothing to do
+            return new_path
+        except OSError:
+            # new_path appeared between our check and rename, fall through
+            # to the append path below.
+            if not old_path.exists():
+                return new_path
+
+    # Slow path: both files exist — append old content to new, then remove old.
+    try:
+        old_content = old_path.read_bytes()
+        if old_content:
+            with open(new_path, 'r+b') as f:
+                # Check the last byte of the existing file to avoid merging
+                # two JSONL lines. Using a single file handle avoids TOCTOU.
+                f.seek(0, 2)  # seek to end
+                pos = f.tell()
+                if pos > 0:
+                    f.seek(pos - 1)
+                    if f.read(1) != b'\n':
+                        f.write(b'\n')
+                f.write(old_content)
+        old_path.unlink(missing_ok=True)
+    except FileNotFoundError:
+        # old_path vanished between read and unlink — another process handled it
+        pass
+    except Exception as exc:
+        logger.debug("Failed to migrate legacy sync log %s -> %s: %s", old_path, new_path, exc)
+
+    return new_path
 
 
 def get_fingerprint_path(basename: str, language: str) -> Path:

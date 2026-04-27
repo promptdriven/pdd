@@ -225,10 +225,16 @@ def test_core_dump_auto_includes_operation_log_and_run_report(tmp_path, monkeypa
     core_dump_data = json.loads(core_dumps[0].read_text())
     file_contents = core_dump_data.get("file_contents", {})
 
-    assert any(k.endswith("_sync.log") for k in file_contents.keys()), f"Missing *_sync.log: {list(file_contents.keys())}"
+    # Sync logs are no longer embedded in file_contents (moved to sync_log_refs)
+    assert not any(k.endswith("_sync.log") for k in file_contents.keys()), \
+        f"Sync logs should NOT be in file_contents: {list(file_contents.keys())}"
     assert any(k.endswith("_run.json") for k in file_contents.keys()), f"Missing *_run.json: {list(file_contents.keys())}"
 
-    # Expanded per-operation steps should be present.
+    # sync_log_refs should point to the log file
+    sync_log_refs = core_dump_data.get("sync_log_refs") or []
+    assert len(sync_log_refs) >= 1
+
+    # Expanded per-operation steps should be present (read from disk).
     sync_steps = core_dump_data.get("sync_steps") or []
     assert len(sync_steps) >= 1
     assert sync_steps[0]["operation"] == "fix"
@@ -236,7 +242,6 @@ def test_core_dump_auto_includes_operation_log_and_run_report(tmp_path, monkeypa
     assert sync_steps[0]["model"] == "m"
     assert "boom" in str(sync_steps[0].get("failure_summary"))
     assert sync_steps[0].get("test_output_excerpt") == "out"
-    # LLM trace should also be carried through when present.
     assert sync_steps[0].get("source_log")
 
 

@@ -67,7 +67,7 @@ from .get_run_command import get_run_command_for_file
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
 from .core.errors import record_core_dump_error
-from .core.llm_trace import set_current_operation, pop_last_pair
+from .core.llm_trace import set_current_operation, pop_all_pairs
 
 
 def _truncate_text(text: str, limit_chars: int) -> str:
@@ -1568,7 +1568,8 @@ def _create_mock_context(**kwargs) -> click.Context:
 
 def _display_sync_log(basename: str, language: str, verbose: bool = False) -> Dict[str, Any]:
     """Displays the sync log for a given basename and language."""
-    log_file = META_DIR / f"{_safe_basename(basename)}_{language.lower()}_sync.log"
+    from .operation_log import get_log_path
+    log_file = get_log_path(basename, language.lower())
     if not log_file.exists():
         print(f"No sync log found for '{basename}' in language '{language}'.")
         return {'success': False, 'errors': ['Log file not found.'], 'log_entries': []}
@@ -2165,9 +2166,16 @@ def sync_orchestration(
 
                     # Issue #159 fix: Use atomic state for consistent run_report + fingerprint writes
                     set_current_operation(operation)
-                    # Drop any stale LLM trace for this operation key so failure paths only
-                    # attach pairs from the current attempt (success paths do not pop).
-                    pop_last_pair(operation)
+                    # Drop any stale LLM traces for this operation key so we only
+                    # attach pairs from the current attempt.
+                    pop_all_pairs(operation)
+                    # Also drain any stale agentic trace from a prior operation
+                    # that may not have been consumed (e.g. exception path).
+                    try:
+                        from .agentic_common import get_last_agentic_trace
+                        get_last_agentic_trace()
+                    except ImportError:
+                        pass
                     with AtomicStateUpdate(basename, language) as atomic_state:
 
                         # --- Execute Operation ---
@@ -2651,10 +2659,21 @@ def sync_orchestration(
                         if not success:
                             if test_output_excerpt:
                                 log_entry.setdefault("details", {})["test_output_excerpt"] = test_output_excerpt
-                            # Attach last LLM prompt/response pair (best-effort) for failed operations.
-                            pair = pop_last_pair(operation)
-                            if pair:
-                                log_entry.setdefault("details", {})["llm_trace"] = pair
+
+                        # Attach all LLM traces for this operation (success and failure)
+                        pairs = pop_all_pairs(operation)
+                        if pairs:
+                            log_entry["llm_traces"] = pairs
+
+                        # Attach agentic trace if a provider session was discovered
+                        try:
+                            from .agentic_common import get_last_agentic_trace
+                            agentic_trace = get_last_agentic_trace()
+                        except ImportError:
+                            agentic_trace = None
+                        if agentic_trace:
+                            log_entry["agentic_trace"] = agentic_trace
+
                         append_log_entry(basename, language, log_entry)
 
                         # Post-operation checks (simplified)

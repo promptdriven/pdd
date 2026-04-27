@@ -90,7 +90,7 @@ class TestWorktreeIsolationE2E:
         fake CLI binary. The fake CLI reports its environment, and we verify
         GIT_WORK_TREE was set to the worktree cwd.
         """
-        success, output, cost = _run_with_provider(
+        success, output, cost, _trace = _run_with_provider(
             provider="anthropic",
             prompt_path=prompt_file,
             cwd=worktree_dir,
@@ -123,7 +123,7 @@ class TestWorktreeIsolationE2E:
         If they diverge, git operations will use the wrong root for file
         resolution, which is the exact symptom described in issue #894.
         """
-        success, output, cost = _run_with_provider(
+        success, output, cost, _trace = _run_with_provider(
             provider="anthropic",
             prompt_path=prompt_file,
             cwd=worktree_dir,
@@ -164,7 +164,7 @@ class TestWorktreeIsolationE2E:
         # Simulate a parent process with GIT_WORK_TREE pointing to main repo
         monkeypatch.setenv("GIT_WORK_TREE", "/some/main/repo")
 
-        success, output, cost = _run_with_provider(
+        success, output, cost, _trace = _run_with_provider(
             provider="anthropic",
             prompt_path=prompt_file,
             cwd=worktree_dir,
