@@ -75,6 +75,7 @@ from z3 import Solver, Real, Bool, Implies, And, Or, Not, sat
 # Import the code under test
 # Adjusting path to ensure import works regardless of where test is run
 import pdd.auth_service as auth_service
+import pdd._keyring_timeout as keyring_timeout
 
 # --- Fixtures ---
 
@@ -94,6 +95,20 @@ def mock_keyring():
     """Mock the keyring module."""
     with patch.dict(sys.modules, {"keyring": MagicMock()}):
         yield sys.modules["keyring"]
+
+@pytest.fixture
+def fast_keyring_timeout(monkeypatch):
+    """Shrink keyring timeout values so hang regression tests stay quick."""
+    monkeypatch.setattr(keyring_timeout, "_KEYRING_TIMEOUT_DARWIN", 0.05)
+    monkeypatch.setattr(keyring_timeout, "_KEYRING_TIMEOUT_OTHER", 0.05)
+
+
+def _blocking_keyring_op(*_args, **_kwargs):
+    """Simulate a keyring backend waiting on unavailable GUI input."""
+    time.sleep(2)
+
+
+_AUTH_KEYRING_TIMEOUT_BUDGET = 0.75
 
 # --- Unit Tests ---
 
@@ -496,6 +511,89 @@ def test_get_refresh_token_none(mock_keyring):
     mock_keyring.get_password.return_value = None
     token = auth_service.get_refresh_token()
     assert token is None
+
+
+# --- Issue #404 Keyring Timeout Tests ---
+
+def test_has_refresh_token_times_out_when_keyring_get_hangs(
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """pdd auth status must not hang when keyring.get_password blocks."""
+    mock_keyring.get_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    result = auth_service.has_refresh_token()
+    elapsed = time.time() - start
+
+    mock_keyring.get_password.assert_called_with(
+        auth_service.KEYRING_SERVICE_NAME,
+        auth_service.KEYRING_USER_NAME,
+    )
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert result is False
+
+
+def test_clear_refresh_token_times_out_when_keyring_delete_hangs(
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """pdd auth logout must not hang when keyring.delete_password blocks."""
+    mock_keyring.delete_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    success, error = auth_service.clear_refresh_token()
+    elapsed = time.time() - start
+
+    mock_keyring.delete_password.assert_called_with(
+        auth_service.KEYRING_SERVICE_NAME,
+        auth_service.KEYRING_USER_NAME,
+    )
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert success is False
+    assert error is not None
+    assert "timed out" in error
+
+
+def test_get_refresh_token_times_out_when_keyring_get_hangs(
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """Server-side auth routes must not hang when keyring.get_password blocks."""
+    mock_keyring.get_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    token = auth_service.get_refresh_token()
+    elapsed = time.time() - start
+
+    mock_keyring.get_password.assert_called_with(
+        auth_service.KEYRING_SERVICE_NAME,
+        auth_service.KEYRING_USER_NAME,
+    )
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert token is None
+
+
+@patch('pdd.auth_service.get_jwt_cache_info')
+def test_get_auth_status_does_not_hang_when_keyring_get_hangs(
+    mock_get_jwt,
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """Cover the user workflow: pdd auth status after token deletion."""
+    mock_get_jwt.return_value = (False, None)
+    mock_keyring.get_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    status = auth_service.get_auth_status()
+    elapsed = time.time() - start
+
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert status == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+    }
 
 
 # --- verify_auth Tests ---

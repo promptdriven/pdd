@@ -5,11 +5,14 @@ import logging
 import os
 import subprocess
 import sys
-import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
+
+import requests
+
+from ._keyring_timeout import _keyring_op_with_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,6 @@ except ImportError:
         keyring = None
         KEYRING_AVAILABLE = False
         print("Warning: No keyring available - token storage disabled")
-import requests
 
 # Custom exception classes for better error handling
 class AuthError(Exception):
@@ -238,50 +240,6 @@ def _macos_force_delete_keychain_item(service_name: str, account_name: str) -> b
         return result.returncode in (0, 44)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
-
-
-# Issue #404: Python's `keyring` library has no timeout. On a locked macOS
-# keychain in headless CI/SSH the underlying SecKeychainUnlock call blocks
-# waiting for a GUI prompt that will never appear, hanging the process for
-# up to 6 hours. Tighter on Darwin where the GUI-prompt path is the common
-# failure mode; looser elsewhere where backend round-trips legitimately
-# vary (libsecret over D-Bus, etc.).
-_KEYRING_TIMEOUT_DARWIN = 5.0
-_KEYRING_TIMEOUT_OTHER = 10.0
-
-
-def _keyring_op_with_timeout(
-    op: Callable[..., Any],
-    *args: Any,
-    timeout: Optional[float] = None,
-) -> Tuple[bool, Any, Optional[BaseException]]:
-    """Run a keyring operation in a daemon thread, bounded by `timeout` seconds.
-
-    Returns ``(timed_out, value, exception)``. The thread is a daemon so a
-    still-blocking keyring call cannot prevent process exit.
-    """
-    if timeout is None:
-        timeout = (
-            _KEYRING_TIMEOUT_DARWIN if sys.platform == 'darwin' else _KEYRING_TIMEOUT_OTHER
-        )
-
-    state: Dict[str, Any] = {'value': None, 'exception': None, 'completed': False}
-
-    def _runner() -> None:
-        try:
-            state['value'] = op(*args)
-        except Exception as exc:
-            state['exception'] = exc
-        finally:
-            state['completed'] = True
-
-    thread = threading.Thread(target=_runner, daemon=True, name="keyring-timeout-op")
-    thread.start()
-    thread.join(timeout=timeout)
-
-    if not state['completed']:
-        return True, None, None
-    return False, state['value'], state['exception']
 
 
 class DeviceFlow:

@@ -925,14 +925,14 @@ class TestKeyringTimeoutProtection:
         auth = FirebaseAuthenticator("fake_key", "test_app")
 
         # Simulate macOS — expect a tighter (≤ ~8s) timeout.
-        with patch("pdd.get_jwt_token.sys.platform", "darwin"):
+        with patch("pdd._keyring_timeout.sys.platform", "darwin"):
             with patch("platform.system", return_value="Darwin"):
                 start = time.time()
                 result_mac = auth._store_refresh_token("token_mac")
                 mac_elapsed = time.time() - start
 
         # Simulate Linux — expect a slightly looser (≤ ~13s) timeout.
-        with patch("pdd.get_jwt_token.sys.platform", "linux"):
+        with patch("pdd._keyring_timeout.sys.platform", "linux"):
             with patch("platform.system", return_value="Linux"):
                 start = time.time()
                 result_linux = auth._store_refresh_token("token_linux")

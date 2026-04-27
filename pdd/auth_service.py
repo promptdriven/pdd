@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
+from ._keyring_timeout import _keyring_op_with_timeout
+
 
 # JWT file cache path
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
@@ -86,7 +88,13 @@ def has_refresh_token() -> bool:
     try:
         import keyring
 
-        token = keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
+        timed_out, token, exc = _keyring_op_with_timeout(
+            keyring.get_password,
+            KEYRING_SERVICE_NAME,
+            KEYRING_USER_NAME,
+        )
+        if timed_out or exc is not None:
+            return False
         return token is not None
     except ImportError:
         # Try alternative keyring
@@ -94,7 +102,13 @@ def has_refresh_token() -> bool:
             import keyrings.alt.file
 
             kr = keyrings.alt.file.PlaintextKeyring()
-            token = kr.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
+            timed_out, token, exc = _keyring_op_with_timeout(
+                kr.get_password,
+                KEYRING_SERVICE_NAME,
+                KEYRING_USER_NAME,
+            )
+            if timed_out or exc is not None:
+                return False
             return token is not None
         except ImportError:
             pass
@@ -131,25 +145,42 @@ def clear_refresh_token() -> Tuple[bool, Optional[str]]:
     try:
         import keyring
 
-        keyring.delete_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-        return True, None
+        timed_out, _, exc = _keyring_op_with_timeout(
+            keyring.delete_password,
+            KEYRING_SERVICE_NAME,
+            KEYRING_USER_NAME,
+        )
+        if timed_out:
+            return False, "Failed to clear refresh token: keyring delete_password timed out"
+        if exc is None:
+            return True, None
+
+        error_str = str(exc)
+        # Ignore "not found" errors - token was already deleted
+        if "not found" in error_str.lower() or "no matching" in error_str.lower():
+            return True, None
+        return False, f"Failed to clear refresh token: {exc}"
     except ImportError:
         # Try alternative keyring
         try:
             import keyrings.alt.file
 
             kr = keyrings.alt.file.PlaintextKeyring()
-            kr.delete_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-            return True, None
+            timed_out, _, exc = _keyring_op_with_timeout(
+                kr.delete_password,
+                KEYRING_SERVICE_NAME,
+                KEYRING_USER_NAME,
+            )
+            if timed_out:
+                return False, "Failed to clear refresh token: keyring delete_password timed out"
+            if exc is None:
+                return True, None
+            return False, f"Failed to clear refresh token: {exc}"
         except ImportError:
             return True, None  # No keyring available, nothing to clear
         except Exception as e:
             return False, f"Failed to clear refresh token: {e}"
     except Exception as e:
-        error_str = str(e)
-        # Ignore "not found" errors - token was already deleted
-        if "not found" in error_str.lower() or "no matching" in error_str.lower():
-            return True, None
         return False, f"Failed to clear refresh token: {e}"
 
 
@@ -198,14 +229,28 @@ def get_refresh_token() -> Optional[str]:
     try:
         import keyring
 
-        return keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
+        timed_out, token, exc = _keyring_op_with_timeout(
+            keyring.get_password,
+            KEYRING_SERVICE_NAME,
+            KEYRING_USER_NAME,
+        )
+        if timed_out or exc is not None:
+            return None
+        return token
     except ImportError:
         # Try alternative keyring
         try:
             import keyrings.alt.file
 
             kr = keyrings.alt.file.PlaintextKeyring()
-            return kr.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
+            timed_out, token, exc = _keyring_op_with_timeout(
+                kr.get_password,
+                KEYRING_SERVICE_NAME,
+                KEYRING_USER_NAME,
+            )
+            if timed_out or exc is not None:
+                return None
+            return token
         except ImportError:
             pass
     except Exception:
