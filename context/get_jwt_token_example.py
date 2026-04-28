@@ -56,6 +56,10 @@ ENV_TOKEN_VAR = f"JWT_TOKEN_{pdd_env.upper()}"
 async def main():
     """
     Demonstrates how to use the get_jwt_token function to authenticate with Firebase using GitHub Device Flow.
+
+    get_jwt_token bounds keyring reads, writes, and deletes with
+    _keyring_op_with_timeout so authentication does not hang when keyring is
+    locked or unavailable in CI/SSH.
     """
     print("Starting authentication process...")
 

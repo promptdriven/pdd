@@ -1,13 +1,31 @@
-## v0.0.220 (2026-04-26)
-
-### Feat
-
-- add PR-verification mode to checkup and overhaul test generation prompt; fix CI auto-heal drift, incremental checkpointing, and path casing issues.
+## v0.0.221 (2026-04-27)
 
 ### Fix
 
-- align core prompt specs with CLI exit handling (#1307)
-- sync agentic dependency prompt contracts
+- declare duplicate guard prompt deps
+- report keyring status timeouts
+- relay keyring timeout base exceptions
+- read legacy server auth refresh tokens
+- clear legacy server auth keyring token
+- clarify logout after keyring status timeout
+- align server auth keyring service
+- handle keyring timeout logout edge case
+- bound keyring auth workflows
+- prevent checkup Step 4 false-positive aborts (#1310)
+- improve CLI exit handling, refine agentic sync dependency contracts, and optimize prompt include-blocks with refreshed test benchmarks.
+
+## v0.0.220 (2026-04-26)
+
+### Fix
+
+- **align core prompt specs with CLI exit handling (#1307)**: `pdd/prompts/core/cli_python.prompt` rewrites the `invoke` exception-handling contract so `SystemExit` and `click.exceptions.Exit` with non-zero codes preserve the command's intentional exit code instead of being wrapped as `RuntimeError` and routed through `handle_error()`. `SystemExit` writes an intentional-failure core dump (with captured terminal output and an `exit_reason`) before exiting; `click.exceptions.Exit` is re-raised so Click's own machinery preserves the code. Fail-safe core-dump-then-exit behavior is now reserved for *unexpected* exceptions only. `pdd/prompts/core/utils_python.prompt` extends `_first_pending_command(ctx)` to fall back from `ctx.protected_args` to `ctx.invoked_subcommand`, then to the last entry in `ctx.obj["invoked_subcommands"]` recorded by `@track_cost`, so cost reporting still resolves a command name after Click has consumed `protected_args`. `context/core/utils_example.py` adds two new scenarios (empty args + `invoked_subcommand='auth'` → returns `'auth'`; `ctx.obj["invoked_subcommands"]` fallback → returns last recorded command) and updates the example docstring to match
+- **sync agentic dependency prompt contracts**: `agentic_sync_runner` prompt redefines `build_dep_graph_from_architecture` to return a `DepGraphFromArchitectureResult` NamedTuple (`graph`, `warnings`) instead of a bare dict. The subgraph now omits edges whose endpoints are outside `target_basenames` (partial-sync) and emits two warning classes — *orphan dependency* (filename has no matching architecture entry) and *partial-sync edge* (dependency resolves to a basename outside the target set) — without raising. `agentic_sync` consumes `result.graph` for the runner and prints `result.warnings` as yellow `Warning:` lines via Rich (suppressed when `quiet`), giving operators visibility into silently-omitted edges. `architecture_sync` prompt tightens dependency-field write semantics: the `dependencies` array is only updated when the prompt expresses dependency intent (`has_dependency_tags=True`, including the explicit-clear empty `<pdd-dependency></pdd-dependency>`, or a non-empty parsed list); a reason- or interface-only prompt change preserves the existing `dependencies` array instead of wiping edges that may still be valid from prior sync or manual curation
+
+### Build
+
+- auto-healed prompt/example drift for `core/cli`, `core/cloud`, `core/utils`, `split`, `validate_prompt_includes` — narrows broad `<include>` blocks to surgical `select="…"` queries (e.g. `pdd.core.cli` now selects `class:PDDCLI,def:cli,def:process_commands`; `pdd.core.cloud` selects only the `Auth/Network/Token/UserCancelled/RateLimit` error classes; `validate_prompt_includes` selects `def:main` from `auto_include_example.py`) and adds the previously-undeclared `pdd.agentic_common` and `utils.auth_service` dependency blocks to `core/cli` and `core/cloud`
+- auto-healed prompt/example drift for `agentic_sync`, `agentic_sync_runner`, `architecture_sync` — converts broad include blocks to `select`-scoped imports (e.g. `agentic_sync` now pulls only `run_agentic_task`/`load_prompt_template`/`post_error_comment`/`example_github_state_helpers` from `agentic_common`; `agentic_sync_runner` adds an `architecture_sync` dep block selecting `example_validate_dependencies`/`example_get_entry`)
+- refresh `ci/cloud-batch/test-durations.json` benchmarks and `.cloud-image-hash`
 
 ## v0.0.219 (2026-04-25)
 

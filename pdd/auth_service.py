@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
+from ._keyring_timeout import _keyring_op_with_timeout
+
 
 # JWT file cache path
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
@@ -20,6 +22,13 @@ JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
 # Keyring configuration (must match app_name="PDD CLI" used in commands/auth.py)
 KEYRING_SERVICE_NAME = "firebase-auth-PDD CLI"
 KEYRING_USER_NAME = "refresh_token"
+LEGACY_KEYRING_SERVICE_NAMES = ("firebase-auth-pdd",)
+REFRESH_TOKEN_CHECK_TIMEOUT_ERROR = "keyring get_password timed out"
+
+
+def _refresh_token_service_names() -> Tuple[str, ...]:
+    """Return keyring service names to read/delete for refresh tokens."""
+    return (KEYRING_SERVICE_NAME, *LEGACY_KEYRING_SERVICE_NAMES)
 
 
 def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
@@ -76,6 +85,46 @@ def get_cached_jwt() -> Optional[str]:
     return None
 
 
+def _get_refresh_token_with_get(
+    get_password: Any,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Read refresh token from current and legacy keyring service names."""
+    for service_name in _refresh_token_service_names():
+        timed_out, token, exc = _keyring_op_with_timeout(
+            get_password,
+            service_name,
+            KEYRING_USER_NAME,
+        )
+        if timed_out:
+            return None, REFRESH_TOKEN_CHECK_TIMEOUT_ERROR
+        if exc is not None:
+            continue
+        if token is not None:
+            return token, None
+    return None, None
+
+
+def _get_refresh_token_status() -> Tuple[Optional[str], Optional[str]]:
+    """Read refresh token from keyring and preserve timeout status."""
+    try:
+        import keyring
+
+        return _get_refresh_token_with_get(keyring.get_password)
+    except ImportError:
+        # Try alternative keyring
+        try:
+            import keyrings.alt.file
+
+            kr = keyrings.alt.file.PlaintextKeyring()
+            return _get_refresh_token_with_get(kr.get_password)
+        except ImportError:
+            pass
+    except Exception:
+        pass
+
+    return None, None
+
+
 def has_refresh_token() -> bool:
     """
     Check if there's a stored refresh token in keyring.
@@ -83,25 +132,8 @@ def has_refresh_token() -> bool:
     Returns:
         True if a refresh token exists, False otherwise.
     """
-    try:
-        import keyring
-
-        token = keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-        return token is not None
-    except ImportError:
-        # Try alternative keyring
-        try:
-            import keyrings.alt.file
-
-            kr = keyrings.alt.file.PlaintextKeyring()
-            token = kr.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-            return token is not None
-        except ImportError:
-            pass
-    except Exception:
-        pass
-
-    return False
+    token, _ = _get_refresh_token_status()
+    return token is not None
 
 
 def clear_jwt_cache() -> Tuple[bool, Optional[str]]:
@@ -121,6 +153,47 @@ def clear_jwt_cache() -> Tuple[bool, Optional[str]]:
         return False, f"Failed to clear JWT cache: {e}"
 
 
+def _clear_refresh_token_from_service(
+    delete_password: Any,
+    service_name: str,
+) -> Tuple[bool, Optional[str]]:
+    """Delete the refresh token for a single keyring service name."""
+    timed_out, _, exc = _keyring_op_with_timeout(
+        delete_password,
+        service_name,
+        KEYRING_USER_NAME,
+    )
+    if timed_out:
+        return (
+            False,
+            f"Failed to clear refresh token for {service_name}: "
+            "keyring delete_password timed out",
+        )
+    if exc is None:
+        return True, None
+
+    error_str = str(exc)
+    # Ignore "not found" errors - token was already deleted
+    if "not found" in error_str.lower() or "no matching" in error_str.lower():
+        return True, None
+    return False, f"Failed to clear refresh token for {service_name}: {exc}"
+
+
+def _clear_refresh_tokens_with_delete(
+    delete_password: Any,
+) -> Tuple[bool, Optional[str]]:
+    """Delete current and legacy refresh token keyring entries."""
+    errors = []
+    for service_name in _refresh_token_service_names():
+        success, error = _clear_refresh_token_from_service(delete_password, service_name)
+        if not success and error:
+            errors.append(error)
+
+    if errors:
+        return False, "; ".join(errors)
+    return True, None
+
+
 def clear_refresh_token() -> Tuple[bool, Optional[str]]:
     """
     Clear the refresh token from keyring.
@@ -131,25 +204,19 @@ def clear_refresh_token() -> Tuple[bool, Optional[str]]:
     try:
         import keyring
 
-        keyring.delete_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-        return True, None
+        return _clear_refresh_tokens_with_delete(keyring.delete_password)
     except ImportError:
         # Try alternative keyring
         try:
             import keyrings.alt.file
 
             kr = keyrings.alt.file.PlaintextKeyring()
-            kr.delete_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-            return True, None
+            return _clear_refresh_tokens_with_delete(kr.delete_password)
         except ImportError:
             return True, None  # No keyring available, nothing to clear
         except Exception as e:
             return False, f"Failed to clear refresh token: {e}"
     except Exception as e:
-        error_str = str(e)
-        # Ignore "not found" errors - token was already deleted
-        if "not found" in error_str.lower() or "no matching" in error_str.lower():
-            return True, None
         return False, f"Failed to clear refresh token: {e}"
 
 
@@ -173,19 +240,22 @@ def get_auth_status() -> Dict[str, Any]:
         }
 
     # Check for refresh token in keyring
-    has_refresh = has_refresh_token()
-    if has_refresh:
+    refresh_token, refresh_token_error = _get_refresh_token_status()
+    if refresh_token is not None:
         return {
             "authenticated": True,
             "cached": False,
             "expires_at": None,
         }
 
-    return {
+    status = {
         "authenticated": False,
         "cached": False,
         "expires_at": None,
     }
+    if refresh_token_error:
+        status["refresh_token_error"] = refresh_token_error
+    return status
 
 
 def get_refresh_token() -> Optional[str]:
@@ -195,23 +265,8 @@ def get_refresh_token() -> Optional[str]:
     Returns:
         The refresh token if found, None otherwise.
     """
-    try:
-        import keyring
-
-        return keyring.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-    except ImportError:
-        # Try alternative keyring
-        try:
-            import keyrings.alt.file
-
-            kr = keyrings.alt.file.PlaintextKeyring()
-            return kr.get_password(KEYRING_SERVICE_NAME, KEYRING_USER_NAME)
-        except ImportError:
-            pass
-    except Exception:
-        pass
-
-    return None
+    token, _ = _get_refresh_token_status()
+    return token
 
 
 async def verify_auth() -> Dict[str, Any]:

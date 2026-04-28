@@ -243,6 +243,31 @@ class TestDownstreamNullHandling:
             assert expires_at is None, "Should return None for invalid expires_at"
 
 
+class TestStatusCommand:
+    """Tests for auth status output."""
+
+    def test_status_reports_keyring_timeout_when_auth_is_inconclusive(self):
+        """Status should surface a keyring timeout instead of saying unauthenticated."""
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        with patch("pdd.commands.auth.get_auth_status") as mock_status:
+            mock_status.return_value = {
+                "authenticated": False,
+                "cached": False,
+                "expires_at": None,
+                "refresh_token_error": "keyring get_password timed out",
+            }
+
+            result = runner.invoke(auth_group, ["status"])
+
+        assert result.exit_code == 1, f"Expected exit code 1, got {result.exit_code}"
+        assert "Authentication status could not be confirmed" in result.output
+        assert "keyring get_password timed out" in result.output
+        assert "Not authenticated" not in result.output
+
+
 class TestLogoutCommand:
     """
     Tests for the logout command's authentication state checking behavior.
@@ -285,8 +310,9 @@ class TestLogoutCommand:
             mock_cache_file = tmp_path / ".pdd" / "jwt_cache"
 
             with patch("pdd.commands.auth.JWT_CACHE_FILE", mock_cache_file):
-                # Run logout command
-                result = runner.invoke(auth_group, ["logout"])
+                with patch("pdd.commands.auth.service_logout") as mock_logout:
+                    # Run logout command
+                    result = runner.invoke(auth_group, ["logout"])
 
         # THE BUG: Current code displays "Logged out of PDD Cloud."
         # This assertion FAILS on buggy code, PASSES after fix
@@ -304,6 +330,66 @@ class TestLogoutCommand:
 
         # Exit code should be 0 (not an error, just a no-op)
         assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}"
+        mock_logout.assert_not_called()
+
+    def test_logout_attempts_cleanup_when_keyring_status_times_out(self):
+        """
+        If the auth status preflight cannot read keyring due to a timeout,
+        logout should still attempt bounded cleanup and report delete failures.
+        """
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        with patch("pdd.commands.auth.get_auth_status") as mock_status:
+            mock_status.return_value = {
+                "authenticated": False,
+                "cached": False,
+                "expires_at": None,
+                "refresh_token_error": "keyring get_password timed out",
+            }
+
+            with patch("pdd.commands.auth.service_logout") as mock_logout:
+                mock_logout.return_value = (
+                    False,
+                    "Failed to clear refresh token: keyring delete_password timed out",
+                )
+
+                result = runner.invoke(auth_group, ["logout"])
+
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}"
+        assert "Failed to logout" in result.output
+        assert "keyring delete_password" in result.output
+        assert "timed" in result.output
+        assert "out" in result.output
+        mock_logout.assert_called_once()
+
+    def test_logout_reports_success_when_inconclusive_keyring_cleanup_succeeds(self):
+        """
+        If status is inconclusive but bounded cleanup succeeds, report the
+        logout result instead of falling through to "Not authenticated".
+        """
+        from pdd.commands.auth import auth_group
+
+        runner = CliRunner()
+
+        with patch("pdd.commands.auth.get_auth_status") as mock_status:
+            mock_status.return_value = {
+                "authenticated": False,
+                "cached": False,
+                "expires_at": None,
+                "refresh_token_error": "keyring get_password timed out",
+            }
+
+            with patch("pdd.commands.auth.service_logout") as mock_logout:
+                mock_logout.return_value = (True, None)
+
+                result = runner.invoke(auth_group, ["logout"])
+
+        assert result.exit_code == 0, f"Expected exit code 0, got {result.exit_code}"
+        assert "Logged out of PDD Cloud" in result.output
+        assert "Not authenticated" not in result.output
+        mock_logout.assert_called_once()
 
     def test_logout_with_valid_jwt_succeeds(self, tmp_path):
         """

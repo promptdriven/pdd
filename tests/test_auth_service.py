@@ -2,7 +2,7 @@
 Test Plan for pdd.auth_service
 
 1. **Constants Verification**:
-   - Verify that constants (JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME) are defined correctly.
+   - Verify that constants (JWT_CACHE_FILE, KEYRING_SERVICE_NAME, KEYRING_USER_NAME, LEGACY_KEYRING_SERVICE_NAMES) are defined correctly.
    - *Method*: Unit Test.
 
 2. **get_jwt_cache_info**:
@@ -68,13 +68,14 @@ Test Plan for pdd.auth_service
 import json
 import time
 import sys
-from unittest.mock import MagicMock, patch, mock_open, AsyncMock
+from unittest.mock import MagicMock, patch, mock_open, AsyncMock, call
 import pytest
 from z3 import Solver, Real, Bool, Implies, And, Or, Not, sat
 
 # Import the code under test
 # Adjusting path to ensure import works regardless of where test is run
 import pdd.auth_service as auth_service
+import pdd._keyring_timeout as keyring_timeout
 
 # --- Fixtures ---
 
@@ -95,12 +96,27 @@ def mock_keyring():
     with patch.dict(sys.modules, {"keyring": MagicMock()}):
         yield sys.modules["keyring"]
 
+@pytest.fixture
+def fast_keyring_timeout(monkeypatch):
+    """Shrink keyring timeout values so hang regression tests stay quick."""
+    monkeypatch.setattr(keyring_timeout, "_KEYRING_TIMEOUT_DARWIN", 0.05)
+    monkeypatch.setattr(keyring_timeout, "_KEYRING_TIMEOUT_OTHER", 0.05)
+
+
+def _blocking_keyring_op(*_args, **_kwargs):
+    """Simulate a keyring backend waiting on unavailable GUI input."""
+    time.sleep(2)
+
+
+_AUTH_KEYRING_TIMEOUT_BUDGET = 0.75
+
 # --- Unit Tests ---
 
 def test_constants():
     """Verify module constants."""
     assert auth_service.KEYRING_SERVICE_NAME == "firebase-auth-PDD CLI"
     assert auth_service.KEYRING_USER_NAME == "refresh_token"
+    assert auth_service.LEGACY_KEYRING_SERVICE_NAMES == ("firebase-auth-pdd",)
     # We can't easily assert the exact path of JWT_CACHE_FILE without mocking home during import,
     # but we can check the suffix.
     assert auth_service.JWT_CACHE_FILE.name == "jwt_cache"
@@ -300,6 +316,22 @@ def test_has_refresh_token_none(mock_keyring):
     mock_keyring.get_password.return_value = None
     assert auth_service.has_refresh_token() is False
 
+def test_has_refresh_token_reads_legacy_server_auth_service(mock_keyring):
+    """Should preserve auth status for tokens stored by older server login."""
+    def get_password(service_name, user_name):
+        assert user_name == auth_service.KEYRING_USER_NAME
+        if service_name == "firebase-auth-pdd":
+            return "legacy_refresh_token"
+        return None
+
+    mock_keyring.get_password.side_effect = get_password
+
+    assert auth_service.has_refresh_token() is True
+    mock_keyring.get_password.assert_has_calls([
+        call(auth_service.KEYRING_SERVICE_NAME, auth_service.KEYRING_USER_NAME),
+        call("firebase-auth-pdd", auth_service.KEYRING_USER_NAME),
+    ])
+
 def test_has_refresh_token_import_error():
     """Should return False if keyring import fails and no fallback available."""
     # Remove keyring from sys.modules to force re-import
@@ -370,11 +402,14 @@ def test_clear_jwt_cache_error(mock_home):
 # --- clear_refresh_token Tests ---
 
 def test_clear_refresh_token_success(mock_keyring):
-    """Should delete password and return success."""
+    """Should delete current and legacy password entries and return success."""
     success, error = auth_service.clear_refresh_token()
     assert success is True
     assert error is None
-    mock_keyring.delete_password.assert_called_once()
+    mock_keyring.delete_password.assert_has_calls([
+        call(auth_service.KEYRING_SERVICE_NAME, auth_service.KEYRING_USER_NAME),
+        call("firebase-auth-pdd", auth_service.KEYRING_USER_NAME),
+    ])
 
 def test_clear_refresh_token_not_found(mock_keyring):
     """Should ignore 'not found' errors."""
@@ -390,11 +425,22 @@ def test_clear_refresh_token_other_error(mock_keyring):
     assert success is False
     assert "System error" in error
 
+def test_clear_refresh_token_deletes_legacy_server_auth_service(mock_keyring):
+    """Should remove refresh tokens stored by the old server login service name."""
+    success, error = auth_service.clear_refresh_token()
+
+    assert success is True
+    assert error is None
+    mock_keyring.delete_password.assert_any_call(
+        "firebase-auth-pdd",
+        auth_service.KEYRING_USER_NAME,
+    )
+
 # --- get_auth_status Tests ---
 
 @patch('pdd.auth_service.get_jwt_cache_info')
-@patch('pdd.auth_service.has_refresh_token')
-def test_get_auth_status_cached(mock_has_refresh, mock_get_jwt):
+@patch('pdd.auth_service._get_refresh_token_status')
+def test_get_auth_status_cached(mock_refresh_status, mock_get_jwt):
     """Should return cached status if JWT is valid."""
     mock_get_jwt.return_value = (True, 1234567890.0)
     
@@ -406,14 +452,14 @@ def test_get_auth_status_cached(mock_has_refresh, mock_get_jwt):
     # Should not check refresh token if cache is valid (optimization check)
     # Note: The code doesn't explicitly forbid it, but usually it's an `if/else` or early return.
     # Looking at code: it returns early.
-    mock_has_refresh.assert_not_called()
+    mock_refresh_status.assert_not_called()
 
 @patch('pdd.auth_service.get_jwt_cache_info')
-@patch('pdd.auth_service.has_refresh_token')
-def test_get_auth_status_refresh_only(mock_has_refresh, mock_get_jwt):
+@patch('pdd.auth_service._get_refresh_token_status')
+def test_get_auth_status_refresh_only(mock_refresh_status, mock_get_jwt):
     """Should return authenticated but not cached if only refresh token exists."""
     mock_get_jwt.return_value = (False, None)
-    mock_has_refresh.return_value = True
+    mock_refresh_status.return_value = ("some_refresh_token", None)
     
     status = auth_service.get_auth_status()
     
@@ -422,17 +468,41 @@ def test_get_auth_status_refresh_only(mock_has_refresh, mock_get_jwt):
     assert status['expires_at'] is None
 
 @patch('pdd.auth_service.get_jwt_cache_info')
-@patch('pdd.auth_service.has_refresh_token')
-def test_get_auth_status_unauthenticated(mock_has_refresh, mock_get_jwt):
+@patch('pdd.auth_service._get_refresh_token_status')
+def test_get_auth_status_unauthenticated(mock_refresh_status, mock_get_jwt):
     """Should return unauthenticated if neither exists."""
     mock_get_jwt.return_value = (False, None)
-    mock_has_refresh.return_value = False
+    mock_refresh_status.return_value = (None, None)
     
     status = auth_service.get_auth_status()
     
     assert status['authenticated'] is False
     assert status['cached'] is False
     assert status['expires_at'] is None
+
+@patch('pdd.auth_service.get_jwt_cache_info')
+def test_get_auth_status_authenticates_with_legacy_server_auth_token(
+    mock_get_jwt,
+    mock_keyring,
+):
+    """Should keep older web-login users authenticated after service-name migration."""
+    mock_get_jwt.return_value = (False, None)
+
+    def get_password(service_name, user_name):
+        assert user_name == auth_service.KEYRING_USER_NAME
+        if service_name == "firebase-auth-pdd":
+            return "legacy_refresh_token"
+        return None
+
+    mock_keyring.get_password.side_effect = get_password
+
+    status = auth_service.get_auth_status()
+
+    assert status == {
+        "authenticated": True,
+        "cached": False,
+        "expires_at": None,
+    }
 
 # --- logout Tests ---
 
@@ -491,11 +561,118 @@ def test_get_refresh_token_exists(mock_keyring):
     )
 
 
+def test_get_refresh_token_reads_legacy_server_auth_service(mock_keyring):
+    """Should return refresh tokens stored by the old server login service name."""
+    def get_password(service_name, user_name):
+        assert user_name == auth_service.KEYRING_USER_NAME
+        if service_name == "firebase-auth-pdd":
+            return "legacy_refresh_token"
+        return None
+
+    mock_keyring.get_password.side_effect = get_password
+
+    token = auth_service.get_refresh_token()
+
+    assert token == "legacy_refresh_token"
+    mock_keyring.get_password.assert_has_calls([
+        call(auth_service.KEYRING_SERVICE_NAME, auth_service.KEYRING_USER_NAME),
+        call("firebase-auth-pdd", auth_service.KEYRING_USER_NAME),
+    ])
+
+
 def test_get_refresh_token_none(mock_keyring):
     """Should return None if keyring has no token."""
     mock_keyring.get_password.return_value = None
     token = auth_service.get_refresh_token()
     assert token is None
+
+
+# --- Issue #1311 Keyring Timeout Tests ---
+
+def test_has_refresh_token_times_out_when_keyring_get_hangs(
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """pdd auth status must not hang when keyring.get_password blocks."""
+    mock_keyring.get_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    result = auth_service.has_refresh_token()
+    elapsed = time.time() - start
+
+    mock_keyring.get_password.assert_called_with(
+        auth_service.KEYRING_SERVICE_NAME,
+        auth_service.KEYRING_USER_NAME,
+    )
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert result is False
+
+
+def test_clear_refresh_token_times_out_when_keyring_delete_hangs(
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """pdd auth logout must not hang when keyring.delete_password blocks."""
+    mock_keyring.delete_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    success, error = auth_service.clear_refresh_token()
+    elapsed = time.time() - start
+
+    mock_keyring.delete_password.assert_any_call(
+        auth_service.KEYRING_SERVICE_NAME,
+        auth_service.KEYRING_USER_NAME,
+    )
+    mock_keyring.delete_password.assert_any_call(
+        "firebase-auth-pdd",
+        auth_service.KEYRING_USER_NAME,
+    )
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert success is False
+    assert error is not None
+    assert "timed out" in error
+
+
+def test_get_refresh_token_times_out_when_keyring_get_hangs(
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """Server-side auth routes must not hang when keyring.get_password blocks."""
+    mock_keyring.get_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    token = auth_service.get_refresh_token()
+    elapsed = time.time() - start
+
+    mock_keyring.get_password.assert_called_with(
+        auth_service.KEYRING_SERVICE_NAME,
+        auth_service.KEYRING_USER_NAME,
+    )
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert token is None
+
+
+@patch('pdd.auth_service.get_jwt_cache_info')
+def test_get_auth_status_does_not_hang_when_keyring_get_hangs(
+    mock_get_jwt,
+    mock_keyring,
+    fast_keyring_timeout,
+):
+    """Cover the user workflow: pdd auth status after token deletion."""
+    mock_get_jwt.return_value = (False, None)
+    mock_keyring.get_password.side_effect = _blocking_keyring_op
+
+    start = time.time()
+    status = auth_service.get_auth_status()
+    elapsed = time.time() - start
+
+    assert elapsed < _AUTH_KEYRING_TIMEOUT_BUDGET
+    assert status == {
+        "authenticated": False,
+        "cached": False,
+        "expires_at": None,
+        "refresh_token_error": auth_service.REFRESH_TOKEN_CHECK_TIMEOUT_ERROR,
+    }
 
 
 # --- verify_auth Tests ---
@@ -644,10 +821,10 @@ async def test_verify_auth_no_api_key(mock_get_refresh, mock_get_jwt):
 # --- Issue #348: Auth Status Mismatch Tests ---
 
 @pytest.mark.asyncio
-@patch('pdd.auth_service.has_refresh_token')
+@patch('pdd.auth_service._get_refresh_token_status')
 @patch('pdd.auth_service.get_jwt_cache_info')
 @patch('pdd.auth_service.get_refresh_token')
-async def test_verify_auth_catches_expired_refresh_token_issue_348(mock_get_refresh, mock_get_jwt, mock_has_refresh):
+async def test_verify_auth_catches_expired_refresh_token_issue_348(mock_get_refresh, mock_get_jwt, mock_refresh_status):
     """
     Issue #348: Reproduce the auth status mismatch bug.
 
@@ -659,7 +836,7 @@ async def test_verify_auth_catches_expired_refresh_token_issue_348(mock_get_refr
     mock_get_jwt.return_value = (False, None)
 
     # Refresh token exists in keyring
-    mock_has_refresh.return_value = True
+    mock_refresh_status.return_value = ("expired_or_revoked_refresh_token", None)
     mock_get_refresh.return_value = "expired_or_revoked_refresh_token"
 
     from pdd.get_jwt_token import TokenError
