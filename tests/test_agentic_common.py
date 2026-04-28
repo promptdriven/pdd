@@ -307,6 +307,180 @@ def test_run_agentic_task_anthropic_result_key(mock_cwd, mock_env, mock_load_mod
     assert cost == 0.10
     assert provider == "anthropic"
 
+
+def test_anthropic_oauth_error_falls_back_to_google(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """Anthropic auth JSON with is_error=true should fail and fall back."""
+    mock_shutil_which.return_value = "/bin/exe"
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+    mock_env["GEMINI_API_KEY"] = "key"
+
+    anthropic_auth_error = MagicMock()
+    anthropic_auth_error.returncode = 0
+    anthropic_auth_error.stdout = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "result": (
+            "Failed to authenticate. API Error: 401 "
+            "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\","
+            "\"message\":\"Invalid bearer token\"}}"
+        ),
+        "total_cost_usd": 0.0,
+    })
+    anthropic_auth_error.stderr = ""
+
+    google_success = MagicMock()
+    google_success.returncode = 0
+    google_success.stdout = json.dumps({
+        "response": (
+            "Google handled the task after Anthropic auth failed and produced "
+            "a real fallback response with enough content to be valid."
+        ),
+        "stats": {
+            "models": {
+                "gemini-1.5-flash": {
+                    "tokens": {"prompt": 1000, "candidates": 500, "cached": 0}
+                }
+            }
+        }
+    })
+    google_success.stderr = ""
+
+    mock_subprocess.side_effect = [anthropic_auth_error, google_success]
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success is True
+    assert provider == "google"
+    assert "Google handled the task" in msg
+    assert cost > 0.0
+
+
+def test_anthropic_oauth_error_without_fallback_returns_failure(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """Anthropic auth JSON should surface as provider failure when alone."""
+    def which_side_effect(cmd):
+        return "/bin/claude" if cmd == "claude" else None
+
+    mock_shutil_which.side_effect = which_side_effect
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "result": (
+            "Failed to authenticate. API Error: 401 "
+            "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\","
+            "\"message\":\"Invalid bearer token\"}}"
+        ),
+        "total_cost_usd": 0.0,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success is False
+    assert provider == ""
+    assert cost == 0.0
+    assert "All agent providers failed" in msg
+    assert "Failed to authenticate" in msg
+
+
+def test_anthropic_oauth_error_verbose_mode_prints_retry_and_failure(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    mock_console,
+):
+    """Verbose mode should report retries for Anthropic auth JSON failures."""
+    def which_side_effect(cmd):
+        return "/bin/claude" if cmd == "claude" else None
+
+    mock_shutil_which.side_effect = which_side_effect
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "result": (
+            "Failed to authenticate. API Error: 401 "
+            "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\","
+            "\"message\":\"Invalid bearer token\"}}"
+        ),
+        "total_cost_usd": 0.0,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.time.sleep") as mock_sleep, \
+         patch("pdd.agentic_common._log_agentic_interaction"):
+        success, msg, cost, provider = run_agentic_task(
+            "Fix the bug",
+            mock_cwd,
+            verbose=True,
+            max_retries=2,
+            retry_delay=1,
+        )
+
+    printed_messages = " ".join(
+        str(call.args[0]) for call in mock_console.print.call_args_list if call.args
+    )
+
+    assert success is False
+    assert provider == ""
+    assert "Retry 2/2 for anthropic" in printed_messages
+    assert "Provider anthropic failed after 2 attempts" in printed_messages
+    mock_sleep.assert_called_once_with(1)
+    assert "Failed to authenticate" in msg
+
+
+def test_anthropic_success_json_still_succeeds_with_is_error_false(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+):
+    """Regression guard: valid Anthropic success JSON must still pass."""
+    def which_side_effect(cmd):
+        return "/bin/claude" if cmd == "claude" else None
+
+    mock_shutil_which.side_effect = which_side_effect
+    mock_env["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "Claude completed the task successfully.",
+        "total_cost_usd": 0.05,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, msg, cost, provider = run_agentic_task("Fix the bug", mock_cwd)
+
+    assert success is True
+    assert provider == "anthropic"
+    assert msg == "Claude completed the task successfully."
+    assert cost == 0.05
+
 def test_anthropic_provider_pipes_prompt_via_stdin(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Verify Claude CLI uses -p - flag and pipes prompt content via stdin.
 
