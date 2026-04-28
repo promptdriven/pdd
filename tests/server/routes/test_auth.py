@@ -357,3 +357,43 @@ class TestPollLoginStatus:
         finally:
             # Cleanup
             _active_sessions.pop(poll_id, None)
+
+
+class TestPollForAuth:
+    """Test the background login task."""
+
+    @pytest.mark.asyncio
+    async def test_poll_for_auth_uses_shared_auth_service_keyring_name(self):
+        """Server login must store refresh tokens where auth_service reads them."""
+        from pdd.server.routes.auth import _active_sessions, _poll_for_auth
+
+        poll_id = "test-background-poll-id"
+        _active_sessions[poll_id] = {
+            "status": "pending",
+            "message": "Waiting...",
+            "created_at": 0,
+        }
+
+        with patch.dict("os.environ", {
+            "GITHUB_CLIENT_ID": "test_client_id",
+            "NEXT_PUBLIC_FIREBASE_API_KEY": "test_api_key",
+        }):
+            with patch("pdd.get_jwt_token.DeviceFlow") as mock_device_flow_cls:
+                with patch("pdd.get_jwt_token.FirebaseAuthenticator") as mock_auth_cls:
+                    with patch("pdd.get_jwt_token._cache_jwt") as mock_cache_jwt:
+                        mock_device_flow = mock_device_flow_cls.return_value
+                        mock_device_flow.poll_for_token = AsyncMock(return_value="github-token")
+
+                        mock_auth = mock_auth_cls.return_value
+                        mock_auth.exchange_github_token_for_firebase_token = AsyncMock(
+                            return_value=("id-token", "refresh-token")
+                        )
+
+                        try:
+                            await _poll_for_auth(poll_id, "device-code", 1, 900)
+                        finally:
+                            _active_sessions.pop(poll_id, None)
+
+        mock_auth_cls.assert_called_once_with("test_api_key", "PDD CLI")
+        mock_auth._store_refresh_token.assert_called_once_with("refresh-token")
+        mock_cache_jwt.assert_called_once_with("id-token")

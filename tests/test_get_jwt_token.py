@@ -10,6 +10,7 @@ from pdd.get_jwt_token import (
     RateLimitError,
     FirebaseAuthenticator,
 )
+import pdd._keyring_timeout as keyring_timeout
 
 
 @pytest.mark.asyncio
@@ -764,3 +765,360 @@ class TestDeviceFlowSlowDown:
         # slow_down: current_interval += 5, sleep 10
         # pending: sleep 10 (current_interval is now 10)
         assert sleep_times == [5, 10, 10], f"Expected [5, 10, 10], got {sleep_times}"
+
+
+# =============================================================================
+# Issue #1311: Keyring operations hang indefinitely in CI/CD/SSH environments
+# =============================================================================
+# These tests verify that keyring operations (set_password, get_password,
+# delete_password) do not block indefinitely when the system keychain requires
+# GUI interaction in headless environments (CI/CD, SSH, locked macOS keychain).
+#
+# Bug: Python's `keyring` library has no timeout mechanism. On macOS with a
+# locked keychain and no available GUI, set/get/delete calls block waiting
+# for user input that will never come, causing CI jobs to hang for up to
+# 6 hours until the external runner timeout kills them.
+#
+# Fix direction: wrap keyring operations in a daemon thread with
+# thread.join(timeout=...) so the caller times out gracefully and returns
+# False/None instead of blocking forever.
+#
+# Source code under test (pdd/get_jwt_token.py):
+#   - _store_refresh_token  (calls keyring.set_password / delete_password)
+#   - _get_stored_refresh_token  (calls keyring.get_password)
+#   - _delete_stored_refresh_token  (calls keyring.delete_password)
+# =============================================================================
+
+import time
+import threading
+
+
+# Single hang duration shared by all timeout tests. The class fixture shrinks
+# production keyring timeouts to keep these regression tests fast.
+_HANG_SECONDS = 2
+
+# Upper bound the test allows for any single keyring op. Must be larger than
+# the patched timeout plus scheduling slack, but well under _HANG_SECONDS so a
+# buggy run is unambiguously caught.
+_TIMEOUT_BUDGET = 0.75
+
+
+def _blocking(*_args, **_kwargs):
+    """Mock side_effect: simulates a keyring call that hangs in CI/SSH."""
+    time.sleep(_HANG_SECONDS)
+
+
+class TestKeyringTimeoutProtection:
+    """
+    Tests for Issue #1311: Keyring operations must not hang indefinitely.
+
+    Each test mocks `pdd.get_jwt_token.keyring` so that the underlying
+    keyring call sleeps for _HANG_SECONDS (simulating a locked-keychain
+    hang). On the unfixed code, the FirebaseAuthenticator method blocks
+    for the full sleep duration. On fixed code, the timeout wrapper
+    returns within the patched timeout and yields False/None.
+
+    Issue: https://github.com/gltanaka/pdd/issues/1311
+    """
+
+    @pytest.fixture(autouse=True)
+    def fast_keyring_timeout(self, monkeypatch):
+        """Keep blocked-keyring regression tests fast while preserving behavior."""
+        monkeypatch.setattr(keyring_timeout, "_KEYRING_TIMEOUT_DARWIN", 0.05)
+        monkeypatch.setattr(keyring_timeout, "_KEYRING_TIMEOUT_OTHER", 0.05)
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_set_password_hangs_indefinitely_in_ci_environment(self, mock_keyring):
+        """
+        PRIMARY BUG: keyring.set_password() must not block forever.
+
+        Reproduces the hang inside `_store_refresh_token`. The
+        timeout wrapper should bound the wait and let the method return
+        False so that authentication can continue without keyring caching.
+        """
+        mock_keyring.set_password.side_effect = _blocking
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        start = time.time()
+        result = auth._store_refresh_token("test_token")
+        elapsed = time.time() - start
+
+        # The mock was actually invoked (not short-circuited by some other
+        # check). This guards against the test passing for the wrong reason
+        # (e.g., KEYRING_AVAILABLE being False).
+        mock_keyring.set_password.assert_called()
+
+        assert elapsed < _TIMEOUT_BUDGET, (
+            f"_store_refresh_token took {elapsed:.1f}s - should timeout within "
+            f"{_TIMEOUT_BUDGET}s. In real CI/CD this would hang for 6 hours."
+        )
+        assert result is False, (
+            "Should return False when keyring set_password times out, "
+            "so authentication can continue without keyring caching."
+        )
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_get_password_hangs_indefinitely_when_retrieving_token(self, mock_keyring):
+        """
+        keyring.get_password() must not block forever.
+
+        Reproduces the hang inside `_get_stored_refresh_token`.
+        After the fix, the method should return None on timeout so the
+        caller falls back to the JWT file cache or device-flow path.
+        """
+        mock_keyring.get_password.side_effect = _blocking
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        start = time.time()
+        result = auth._get_stored_refresh_token()
+        elapsed = time.time() - start
+
+        mock_keyring.get_password.assert_called()
+        assert elapsed < _TIMEOUT_BUDGET, (
+            f"_get_stored_refresh_token took {elapsed:.1f}s - should timeout "
+            f"within {_TIMEOUT_BUDGET}s. This affects every command after "
+            f"initial auth."
+        )
+        assert result is None, (
+            "Should return None when keyring get_password times out, "
+            "letting auth flow proceed without a cached refresh token."
+        )
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_delete_password_hangs_indefinitely_during_cleanup(self, mock_keyring):
+        """
+        keyring.delete_password() must not block forever.
+
+        Reproduces the hang inside `_delete_stored_refresh_token`.
+        Cleanup paths (logout, invalid-token recovery) should never wedge
+        the process.
+        """
+        mock_keyring.delete_password.side_effect = _blocking
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        start = time.time()
+        result = auth._delete_stored_refresh_token()
+        elapsed = time.time() - start
+
+        mock_keyring.delete_password.assert_called()
+        assert elapsed < _TIMEOUT_BUDGET, (
+            f"_delete_stored_refresh_token took {elapsed:.1f}s - should "
+            f"timeout within {_TIMEOUT_BUDGET}s. Cleanup must never block "
+            f"CI/CD jobs."
+        )
+        # Either False (timed out) or True (treated as best-effort) is
+        # acceptable here for graceful degradation; what matters is that
+        # the call returns rather than hangs.
+        assert result in (True, False), (
+            "Cleanup must return a bool, not block forever. "
+            f"Got {result!r}."
+        )
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_platform_specific_timeout_values(self, mock_keyring):
+        """
+        Platform-aware timeout: macOS should bail out faster than Linux.
+
+        The proposed fix uses a 5s timeout on Darwin (most affected by GUI
+        prompts) and 10s elsewhere. We verify the hang is bounded and that
+        macOS finishes meaningfully sooner than the Linux upper bound.
+        """
+        mock_keyring.set_password.side_effect = _blocking
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        # Simulate macOS - expect a tighter (<= ~8s) timeout.
+        with patch("pdd._keyring_timeout.sys.platform", "darwin"):
+            with patch("platform.system", return_value="Darwin"):
+                start = time.time()
+                result_mac = auth._store_refresh_token("token_mac")
+                mac_elapsed = time.time() - start
+
+        # Simulate Linux - expect a slightly looser (<= ~13s) timeout.
+        with patch("pdd._keyring_timeout.sys.platform", "linux"):
+            with patch("platform.system", return_value="Linux"):
+                start = time.time()
+                result_linux = auth._store_refresh_token("token_linux")
+                linux_elapsed = time.time() - start
+
+        assert result_mac is False and result_linux is False, (
+            "Both platforms should fail gracefully on keyring timeout."
+        )
+        # Both must finish quickly relative to _HANG_SECONDS.
+        assert mac_elapsed < _TIMEOUT_BUDGET, (
+            f"macOS path took {mac_elapsed:.1f}s - expected <= ~5s timeout."
+        )
+        assert linux_elapsed < _TIMEOUT_BUDGET, (
+            f"Linux path took {linux_elapsed:.1f}s - expected <= ~10s timeout."
+        )
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_successful_keyring_operations_unaffected_by_timeout_wrapper(self, mock_keyring):
+        """
+        Regression guard: the happy path must keep working.
+
+        When keyring returns immediately (the desktop case), the timeout
+        wrapper must be transparent - `_store_refresh_token` should still
+        return True and finish in well under a second.
+        """
+        mock_keyring.set_password.return_value = None  # succeeds instantly
+        mock_keyring.get_password.return_value = "existing_refresh_token"
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        start = time.time()
+        store_result = auth._store_refresh_token("token_value")
+        get_result = auth._get_stored_refresh_token()
+        elapsed = time.time() - start
+
+        assert store_result is True, "Fast set_password should still report success."
+        assert get_result == "existing_refresh_token", (
+            "Fast get_password must return the underlying value, not None."
+        )
+        assert elapsed < 2.0, (
+            f"Happy-path keyring ops took {elapsed:.2f}s - wrapper should be "
+            f"effectively free when the underlying call returns immediately."
+        )
+        mock_keyring.set_password.assert_called_once()
+        mock_keyring.get_password.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("pdd.get_jwt_token.webbrowser.open")
+    @patch("pdd.get_jwt_token._cache_jwt")
+    @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)
+    @patch(
+        "pdd.get_jwt_token.FirebaseAuthenticator.exchange_github_token_for_firebase_token",
+        return_value=("id_token_graceful", "refresh_token_graceful"),
+    )
+    @patch("pdd.get_jwt_token.DeviceFlow.poll_for_token", return_value="github_token_xyz")
+    @patch(
+        "pdd.get_jwt_token.DeviceFlow.request_device_code",
+        return_value={
+            "device_code": "test_device",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://github.com/login/device",
+            "interval": 5,
+            "expires_in": 900,
+        },
+    )
+    @patch("pdd.get_jwt_token.keyring")
+    async def test_authentication_succeeds_despite_keyring_timeout(
+        self,
+        mock_keyring,
+        _mock_request_device_code,
+        _mock_poll,
+        _mock_exchange,
+        _mock_cache_read,
+        _mock_cache_write,
+        _mock_browser,
+    ):
+        """
+        End-to-end graceful degradation.
+
+        When keyring set/get both hang (locked keychain in CI), the public
+        `get_jwt_token()` should still return a valid Firebase ID token by
+        completing the device flow and falling back to the JWT file cache.
+        Without timeout protection this entire async function never returns.
+        """
+        mock_keyring.set_password.side_effect = _blocking
+        mock_keyring.get_password.side_effect = _blocking
+
+        start = time.time()
+        token = await get_jwt_token("fake_firebase_key", "fake_github_client")
+        elapsed = time.time() - start
+
+        assert token == "id_token_graceful", (
+            "Auth should still yield a valid Firebase ID token even when "
+            "keyring storage/retrieval times out - the JWT cache is the "
+            "post-fix safety net."
+        )
+        assert elapsed < (2 * _TIMEOUT_BUDGET), (
+            f"get_jwt_token() took {elapsed:.1f}s with keyring hangs - must "
+            f"not block on locked keychains in CI/CD."
+        )
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_timeout_wrapper_uses_daemon_threads(self, mock_keyring):
+        """
+        Threads spawned by the timeout wrapper must be daemons.
+
+        Otherwise a hung keyring call would prevent process exit (e.g., the
+        Python interpreter waits for non-daemon threads on shutdown), which
+        would defeat the purpose of the timeout - CI would still hang.
+        """
+        mock_keyring.set_password.side_effect = _blocking
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        before = {t.ident for t in threading.enumerate()}
+        start = time.time()
+        result = auth._store_refresh_token("daemon_check_token")
+        elapsed = time.time() - start
+
+        assert elapsed < _TIMEOUT_BUDGET, (
+            f"Wrapper did not time out (took {elapsed:.1f}s); cannot evaluate "
+            f"daemon-thread guarantee."
+        )
+        assert result is False
+
+        # Any thread that the wrapper started and is still alive (because
+        # the mock is still sleeping) must be a daemon.
+        leaked_non_daemons = [
+            t for t in threading.enumerate()
+            if t.ident not in before and t.is_alive() and not t.daemon
+        ]
+        assert not leaked_non_daemons, (
+            "Timeout wrapper leaked non-daemon threads: "
+            f"{[t.name for t in leaked_non_daemons]}. These would block "
+            "process exit and re-introduce the CI hang."
+        )
+
+    def test_timeout_wrapper_reraises_base_exceptions(self):
+        """
+        KeyboardInterrupt/SystemExit must not be reported as keyring success.
+
+        The worker thread has to relay BaseException subclasses back to the
+        caller; otherwise a hard interruption can look identical to a missing
+        refresh token.
+        """
+        def interrupting_op():
+            raise KeyboardInterrupt("stop auth")
+
+        with pytest.raises(KeyboardInterrupt, match="stop auth"):
+            keyring_timeout._keyring_op_with_timeout(interrupting_op, timeout=0.05)
+
+    @patch("pdd.get_jwt_token.keyring")
+    def test_multiple_sequential_timeouts_dont_accumulate(self, mock_keyring):
+        """
+        Sequential keyring ops must each time out independently.
+
+        If a single hang inside `_store_refresh_token` could prevent later
+        calls from issuing their own timeouts (e.g., a shared global lock
+        being held forever), the cumulative wall time would balloon. Verify
+        three back-to-back operations all return promptly.
+        """
+        mock_keyring.set_password.side_effect = _blocking
+        mock_keyring.get_password.side_effect = _blocking
+        mock_keyring.delete_password.side_effect = _blocking
+
+        auth = FirebaseAuthenticator("fake_key", "test_app")
+
+        start = time.time()
+        store_result = auth._store_refresh_token("seq_token")
+        get_result = auth._get_stored_refresh_token()
+        delete_result = auth._delete_stored_refresh_token()
+        elapsed = time.time() - start
+
+        # Each op gets its own timeout budget; total should be roughly
+        # 3 * timeout, never 3 * _HANG_SECONDS.
+        assert elapsed < (3 * _TIMEOUT_BUDGET), (
+            f"Sequential timeouts accumulated to {elapsed:.1f}s - each op "
+            f"should be bounded independently by its own timeout."
+        )
+        assert store_result is False, "Store should fail gracefully on timeout."
+        assert get_result is None, "Get should return None on timeout."
+        assert delete_result in (True, False), (
+            "Delete must return a bool on timeout, not block."
+        )

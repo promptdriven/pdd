@@ -10,6 +10,10 @@ import webbrowser
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import requests
+
+from ._keyring_timeout import _keyring_op_with_timeout
+
 logger = logging.getLogger(__name__)
 
 # Cross-platform keyring import with fallback for WSL compatibility
@@ -26,7 +30,6 @@ except ImportError:
         keyring = None
         KEYRING_AVAILABLE = False
         print("Warning: No keyring available - token storage disabled")
-import requests
 
 # Custom exception classes for better error handling
 class AuthError(Exception):
@@ -398,40 +401,41 @@ class FirebaseAuthenticator:
         max_retries = 2
 
         for attempt in range(max_retries):
-            try:
-                keyring.set_password(
+            timed_out, _, exc = _keyring_op_with_timeout(
+                keyring.set_password,
+                self.keyring_service_name,
+                self.keyring_user_name,
+                refresh_token,
+            )
+            if timed_out:
+                logger.warning(
+                    "Keyring set_password timed out - refresh token not cached. "
+                    "This typically happens in headless CI/SSH environments."
+                )
+                return False
+            if exc is None:
+                return True
+
+            error_str = str(exc)
+            is_duplicate_error = '-25299' in error_str
+
+            if is_duplicate_error and attempt < max_retries - 1:
+                # Try to delete the existing item before retrying
+                _keyring_op_with_timeout(
+                    keyring.delete_password,
                     self.keyring_service_name,
                     self.keyring_user_name,
-                    refresh_token
                 )
-                return True
-            except Exception as e:
-                error_str = str(e)
+                # Try macOS-specific force delete
+                if sys.platform == 'darwin':
+                    _macos_force_delete_keychain_item(
+                        self.keyring_service_name,
+                        self.keyring_user_name
+                    )
+                continue
 
-                # Check for errSecDuplicateItem (-25299) on macOS
-                is_duplicate_error = '-25299' in error_str
-
-                if is_duplicate_error and attempt < max_retries - 1:
-                    # Try to delete the existing item before retrying
-                    try:
-                        keyring.delete_password(
-                            self.keyring_service_name,
-                            self.keyring_user_name
-                        )
-                    except Exception:
-                        pass  # Ignore delete errors, try force delete
-
-                    # Try macOS-specific force delete
-                    if sys.platform == 'darwin':
-                        _macos_force_delete_keychain_item(
-                            self.keyring_service_name,
-                            self.keyring_user_name
-                        )
-                    continue
-
-                # Non-duplicate error or final retry failed
-                logger.warning(f"Failed to store refresh token in keyring: {e}")
-                return False
+            logger.warning(f"Failed to store refresh token in keyring: {exc}")
+            return False
 
         return False
 
@@ -439,11 +443,20 @@ class FirebaseAuthenticator:
         """Retrieves the Firebase refresh token from the system keyring."""
         if not KEYRING_AVAILABLE or keyring is None:
             return None
-        try:
-            return keyring.get_password(self.keyring_service_name, self.keyring_user_name)
-        except Exception as e:
-            logger.warning(f"Failed to retrieve refresh token from keyring: {e}")
+        timed_out, value, exc = _keyring_op_with_timeout(
+            keyring.get_password,
+            self.keyring_service_name,
+            self.keyring_user_name,
+        )
+        if timed_out:
+            logger.warning(
+                "Keyring get_password timed out - proceeding without cached refresh token."
+            )
             return None
+        if exc is not None:
+            logger.warning(f"Failed to retrieve refresh token from keyring: {exc}")
+            return None
+        return value
 
     def _delete_stored_refresh_token(self) -> bool:
         """
@@ -456,26 +469,35 @@ class FirebaseAuthenticator:
             print("No keyring available. Token deletion skipped.")
             return True
 
-        try:
-            keyring.delete_password(self.keyring_service_name, self.keyring_user_name)
+        timed_out, _, exc = _keyring_op_with_timeout(
+            keyring.delete_password,
+            self.keyring_service_name,
+            self.keyring_user_name,
+        )
+        if timed_out:
+            logger.warning(
+                "Keyring delete_password timed out - token may remain on disk."
+            )
+            return False
+        if exc is None:
             return True
-        except Exception as e:
-            error_str = str(e)
 
-            # Check if it's a "not found" error (acceptable)
-            if 'PasswordDeleteError' in str(type(e)) or 'not found' in error_str.lower():
+        error_str = str(exc)
+
+        # Check if it's a "not found" error (acceptable)
+        if 'PasswordDeleteError' in str(type(exc)) or 'not found' in error_str.lower():
+            return True
+
+        # Try macOS force delete as fallback
+        if sys.platform == 'darwin':
+            if _macos_force_delete_keychain_item(
+                self.keyring_service_name,
+                self.keyring_user_name
+            ):
                 return True
 
-            # Try macOS force delete as fallback
-            if sys.platform == 'darwin':
-                if _macos_force_delete_keychain_item(
-                    self.keyring_service_name,
-                    self.keyring_user_name
-                ):
-                    return True
-
-            print(f"Warning: Error deleting token from keyring: {e}")
-            return False
+        print(f"Warning: Error deleting token from keyring: {exc}")
+        return False
 
     async def _refresh_firebase_token(self, refresh_token: str) -> str:
         """

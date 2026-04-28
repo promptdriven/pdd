@@ -291,6 +291,12 @@ DEFAULT_RETRY_DELAY: float = 5.0
 MAX_RETRY_DELAY: float = 120.0
 MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
 MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
+# Issue #1232: max newlines allowed in a leading-"Error:" provider error response.
+# Genuine terse provider errors have 0-2 newlines (single status line, or
+# "Error: ...\nDetails: ..."). Multi-paragraph findings docs have many more
+# newlines — this gate prevents demoting substantive docs that happen to start
+# with "Error:" while preserving the long-single-line error case from #902.
+MAX_ERROR_RESPONSE_NEWLINES: int = 3
 
 
 def _is_permanent_error(error_message: str) -> bool:
@@ -318,6 +324,12 @@ def _is_permanent_error(error_message: str) -> bool:
         r"quota\s+(exhausted|exceeded)",
         r"daily\s+quota",
         r"terminal\s*quota\s*error",
+        # Issue #1232: Anthropic CLI OAuth/login failure on cloud workers
+        # ("Not logged in · Please run /login"). Without this, every cloud
+        # one-session run burns its first attempt on Anthropic before falling
+        # through to OpenAI.
+        r"not\s+logged\s+in",
+        r"please\s+run\s+/login",
     ]
     return any(re.search(p, msg) for p in permanent_patterns)
 
@@ -880,13 +892,26 @@ def run_agentic_task(
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
                 # regardless of cost. Claude may consume tokens running tools but produce
                 # no text response, which means the task wasn't actually completed.
-                # Issue #902: Error-like content with cost > 0 is also a false positive.
+                # Issue #902: Error-like content with cost > 0 is also a false positive,
+                # but only when the output STARTS with "Error:" (genuine terse provider
+                # error response, e.g., "Error: rate limit exceeded" or a long
+                # single-line CLI error).
+                # Issue #1232: Substantive output that merely mentions "Error:" mid-text
+                # (e.g., describing error-raising functions) must NOT be demoted. A
+                # multi-paragraph findings doc that happens to start with "Error:"
+                # also survives via the newline-count gate (`MAX_ERROR_RESPONSE_NEWLINES`).
                 if success:
-                    output_length = len(output.strip())
+                    stripped_output = output.strip()
+                    output_length = len(stripped_output)
                     is_false_positive = (
                         output_length == 0 or  # Empty output is always a false positive
                         (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH) or  # Zero cost with short output
-                        (cost > 0.0 and "Error:" in output and output_length < 4000) # Issue #902: error message with cost
+                        (
+                            cost > 0.0
+                            and stripped_output.startswith("Error:")
+                            and stripped_output.count("\n") < MAX_ERROR_RESPONSE_NEWLINES
+                            and output_length < 4000
+                        )  # Issue #902/#1232: leading "Error:" with few newlines (terse error, not findings doc)
                     )
 
                     if is_false_positive:

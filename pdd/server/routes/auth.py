@@ -162,7 +162,7 @@ async def _poll_for_auth(poll_id: str, device_code: str, interval: int, expires_
         return
 
     device_flow = DeviceFlow(github_client_id)
-    firebase_auth = FirebaseAuthenticator(firebase_api_key, "pdd")
+    firebase_auth = FirebaseAuthenticator(firebase_api_key, "PDD CLI")
 
     try:
         # Poll for GitHub token

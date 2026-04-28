@@ -5216,3 +5216,387 @@ class TestDetectControlTokenLineEndings:
             "index 1 — it is outside the 30-line tail. But .split('\\n') treats "
             "the entire \\r-separated text as one line, bypassing tail restriction"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1232: substantive `Error:`-containing output classified as false positive
+#
+# The third false-positive heuristic at agentic_common.py:889
+#     (cost > 0.0 and "Error:" in output and output_length < 4000)
+# is too aggressive. Substantive Step 4 checkup reports legitimately mention
+# the substring "Error:" while *describing* error-raising functions, but the
+# heuristic demotes them as false positives, the run falls through to a
+# secondary provider, and (as in the prod repro) aborts entirely.
+#
+# These tests pin the desired behavior:
+#   * Substantive output that merely mentions "Error:" must survive (Tests 1–3).
+#   * Genuine zero-cost / empty / leading "Error:" responses must still be
+#     detected as false positives — guards against simply deleting the branch
+#     and regressing #261 / #902 (Tests 4–6).
+# ---------------------------------------------------------------------------
+
+
+_ISSUE_1232_FINDINGS = (
+    "Findings:\n"
+    "- get_test_command_for_file() can raise Error: ValueError instead of "
+    "returning None when language is omitted and PDD_PATH is unset.\n"
+    "- construct_paths._determine_language() fails for extensionless files "
+    "like Makefile (raises Error: UnknownLanguage).\n"
+    "Verification: focused pytest slices passed but the edge cases are not "
+    "currently covered."
+)
+
+
+def _codex_jsonl(output_text: str, input_tokens: int = 1000, output_tokens: int = 500) -> str:
+    """Build a Codex legacy-format JSONL payload that produces cost > 0."""
+    return "\n".join([
+        json.dumps({"type": "session.start"}),
+        json.dumps({
+            "type": "result",
+            "output": output_text,
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cached_input_tokens": 0,
+            },
+        }),
+    ])
+
+
+def _printed_text(mock_console_obj):
+    """Flatten every console.print(...) call into a single inspectable string."""
+    parts = []
+    for c in mock_console_obj.print.call_args_list:
+        # call_args is (args, kwargs); print() takes positional Rich strings.
+        for a in c.args:
+            parts.append(str(a))
+    return "\n".join(parts)
+
+
+def test_issue1232_substantive_output_with_error_substring_not_demoted(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (primary repro): A real Step 4 OpenAI report whose body merely
+    mentions the substring "Error:" — while describing error-raising functions
+    — must NOT be classified as a false positive.
+
+    Sanity: the constructed output sits squarely inside the buggy branch's
+    window (cost > 0, length between MIN_VALID_OUTPUT_LENGTH and 4000, contains
+    "Error:" twice). On current code this is demoted; after the fix, it is
+    accepted as a valid step result.
+    """
+    # Sanity check the fixture matches the buggy branch's exact predicate
+    assert 50 < len(_ISSUE_1232_FINDINGS.strip()) < 4000
+    assert "Error:" in _ISSUE_1232_FINDINGS
+
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = _codex_jsonl(_ISSUE_1232_FINDINGS)
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert success, (
+        f"Substantive Step 4 output containing 'Error:' must not be classified "
+        f"as a false positive. msg={msg!r}"
+    )
+    assert provider == "openai"
+    assert cost > 0
+    assert "get_test_command_for_file" in msg
+    assert "_determine_language" in msg
+
+    printed = _printed_text(mock_console)
+    assert "Provider 'openai' returned false positive" not in printed, (
+        "False-positive log line must NOT be emitted for substantive output. "
+        f"Console calls: {mock_console.print.call_args_list}"
+    )
+
+
+def test_issue1232_multi_provider_does_not_fall_through_for_substantive_openai_output(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (prod symptom): With a multi-provider config [openai, anthropic],
+    a substantive OpenAI Step 4 report must be accepted; anthropic must NEVER be
+    invoked. The prod repro showed openai demoted, anthropic then failed with
+    'Not logged in', and the run aborted with 'All agent providers failed'.
+    """
+    # Both codex and claude binaries discoverable
+    def which_side_effect(cmd):
+        return f"/bin/{cmd}" if cmd in ("codex", "claude") else None
+    mock_shutil_which.side_effect = which_side_effect
+    os.environ["OPENAI_API_KEY"] = "key"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    openai_response = MagicMock(
+        returncode=0,
+        stdout=_codex_jsonl(_ISSUE_1232_FINDINGS),
+        stderr="",
+    )
+    anthropic_auth_failure = MagicMock(
+        returncode=1,
+        stdout="",
+        stderr="Not logged in · Please run /login",
+    )
+    # If openai is (correctly) accepted, the anthropic mock is never consumed.
+    # If openai is (buggily) demoted, fallback consumes the anthropic mock and
+    # the call_count would be 2.
+    mock_subprocess.side_effect = [openai_response, anthropic_auth_failure]
+
+    with patch("pdd.agentic_common.get_agent_provider_preference",
+               return_value=["openai", "anthropic"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert success, (
+        f"Multi-provider run should succeed on openai alone; got msg={msg!r}"
+    )
+    assert provider == "openai"
+    assert "All agent providers failed" not in msg
+    assert "Aborting after Step 4" not in msg
+    # Critically: anthropic must never be invoked
+    assert mock_subprocess.call_count == 1, (
+        "Anthropic must not be invoked when OpenAI returned a substantive "
+        f"result. subprocess was called {mock_subprocess.call_count} times: "
+        f"{mock_subprocess.call_args_list}"
+    )
+    printed = _printed_text(mock_console)
+    assert "Provider 'openai' returned false positive" not in printed
+
+
+def test_issue1232_long_output_with_error_substring_still_passes(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (boundary regression): output that contains "Error:" but is
+    >= 4000 chars must continue to pass — confirms the fix preserves today's
+    accepted behavior at the upper boundary of the buggy <4000 window.
+    """
+    # Build a long substantive report >= 4000 chars
+    chunk = (
+        "Finding line: get_test_command_for_file() raises Error: ValueError "
+        "when PDD_PATH is unset; needs a guarded fallback path. "
+    )
+    long_findings = chunk * 40  # well over 4000 chars
+    assert len(long_findings.strip()) >= 4000
+    assert "Error:" in long_findings
+
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = _codex_jsonl(long_findings)
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert success
+    assert provider == "openai"
+    assert cost > 0
+    printed = _printed_text(mock_console)
+    assert "Provider 'openai' returned false positive" not in printed
+
+
+def test_issue1232_empty_output_branch_still_detects_false_positive(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (regression guard for #261): the empty-output false-positive
+    branch (output_length == 0) must still fire even when cost > 0. Guards
+    against the fix accidentally weakening the empty-output detection.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "",                # empty output
+        "total_cost_usd": 0.25,      # cost > 0 — only branch 1 (empty) should fire
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["anthropic"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, _cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert not success, f"Empty output must still be detected as false positive. msg={msg!r}"
+    printed = _printed_text(mock_console)
+    assert "Provider 'anthropic' returned false positive" in printed, (
+        "Empty-output false-positive log line must still be emitted. "
+        f"Console calls: {mock_console.print.call_args_list}"
+    )
+
+
+def test_issue1232_zero_cost_short_output_branch_still_detects_false_positive(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (regression guard for #261): the zero-cost + short-output
+    branch must still fire after the fix. Specifically: cost == 0 AND
+    output length < MIN_VALID_OUTPUT_LENGTH (50) AND no "Error:" substring.
+    """
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    short_text = "ok"  # 2 chars, no "Error:" substring
+    assert len(short_text) < 50
+    assert "Error:" not in short_text
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": short_text,
+        "total_cost_usd": 0.0,  # zero cost
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["anthropic"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, _cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert not success, (
+        f"Zero-cost + short-output must still be detected as false positive. msg={msg!r}"
+    )
+    printed = _printed_text(mock_console)
+    assert "Provider 'anthropic' returned false positive" in printed, (
+        "Zero-cost short-output false-positive log line must still be emitted. "
+        f"Console calls: {mock_console.print.call_args_list}"
+    )
+
+
+def test_issue1232_leading_error_prefix_response_still_detects_false_positive(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (regression guard for #902): a genuine provider error response
+    whose body STARTS with "Error:" must still be classified as a false
+    positive. This pins the *tightened* heuristic — the fix must not simply
+    delete the branch, since #902 added it specifically to catch real error
+    responses.
+
+    Output: 'Error: rate limit exceeded' (cost > 0, length < 4000, leading
+    "Error:" prefix). A reasonable tightening (e.g., output.strip().
+    startswith("Error:")) preserves this demotion.
+    """
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+
+    error_response = "Error: rate limit exceeded"
+    assert error_response.startswith("Error:")
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = _codex_jsonl(error_response)
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, _cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert not success, (
+        f"Leading 'Error:' provider error response must still be detected as "
+        f"false positive (#902 regression). msg={msg!r}"
+    )
+    printed = _printed_text(mock_console)
+    assert "Provider 'openai' returned false positive" in printed, (
+        "Leading-'Error:' false-positive log line must still be emitted (#902). "
+        f"Console calls: {mock_console.print.call_args_list}"
+    )
+
+
+def test_issue1232_substantive_finding_starting_with_error_prefix_not_demoted(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, mock_console
+):
+    """
+    Issue #1232 (residual edge case): a *substantive* multi-paragraph findings
+    doc that happens to begin with "Error:" must not be demoted. The newline
+    gate (`MAX_ERROR_RESPONSE_NEWLINES = 3`) protects multi-paragraph docs
+    even when they start with "Error:", while preserving #902's long-single-
+    line error detection.
+    """
+    finding = (
+        "Error: get_test_command_for_file() in pdd/get_command.py is the "
+        "primary failure mode here.\n\n"
+        "Findings:\n"
+        "- The function raises ValueError when language is omitted and "
+        "PDD_PATH is unset, instead of returning None as documented.\n"
+        "- construct_paths._determine_language() fails for extensionless "
+        "files like Makefile (raises UnknownLanguage).\n"
+        "- The exception path leaks through to the orchestrator.\n\n"
+        "Suggested remediation:\n"
+        "- Wrap language inference in a try/except returning None on failure."
+    )
+    assert finding.strip().startswith("Error:")
+    assert finding.strip().count("\n") >= 3
+    assert len(finding.strip()) < 4000
+
+    mock_shutil_which.return_value = "/bin/codex"
+    os.environ["OPENAI_API_KEY"] = "key"
+
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = _codex_jsonl(finding)
+    mock_subprocess.return_value.stderr = ""
+
+    with patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
+         patch("pdd.agentic_common.time.sleep"):
+        success, msg, cost, provider = run_agentic_task(
+            "instruction", mock_cwd, max_retries=1
+        )
+
+    assert success, (
+        f"Substantive multi-paragraph finding starting with 'Error:' must not "
+        f"be demoted (newline gate protects docs). msg={msg!r}"
+    )
+    assert provider == "openai"
+    assert cost > 0
+    printed = _printed_text(mock_console)
+    assert "Provider 'openai' returned false positive" not in printed
+
+
+# ---------------------------------------------------------------------------
+# Issue #1232: cloud-worker Anthropic "Not logged in" must classify as permanent
+# so multi-provider runs don't burn an attempt on a known-broken provider.
+# ---------------------------------------------------------------------------
+
+
+class TestIssue1232NotLoggedInPermanent:
+    """Anthropic CLI 'Not logged in' on cloud workers must be permanent (Issue #1232)."""
+
+    def test_not_logged_in_message_is_permanent(self):
+        """Bare 'Not logged in' phrase should be classified as permanent."""
+        assert _is_permanent_error("Not logged in · Please run /login") is True
+
+    def test_anthropic_cli_full_login_error_is_permanent(self):
+        """The exact prod-repro Anthropic CLI login error string is permanent."""
+        prod_msg = "Exit code 1: Not logged in · Please run /login"
+        assert _is_permanent_error(prod_msg) is True
+
+    def test_please_run_login_alone_is_permanent(self):
+        """The '/login' instruction alone should also classify as permanent."""
+        assert _is_permanent_error("Please run /login to authenticate") is True
+
+    def test_logged_in_substring_does_not_match(self):
+        """'logged in' (without 'not') must NOT be classified as permanent."""
+        assert _is_permanent_error("User is logged in") is False
+        assert _is_permanent_error("Successfully logged in to provider") is False
+
+    def test_login_unrelated_words_do_not_match(self):
+        """Unrelated mentions of 'login' must not trigger permanent classification."""
+        assert _is_permanent_error("login flow timed out, retrying") is False
