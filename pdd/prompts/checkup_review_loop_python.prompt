@@ -1,0 +1,55 @@
+% Write `pdd/checkup_review_loop.py`, implementing `pdd checkup --review-loop`.
+
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_change_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
+
+% Goal
+Add a PR-mode multi-reviewer ping-pong review/fix loop for `pdd checkup`.
+
+% Requirements
+1. Public API:
+   - `parse_reviewers(value) -> Tuple[str, ...]`
+   - `run_checkup_review_loop(context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str]`
+2. Define dataclasses for `ReviewLoopContext`, `ReviewLoopConfig`, `ReviewLoopState`, `ReviewFinding`, `ReviewResult`, and `FixResult`.
+3. Default reviewers are `codex,claude`. Reviewer role mapping:
+   - `codex` / `chatgpt` -> OpenAI/Codex provider
+   - `claude` -> Anthropic/Claude provider
+   - `gemini` -> Google/Gemini provider
+4. Run the loop against an existing PR worktree created via `_setup_pr_worktree`.
+5. The loop is cross-review / cross-fix, not intersection-based:
+   - Codex findings are sent to Claude to fix, then Codex verifies.
+   - Claude findings are sent to Codex to fix, then Claude verifies.
+   - More reviewers generalize by using the next configured reviewer as fixer.
+6. Findings from any reviewer are retained in loop state/artifacts. Deduplication only prevents duplicate work; it must never discard a finding because only one reviewer found it. When the original reviewer verifies a blocking finding as fixed, mark that finding fixed and exclude it from the final report's remaining-findings table so downstream verdict parsers only see open findings.
+7. Normalize reviewer output into structured findings with severity, reviewer, area, evidence, finding, required_fix, location, status, and round.
+8. Blocker, critical, and medium findings require fixes. Low, nit, and info findings are non-blocking.
+9. A required reviewer that fails, times out, hits rate/context/quota limits, or produces unusable output is not clean. The final report must mark the reviewer as failed/degraded/missing, never ship.
+10. After all required reviewers are clean, run a fresh final review when `require_final_fresh_review=True`.
+11. Persist artifacts under `.pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}`:
+    - reviewer raw outputs
+    - fixer raw outputs
+    - final report
+12. Push fixes back to the PR head branch by committing local worktree changes with an explicit bot git identity (`PDD Bot <pdd-bot@users.noreply.github.com>`) and pushing `HEAD:{head_ref}` to the PR head repository clone URL from `gh api repos/{owner}/{repo}/pulls/{pr_number}`.
+13. If PR metadata is unavailable or push fails after fixes, stop with a report whose required reviewer statuses are not clean.
+14. Post the final report to both the source issue and PR unless `use_github_state=False`.
+15. The final markdown report must begin with `## Step 7/8: Review Loop Final Report` and include:
+    - `PR: ...`
+    - `Issue: ...`
+    - `issue_aligned: true|false`
+    - `reviewer-status: codex=... claude=... fresh-final=...`
+    - `fresh-final-review: clean|findings|failed|degraded|missing`
+    - `max-rounds-reached: true|false`
+    - `max-cost-reached: true|false`
+    - `max-duration-reached: true|false`
+    - a markdown findings table with first column severity, containing only remaining/unfixed findings
+16. Return success `True` when the loop completed and produced a report, even when the report is not shippable. Downstream verdict adapters classify ship/not-ready/unknown from the report.
+
+% Dependencies
+<pdd.agentic_common><include select="def:run_agentic_task">context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_change><include select="def:_run_gh_command">context/agentic_change_example.py</include></pdd.agentic_change>
+<pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
+
+% Deliverables
+- Code: `pdd/checkup_review_loop.py`

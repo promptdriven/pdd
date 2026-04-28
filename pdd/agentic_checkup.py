@@ -23,6 +23,12 @@ from .agentic_change import (
     _run_gh_command,
 )
 from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+from .checkup_review_loop import (
+    ReviewLoopConfig,
+    ReviewLoopContext,
+    parse_reviewers,
+    run_checkup_review_loop,
+)
 from .agentic_sync import _find_project_root, _load_architecture_json
 
 console = Console()
@@ -152,6 +158,14 @@ def run_agentic_checkup(
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
     pr_url: Optional[str] = None,
+    review_loop: bool = False,
+    reviewers: str = "codex,claude",
+    max_review_rounds: int = 5,
+    max_review_cost: float = 10.0,
+    max_review_minutes: float = 90.0,
+    require_all_reviewers_clean: bool = True,
+    continue_on_reviewer_limit: bool = False,
+    require_final_fresh_review: bool = True,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -165,6 +179,8 @@ def run_agentic_checkup(
         pr_url: When set, verify this existing PR against ``issue_url`` instead
             of creating a new branch/PR. Step 8 (create_pr) is skipped and the
             worktree is based on the PR's head branch.
+        review_loop: When true in PR mode, run the reviewer/fixer ping-pong
+            loop instead of the legacy single-pass checkup path.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -236,6 +252,44 @@ def run_agentic_checkup(
 
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
+
+    if review_loop:
+        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
+            return False, "--review-loop requires --pr and --issue.", 0.0, ""
+        loop_context = ReviewLoopContext(
+            issue_url=issue_url,
+            issue_content=full_content,
+            repo_owner=owner,
+            repo_name=repo,
+            issue_number=issue_number,
+            issue_title=title,
+            architecture_json=arch_json_str,
+            pddrc_content=pddrc_content,
+            pr_url=pr_url,
+            pr_owner=pr_owner,
+            pr_repo=pr_repo,
+            pr_number=pr_number,
+            project_root=project_root,
+        )
+        loop_config = ReviewLoopConfig(
+            reviewers=parse_reviewers(reviewers),
+            max_rounds=max_review_rounds,
+            max_cost=max_review_cost,
+            max_minutes=max_review_minutes,
+            require_all_reviewers_clean=require_all_reviewers_clean,
+            continue_on_reviewer_limit=continue_on_reviewer_limit,
+            require_final_fresh_review=require_final_fresh_review,
+            timeout_adder=timeout_adder,
+            reasoning_time=reasoning_time,
+        )
+        return run_checkup_review_loop(
+            context=loop_context,
+            config=loop_config,
+            cwd=project_root,
+            verbose=verbose,
+            quiet=quiet,
+            use_github_state=use_github_state,
+        )
 
     # 5. Invoke orchestrator
     try:
