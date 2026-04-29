@@ -31,10 +31,22 @@ You are working on step 11 of 13 in an agentic change workflow. Previous step up
 {step9_output}
 </step9_output>
 
+% Architecture + Doc-Sync Output
+<step10_output>
+{step10_output}
+</step10_output>
+
 % Previous Fix Attempts (if any)
 <previous_fixes>
 {previous_fixes}
 </previous_fixes>
+
+If `step10_output` contains an `ORCHESTRATOR_POSTCHECK_WARNINGS` block or
+`DOC_SYNC_SILENT_DROPS:` line, treat each listed file as an explicit issue
+to surface — these are documents the orchestrator's deterministic discovery
+identified as associated with the changes but Step 10's LLM did not
+explicitly handle. They likely need to be edited or explicitly justified
+as already-consistent.
 
 % Your Task
 

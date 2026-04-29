@@ -139,6 +139,116 @@ def test_orchestrator_happy_path(mock_dependencies, temp_cwd):
     # Verify state was cleared
     mocks["clear_state"].assert_called_once()
 
+def test_step13_prompt_includes_manual_review_lines(mock_dependencies, temp_cwd):
+    """When Step 9 flags conflicts via ``MANUAL_REVIEW:`` lines, those lines
+    must be substituted into Step 13's PR-body template via the
+    ``{manual_review_lines}`` placeholder so reviewers see them in the PR.
+    Regression: previously the aggregation lived in a per-step ``if step_num
+    == 13`` block that never fired (the loop only iterates steps 1-10).
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "PR template — manual review block: {manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mock_template_loader.side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "FILES_MODIFIED: a.py\n"
+                "MANUAL_REVIEW: docs/api.md — schema diverged, manual edit needed",
+                0.5,
+                "gpt-4",
+            )
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/9", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, _, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+        repo_name="repo", issue_number=4242, issue_author="me",
+        issue_title="Conflict surfacing", cwd=temp_cwd, verbose=False,
+    )
+    assert success is True
+
+    step13_calls = [
+        c for c in mock_run.call_args_list
+        if c.kwargs.get("label") == "step13"
+    ]
+    assert step13_calls, "Step 13 was never invoked"
+    s13_prompt = step13_calls[0].kwargs["instruction"]
+    assert "MANUAL_REVIEW: docs/api.md" in s13_prompt
+    assert "schema diverged" in s13_prompt
+
+
+def test_step13_surfaces_step10_associated_docs_conflicts(mock_dependencies, temp_cwd):
+    """Step 10's ``ASSOCIATED_DOCS_CONFLICTS:`` bucket means "left for
+    human"; the verifier counts those entries as handled (no silent drop)
+    but the conflicts must still surface in the PR body so reviewers see
+    them. Each conflict path is funneled into the Step 13 prompt as a
+    synthesized ``MANUAL_REVIEW:`` line.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "PR template — manual review block: {manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mock_template_loader.side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: a.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (
+                True,
+                "ASSOCIATED_DOCS_MODIFIED: README.md\n"
+                "ASSOCIATED_DOCS_CONFLICTS: docs/spec.md\n"
+                "ASSOCIATED_DOCS_UNCHANGED: ",
+                0.1,
+                "gpt-4",
+            )
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/9", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    success, _, _, _, _ = run_agentic_change_orchestrator(
+        issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+        repo_name="repo", issue_number=4243, issue_author="me",
+        issue_title="Conflict surfacing", cwd=temp_cwd, verbose=False,
+    )
+    assert success is True
+
+    step13_calls = [
+        c for c in mock_run.call_args_list if c.kwargs.get("label") == "step13"
+    ]
+    assert step13_calls
+    s13_prompt = step13_calls[0].kwargs["instruction"]
+    assert "docs/spec.md" in s13_prompt
+    assert "ASSOCIATED_DOCS_CONFLICTS" in s13_prompt
+
+
 def test_orchestrator_hard_stop_early(mock_dependencies, temp_cwd):
     """
     Test that the orchestrator stops immediately if a hard stop condition is met.
@@ -977,6 +1087,96 @@ def test_parse_direct_edit_candidates():
     candidates_varied = _parse_direct_edit_candidates(output_varied)
     assert len(candidates_varied) == 1
     assert "frontend/src/App.tsx" in candidates_varied
+
+def test_parse_changed_files_handles_inline_markers():
+    """LLM outputs frequently emit markers mid-line, e.g.
+    ``Implementation done. FILES_MODIFIED: a.py, b.py``. The parser must
+    recognize these so Step 9's files reach Step 10 doc discovery (the
+    parsing regression that broke the #739 inline path).
+    """
+    from pdd.agentic_change_orchestrator import _parse_changed_files
+
+    output = "Implementation done. FILES_MODIFIED: file_a.py, file_b.py"
+    files = _parse_changed_files(output)
+    assert "file_a.py" in files
+    assert "file_b.py" in files
+
+    # Word-boundary check: a similarly-named marker must not match.
+    output_boundary = "MY_FILES_MODIFIED: should_not_match.py\nFILES_MODIFIED: real.py"
+    files_boundary = _parse_changed_files(output_boundary)
+    assert "real.py" in files_boundary
+    assert "should_not_match.py" not in files_boundary
+
+
+def test_extract_marker_paths_continuation_preserves_prefix_before_inline_terminator():
+    """A continuation line containing both a payload entry AND an inline
+    terminator must contribute the prefix to the section's payload before
+    ending it. ``b.py ARCHITECTURE_FILES_MODIFIED: arch.json`` on a
+    continuation line of FILES_MODIFIED contributes ``b.py``; losing it
+    silently drops a real path from Step 10 doc discovery.
+    """
+    from pdd.agentic_change_orchestrator import _extract_marker_paths
+
+    output = "FILES_MODIFIED: a.py\nb.py ARCHITECTURE_FILES_MODIFIED: architecture.json"
+    files = _extract_marker_paths("FILES_MODIFIED", output)
+    arch = _extract_marker_paths("ARCHITECTURE_FILES_MODIFIED", output)
+    assert "a.py" in files
+    assert "b.py" in files
+    assert arch == ["architecture.json"]
+
+
+def test_extract_marker_paths_truncates_at_inline_terminator():
+    """When two markers appear on the same line, the parser must stop at
+    the second marker rather than swallowing it into the first section's
+    payload. Otherwise ``DIRECT_EDITS: b.md`` becomes a bogus path of the
+    FILES_MODIFIED section.
+    """
+    from pdd.agentic_change_orchestrator import _extract_marker_paths
+
+    output = "Step 9 done. FILES_MODIFIED: a.py DIRECT_EDITS: b.md"
+    files = _extract_marker_paths("FILES_MODIFIED", output)
+    direct = _extract_marker_paths("DIRECT_EDITS", output)
+    assert files == ["a.py"]
+    assert direct == ["b.md"]
+
+
+def test_verify_doc_sync_contract_recognizes_inline_associated_docs():
+    """The verifier must recognize associated-doc markers when they appear
+    mid-line (e.g. ``Arch updated. ASSOCIATED_DOCS_MODIFIED: README.md``);
+    otherwise legitimate doc edits are reported as silent drops.
+    """
+    from pdd.agentic_change_orchestrator import _verify_doc_sync_contract
+
+    discovered = ["README.md"]
+    output = "Arch updated. ASSOCIATED_DOCS_MODIFIED: README.md"
+    modified, conflicted, unchanged, silently_dropped, overlapping = (
+        _verify_doc_sync_contract(discovered, output)
+    )
+    assert "README.md" in modified
+    assert silently_dropped == []
+    assert overlapping == []
+
+
+def test_collect_manual_review_lines_aggregates_and_dedupes():
+    """Step 13 surfaces conflicts via {manual_review_lines}; the helper must
+    pull MANUAL_REVIEW lines from Step 9 and the review-loop fixes string,
+    de-dupe, and return ``"None"`` when nothing is flagged.
+    """
+    from pdd.agentic_change_orchestrator import _collect_manual_review_lines
+
+    s9 = "FILES_MODIFIED: a.py\nMANUAL_REVIEW: docs/api.md — schema diverged"
+    fixes = (
+        "Iteration 1:\n- MANUAL_REVIEW: docs/api.md — schema diverged\n"
+        "Iteration 2:\nMANUAL_REVIEW: README.md — section needs hand-editing"
+    )
+    result = _collect_manual_review_lines(s9, fixes)
+    lines = result.splitlines()
+    assert len(lines) == 2  # de-duped across sources
+    assert any("docs/api.md" in l for l in lines)
+    assert any("README.md" in l for l in lines)
+
+    assert _collect_manual_review_lines("", "") == "None"
+
 
 def test_parse_changed_files_includes_direct_edits():
     """

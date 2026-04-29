@@ -1,18 +1,36 @@
-## v0.0.221 (2026-04-27)
+## v0.0.222 (2026-04-28)
+
+### Feat
+
+- **#739**: discover and account for associated docs in pdd change
+- introduce keyring operation timeouts to prevent CLI hangs and improve auth reliability
 
 ### Fix
 
-- declare duplicate guard prompt deps
-- report keyring status timeouts
-- relay keyring timeout base exceptions
-- read legacy server auth refresh tokens
-- clear legacy server auth keyring token
-- clarify logout after keyring status timeout
-- align server auth keyring service
-- handle keyring timeout logout edge case
-- bound keyring auth workflows
-- prevent checkup Step 4 false-positive aborts (#1310)
-- improve CLI exit handling, refine agentic sync dependency contracts, and optimize prompt include-blocks with refreshed test benchmarks.
+- avoid duplicate guard empty argv records (#1313)
+
+## v0.0.221 (2026-04-27)
+
+### Feat
+
+- **bounded keyring operations to prevent CLI hangs in headless CI/SSH and locked desktop keychains**: new module `pdd/_keyring_timeout.py` (and matching `pdd/prompts/_keyring_timeout_python.prompt` + `context/_keyring_timeout_example.py`) provides `_keyring_op_with_timeout(op, *args, timeout=None)` which runs any keyring callable in a daemon `threading.Thread` and returns `(timed_out, value, exception)`. Timeout defaults to 5s on macOS, 10s elsewhere. The thread is daemonized so a still-blocking keyring call cannot keep the process alive after the caller decides to give up. Ordinary `Exception` instances are captured in the return tuple; `BaseException` subclasses (`KeyboardInterrupt`, `SystemExit`) are re-raised in the caller's thread so they are never silently swallowed as a successful result. Python's `keyring` library has no built-in timeout, and on locked macOS keychains or headless CI/SSH sessions `keyring.get_password` / `set_password` / `delete_password` can wait indefinitely for GUI unlock input that will never arrive — the helper lets every auth path degrade gracefully instead of hanging the CLI
+
+### Fix
+
+- **`pdd/auth_service.py` — bound every keyring read/delete with `_keyring_op_with_timeout` and surface timeouts as `refresh_token_error`**: `has_refresh_token`, `get_refresh_token`, `clear_refresh_token`, and `get_auth_status` now route through new internal helpers `_get_refresh_token_status`, `_get_refresh_token_with_get`, `_clear_refresh_tokens_with_delete`, and `_clear_refresh_token_from_service`. `get_auth_status` adds a new optional `refresh_token_error` field (only set when the keyring read times out) so callers can distinguish "definitely not authenticated" from "couldn't tell because keyring hung". New constants `LEGACY_KEYRING_SERVICE_NAMES = ("firebase-auth-pdd",)` and `REFRESH_TOKEN_CHECK_TIMEOUT_ERROR = "keyring get_password timed out"`
+- **`pdd/auth_service.py` — read and clear refresh tokens from legacy `firebase-auth-pdd` service**: every refresh-token read iterates over `KEYRING_SERVICE_NAME` first then each entry of `LEGACY_KEYRING_SERVICE_NAMES`, so existing users whose tokens were written by older server-auth flows under `firebase-auth-pdd` remain authenticated and migrate transparently. `clear_refresh_token` likewise deletes from both the current and every legacy service name, so logout/start-login cleanup actually removes the old tokens instead of orphaning them in the keychain
+- **`pdd/get_jwt_token.py` — `FirebaseAuthenticator._store_refresh_token` / `_get_stored_refresh_token` / `_delete_stored_refresh_token` use the timeout helper**: every `keyring.set_password`/`get_password`/`delete_password` call is now wrapped. On timeout, store and delete log a warning and return `False` (caller proceeds without keyring caching); read returns `None`. The macOS `errSecDuplicateItem` (-25299) retry loop is preserved — on the duplicate error, the bounded `delete_password` plus `_macos_force_delete_keychain_item` fallback still runs before the next set attempt
+- **`pdd/server/routes/auth.py` — `_poll_for_auth` constructs `FirebaseAuthenticator(firebase_api_key, "PDD CLI")` instead of `"pdd"`**: the server auth flow was writing refresh tokens under keyring service `firebase-auth-pdd` while `pdd auth status`, `verify`, and `logout` read from `firebase-auth-PDD CLI`. Aligning `app_name` to `"PDD CLI"` makes the keyring service identical across both writers; combined with the `LEGACY_KEYRING_SERVICE_NAMES` reader, existing tokens under the old name still work
+- **`pdd/commands/auth.py status` — report keyring timeout instead of falsely claiming "Not authenticated"**: when `get_auth_status()` returns `refresh_token_error`, status now prints "Authentication status could not be confirmed: …" plus a hint to unlock or configure the system keyring, then exits 1. Previously a hung keyring read would surface as a confusing "Not authenticated" message and silently mask the real failure
+- **`pdd/commands/auth.py logout` — best-effort keyring cleanup when status read timed out**: when `refresh_token_error` is set, logout still calls `service_logout()` so the bounded `delete_password` path (with its own timeout) runs instead of giving up with "Not authenticated". On success prints "Logged out of PDD Cloud."; on delete-timeout/error reports the underlying message
+- **prevent checkup Step 4 false-positive aborts (Issue #1232)**: `pdd/agentic_common.py` `run_agentic_task` false-positive heuristic was demoting substantive multi-paragraph findings docs that merely *described* error-raising functions whenever they contained the substring `"Error:"`, causing the run to fall through to the next provider and (in the prod repro) abort with "Aborting after Step 4: agent providers unavailable". The check now requires the stripped output to **start with** `"Error:"` (anchored prefix, not unanchored substring) AND have fewer than `MAX_ERROR_RESPONSE_NEWLINES = 3` newlines AND be shorter than 4000 chars. The newline-count gate preserves the long-single-line provider-error case from #902 while protecting multi-paragraph findings docs that happen to start with `"Error:"`. Empty-output and zero-cost-short-output detection from #261/#902 are unchanged
+- **classify Anthropic CLI "Not logged in" as a permanent error**: `_is_permanent_error` adds `not\s+logged\s+in` and `please\s+run\s+/login` patterns. Cloud workers without Anthropic auth no longer burn their first attempt on Anthropic before falling through to OpenAI on every multi-provider run — the candidate provider is skipped immediately
+- **`pdd/prompts/core/duplicate_cli_guard_python.prompt` — declare missing prompt dependencies**: header now declares `<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>` and `<pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>` and adds the matching `<pdd.agentic_test_orchestrator>` (selecting `def:example_hard_stop_duplicate`) and `<pdd.agentic_langtest>` (selecting `def:default_verify_cmd_for`) include blocks, so auto-heal correctly links the duplicate-CLI guard to the test-orchestrator helpers it actually consumes
+
+### Build
+
+- auto-healed prompt/example drift across `_keyring_timeout`, `auth_service`, `bug_main`, `cmd_test_main`, `code_generator_main`, `commands/auth`, `context_generator_main`, `core/cli`, `core/cloud`, `core/duplicate_cli_guard`, `get_jwt_token`, `llm_invoke`, `remote_session`, `server/routes/auth`, `sync_determine_operation`, `sync_main`, `update_main` — narrows broad `<include>` blocks to surgical `select="…"` queries (e.g. `bug_main` selects `def:get_jwt_token` from `get_jwt_token_example.py`; `commands/auth` selects `def:get_auth_status,def:logout,def:verify_auth,def:get_jwt_cache_info,def:has_refresh_token,def:get_cached_jwt` from `auth_service_example.py`; `server/routes/auth` selects `class:DeviceFlow,class:FirebaseAuthenticator,class:AuthError,class:NetworkError,class:TokenError,class:UserCancelledError`; `update_main` swaps the broad `sync_determine_operation_example` and `operation_log_example` includes for `def:example_determine_operation` and `def:example_save_fingerprint,def:example_infer_module_identity` respectively); `cmd_test_main` and `sync_main` swap broad `<include>` blocks on `README.md` for `query="…"` / `select="section:sync"` scoping; `core/cli` adds `<pdd-dependency>` declarations for `agentic_common`, `auto_update`, and `track_cost`; `core/cloud` adds the new `<utils.keyring_timeout>` include; `auth_service` and `get_jwt_token` add `<pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>` and the matching include blocks; `llm_invoke` adds new `<pdd.core.path_resolver>`, `<pdd.server.token_counter>`, `<pdd.core.provider_manager>`, and `<pdd.core.cloud>` include blocks; `update_main` adds `<pdd-dependency>auto_include_python.prompt</pdd-dependency>`; `code_generator_main` adds `<pdd.auto_include>` and `<pdd.api_key_scanner>` include blocks
+- refresh `ci/cloud-batch/test-durations.json` benchmarks, `.cloud-image-hash`, `architecture.json`, and `project_dependencies.csv`
 
 ## v0.0.220 (2026-04-26)
 

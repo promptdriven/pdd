@@ -75,11 +75,32 @@ def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: boo
         2. validation_python.prompt: Create new module for validation utilities
         3. user_service_example.py: Update to show validation usage"""
     elif step_num == "9":
-        output = """FILES_MODIFIED: prompts/user_service_python.prompt, context/user_service_example.py
-        FILES_CREATED: prompts/validation_python.prompt
-        Changes applied successfully."""
+        # Step 9 atomically applies drafted edits to prompts, code, and
+        # associated documents in the same commit. Per the Step 9 prompt,
+        # associated-document edits are reported in FILES_MODIFIED
+        # alongside prompt/code edits — Step 10 then classifies them into
+        # the doc-sync buckets (ASSOCIATED_DOCS_*).
+        output = (
+            "FILES_MODIFIED: prompts/user_service_python.prompt, "
+            "context/user_service_example.py, README.md, CHANGELOG.md\n"
+            "FILES_CREATED: prompts/validation_python.prompt\n"
+            "Changes applied successfully."
+        )
     elif step_num == "10":
-        output = "ARCHITECTURE_FILES_MODIFIED: prompts/architecture.md\nArchitecture metadata updated."
+        # Step 10 ratifies the doc-sync contract for this run. Step 10.5
+        # then verifies that every associated doc returned by
+        # `discover_associated_documents` (a real-disk operation gated by
+        # the prompt graph — illustrative here) appears under exactly one
+        # of ASSOCIATED_DOCS_MODIFIED / _CONFLICTS / _UNCHANGED.
+        # architecture.json is reported via ARCHITECTURE_FILES_MODIFIED;
+        # discovery only returns .md/.rst/.txt files.
+        output = (
+            "ARCHITECTURE_FILES_MODIFIED: architecture.json\n"
+            "ASSOCIATED_DOCS_MODIFIED: README.md, CHANGELOG.md\n"
+            "ASSOCIATED_DOCS_UNCHANGED: \n"
+            "ASSOCIATED_DOCS_CONFLICTS: \n"
+            "Architecture metadata + associated docs synced."
+        )
     elif step_num == "11":
         output = "No Issues Found"
     elif step_num == "12":

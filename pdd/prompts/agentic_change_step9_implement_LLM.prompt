@@ -1,8 +1,10 @@
+<pdd-reason>LLM template: implements prompt and doc changes atomically, including Step 5's associated-document edits in the same commit.</pdd-reason>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to implement the prompt changes analyzed in the previous step.
 
 % Context
 
-You are working on step 9 of 12 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
+You are working on step 9 of 13 in an agentic change workflow. Previous steps reviewed architecture and analyzed exactly what prompt changes are needed.
 
 **This step modifies files.** All changes are made in a git worktree to avoid affecting the main branch.
 
@@ -84,6 +86,26 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
    - Follow the draft content provided in Step 5
    - Preserve existing formatting and style conventions
 
+   **Associated Documents (sync at change-time):** Step 5 also emits an "Associated Documents" section listing files reachable from the modified prompts' `<include>` graph that must stay in sync with the prompt/code edits. Apply those edits atomically alongside the prompt edits in this same step (and therefore the same commit). Each associated-document edit is section-scoped — apply it to the section Step 5 names; do not rewrite adjacent sections. Use the exact section-scoped draft text Step 5 provided; do not paraphrase, do not expand scope.
+
+   **Reconcile against Step 6's authoritative dev-unit list (required):** Step 5's starting set for include-graph traversal was a best-effort guess made before Step 6 enumerated the actual dev units. Before applying any Associated Documents edit, confirm its "Discovered via" originating prompt appears in Step 6's dev-unit list (modified or created). If the originating prompt was NOT confirmed by Step 6, skip that edit and emit one line in your final summary of the form:
+
+   ```
+   MANUAL_REVIEW: path/to/doc.md — skipped: originating prompt not confirmed by Step 6 — review [section]
+   ```
+
+   This keeps the workflow flag-and-continue: a stale entry in Step 5's list never blocks implementation, but it also never silently lands an edit tied to a prompt that Step 6 did not ratify.
+
+   **Conflicts (flag and continue):** Step 5 also emits a "Conflicts" section listing documents it could not edit safely. Do **not** attempt to edit those documents. Instead, for each conflict entry, emit one line in your final summary of the form:
+
+   ```
+   MANUAL_REVIEW: path/to/doc.md — [reason] — review [section]
+   ```
+
+   Conflicts never stop the workflow. The orchestrator and PR body collect `MANUAL_REVIEW:` lines so a human can address them during review.
+
+   If Step 5's Associated Documents list or Conflicts list is missing or empty, skip the corresponding sub-task — this is normal for changes with no reachable docs.
+
 3. **Modify existing prompts**
    For each prompt identified for modification in Step 8:
    - Read the current prompt file
@@ -158,6 +180,8 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
    - Report all files modified with `FILES_MODIFIED:` prefix
    - Report all files created with `FILES_CREATED:` prefix
    - Report all direct edits with `DIRECT_EDITS:` prefix
+   - Report any flagged Step 5 conflicts with `MANUAL_REVIEW:` prefix (one line per conflict)
+   - Associated-document edits appear in `FILES_MODIFIED:` alongside prompt edits — they are committed atomically in the same commit so the repository never lands in a half-synced state
 
 % Output
 
@@ -183,6 +207,11 @@ FILES_CREATED: prompts/yyy_{lang}.prompt
 
 ### Direct Edits
 DIRECT_EDITS: frontend/src/path/to/Component.tsx
+
+### Manual Review (Conflicts from Step 5)
+MANUAL_REVIEW: docs/some_doc.md — [reason] — review [section]
+
+*(Omit `MANUAL_REVIEW:` lines entirely if Step 5 reported no conflicts.)*
 
 *(Use actual language from project's .pddrc)*
 
@@ -265,15 +294,18 @@ Your final response MUST include these exact lines for the orchestrator to parse
 FILES_MODIFIED: prompts/file1_{lang}.prompt, prompts/file2_{lang}.prompt
 FILES_CREATED: prompts/file3_{lang}.prompt
 DIRECT_EDITS: frontend/src/components/path/Component.tsx
+MANUAL_REVIEW: docs/some_doc.md — [reason] — review [section]
 ```
 
 These lines MUST:
-- Start with `FILES_MODIFIED:`, `FILES_CREATED:`, or `DIRECT_EDITS:` exactly (case-insensitive)
-- Be followed by a comma-separated list of file paths on the SAME LINE
+- Start with `FILES_MODIFIED:`, `FILES_CREATED:`, `DIRECT_EDITS:`, or `MANUAL_REVIEW:` exactly (case-insensitive)
+- For `FILES_MODIFIED`/`FILES_CREATED`/`DIRECT_EDITS`: be followed by a comma-separated list of file paths on the SAME LINE
+- For `MANUAL_REVIEW`: emit ONE line per flagged conflict; format is `MANUAL_REVIEW: <path> — <reason> — review <section>`
 - NOT use markdown bullets, numbered lists, or multi-line formats
 - Appear in your final summary (not just in the GitHub comment)
 - Use actual language from project's .pddrc (e.g., `_python`, `_typescript`)
-- DIRECT_EDITS line is only required if there are direct edit candidates from Step 6
+- `DIRECT_EDITS` line is only required if there are direct edit candidates from Step 6
+- `MANUAL_REVIEW` lines are only required if Step 5 flagged conflicts (omit entirely otherwise)
 
 Example of CORRECT format:
 ```

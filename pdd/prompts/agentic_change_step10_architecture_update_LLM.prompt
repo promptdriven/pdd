@@ -18,6 +18,7 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
 - Worktree Path: {worktree_path}
 - FILES_CREATED: {files_created}
 - FILES_MODIFIED: {files_modified}
+- ASSOCIATED_DOCUMENTS: {associated_documents}
 
 % Issue Content
 <issue_content>
@@ -68,6 +69,28 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
       - If no existing arch.json entry is found: create a new entry using the same structure as (a), populating reason, interface, and dependencies from the prompt's PDD tags. This applies to prompts that exist in the repo but were never registered in arch.json (e.g., nested `commands/*` prompts, legacy modules).
    c. Preserve existing entries not being modified
 
+6. **Sync associated documents (discovered via `<include>` graph BFS):**
+   The `ASSOCIATED_DOCUMENTS` input is a comma-separated list of doc files
+   (`.md`, `.rst`, `.txt`) that the orchestrator's deterministic discovery
+   determined are associated with the modified prompts via `<include>` references
+   or `architecture.json` dependency BFS.
+
+   For EACH doc path in `ASSOCIATED_DOCUMENTS` (skip if value is `"None"` or empty):
+
+   a. Read the doc file in the worktree.
+   b. Inspect the changes made in Step 9 (see `step9_output` above) — what
+      behaviors, signatures, options, or facts changed in the modified prompts?
+   c. **If the doc references those changes** (e.g. mentions an option that was
+      renamed, a signature that changed, a behavior that was extended), **edit
+      the doc to keep it consistent** with Step 9's edits. Use `gh pr` style
+      narrow edits — only the affected section, not a whole-file rewrite.
+   d. **If the doc cannot be safely auto-updated** (e.g. structural overhaul
+      needed, ambiguous which section is stale, conflicting cross-references),
+      **flag it as a conflict** instead of editing.
+   e. **If the doc is already consistent with the changes**, declare it explicitly
+      under `ASSOCIATED_DOCS_UNCHANGED:` so the contract verifier knows you
+      considered it. Do NOT silently omit it — that looks identical to a drop.
+
 % Output
 
 After completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -94,7 +117,17 @@ Your comment should follow this format:
 - Added: `xxx.prompt`
 - Updated: `yyy.prompt`
 
+### Associated Documents
+| Document | Status | Notes |
+|----------|--------|-------|
+| `README.md` | Updated | Added `--compact-json` to options list |
+| `docs/spec.md` | Conflict | Structure overhaul needed; left for manual review |
+| `docs/api.md` | Unchanged | Already consistent with the new behavior |
+
 ARCHITECTURE_FILES_MODIFIED: prompts/xxx.prompt, prompts/yyy.prompt, architecture.json
+ASSOCIATED_DOCS_MODIFIED: README.md
+ASSOCIATED_DOCS_CONFLICTS: docs/spec.md
+ASSOCIATED_DOCS_UNCHANGED: docs/api.md
 
 ---
 *Proceeding to Step 11: Identify Issues*
@@ -136,6 +169,16 @@ No new or modified prompt files require architecture metadata updates.
 - Always post your findings as a GitHub comment before completing
 - The ARCHITECTURE_FILES_MODIFIED line is CRITICAL for the orchestrator to track changes
 - Use the exact format: `ARCHITECTURE_FILES_MODIFIED: file1, file2, file3` (comma-separated, same line)
+- The ASSOCIATED_DOCS_MODIFIED, ASSOCIATED_DOCS_CONFLICTS, and ASSOCIATED_DOCS_UNCHANGED
+  lines are CRITICAL for the orchestrator's contract verifier. **Every doc in the
+  `ASSOCIATED_DOCUMENTS` input MUST appear in exactly one of the three output lines.**
+  Silent omission is a workflow regression and the contract verifier will flag it as
+  a silent drop.
+  Use the exact format (comma-separated, same line each):
+  - `ASSOCIATED_DOCS_MODIFIED: file1, file2` (you edited the doc)
+  - `ASSOCIATED_DOCS_CONFLICTS: file1` (you couldn't safely edit; left for human)
+  - `ASSOCIATED_DOCS_UNCHANGED: file1, file2` (already consistent; no edit needed)
+  Omit any line whose value would be empty.
 
 % Tag Format Examples
 

@@ -221,7 +221,7 @@ The `pdd fix` command:
 infisical run -- pdd change https://github.com/gltanaka/pdd/issues/XXX
 ```
 
-This runs a 12-step workflow that researches, clarifies requirements, implements changes, and creates a PR.
+This runs a 13-step workflow that researches, clarifies requirements, implements changes (including associated-document sync), runs a review loop, and creates a PR.
 
 ### When to Use Manual Workflows
 

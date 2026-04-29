@@ -169,7 +169,7 @@ def run_agentic_change(
     CLI entry point for the agentic change workflow.
 
     Fetches issue details and comments from GitHub, sets up the repository,
-    and invokes the orchestrator to perform the 12-step change process.
+    and invokes the orchestrator to perform the 13-step change process.
 
     Args:
         issue_url: The full URL of the GitHub issue.

@@ -11,8 +11,9 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Dict, List, Optional, Sequence, Set, Tuple, Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -36,6 +37,7 @@ from pdd.sync_order import (
     get_affected_modules,
     generate_sync_order_script,
     extract_module_from_include,
+    discover_associated_documents,
 )
 from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
 from pdd.get_extension import get_extension
@@ -57,7 +59,7 @@ CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
     7: 340.0,   # Architecture Review
     8: 600.0,   # Analyze Prompt Changes (Complex)
     9: 1000.0,  # Implement Changes (Most Complex)
-    10: 340.0,  # Architecture Update
+    10: 600.0,  # Architecture Update + Associated Document Updates
     11: 340.0,  # Identify Issues
     12: 600.0,  # Fix Issues (Complex)
     13: 340.0,  # Create PR
@@ -526,30 +528,198 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
     except subprocess.CalledProcessError as e:
         return None, f"Git worktree creation failed: {e}"
 
+_PARSE_CHANGED_FILES_TERMINATORS = (
+    "FILES_CREATED",
+    "FILES_MODIFIED",
+    "ARCHITECTURE_FILES_MODIFIED",
+    "ASSOCIATED_DOCS_MODIFIED",
+    "ASSOCIATED_DOCS_CONFLICTS",
+    "ASSOCIATED_DOCS_UNCHANGED",
+    "DIRECT_EDITS",
+    "MANUAL_REVIEW",
+    "ORCHESTRATOR_POSTCHECK_WARNINGS",
+    "DOC_SYNC_SILENT_DROPS",
+    "DOC_SYNC_BUCKET_OVERLAPS",
+    "STOP_CONDITION",
+)
+
+
+def _collect_manual_review_lines(*sources: str) -> str:
+    """Collect ``MANUAL_REVIEW: ...`` lines from one or more text sources,
+    de-duped while preserving first-seen order. Returns ``"None"`` when no
+    flags are present so the Step 13 template renders a stable placeholder.
+    """
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for src in sources:
+        if not src:
+            continue
+        for line in src.splitlines():
+            stripped = line.strip()
+            while stripped and stripped[0] in "-*•":
+                stripped = stripped[1:].lstrip()
+            if stripped.upper().startswith("MANUAL_REVIEW:") and stripped not in seen:
+                seen.add(stripped)
+                ordered.append(stripped)
+    return "\n".join(ordered) if ordered else "None"
+
+
+def _find_marker_start(line: str, prefix: str) -> Optional[int]:
+    """Return the index just after ``prefix:`` in ``line`` if it appears at a
+    word boundary, else None. Word boundary means the character before
+    ``prefix`` is not alphanumeric/underscore — this prevents ``MY_FILES_MODIFIED:``
+    from matching ``FILES_MODIFIED:``.
+    """
+    idx = line.find(prefix)
+    while idx != -1:
+        if idx == 0 or not (line[idx - 1].isalnum() or line[idx - 1] == "_"):
+            return idx + len(prefix)
+        idx = line.find(prefix, idx + 1)
+    return None
+
+
+def _truncate_at_inline_terminator(
+    text: str, terminators: Sequence[str], skip_prefix: str
+) -> str:
+    """Trim ``text`` at the first inline occurrence of any terminator marker,
+    skipping ``skip_prefix`` (the marker we're currently inside, so a repeat
+    of our own marker still terminates but our entry-point doesn't).
+    """
+    earliest: Optional[int] = None
+    for term in terminators:
+        term_prefix = f"{term}:"
+        end_after = _find_marker_start(text, term_prefix)
+        if end_after is None:
+            continue
+        # _find_marker_start returns the index AFTER the colon; the marker
+        # itself starts at end_after - len(term_prefix).
+        marker_start = end_after - len(term_prefix)
+        if earliest is None or marker_start < earliest:
+            earliest = marker_start
+    if earliest is None:
+        return text
+    return text[:earliest].rstrip()
+
+
+def _extract_marker_paths(marker: str, output: str) -> List[str]:
+    """Walk lines after ``marker:`` until blank or another known marker.
+
+    Multi-line payloads are supported (LLMs wrap long lists across lines).
+    The marker is also detected when it appears mid-line (e.g.
+    ``Implementation done. FILES_MODIFIED: a.py, b.py``); in that case the
+    section starts at the marker and ends at the line break, matching the
+    behavior of the prior single-line regex parser.
+    """
+    prefix = f"{marker}:"
+    other_terminators = tuple(
+        t for t in _PARSE_CHANGED_FILES_TERMINATORS if t != marker
+    )
+    lines = output.splitlines()
+    payload_lines: List[str] = []
+    in_section = False
+    for line in lines:
+        lstrip = line.lstrip()
+        if not in_section:
+            start_idx = _find_marker_start(line, prefix)
+            if start_idx is None:
+                continue
+            in_section = True
+            # When the marker started inline (mid-line), the remainder of
+            # the line may also contain another marker (e.g.
+            # ``Done. FILES_MODIFIED: a.py DIRECT_EDITS: b.md``). Truncate
+            # at the next inline terminator so we don't swallow the next
+            # section's tag/value as a path.
+            first = _truncate_at_inline_terminator(
+                line[start_idx:], other_terminators, prefix
+            ).strip()
+            if first:
+                payload_lines.append(first)
+            continue
+        stripped = line.strip()
+        if not stripped:
+            break
+        # Preserve any prefix text before an inline terminator on a
+        # continuation line. ``b.py ARCHITECTURE_FILES_MODIFIED: arch.json``
+        # contributes ``b.py`` to FILES_MODIFIED's payload, then ends the
+        # section — losing ``b.py`` would silently drop a real file from
+        # downstream Step 10 doc discovery.
+        truncated = _truncate_at_inline_terminator(
+            line, other_terminators, prefix
+        )
+        if truncated != line:
+            if truncated.strip():
+                payload_lines.append(truncated)
+            break
+        payload_lines.append(line)
+
+    entries: List[str] = []
+    for raw_line in payload_lines:
+        s = raw_line.strip()
+        # Strip leading bullets per line so "- README.md" yields "README.md".
+        while s and s[0] in "-*•":
+            s = s[1:].lstrip()
+        for part in s.split(","):
+            piece = part.strip()
+            # Re-strip bullets per entry so a single inline list like
+            # ``- a.md, - b.md, • c.md`` normalizes each comma-piece.
+            while piece and piece[0] in "-*•":
+                piece = piece[1:].lstrip()
+            # Strip surrounding markdown emphasis / code ticks so
+            # ``**README.md**`` and ```README.md``` both normalize cleanly.
+            piece = piece.strip("*`").strip()
+            if piece:
+                entries.append(piece)
+    return entries
+
+
 def _parse_changed_files(output: str) -> List[str]:
-    """Extract file paths from FILES_CREATED, FILES_MODIFIED, or DIRECT_EDITS lines."""
-    files = []
-    # Look for FILES_CREATED: path, path
-    created_match = re.search(r"FILES_CREATED:\s*(.*)", output)
-    if created_match:
-        files.extend([f.strip().strip("*").strip() for f in created_match.group(1).split(",") if f.strip()])
+    """Extract file paths from FILES_CREATED, FILES_MODIFIED, or DIRECT_EDITS lines.
 
-    # Look for FILES_MODIFIED: path, path
-    modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", output)
-    if modified_match:
-        files.extend([f.strip().strip("*").strip() for f in modified_match.group(1).split(",") if f.strip()])
+    Multi-line marker payloads are supported (the LLM frequently wraps long
+    lists across lines). All markers share the same line-walker shape; see
+    ``_extract_marker_paths``.
+    """
+    files: List[str] = []
+    files.extend(_extract_marker_paths("FILES_CREATED", output))
+    files.extend(_extract_marker_paths("FILES_MODIFIED", output))
+    files.extend(_extract_marker_paths("ARCHITECTURE_FILES_MODIFIED", output))
+    files.extend(_extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", output))
 
-    # Look for ARCHITECTURE_FILES_MODIFIED: path, path (Step 10)
-    arch_match = re.search(r"ARCHITECTURE_FILES_MODIFIED:\s*(.*)", output)
-    if arch_match:
-        files.extend([f.strip().strip("*").strip() for f in arch_match.group(1).split(",") if f.strip()])
+    # Log ASSOCIATED_DOCS_CONFLICTS as warnings (docs that need manual review).
+    conflict_list = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", output)
+    if conflict_list:
+        console.print(
+            f"[yellow]Associated docs flagged for manual review: {', '.join(conflict_list)}[/yellow]"
+        )
 
-    # Look for DIRECT_EDITS: path, path (Step 9 - direct code edits for files without prompts)
-    direct_edits_match = re.search(r"DIRECT_EDITS:\s*(.*)", output)
-    if direct_edits_match:
-        files.extend([f.strip().strip("*").strip() for f in direct_edits_match.group(1).split(",") if f.strip()])
+    files.extend(_extract_marker_paths("DIRECT_EDITS", output))
 
-    return list(set(files)) # Deduplicate
+    return list(set(files))  # Deduplicate
+
+
+def _prompt_paths_from_changed_file_entries(
+    entries: Sequence[str],
+    worktree_path: Path,
+) -> Set[Path]:
+    """Return changed prompt paths resolved against the workflow worktree.
+
+    Step 9 has two successful reporting paths: explicit ``FILES_*`` markers
+    and the worktree fallback. Step 10 associated-document discovery must use
+    the authoritative changed-file set from both paths, not only the marker
+    payloads.
+    """
+    prompt_paths: Set[Path] = set()
+    for raw in entries:
+        for part in str(raw).split(","):
+            fp = part.strip().strip("*`").strip()
+            if not fp:
+                continue
+            normalized = fp.replace("\\", "/")
+            if not normalized.endswith(".prompt"):
+                continue
+            path = Path(normalized)
+            prompt_paths.add(path if path.is_absolute() else worktree_path / path)
+    return prompt_paths
 
 
 def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
@@ -648,6 +818,323 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
 
 # Steps where a hard stop is a "clarification" request (user may respond, step should re-run)
 _CLARIFICATION_STEPS = {4, 7}
+
+
+# ---------------------------------------------------------------------------
+# Step 8.5 — Pre-flight drift heal
+# ---------------------------------------------------------------------------
+
+# Process-wide lock guarding the os.chdir window in _preflight_drift_heal.
+# detect_drift() reads from CWD; chdir is process-global, so concurrent
+# orchestrator runs in the same process would stomp each other's cwd. The
+# lock serializes the (chdir, detect_drift, chdir-back) critical section.
+_PREFLIGHT_CHDIR_LOCK = threading.Lock()
+
+_PREFLIGHT_MAX_HEAL_MODULES = 10
+
+
+def _preflight_drift_heal(
+    worktree_path: Path,
+    quiet: bool = False,
+    timeout_per_module: float = 300.0,
+    max_modules: int = _PREFLIGHT_MAX_HEAL_MODULES,
+) -> Tuple[List[str], List[str], List[str]]:
+    """Detect and heal stale prompts before `pdd change` rewrites them.
+
+    If a module's code has drifted from its prompt (code edited directly
+    without updating the prompt), the prompt describes the *previous* code.
+    Any `pdd change` operation would then reason from a stale prompt and
+    produce bad output.
+
+    This runs ``sync_determine_operation`` on every prompt in the worktree
+    (hash-only, no LLM) to find modules with ``operation == "update"`` (prompt
+    stale vs code), and runs ``pdd update <code_path>`` on each one *in the
+    worktree* to realign the prompt before Step 9 rewrites it.
+
+    Args:
+        worktree_path: Path to the isolated git worktree where the change will
+            run. Healing happens inside the worktree so that if any
+            `pdd update` produces a bad prompt rewrite it is contained to the
+            worktree and does not touch the user's main tree.
+        quiet: If True, suppress console output.
+        timeout_per_module: Hard cap on subprocess timeout for each `pdd update`.
+        max_modules: Cap on how many drifted modules this pass will heal. With
+            ``timeout_per_module`` defaulting to 300s, an unbounded fan-out
+            could spend hours before Step 9 starts. When the drift list
+            exceeds this cap, the alphabetically-first ``max_modules`` are
+            healed and the remainder are deferred to the CI auto-heal pipeline
+            (which runs on every resulting PR). The cap is intentionally
+            generous — most realistic ``pdd change`` worktrees see 0–3 drifted
+            modules; double-digit drift is the pathological case.
+
+    Returns:
+        Tuple of (healed_modules, failed_modules, healed_prompt_paths).
+        ``healed_modules`` and ``failed_modules`` are basenames; the third
+        element is the list of prompt-file paths (as recorded in
+        ``DriftInfo.prompt_path``) that were rewritten by ``pdd update``.
+        Surfacing the healed *prompt paths* lets the Step 10 discovery sweep
+        re-run ``discover_associated_documents`` against the new prompt
+        content, so any docs reachable from the just-healed prompt's
+        ``<include>`` graph still go through the doc-sync contract — closing
+        the gap where Step 8.5 mutations otherwise bypassed Steps 10/10.5.
+
+        A module counts as "healed" if `pdd update` returned exit 0; "failed"
+        if it returned non-zero or raised. Failure does not abort the workflow:
+        the change proceeds against the unhealed prompt (Step 9's LLM may still
+        succeed, and pretending drift is not present is no worse than before).
+
+    Scope:
+        The drift list is snapshotted once via `detect_drift()` and iterated.
+        If healing module A causes module B's dependency graph to change (e.g.
+        A's interface is rewritten and B includes A), B's drift state is not
+        re-evaluated in this pass. The cascade case is intentionally delegated
+        to the CI auto-heal pipeline (`ci_drift_heal.py`, the same primitive
+        called here) which runs on every resulting PR — duplicating that loop
+        inside this function would re-implement an existing safety net.
+    """
+    if not worktree_path.exists():
+        return [], [], []
+
+    try:
+        from pdd.ci_drift_heal import detect_drift
+    except (ImportError, ModuleNotFoundError) as exc:
+        if not quiet:
+            console.print(
+                f"[yellow]⚠ Pre-flight drift heal unavailable ({exc}); "
+                "continuing without pre-flight heal.[/yellow]"
+            )
+        return [], [], []
+
+    # detect_drift() reads from CWD; ci_drift_heal's public API doesn't accept
+    # a cwd argument so we must chdir into the worktree. chdir is process-
+    # global, so serialize the (chdir → detect_drift → chdir-back) window
+    # behind a module lock to prevent concurrent orchestrator runs in the
+    # same process from clobbering each other's cwd.
+    original_cwd = Path.cwd()
+    prompt_drifts: List = []
+    with _PREFLIGHT_CHDIR_LOCK:
+        try:
+            os.chdir(worktree_path)
+            try:
+                prompt_drifts, _example_drifts = detect_drift()
+            except Exception as exc:
+                if not quiet:
+                    console.print(
+                        f"[yellow]⚠ Pre-flight drift detection raised ({exc}); "
+                        "continuing without pre-flight heal.[/yellow]"
+                    )
+                return [], [], []
+        finally:
+            os.chdir(original_cwd)
+
+    if not prompt_drifts:
+        if not quiet:
+            console.print(
+                "[blue][Step 8.5/13][/blue] Pre-flight drift check: "
+                "all prompts in sync with code."
+            )
+        return [], [], []
+
+    drifted_names = sorted({d.basename for d in prompt_drifts})
+
+    # Reviewer 4th-pass: cap fan-out. With timeout_per_module=300s,
+    # heading into a worktree with N drifted modules costs N × 5 min in
+    # the worst case — unbounded for very large repos. Heal the first
+    # ``max_modules`` (alphabetical for determinism) and defer the rest
+    # to the CI auto-heal pipeline that runs on every resulting PR.
+    deferred_names: List[str] = []
+    if len(drifted_names) > max_modules:
+        deferred_names = drifted_names[max_modules:]
+        kept = set(drifted_names[:max_modules])
+        prompt_drifts = [d for d in prompt_drifts if d.basename in kept]
+        drifted_names = sorted(kept)
+
+    if not quiet:
+        console.print(
+            f"[yellow][Step 8.5/13][/yellow] Pre-flight drift check: "
+            f"{len(drifted_names)} module(s) drifted — healing before change: "
+            f"{', '.join(drifted_names)}"
+        )
+        if deferred_names:
+            console.print(
+                f"   [yellow]⚠[/yellow] {len(deferred_names)} additional drifted "
+                f"module(s) deferred to CI auto-heal (cap={max_modules}): "
+                f"{', '.join(deferred_names)}"
+            )
+
+    # Reviewer 3rd-pass: the heal subprocess runs in a headless Cloud Run
+    # worker; stdin is piped so pdd.auto_update's isatty() auto-detect
+    # usually picks up "non-interactive" — but the production CI auto-heal
+    # path (ci_drift_heal._build_ci_env) also sets explicit guardrails to
+    # skip local LM Studio calls, force non-TTY behavior, and restore
+    # protected paths if pdd sync/update times out mid-mutation. Mirror
+    # those guardrails here so Step 8.5 is as defensive as the CI heal
+    # path it shares the detect_drift primitive with.
+    heal_env = os.environ.copy()
+    heal_env.setdefault("PDD_FORCE", "1")
+    heal_env.setdefault("CI", "1")
+    heal_env.setdefault("NO_COLOR", "1")
+    heal_env.setdefault("PDD_FORCE_LOCAL", "1")
+    heal_env.setdefault("PDD_SKIP_LOCAL_MODELS", "1")
+    heal_env.setdefault("PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE", "1")
+
+    healed: List[str] = []
+    failed: List[str] = []
+    healed_prompts: List[str] = []
+    for drift in prompt_drifts:
+        if not drift.code_path:
+            failed.append(drift.basename)
+            continue
+        try:
+            # Use sys.executable + -m pdd so the heal subprocess uses the
+            # same Python venv as the orchestrator. A bare ["pdd", ...]
+            # would pick up whatever pdd binary is on PATH, which can be
+            # a different version when devs have a global install plus a
+            # project-local one.
+            result = subprocess.run(
+                [sys.executable, "-m", "pdd", "update", drift.code_path],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                timeout=timeout_per_module,
+                env=heal_env,
+            )
+            if result.returncode == 0:
+                healed.append(drift.basename)
+                if drift.prompt_path:
+                    healed_prompts.append(drift.prompt_path)
+                if not quiet:
+                    console.print(f"   [green]✓[/green] healed {drift.basename}")
+            else:
+                failed.append(drift.basename)
+                if not quiet:
+                    tail = result.stderr.strip().splitlines()[-1:] or ["(no stderr)"]
+                    console.print(
+                        f"   [red]✗[/red] heal failed {drift.basename}: "
+                        f"{escape(tail[0])}"
+                    )
+        except subprocess.TimeoutExpired:
+            failed.append(drift.basename)
+            if not quiet:
+                console.print(
+                    f"   [red]✗[/red] heal timed out for {drift.basename}"
+                )
+        except Exception as exc:
+            failed.append(drift.basename)
+            if not quiet:
+                console.print(
+                    f"   [red]✗[/red] heal raised for {drift.basename}: {exc}"
+                )
+
+    if not quiet:
+        console.print(
+            f"   → Pre-flight heal complete: "
+            f"{len(healed)} healed, {len(failed)} failed."
+        )
+    return healed, failed, healed_prompts
+
+
+# ---------------------------------------------------------------------------
+# Step 10.5 — Post-Step-10 associated-document contract verifier
+# ---------------------------------------------------------------------------
+
+
+
+def _verify_doc_sync_contract(
+    discovered_docs: List[str],
+    step10_output: str,
+) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
+    """Enforce the associated-document contract after Step 10.
+
+    The contract: every doc in *discovered_docs* (from Step 10's pre-call to
+    ``discover_associated_documents``) must appear in Step 10's output under
+    EXACTLY ONE of:
+      - ``ASSOCIATED_DOCS_MODIFIED:``  — LLM edited the doc
+      - ``ASSOCIATED_DOCS_CONFLICTS:`` — LLM flagged it for manual review
+      - ``ASSOCIATED_DOCS_UNCHANGED:`` — LLM determined it was already consistent
+
+    Two classes of contract violation are caught:
+
+    1. **Silent drops** — a discovered doc appears in none of the three
+       buckets. The LLM forgot it. Downstream consumers (review loops, PR
+       bodies) never learn the doc was skipped.
+
+    2. **Overlap (contradictory state)** — a discovered doc appears in two or
+       more buckets (e.g. both ``MODIFIED`` and ``UNCHANGED``). The LLM made
+       inconsistent claims about the same file. Treating such a doc as
+       "handled" lets a real state conflict ride through to the PR.
+
+    The Step 10 prompt must instruct the LLM to emit exactly one marker per
+    doc; otherwise this verifier false-positives on every doc.
+
+    Scope:
+        The contract only protects docs the static discovery (`<include>`
+        graph + architecture BFS) actually found. Docs that *should* be
+        referenced via `<include>` but aren't tagged are invisible here —
+        catching that class of gap requires semantic auto-deps discovery,
+        which is tracked separately as future work.
+
+    Args:
+        discovered_docs: The list the orchestrator passed in via
+            ``context["associated_documents"]``. Pass ``[]`` when no docs were
+            discovered (the contract is trivially satisfied).
+        step10_output: Raw Step 10 LLM output text.
+
+    Returns:
+        Tuple of (modified, conflicted, unchanged, silently_dropped, overlapping).
+        Both *silently_dropped* and *overlapping* are alarms — the former lists
+        discovered docs the LLM never addressed, the latter lists discovered
+        docs the LLM placed in more than one bucket simultaneously.
+    """
+    if not discovered_docs:
+        return [], [], [], [], []
+
+    # Reviewer 4th-pass fixes (bugs 1 + 2):
+    #   (a) Multi-line marker values, UNINDENTED continuation. The prior
+    #       regex `[^\n]*(?:\n[ \t]+[^\n]*)*` required continuation lines
+    #       to start with whitespace. LLMs frequently wrap a long list
+    #       without indenting the next line — those entries vanished
+    #       silently and were re-flagged as silent drops. Replaced with a
+    #       line-by-line walk that stops at a blank line or another known
+    #       marker, regardless of indentation.
+    #   (b) Bulleted list with no commas (e.g. "MARKER:\n  - a.md\n  - b.md").
+    #       Joining lines with " " before splitting on "," produced a
+    #       single entry "- a.md   - b.md" which `_strip_entry` could only
+    #       partially un-bullet. Strip the leading bullet *per line* before
+    #       splitting on comma, so each line is its own potential entry.
+    # The verifier and ``_extract_marker_paths`` share marker-walking
+    # semantics by design — if they ever disagree on what Step 10 emitted
+    # the orchestrator's bookkeeping silently diverges from the contract.
+    modified = _extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", step10_output)
+    conflicted = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", step10_output)
+    unchanged = _extract_marker_paths("ASSOCIATED_DOCS_UNCHANGED", step10_output)
+
+    def _normalize(p: str) -> str:
+        # Normalize backslashes to forward slashes BEFORE pathlib so a
+        # windows-style 'docs\\foo.md' matches a posix 'docs/foo.md'.
+        return Path(p.replace("\\", "/")).as_posix()
+
+    mod_norm = {_normalize(p) for p in modified}
+    conf_norm = {_normalize(p) for p in conflicted}
+    unch_norm = {_normalize(p) for p in unchanged}
+    handled: Set[str] = mod_norm | conf_norm | unch_norm
+
+    silently_dropped = [
+        d for d in discovered_docs
+        if _normalize(d) not in handled
+    ]
+
+    # A doc is in overlap if its normalized form appears in 2+ of the three
+    # buckets. Preserves the discovered-list ordering for deterministic output.
+    overlapping = [
+        d for d in discovered_docs
+        if sum(
+            1 for bucket in (mod_norm, conf_norm, unch_norm)
+            if _normalize(d) in bucket
+        ) >= 2
+    ]
+
+    return modified, conflicted, unchanged, silently_dropped, overlapping
 
 
 def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
@@ -927,11 +1414,22 @@ def run_agentic_change_orchestrator(
     if "step9_output" in context:
         s9_out = context["step9_output"]
         extracted_files = _parse_changed_files(s9_out)
+        if not extracted_files and worktree_path and worktree_path.exists():
+            # Resume case for the successful Step 9 fallback path: the LLM
+            # omitted FILES_* markers, so the only authoritative source is
+            # the worktree's current git status.
+            extracted_files = _detect_worktree_changes(
+                worktree_path,
+                _parse_direct_edit_candidates(context.get("step6_output", "")),
+            )
         changed_files.extend(extracted_files)
-        created_match = re.search(r"FILES_CREATED:\s*(.*)", s9_out)
-        modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", s9_out)
-        context["files_created"] = created_match.group(1).strip() if created_match else ""
-        context["files_modified"] = modified_match.group(1).strip() if modified_match else ""
+        # Reviewer 6th-pass (F2): use the same multi-line + bullet-aware
+        # extractor as `_parse_changed_files`, then comma-join. The old
+        # `\s*(.*)` regex truncated multi-line LLM output to the first
+        # line, so any prompt path on lines 2+ never reached Step 10's
+        # discovery sweep and its docs bypassed Step 10.5.
+        context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", s9_out))
+        context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", s9_out))
     
     if "step10_output" in context:
         s10_out = context["step10_output"]
@@ -1034,8 +1532,91 @@ def run_agentic_change_orchestrator(
                 state["worktree_path"] = str(worktree_path)
                 context["worktree_path"] = str(worktree_path)
 
+            # Step 8.5: pre-flight drift heal — run once per worktree (so heals
+            # are contained to the worktree and can't touch the user's main
+            # tree). Idempotency is tied to the worktree path, not the
+            # workflow: if the worktree is recreated between runs (e.g. user
+            # deletes `.pdd/worktrees/change-issue-{N}/` after a strict-mode
+            # abort), we MUST re-heal because the new worktree starts clean
+            # without the previous heal's effects.
+            worktree_path_str = str(worktree_path) if worktree_path else None
+            already_healed_worktree = state.get("preflight_healed_worktree")
+            if (
+                worktree_path
+                and worktree_path.exists()
+                and (
+                    not state.get("preflight_drift_healed")
+                    or already_healed_worktree != worktree_path_str
+                )
+            ):
+                healed, failed_heal, healed_prompts = _preflight_drift_heal(
+                    worktree_path=worktree_path,
+                    quiet=quiet,
+                )
+                state["preflight_drift_healed"] = True
+                state["preflight_healed_worktree"] = worktree_path_str
+                state["preflight_healed_modules"] = healed
+                state["preflight_failed_heal_modules"] = failed_heal
+                # Reviewer 5th-pass (F2): record the healed *prompt paths*
+                # too. Step 10's discovery sweep below merges these with
+                # Step 9's modified prompts so docs reachable from a
+                # just-healed prompt's <include> graph still go through
+                # the doc-sync contract.
+                state["preflight_healed_prompt_paths"] = healed_prompts
+                context["preflight_healed_modules"] = ", ".join(healed) if healed else "None"
+                context["preflight_failed_heal_modules"] = (
+                    ", ".join(failed_heal) if failed_heal else "None"
+                )
+
         if not quiet:
             console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+
+        # Before Step 10: discover associated documents for the LLM to update
+        if step_num == 10 and worktree_path and worktree_path.exists():
+            # Use the authoritative changed-file set for Step 10 discovery.
+            # In the Step 9 fallback path, `files_created`/`files_modified`
+            # are empty because the LLM omitted markers, but `changed_files`
+            # and `files_to_stage` contain the worktree-detected prompt(s).
+            modified_prompt_paths: Set[Path] = _prompt_paths_from_changed_file_entries(
+                [
+                    context.get("files_created", ""),
+                    context.get("files_modified", ""),
+                    context.get("files_to_stage", ""),
+                    *changed_files,
+                ],
+                worktree_path,
+            )
+
+            # Reviewer 5th-pass (F2): include preflight-healed prompts so
+            # any <include>doc.md</include> they hold reaches the doc-sync
+            # contract. Without this, Step 8.5 mutations bypass Steps
+            # 10/10.5 and a healed prompt's docs can land in the PR via
+            # `git add -A` without ever passing through verification.
+            for prompt_path_str in state.get("preflight_healed_prompt_paths", []) or []:
+                p = Path(prompt_path_str)
+                if not p.is_absolute():
+                    p = worktree_path / p
+                if p.exists():
+                    modified_prompt_paths.add(p)
+
+            if modified_prompt_paths:
+                try:
+                    docs = discover_associated_documents(
+                        modified_prompts=modified_prompt_paths,
+                        prompts_dir=worktree_path / "prompts",
+                        architecture_path=worktree_path / "architecture.json",
+                        max_depth=3,
+                    )
+                    context["associated_documents"] = ", ".join(docs) if docs else "None"
+                    # Store the discovered list for Step 10.5 contract verification
+                    context["_associated_documents_discovered"] = docs or []
+                except Exception as exc:
+                    console.print(f"[yellow]Associated document discovery failed: {exc}[/yellow]")
+                    context["associated_documents"] = "None"
+                    context["_associated_documents_discovered"] = []
+            else:
+                context["associated_documents"] = "None"
+                context["_associated_documents_discovered"] = []
 
         # Snapshot architecture.json before Step 10 so we can revert out-of-scope mutations
         if step_num == 10 and worktree_path:
@@ -1154,12 +1735,12 @@ def run_agentic_change_orchestrator(
                     console.print(f"[yellow]Note: Detected {len(extracted_files)} changed file(s) in worktree (LLM output lacked markers)[/yellow]")
             changed_files = extracted_files
             context["files_to_stage"] = ", ".join(changed_files)
-            created_match = re.search(r"FILES_CREATED:\s*(.*)", step_output)
-            modified_match = re.search(r"FILES_MODIFIED:\s*(.*)", step_output)
-            direct_edits_match = re.search(r"DIRECT_EDITS:\s*(.*)", step_output)
-            context["files_created"] = created_match.group(1).strip() if created_match else ""
-            context["files_modified"] = modified_match.group(1).strip() if modified_match else ""
-            context["direct_edits"] = direct_edits_match.group(1).strip() if direct_edits_match else ""
+            # Reviewer 6th-pass (F2): same fix as the resume path above —
+            # use the multi-line + bullet-aware extractor so Step 10's
+            # discovery sweep sees the full list, not the first line.
+            context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", step_output))
+            context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", step_output))
+            context["direct_edits"] = ", ".join(_extract_marker_paths("DIRECT_EDITS", step_output))
             if not changed_files:
                 # Save step output for debugging before failing
                 # Issue #467: Mark as FAILED instead of using step_num - 1
@@ -1228,6 +1809,91 @@ def run_agentic_change_orchestrator(
                                 console.print(f"[blue]Auto-registered untracked prompts in arch.json: {reg_list}[/blue]")
                     except Exception:
                         pass
+
+            # Step 10.5: verify associated-document contract.
+            # Every doc discover_associated_documents returned must be either
+            # modified, explicitly flagged as a conflict, or declared unchanged
+            # — and only ONE of the three per doc. Silent drops (doc in no
+            # bucket) and overlaps (doc in multiple buckets) are both workflow
+            # regressions the verifier is built to catch before the change ships.
+            discovered_docs = context.get("_associated_documents_discovered", [])
+            if discovered_docs:
+                (
+                    _docs_mod,
+                    _docs_conflict,
+                    _docs_unchanged,
+                    dropped,
+                    overlapping,
+                ) = _verify_doc_sync_contract(
+                    discovered_docs=discovered_docs,
+                    step10_output=step_output,
+                )
+                violations: List[str] = []
+                warning_lines: List[str] = []
+                marker_lines: List[str] = []
+                if dropped:
+                    drop_list = ", ".join(dropped)
+                    violations.append(f"silent drops: {drop_list}")
+                    warning_lines.extend(
+                        f"- Associated doc silently dropped by Step 10: {d}"
+                        for d in dropped
+                    )
+                    marker_lines.append(f"DOC_SYNC_SILENT_DROPS: {drop_list}")
+                if overlapping:
+                    overlap_list = ", ".join(overlapping)
+                    violations.append(f"contradictory state: {overlap_list}")
+                    warning_lines.extend(
+                        f"- Associated doc placed in multiple buckets by Step 10: {d}"
+                        for d in overlapping
+                    )
+                    marker_lines.append(
+                        f"DOC_SYNC_BUCKET_OVERLAPS: {overlap_list}"
+                    )
+
+                if violations:
+                    step_output = (
+                        step_output.rstrip()
+                        + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
+                        + "\n".join(warning_lines)
+                        + "\n"
+                        + "\n".join(marker_lines)
+                    )
+                    if not quiet:
+                        if dropped:
+                            console.print(
+                                f"[yellow]Step 10.5 contract check: "
+                                f"{len(dropped)} associated doc(s) silently dropped "
+                                f"by Step 10 — {', '.join(dropped)}[/yellow]"
+                            )
+                        if overlapping:
+                            console.print(
+                                f"[yellow]Step 10.5 contract check: "
+                                f"{len(overlapping)} associated doc(s) placed in "
+                                f"multiple buckets by Step 10 — "
+                                f"{', '.join(overlapping)}[/yellow]"
+                            )
+
+                    # Strict mode: when PDD_STRICT_DOC_SYNC=1, any contract
+                    # violation (silent drop or overlap) aborts the workflow
+                    # instead of being passed to the review loop. Default is
+                    # non-strict (warn-only) so the review loop has a chance
+                    # to recover.
+                    if os.environ.get("PDD_STRICT_DOC_SYNC", "").lower() in ("1", "true", "yes"):
+                        if not quiet:
+                            console.print(
+                                f"[red]PDD_STRICT_DOC_SYNC=1 — aborting on "
+                                f"doc-sync contract violation(s).[/red]"
+                            )
+                        state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+                        save_workflow_state(
+                            cwd, issue_number, "change", state, state_dir,
+                            repo_owner, repo_name, use_github_state, github_comment_id,
+                        )
+                        return (
+                            False,
+                            f"Stopped at step 10: PDD_STRICT_DOC_SYNC {'; '.join(violations)}",
+                            total_cost, model_used, changed_files,
+                        )
 
         context[f"step{step_num}_output"] = step_output
         if step_success:
@@ -1373,6 +2039,25 @@ def run_agentic_change_orchestrator(
         context["impacted_tests"] = "No impacted test files identified"
 
     if last_completed_step < 13:
+        # Aggregate MANUAL_REVIEW lines from Step 9 and the review-loop
+        # iterations (Step 12 outputs are concatenated into `previous_fixes`).
+        # Step 10's ASSOCIATED_DOCS_CONFLICTS bucket is also funneled here:
+        # the verifier treats those entries as "handled" (no silent drop),
+        # but the spec calls them "left for human", so each conflict path
+        # must surface as a MANUAL_REVIEW line in the PR body.
+        s10_out = context.get("step10_output", "") or ""
+        s10_conflict_paths = _extract_marker_paths(
+            "ASSOCIATED_DOCS_CONFLICTS", s10_out
+        )
+        synthesized_conflict_lines = "\n".join(
+            f"MANUAL_REVIEW: {p} — Step 10 ASSOCIATED_DOCS_CONFLICTS, manual edit needed"
+            for p in s10_conflict_paths
+        )
+        context["manual_review_lines"] = _collect_manual_review_lines(
+            context.get("step9_output", "") or "",
+            previous_fixes,
+            synthesized_conflict_lines,
+        )
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
         # Preprocess to escape curly braces in included content
