@@ -217,6 +217,9 @@ def save_last_run(
     argv_tail: List[str],
     subcommand: str,
 ) -> None:
+    if not argv_tail:
+        return
+
     path = _last_run_path(project_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -282,8 +285,11 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     if _allow_duplicate(ctx):
         return
 
-    project_root = find_project_root()
     argv_tail = normalized_argv()
+    if not argv_tail:
+        return
+
+    project_root = find_project_root()
     prev = _lookup_matching_record(project_root, argv_tail)
     if prev is None:
         return
@@ -356,4 +362,8 @@ def record_after_guarded_command(ctx: click.Context, success: bool = True) -> No
     if sub not in GUARDED_SUBCOMMANDS:
         return
 
-    save_last_run(find_project_root(), normalized_argv(), sub)
+    argv_tail = normalized_argv()
+    if not argv_tail:
+        return
+
+    save_last_run(find_project_root(), argv_tail, sub)

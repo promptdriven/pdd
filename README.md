@@ -25,7 +25,7 @@ This launches a web interface at `localhost:9876` where you can:
 </p>
 
 For CLI users, PDD also offers powerful **agentic commands** that implement GitHub issues automatically:
-- `pdd change <issue-url>` - Implement feature requests (12-step workflow)
+- `pdd change <issue-url>` - Implement feature requests (13-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
 - `pdd split <target-file>` - Diagnose and split large dev units (14-step workflow with intent classification, diagnosis, phase extraction, verification, and repair)
@@ -590,7 +590,7 @@ graph TB
 - **[`setup`](#post-installation-setup-required-first-step-after-installation)**: Configure API keys and shell completion
 
 ### Agentic Commands (Issue-Driven)
-- **[`change`](#8-change)**: Implement feature requests from GitHub issues (12-step workflow)
+- **[`change`](#8-change)**: Implement feature requests from GitHub issues (13-step workflow)
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
 - **[`checkup`](#17-checkup)**: Run automated project health check from a GitHub issue (8-step workflow)
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
@@ -2131,7 +2131,7 @@ pdd [GLOBAL OPTIONS] split --legacy --output-sub prompts/sub_data_processing.pro
 
 ### 8. change
 
-Implement a change request from a GitHub issue using a 12-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
+Implement a change request from a GitHub issue using a 13-step agentic workflow. The workflow researches the feature, ensures requirements are clear (asking clarifying questions if needed), reviews architecture (asking for decisions if needed), analyzes documentation changes, identifies affected dev units, designs prompt modifications, implements them, runs a review loop to identify and fix issues, and creates a PR.
 
 **Agentic Mode (default):**
 ```
@@ -2141,25 +2141,26 @@ pdd [GLOBAL OPTIONS] change GITHUB_ISSUE_URL
 Arguments:
 - `GITHUB_ISSUE_URL`: The URL of the GitHub issue describing the change request.
 
-The 12-step workflow:
+The 13-step workflow:
 1. **Duplicate Check**: Search for duplicate issues
 2. **Documentation Check**: Verify feature isn't already implemented
 3. **Research**: Web search to clarify specifications and find best practices
 4. **Clarification**: Ensure requirements are clear; ask questions with options if not (stops workflow until answered)
-5. **Documentation Changes**: Analyze what documentation updates are needed
+5. **Documentation Changes**: Analyze what documentation updates are needed (including associated documents discovered via the prompt `<include>` graph)
 6. **Identify Dev Units**: Find affected prompts, code, examples, and tests
 7. **Architecture Review**: Identify architectural decisions; ask questions with options if needed (stops workflow until answered)
 8. **Analyze Changes**: Design prompt modifications
-9. **Implement Changes**: Modify prompts in an isolated git worktree
-10. **Identify Issues**: Review changes for problems (part of review loop)
-11. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
-12. **Create PR**: Create a pull request linking to the issue
+9. **Implement Changes**: Modify prompts in an isolated git worktree, atomically apply drafted associated-document edits, and emit `MANUAL_REVIEW:` lines for conflicts that cannot be auto-resolved
+10. **Architecture & Doc Sync**: Update `architecture.json` metadata and synchronize associated documents (verified by the doc-sync contract; see Step 10.5)
+11. **Identify Issues**: Review changes for problems (part of review loop)
+12. **Fix Issues**: Fix identified issues (part of review loop, max 5 iterations)
+13. **Create PR**: Create a pull request linking to the issue and surface any unresolved `MANUAL_REVIEW:` flags in the PR body
 
 **Workflow Resumption**: Steps 4 and 7 may pause the workflow to ask clarifying or architectural questions. When this happens, answer the questions in the GitHub issue and run `pdd change` again. The workflow will resume from where it left off, skipping already-completed steps to save tokens.
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
-**Review Loop**: Steps 10-11 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
+**Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
 **Worktree Branching Behavior**: When running `pdd change`, `pdd bug`, or `pdd split`, a new git worktree is created based on your current HEAD:
 - **From main/master**: Branch is based on latest main - creates independent PR

@@ -26,6 +26,14 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 {step8_output}
 </step8_output>
 
+% Manual Review Required (from Step 5/9 conflict flagging)
+
+The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emitted by Step 9 (and any review-loop iteration from Step 12). These are documents Step 5 drafted edits for but Step 9 could not safely apply, OR documents whose originating prompt Step 6 did not ratify. They MUST be surfaced in the PR body so reviewers can address them — not buried in an issue comment.
+
+<manual_review_lines>
+{manual_review_lines}
+</manual_review_lines>
+
 % Your Task
 
 1. **Stage all changes**
@@ -84,6 +92,12 @@ Closes #{issue_number}
 
 ### Documentation Updated
 - `README.md` - [brief description]
+
+## ⚠️ Manual Review Required
+
+Render the contents of ``<manual_review_lines>`` here. If the value is the literal ``"None"``, omit this section entirely. Otherwise emit one bullet per ``MANUAL_REVIEW`` line so reviewers see every flagged conflict in the PR body without digging through issue comments:
+
+- `path/to/doc.md` — [reason] — review [section]
 
 ## Review Checklist
 

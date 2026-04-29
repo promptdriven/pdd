@@ -71,6 +71,26 @@ def test_no_prior_record_allows(enable_guard, monkeypatch):
     dg.check_duplicate_before_subcommand(ctx)  # no raise
 
 
+def test_empty_argv_skips_duplicate_check(enable_guard, monkeypatch):
+    """Programmatic/hosted wrappers can leave sys.argv without a useful command.
+
+    An empty argv signature is too broad: recording it would make every guarded
+    command in the same project look identical. The guard should skip instead of
+    consulting persisted state.
+    """
+    ctx = _ctx(sub="change")
+    load = mock.Mock(return_value=_prev_base(argv=[], subcommand="change"))
+    find_root = mock.Mock(return_value=FAKE_ROOT)
+    monkeypatch.setattr(dg, "normalized_argv", lambda _argv=None: [])
+    monkeypatch.setattr(dg, "find_project_root", find_root)
+    monkeypatch.setattr(dg, "load_last_run", load)
+
+    dg.check_duplicate_before_subcommand(ctx)
+
+    find_root.assert_not_called()
+    load.assert_not_called()
+
+
 def test_duplicate_noninteractive_raises_usage_error(enable_guard, monkeypatch):
     monkeypatch.setattr(dg.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(dg.sys.stdout, "isatty", lambda: False)
@@ -233,6 +253,23 @@ def test_record_after_guarded_calls_save(enable_guard, monkeypatch):
     dg.record_after_guarded_command(ctx)
 
     assert calls == [(Path("/w"), ["sync", "a"], "sync")]
+
+
+def test_record_after_guarded_skips_empty_argv(enable_guard, monkeypatch):
+    ctx = mock.MagicMock()
+    ctx.obj = {"invoked_subcommands": ["change"]}
+    ctx.invoked_subcommands = []
+
+    save = mock.Mock()
+    find_root = mock.Mock(return_value=Path("/w"))
+    monkeypatch.setattr(dg, "normalized_argv", lambda _argv=None: [])
+    monkeypatch.setattr(dg, "find_project_root", find_root)
+    monkeypatch.setattr(dg, "save_last_run", save)
+
+    dg.record_after_guarded_command(ctx)
+
+    find_root.assert_not_called()
+    save.assert_not_called()
 
 
 def test_record_after_skips_non_guarded(enable_guard, monkeypatch):
@@ -410,6 +447,13 @@ def test_issue_1178_first_run_without_prior_state_does_not_raise(isolated_projec
     ctx = _ctx(sub="sync")
     with mock.patch.object(dg, "normalized_argv", return_value=["sync", "fresh_mod"]):
         dg.check_duplicate_before_subcommand(ctx)  # no raise
+
+
+def test_save_last_run_skips_empty_argv(isolated_project):
+    """Do not persist a project-wide empty argv record."""
+    dg.save_last_run(isolated_project, [], "change")
+
+    assert not (isolated_project / ".pdd" / "last_run.json").exists()
 
 
 def test_issue_1178_legacy_record_does_not_block_different_argv(isolated_project):

@@ -191,6 +191,13 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
     }
 
     try:
+        lines = prompt_content.splitlines(keepends=True)
+        if lines and lines[0].strip() == '---':
+            for idx, line in enumerate(lines[1:], start=1):
+                if line.strip() == '---':
+                    prompt_content = ''.join(lines[idx + 1:])
+                    break
+
         # Only parse the metadata header. Valid prompts may start with leading
         # `%` preamble lines, prompt comments, or XML-style helper tags such as
         # `<include>...` before the real pdd-* tags, so tolerate those. Once we

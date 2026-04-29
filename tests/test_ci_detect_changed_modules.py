@@ -34,6 +34,21 @@ def test_basename_from_nested_code_paths():
     )
 
 
+def test_basename_excludes_package_main_shim():
+    module = _load_module()
+
+    assert module._basename_from_path("pdd/__main__.py") is None
+    assert module._basename_from_path("pdd/prompts/__main___python.prompt") is None
+    assert module._basename_from_path("context/__main___example.py") is None
+    assert module._basename_from_path("tests/test___main__.py") is None
+
+
+def test_basename_excludes_ci_helper_script_tests():
+    module = _load_module()
+
+    assert module._basename_from_path("tests/test_ci_detect_changed_modules.py") is None
+
+
 def test_basename_from_nested_context_and_tests():
     module = _load_module()
 
@@ -82,3 +97,20 @@ def test_detect_combines_nested_direct_and_reverse_dependencies(monkeypatch):
 
     assert "server/routes/auth" in result
     assert "core/cli" in result
+
+
+def test_detect_excludes_package_main_shim(monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(_repo_root())
+    monkeypatch.setattr(
+        module,
+        "_git_changed_files",
+        lambda diff_base: [
+            "pdd/__main__.py",
+            "pdd/prompts/__main___python.prompt",
+            "context/__main___example.py",
+            "tests/test___main__.py",
+        ],
+    )
+
+    assert module.detect("origin/main...HEAD") == []

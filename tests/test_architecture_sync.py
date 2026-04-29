@@ -95,6 +95,27 @@ def test_parse_tags_only_dependencies():
     assert result['dependencies'] == ['dep1.prompt', 'dep2.prompt']
 
 
+def test_parse_tags_after_yaml_front_matter():
+    """PDD metadata immediately after YAML front matter should be parsed."""
+    content = """---
+name: pdd/example
+language: Python
+---
+
+<pdd-dependency>dep1.prompt</pdd-dependency>
+<pdd-reason>Front matter prompt</pdd-reason>
+
+# Role
+Prompt body.
+"""
+
+    result = parse_prompt_tags(content)
+
+    assert result['reason'] == 'Front matter prompt'
+    assert result['dependencies'] == ['dep1.prompt']
+    assert result['has_dependency_tags'] is True
+
+
 def test_parse_tags_malformed_xml():
     """Test lenient parsing with malformed XML (unclosed tag)."""
     content = "<pdd-reason>Unclosed tag without ending"

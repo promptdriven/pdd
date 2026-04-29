@@ -1,8 +1,12 @@
-% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to analyze how documentation should change to support this new feature.
+<pdd-reason>LLM template: analyzes doc changes and discovers associated documents for atomic sync at change-time.</pdd-reason>
+
+% You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to analyze how documentation should change to support this new feature AND identify the associated documents that must be kept in sync with the code/prompt edits that Step 9 will apply.
 
 % Context
 
-You are working on step 5 of 12 in an agentic change workflow. Previous steps confirmed this is a new feature, conducted research, and verified requirements are clear enough to proceed.
+You are working on step 5 of 13 in an agentic change workflow. Previous steps confirmed this is a new feature, conducted research, and verified requirements are clear enough to proceed.
+
+This step is the **preventive** half of the sync-drift problem: if the associated documents that reference this module (endpoint docs, schema docs, PRD sections, inline docstrings, etc.) are identified here and edited atomically in Step 9, downstream `pdd update` and the CI drift-heal loop have far less work to do. Keeping documents in sync at change-time is the core reason this step exists.
 
 % PDD Background
 
@@ -64,6 +68,34 @@ You are working on step 5 of 12 in an agentic change workflow. Previous steps co
    - Draft the new/updated content
    - Note any new files that should be created
 
+5. **Discover Associated Documents (sync at change-time)**
+   The change-time sync goal is to keep every document that references this module consistent with the code/prompt edits Step 9 applies. Discover them deterministically:
+   - **Starting set:** the prompt file(s) you can identify from the issue content and Steps 1-4 outputs as likely targets for modification, plus any prompts that prior steps indicate will be created. This is a best-effort initial set based on what is visible to Step 5; Step 9 will reconcile it against Step 6's authoritative dev-unit list before applying edits and will prune any associated-document entries whose originating prompt Step 6 did not confirm.
+   - **Include-graph traversal:** parse each prompt in the starting set for `<include>` and `<include-many>` directives and collect referenced files. Documentation files (`.md`, `.rst`, `.txt`) and docstring/spec fragments are candidates for update. Code examples and preambles are context, not targets — skip them.
+   - **Bounded recursion depth = 3:** follow includes at most three levels (prompt → doc → doc). Deeper references are reported but not edited.
+   - **Cycle detection:** track visited paths by canonical path to avoid re-visiting, and log any cycle as a diagnostic without looping.
+   - **Scope:** only `.md`, `.rst`, `.txt`, and similar text documentation files qualify. Never include code files or generated artifacts in this list — Step 9's scope gate will reject them.
+   - Auto-deps / semantic discovery is explicitly out of scope for this step (tracked separately). Use only the explicit `<include>` graph.
+
+6. **Draft section-scoped edits for each associated document**
+   For every associated document you intend Step 9 to edit:
+   - Identify the **smallest section** (heading, paragraph, code fence, or bullet) whose content becomes stale because of the code/prompt change.
+   - Draft the new text for that section only. Do not rewrite whole files — targeted edits minimize merge risk and make conflict detection tractable.
+   - If you cannot localize the change to a bounded section (e.g. the whole document is structured around a behavior that is being overhauled), flag a conflict instead of drafting a sprawling rewrite.
+
+7. **Flag conflicts you cannot resolve automatically**
+   For each associated document where an automatic edit is unsafe, record a **Conflicts** entry with: the file path, a one-line reason, and a pointer to the section a human should review. Examples:
+   - The draft edit would contradict an existing cross-reference in another document also in the associated set.
+   - The document is the authoritative source for a contract that Step 8 has not finalized.
+   - Two candidate sections both plausibly describe the changed behavior and Step 5 cannot pick between them.
+   Flagged conflicts are **not blockers** — Step 9 applies the edits it has and records conflicts for human review in the PR (flag-and-continue).
+
+8. **Output contract for Step 9 (atomic application)**
+   Step 9 applies your drafted edits atomically with the prompt/code edits in the same commit. To make that deterministic, your output MUST contain:
+   - An **Associated Documents** section listing every file Step 9 should edit, with the drafted section-scoped content inline.
+   - A **Conflicts** section listing any documents flagged for manual review (empty section if none).
+   - Stable file paths (repo-root-relative, POSIX).
+
 % Output
 
 After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
@@ -102,6 +134,27 @@ Your comment should follow this format:
 ### Files to Create
 - `docs/[new_file].md` - [purpose]
 
+### Associated Documents
+*(Documents reachable from the modified prompts' `<include>` graph, depth ≤ 3. Each entry is an edit Step 9 will apply atomically.)*
+
+#### `docs/[associated_file].md`
+**Discovered via:** [path in include-graph, e.g. `prompts/foo.prompt` → `<include>docs/[associated_file].md</include>`]
+**Section:** [heading or anchor of the smallest section to edit]
+**Change:** [add/update/remove]
+**Draft content:**
+```
+[section-scoped draft]
+```
+
+*(If none: write `None — no documents reachable via `<include>` from the modified prompts.`)*
+
+### Conflicts
+*(Documents whose edits Step 5 cannot resolve automatically. Step 9 will flag these for human review in the PR body rather than editing them.)*
+
+- `path/to/doc.md` — [one-line reason] — review [section/anchor]
+
+*(If none: write `None.`)*
+
 ### No Changes Needed
 - [List files reviewed but not requiring changes]
 
@@ -114,4 +167,7 @@ Your comment should follow this format:
 - Focus on user-facing documentation, not internal code comments
 - Keep documentation concise and follow existing style
 - Consider both new users and existing users upgrading
+- Associated-document discovery is bounded: depth ≤ 3, explicit `<include>` graph only, cycle-safe. Never emit code files or generated artifacts in the Associated Documents list.
+- Section-scoped edits only: if you cannot localize a change to a bounded section, record it as a Conflict instead of drafting a whole-file rewrite.
+- Flag-and-continue: Conflicts do NOT stop the workflow. Step 9 applies every safe edit and surfaces conflicts for manual review in the PR.
 - Always post your findings as a GitHub comment before completing
