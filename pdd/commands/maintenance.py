@@ -8,13 +8,16 @@ from pathlib import Path
 from ..architecture_sync import sync_prompts_to_architecture
 from ..sync_main import sync_main
 from ..auto_deps_main import auto_deps_main
-from ..agentic_sync import _is_github_issue_url, run_agentic_sync
+from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sync
+from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility
 
+DEFAULT_SYNC_BUDGET = 20.0
+
 @click.command("sync")
-@click.argument("basename", required=True)
+@click.argument("basename", required=False)
 @click.option(
     "--max-attempts",
     type=int,
@@ -98,7 +101,7 @@ from ..core.utils import _run_setup_utility
 @track_cost
 def sync(
     ctx: click.Context,
-    basename: str,
+    basename: Optional[str],
     max_attempts: Optional[int],
     budget: Optional[float],
     skip_verify: bool,
@@ -116,8 +119,9 @@ def sync(
     """
     Synchronize prompts with code and tests.
 
-    BASENAME is the base name of the prompt file (e.g., 'my_module' for 'prompts/my_module_python.prompt'),
-    or a GitHub issue URL for agentic multi-module sync.
+    BASENAME is the base name of the prompt file (e.g., 'my_module' for
+    'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
+    multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
     # Handle deprecated --log flag
     if log:
@@ -129,6 +133,22 @@ def sync(
             err=True
         )
         dry_run = True
+
+    # No basename -> global Tier 1 sync
+    if basename is None:
+        effective_one_session = one_session if one_session is not None else False
+        return _run_global_sync_dispatch(
+            ctx=ctx,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            target_coverage=target_coverage,
+            dry_run=dry_run,
+            agentic=agentic,
+            no_steer=no_steer,
+            max_attempts=max_attempts,
+            one_session=effective_one_session,
+        )
 
     # Detect GitHub issue URL -> dispatch to agentic sync
     if _is_github_issue_url(basename):
@@ -225,6 +245,104 @@ def _run_agentic_sync_dispatch(
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
+
+
+def _run_global_sync_dispatch(
+    ctx: click.Context,
+    budget: Optional[float],
+    skip_verify: bool,
+    skip_tests: bool,
+    target_coverage: Optional[float],
+    dry_run: bool,
+    agentic: bool,
+    no_steer: bool,
+    max_attempts: Optional[int],
+    one_session: bool = False,
+) -> Optional[Tuple[str, float, str]]:
+    """Dispatch to global sync runner for no-argument `pdd sync`."""
+    ctx.ensure_object(dict)
+    quiet = ctx.obj.get("quiet", False)
+    verbose = ctx.obj.get("verbose", False)
+    effective_budget = _resolve_global_sync_budget(budget)
+    effective_target_coverage = _resolve_global_sync_target_coverage(target_coverage)
+
+    try:
+        success, message, cost, model = run_global_sync(
+            verbose=verbose,
+            quiet=quiet,
+            budget=effective_budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            agentic_mode=agentic,
+            no_steer=no_steer,
+            max_attempts=max_attempts,
+            dry_run=dry_run,
+            target_coverage=effective_target_coverage,
+            one_session=one_session,
+            local=ctx.obj.get("local", False),
+        )
+
+        if not quiet:
+            status = "Success" if success else "Failed"
+            click.echo(f"Status: {status}")
+            click.echo(f"Message: {message}")
+            click.echo(f"Cost: ${cost:.4f}")
+            click.echo(f"Model: {model}")
+
+        if not success:
+            raise click.exceptions.Exit(1)
+
+        return message, cost, model
+
+    except (click.Abort, click.exceptions.Exit):
+        raise
+    except Exception as exception:
+        handle_error(exception, "sync", ctx.obj.get("quiet", False))
+        return None
+
+
+def _resolve_global_sync_budget(budget: Optional[float]) -> float:
+    """Resolve no-argument global sync budget from CLI, .pddrc, or default."""
+    if budget is not None:
+        return budget
+
+    pddrc_path = _find_pddrc_file(Path.cwd())
+    if pddrc_path:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+            contexts = config.get("contexts", {})
+            default_context = contexts.get("default", {})
+            default_budget = default_context.get("defaults", {}).get("budget")
+            if default_budget is not None:
+                resolved_budget = float(default_budget)
+                if resolved_budget > 0:
+                    return resolved_budget
+        except (TypeError, ValueError):
+            pass
+
+    return DEFAULT_SYNC_BUDGET
+
+
+def _resolve_global_sync_target_coverage(target_coverage: Optional[float]) -> Optional[float]:
+    """Resolve no-argument global sync target coverage from CLI or .pddrc."""
+    if target_coverage is not None:
+        return target_coverage
+
+    pddrc_path = _find_pddrc_file(Path.cwd())
+    if pddrc_path:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+            contexts = config.get("contexts", {})
+            default_context = contexts.get("default", {})
+            default_target = default_context.get("defaults", {}).get("target_coverage")
+            if default_target is not None:
+                resolved_target = float(default_target)
+                if resolved_target >= 0:
+                    return resolved_target
+        except (TypeError, ValueError):
+            pass
+
+    return None
 
 
 def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> None:

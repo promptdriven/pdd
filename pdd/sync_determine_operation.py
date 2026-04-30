@@ -1954,7 +1954,18 @@ def _check_example_success_history(basename: str, language: str) -> bool:
     return False
 
 
-def sync_determine_operation(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision:
+def sync_determine_operation(
+    basename: str,
+    language: str,
+    target_coverage: float,
+    budget: float = 10.0,
+    log_mode: bool = False,
+    prompts_dir: str = "prompts",
+    skip_tests: bool = False,
+    skip_verify: bool = False,
+    context_override: Optional[str] = None,
+    read_only: bool = False,
+) -> SyncDecision:
     """
     Core decision-making function for sync operations with skip flag awareness.
     
@@ -1967,21 +1978,41 @@ def sync_determine_operation(basename: str, language: str, target_coverage: floa
         prompts_dir: Directory containing prompt files
         skip_tests: If True, skip test generation and execution
         skip_verify: If True, skip verification operations
+        read_only: If True, do not mutate metadata while analyzing state
     
     Returns:
         SyncDecision object with the recommended operation
     """
     
-    if log_mode:
+    analysis_read_only = read_only or log_mode
+    if log_mode or read_only:
         # Skip locking for read-only analysis
-        return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify, context_override)
+        return _perform_sync_analysis(
+            basename, language, target_coverage, budget,
+            prompts_dir, skip_tests, skip_verify, context_override,
+            read_only=analysis_read_only,
+        )
     else:
         # Normal exclusive locking for actual operations
         with SyncLock(basename, language) as lock:
-            return _perform_sync_analysis(basename, language, target_coverage, budget, prompts_dir, skip_tests, skip_verify, context_override)
+            return _perform_sync_analysis(
+                basename, language, target_coverage, budget,
+                prompts_dir, skip_tests, skip_verify, context_override,
+                read_only=analysis_read_only,
+            )
 
 
-def _perform_sync_analysis(basename: str, language: str, target_coverage: float, budget: float, prompts_dir: str = "prompts", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None) -> SyncDecision:
+def _perform_sync_analysis(
+    basename: str,
+    language: str,
+    target_coverage: float,
+    budget: float,
+    prompts_dir: str = "prompts",
+    skip_tests: bool = False,
+    skip_verify: bool = False,
+    context_override: Optional[str] = None,
+    read_only: bool = False,
+) -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
     
@@ -1993,6 +2024,7 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         prompts_dir: Directory containing prompt files
         skip_tests: If True, skip test generation and execution
         skip_verify: If True, skip verification operations
+        read_only: If True, avoid metadata mutations while analyzing state
     
     Returns:
         SyncDecision object with the recommended operation
@@ -2696,6 +2728,36 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
         if 'prompt' in changes:
             # Prompt and derived files both changed — stale fingerprint.
             # Delete metadata and re-run analysis fresh (will hit the "no fingerprint" path).
+            meta_dir = get_meta_dir()
+            safe_bn = _safe_basename(basename)
+            fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
+            rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
+
+            if read_only:
+                if paths['prompt'].exists():
+                    prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
+                    operation = 'auto-deps' if check_for_dependencies(prompt_content) else 'generate'
+                    reason = 'Prompt and derived files changed - fresh sync needed'
+                else:
+                    operation = 'nothing'
+                    reason = 'Prompt and derived files changed, but prompt file is missing'
+
+                return SyncDecision(
+                    operation=operation,
+                    reason=reason,
+                    confidence=0.90,
+                    estimated_cost=estimate_operation_cost(operation),
+                    details={
+                        'decision_type': 'heuristic',
+                        'changed_files': changes,
+                        'read_only': True,
+                        'would_delete_metadata': [
+                            str(path) for path in (fp_path, rr_path) if path.exists()
+                        ],
+                        'fingerprint_found': fingerprint is not None,
+                    }
+                )
+
             import logging
             logger = logging.getLogger(__name__)
             logger.warning(
@@ -2705,10 +2767,6 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             )
 
             # Delete fingerprint and run report to force fresh sync
-            meta_dir = get_meta_dir()
-            safe_bn = _safe_basename(basename)
-            fp_path = meta_dir / f"{safe_bn}_{language.lower()}.json"
-            rr_path = meta_dir / f"{safe_bn}_{language.lower()}_run.json"
             if fp_path.exists():
                 fp_path.unlink()
             if rr_path.exists():
@@ -2717,7 +2775,8 @@ def _perform_sync_analysis(basename: str, language: str, target_coverage: float,
             # Re-run analysis — with fingerprint gone, this hits the "no fingerprint" path
             return _perform_sync_analysis(
                 basename, language, target_coverage, budget,
-                prompts_dir, skip_tests, skip_verify, context_override
+                prompts_dir, skip_tests, skip_verify, context_override,
+                read_only=read_only,
             )
         else:
             # Only derived artifacts changed - prompt (source of truth) is unchanged

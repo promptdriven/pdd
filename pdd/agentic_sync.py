@@ -8,12 +8,13 @@ then dispatches to the async sync runner for parallel execution.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
@@ -21,8 +22,10 @@ from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_u
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import (
     AsyncSyncRunner,
+    _basename_from_architecture_filename,
     _find_pdd_executable,
     build_dep_graph_from_architecture,
+    build_dep_graph_from_architecture_data,
 )
 from .architecture_include_validation import collect_architecture_include_validation_warnings
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
@@ -40,6 +43,10 @@ from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
 
 console = Console()
+
+_GLOBAL_SYNC_NOOP_OPERATIONS = {"nothing", "all_synced"}
+_GLOBAL_SYNC_TIER1_OPERATIONS = {"generate", "auto-deps"}
+_SYNC_DETERMINE_LOGGER_NAME = "pdd.sync_determine_operation"
 
 
 def _is_github_issue_url(s: str) -> bool:
@@ -277,6 +284,332 @@ def _load_architecture_json(
 
     _ = issue_number  # reserved for future origin-aware loading
     return load_combined_architecture_data(project_root)
+
+
+def _sync_determine_operation_readonly(**kwargs: Any) -> Any:
+    """Call sync_determine_operation without mutations or info log noise."""
+    sync_logger = logging.getLogger(_SYNC_DETERMINE_LOGGER_NAME)
+    previous_level = sync_logger.level
+    sync_logger.setLevel(logging.WARNING)
+    try:
+        kwargs["read_only"] = True
+        return sync_determine_operation(**kwargs)
+    finally:
+        sync_logger.setLevel(previous_level)
+
+
+def _run_readonly_sync_determine_in_cwd(cwd: Path, **kwargs: Any) -> Any:
+    """Run read-only sync analysis from the module's resolved cwd."""
+    previous_cwd = Path.cwd()
+    try:
+        os.chdir(cwd)
+        return _sync_determine_operation_readonly(**kwargs)
+    finally:
+        os.chdir(previous_cwd)
+
+
+class GlobalSyncAnalysis(NamedTuple):
+    """Read-only analysis result for no-argument global sync."""
+
+    modules_to_sync: List[str]
+    module_cwds: Dict[str, Path]
+    estimated_cost: float
+    module_operations: Dict[str, List[str]]
+    skipped_modules: List[str]
+    all_modules: List[str]
+
+
+def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[str]:
+    """Return syncable architecture module basenames, preserving declaration order."""
+    basenames: List[str] = []
+    seen = set()
+    for entry in architecture:
+        if not isinstance(entry, dict):
+            continue
+        basename = _basename_from_architecture_filename(entry.get("filename", ""))
+        if basename and basename not in seen:
+            basenames.append(basename)
+            seen.add(basename)
+    return basenames
+
+
+def _resolve_module_sync_context(
+    basename: str,
+    cwd: Path,
+) -> Tuple[Optional[str], Path, Dict[str, Path]]:
+    """Resolve context, prompts_dir, and prompt languages for a sync basename."""
+    pddrc_path = _find_pddrc_file(cwd)
+    context_name = None
+    prompts_dir = cwd / "prompts"
+
+    if pddrc_path:
+        config = _load_pddrc_config(pddrc_path)
+        context_name = _detect_context_from_basename(basename, config)
+        defaults = config.get("contexts", {}).get(
+            context_name or "default", {}
+        ).get("defaults", {})
+        prompts_dir_raw = defaults.get("prompts_dir", "prompts")
+        if not Path(prompts_dir_raw).is_absolute():
+            prompts_dir = pddrc_path.parent / prompts_dir_raw
+        else:
+            prompts_dir = Path(prompts_dir_raw)
+
+    lang_to_path = _detect_languages_with_context(
+        basename, prompts_dir, context_name=context_name
+    )
+    return context_name, prompts_dir, lang_to_path
+
+
+def _analyze_global_sync_modules(
+    modules: List[str],
+    project_root: Path,
+    *,
+    quiet: bool = False,
+    budget: Optional[float] = None,
+    skip_tests: bool = False,
+    skip_verify: bool = False,
+    target_coverage: Optional[float] = None,
+) -> GlobalSyncAnalysis:
+    """Tier 1 global sync analysis: fingerprint-scan all architecture modules."""
+    modules_to_sync: List[str] = []
+    module_cwds: Dict[str, Path] = {}
+    module_operations: Dict[str, List[str]] = {}
+    skipped_modules: List[str] = []
+    estimated_cost = 0.0
+    effective_budget = budget if budget is not None else 10.0
+    effective_coverage = target_coverage if target_coverage is not None else 90.0
+
+    for basename in modules:
+        cwd = _resolve_module_cwd(basename, project_root)
+        module_cwds[basename] = cwd
+
+        try:
+            context_name, prompts_dir, lang_to_path = _resolve_module_sync_context(
+                basename, cwd
+            )
+        except Exception as exc:
+            modules_to_sync.append(basename)
+            module_operations[basename] = [
+                f"analysis-error: {exc}; queued for sync as safe fallback"
+            ]
+            continue
+
+        if not lang_to_path:
+            skipped_modules.append(f"{basename}: no syncable prompt file found")
+            continue
+
+        operations: List[str] = []
+        needs_sync = False
+        for language in lang_to_path:
+            try:
+                decision = _run_readonly_sync_determine_in_cwd(
+                    cwd,
+                    basename=basename,
+                    language=language,
+                    target_coverage=effective_coverage,
+                    budget=effective_budget,
+                    log_mode=True,
+                    prompts_dir=str(prompts_dir),
+                    skip_tests=skip_tests,
+                    skip_verify=skip_verify,
+                    context_override=context_name,
+                )
+            except Exception as exc:
+                needs_sync = True
+                operations.append(
+                    f"{language}: analysis-error ({exc}); queued for sync"
+                )
+                continue
+
+            operations.append(f"{language}: {decision.operation} - {decision.reason}")
+            if decision.operation in _GLOBAL_SYNC_TIER1_OPERATIONS:
+                needs_sync = True
+                estimated_cost += float(decision.estimated_cost or 0.0)
+            elif decision.operation not in _GLOBAL_SYNC_NOOP_OPERATIONS:
+                skipped_modules.append(
+                    f"{basename}: {language} requires {decision.operation}; "
+                    "outside Tier 1 prompt-staleness scope"
+                )
+
+        if needs_sync:
+            modules_to_sync.append(basename)
+            module_operations[basename] = operations
+
+    if not quiet:
+        skipped_count = len(modules) - len(modules_to_sync)
+        console.print(
+            f"[bold]Global sync analysis:[/bold] {len(modules_to_sync)} stale "
+            f"module(s), {skipped_count} already synced or skipped."
+        )
+
+    return GlobalSyncAnalysis(
+        modules_to_sync=modules_to_sync,
+        module_cwds=module_cwds,
+        estimated_cost=estimated_cost,
+        module_operations=module_operations,
+        skipped_modules=skipped_modules,
+        all_modules=modules,
+    )
+
+
+def _dependency_ordered_modules(
+    modules: List[str],
+    dep_graph: Dict[str, List[str]],
+) -> List[str]:
+    """Order modules by dependency graph while preserving input order for ties."""
+    if not modules:
+        return []
+    sorted_modules, _ = topological_sort(dep_graph)
+    module_set = set(modules)
+    ordered = [m for m in sorted_modules if m in module_set]
+    ordered.extend(m for m in modules if m not in ordered)
+    return ordered
+
+
+def _print_global_sync_plan(
+    analysis: GlobalSyncAnalysis,
+    ordered_modules: List[str],
+    warnings: List[str],
+    budget: Optional[float] = None,
+) -> None:
+    """Render a concise global sync dry-run plan."""
+    console.print("[bold]Global sync dry run:[/bold]")
+    console.print(f"  Tier 1 (prompt staleness): {len(ordered_modules)} module(s) stale")
+    console.print(f"  Total architecture modules scanned: {len(analysis.all_modules)}")
+    console.print(f"  Estimated cost: ${analysis.estimated_cost:.2f}")
+    if budget is not None:
+        console.print(f"  Budget: ${budget:.2f}")
+        if analysis.estimated_cost > budget:
+            console.print(
+                f"  [yellow]Warning: estimated cost exceeds budget by "
+                f"${analysis.estimated_cost - budget:.2f}[/yellow]"
+            )
+
+    if ordered_modules:
+        console.print("  Modules (dependency order):")
+        for idx, basename in enumerate(ordered_modules, start=1):
+            operations = analysis.module_operations.get(basename, [])
+            detail = operations[0] if operations else "queued"
+            console.print(f"    {idx}. {basename} ({detail})")
+    else:
+        console.print("  No modules need syncing.")
+
+    for warning in warnings:
+        console.print(f"[yellow]Warning: {warning}[/yellow]")
+
+    for skipped in analysis.skipped_modules:
+        console.print(f"[yellow]Warning: {skipped}[/yellow]")
+
+
+def run_global_sync(
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+    budget: Optional[float] = None,
+    skip_verify: bool = False,
+    skip_tests: bool = False,
+    agentic_mode: bool = True,
+    no_steer: bool = True,
+    max_attempts: Optional[int] = None,
+    dry_run: bool = False,
+    target_coverage: Optional[float] = None,
+    one_session: bool = False,
+    local: bool = False,
+) -> Tuple[bool, str, float, str]:
+    """Run project-wide Tier 1 global sync from architecture.json."""
+    project_root = _find_project_root(Path.cwd())
+    architecture, arch_path = _load_architecture_json(project_root)
+    if architecture is None:
+        return (
+            False,
+            f"No architecture.json found under {project_root}.",
+            0.0,
+            "global-sync",
+        )
+
+    all_modules = _architecture_module_basenames(architecture)
+    if not all_modules:
+        return (
+            False,
+            f"No syncable prompt modules found in {arch_path}.",
+            0.0,
+            "global-sync",
+        )
+
+    analysis = _analyze_global_sync_modules(
+        all_modules,
+        project_root,
+        quiet=quiet,
+        budget=budget,
+        skip_tests=skip_tests,
+        skip_verify=skip_verify,
+        target_coverage=target_coverage,
+    )
+
+    dep_result = build_dep_graph_from_architecture_data(
+        architecture,
+        analysis.modules_to_sync,
+        source_name=f"combined architecture data under {project_root}",
+    )
+    ordered_modules = _dependency_ordered_modules(
+        analysis.modules_to_sync, dep_result.graph
+    )
+
+    if dry_run:
+        if not quiet:
+            _print_global_sync_plan(analysis, ordered_modules, dep_result.warnings, budget)
+        return (
+            True,
+            f"Global sync dry run: {len(ordered_modules)} module(s) would sync.",
+            0.0,
+            "global-sync",
+        )
+
+    if not ordered_modules:
+        return True, "All modules are already synced — nothing to do.", 0.0, "global-sync"
+
+    if budget is not None and budget <= 0:
+        return False, "Budget must be greater than $0.00 for global sync.", 0.0, "global-sync"
+
+    if budget is not None and analysis.estimated_cost > budget:
+        return (
+            False,
+            (
+                f"Estimated global sync cost ${analysis.estimated_cost:.2f} "
+                f"exceeds budget ${budget:.2f}; run with a larger --budget "
+                "or inspect with --dry-run."
+            ),
+            0.0,
+            "global-sync",
+        )
+
+    for warning in dep_result.warnings:
+        if not quiet:
+            console.print(f"[yellow]Warning: {warning}[/yellow]")
+
+    runner = AsyncSyncRunner(
+        basenames=ordered_modules,
+        dep_graph=dep_result.graph,
+        sync_options={
+            "total_budget": budget,
+            "skip_verify": skip_verify,
+            "skip_tests": skip_tests,
+            "agentic": agentic_mode,
+            "no_steer": no_steer,
+            "max_attempts": max_attempts,
+            "one_session": one_session,
+            "local": local,
+            "target_coverage": target_coverage,
+        },
+        github_info=None,
+        quiet=quiet,
+        verbose=verbose,
+        issue_url=None,
+        module_cwds=analysis.module_cwds,
+        initial_cost=0.0,
+    )
+    success, message, cost = runner.run()
+    return success, message, cost, "global-sync"
 
 
 def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
@@ -608,23 +941,10 @@ def _filter_already_synced(
             needs_sync.append(basename)
             continue
 
-        # Detect context and prompts_dir for this module
         try:
-            pddrc_path = _find_pddrc_file(cwd)
-            context_name = None
-            prompts_dir = cwd / "prompts"
-
-            if pddrc_path:
-                config = _load_pddrc_config(pddrc_path)
-                context_name = _detect_context_from_basename(basename, config)
-                defaults = config.get("contexts", {}).get(context_name or "default", {}).get("defaults", {})
-                prompts_dir_raw = defaults.get("prompts_dir", "prompts")
-                if not Path(prompts_dir_raw).is_absolute():
-                    prompts_dir = pddrc_path.parent / prompts_dir_raw
-                else:
-                    prompts_dir = Path(prompts_dir_raw)
-
-            lang_to_path = _detect_languages_with_context(basename, prompts_dir, context_name=context_name)
+            context_name, prompts_dir, lang_to_path = _resolve_module_sync_context(
+                basename, cwd
+            )
         except Exception:
             # Language discovery failed — keep module in the list (safe fallback)
             needs_sync.append(basename)
@@ -639,7 +959,7 @@ def _filter_already_synced(
         all_nothing = True
         for lang in lang_to_path:
             try:
-                decision = sync_determine_operation(
+                decision = _sync_determine_operation_readonly(
                     basename=basename,
                     language=lang,
                     target_coverage=90.0,
@@ -647,7 +967,7 @@ def _filter_already_synced(
                     prompts_dir=str(prompts_dir),
                     context_override=context_name,
                 )
-                if decision.operation != "nothing":
+                if decision.operation not in _GLOBAL_SYNC_NOOP_OPERATIONS:
                     all_nothing = False
                     break
             except Exception:
@@ -786,7 +1106,7 @@ def run_agentic_sync(
         issue_url: GitHub issue URL.
         verbose: Enable detailed logging.
         quiet: Suppress standard output.
-        budget: Max cost per module sync.
+        budget: Maximum total cost across module identification and child syncs.
         skip_verify: Skip verification step.
         skip_tests: Skip test generation.
         agentic_mode: Use agentic mode for individual syncs.
@@ -1015,7 +1335,7 @@ def run_agentic_sync(
 
     # 12. Run parallel sync
     sync_options = {
-        "budget": budget,
+        "total_budget": budget,
         "skip_verify": skip_verify,
         "skip_tests": skip_tests,
         "agentic": agentic_mode,

@@ -60,6 +60,324 @@ def test_sync_returns_tuple_on_success(mock_sync_main, mock_auto_update, runner)
 
 
 @patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_dispatches_global_sync(
+    mock_global_sync,
+    mock_agentic_sync,
+    mock_sync_main,
+    mock_auto_update,
+    runner,
+):
+    """No-argument `pdd sync` should run global architecture sync."""
+    mock_global_sync.return_value = (True, "Global sync dry run: 1 module(s) would sync.", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_called_once()
+    mock_agentic_sync.assert_not_called()
+    mock_sync_main.assert_not_called()
+    call_kwargs = mock_global_sync.call_args.kwargs
+    assert call_kwargs["dry_run"] is True
+    assert call_kwargs["budget"] is not None
+    assert call_kwargs["local"] is False
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_forwards_global_local_flag(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """Top-level --local must be preserved when global sync dispatches children."""
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["--local", "sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["local"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_uses_default_budget_without_pddrc(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """No-argument global sync should use the advertised default budget cap."""
+    monkeypatch.chdir(tmp_path)
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["budget"] == pytest.approx(20.0)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_uses_pddrc_default_budget(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """No-argument global sync should honor .pddrc default budget."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      budget: 7.5
+""",
+        encoding="utf-8",
+    )
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["budget"] == pytest.approx(7.5)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_uses_pddrc_default_target_coverage(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """Global sync analysis should honor .pddrc target coverage like child sync."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      target_coverage: 12.5
+""",
+        encoding="utf-8",
+    )
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["target_coverage"] == pytest.approx(12.5)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_target_coverage_cli_overrides_pddrc(
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """Explicit --target-coverage should take precedence over .pddrc defaults."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  default:
+    defaults:
+      target_coverage: 12.5
+""",
+        encoding="utf-8",
+    )
+    mock_global_sync.return_value = (True, "ok", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run", "--target-coverage", "80"])
+
+    assert result.exit_code == 0
+    assert mock_global_sync.call_args.kwargs["target_coverage"] == pytest.approx(80.0)
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+def test_sync_without_basename_exits_on_global_sync_failure(mock_global_sync, mock_auto_update, runner):
+    """A failed global sync dispatch should produce a non-zero CLI exit."""
+    mock_global_sync.return_value = (False, "No architecture.json found", 0.0, "global-sync")
+
+    result = runner.invoke(cli.cli, ["sync"])
+
+    assert result.exit_code == 1
+    mock_global_sync.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_basename_keeps_single_module_dispatch(
+    mock_sync_main,
+    mock_agentic_sync,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """A basename argument should still use the original single-module sync path."""
+    mock_sync_main.return_value = ('success', 0.5, 'model')
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run", "--one-session", "test_module"])
+
+    assert result.exit_code == 0
+    mock_sync_main.assert_called_once()
+    mock_agentic_sync.assert_not_called()
+    mock_global_sync.assert_not_called()
+    call_kwargs = mock_sync_main.call_args.kwargs
+    assert call_kwargs["basename"] == "test_module"
+    assert call_kwargs["dry_run"] is True
+    assert call_kwargs["one_session"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+def test_sync_with_github_issue_url_keeps_agentic_dispatch(
+    mock_agentic_sync,
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """A GitHub issue URL should still dispatch to agentic issue sync."""
+    mock_agentic_sync.return_value = (True, "Sync completed", 0.25, "agentic-sync")
+    issue_url = "https://github.com/gltanaka/pdd/issues/636"
+
+    result = runner.invoke(
+        cli.cli,
+        ["sync", "--budget", "3.5", "--no-one-session", issue_url],
+    )
+
+    assert result.exit_code == 0
+    mock_agentic_sync.assert_called_once()
+    mock_sync_main.assert_not_called()
+    mock_global_sync.assert_not_called()
+    call_kwargs = mock_agentic_sync.call_args.kwargs
+    assert call_kwargs["issue_url"] == issue_url
+    assert call_kwargs["budget"] == 3.5
+    assert call_kwargs["one_session"] is False
+    assert call_kwargs["use_github_state"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_architecture_json_keeps_single_module_dispatch(
+    mock_sync_main,
+    mock_agentic_sync,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """`pdd sync architecture.json` stays on the single-module sync path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(cli.cli, ["sync", "architecture.json", "--dry-run"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+    assert mock_sync_main.call_args.kwargs["basename"] == "architecture.json"
+    mock_agentic_sync.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_architecture_json_subpath_keeps_single_module_dispatch(
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """A path ending in `/architecture.json` stays on single-module sync."""
+    monkeypatch.chdir(tmp_path)
+    nested = tmp_path / "subdir"
+    nested.mkdir()
+    (nested / "architecture.json").write_text("[]", encoding="utf-8")
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(
+        cli.cli, ["sync", "subdir/architecture.json", "--dry-run"]
+    )
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+    assert mock_sync_main.call_args.kwargs["basename"] == "subdir/architecture.json"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_unrelated_json_falls_through_to_single_module(
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """Non-`architecture.json` `.json` arguments must NOT trigger global sync."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(cli.cli, ["sync", "config.json"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+    assert mock_sync_main.call_args.kwargs["basename"] == "config.json"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_with_missing_architecture_json_falls_through(
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+    monkeypatch,
+    tmp_path,
+):
+    """`pdd sync architecture.json` remains a normal basename when missing."""
+    monkeypatch.chdir(tmp_path)  # no architecture.json on disk
+    mock_sync_main.return_value = ("success", 0.0, "model")
+
+    result = runner.invoke(cli.cli, ["sync", "architecture.json"])
+
+    assert result.exit_code == 0
+    mock_global_sync.assert_not_called()
+    mock_sync_main.assert_called_once()
+
+
+@patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.maintenance.handle_error')
 @patch('pdd.commands.maintenance.sync_main')
 def test_sync_returns_none_on_error(mock_sync_main, mock_handle_error, mock_auto_update, runner):

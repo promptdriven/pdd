@@ -49,6 +49,18 @@ def test_basename_excludes_ci_helper_script_tests():
     assert module._basename_from_path("tests/test_ci_detect_changed_modules.py") is None
 
 
+def test_basename_excludes_agent_reviewed_model_catalog():
+    module = _load_module()
+
+    assert module._basename_from_path("pdd/generate_model_catalog.py") is None
+    assert (
+        module._basename_from_path("pdd/prompts/generate_model_catalog_python.prompt")
+        is None
+    )
+    assert module._basename_from_path("context/generate_model_catalog_example.py") is None
+    assert module._basename_from_path("tests/test_generate_model_catalog.py") is None
+
+
 def test_basename_from_nested_context_and_tests():
     module = _load_module()
 

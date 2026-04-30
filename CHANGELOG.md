@@ -1,13 +1,29 @@
+## v0.0.223 (2026-04-29)
+
+### Feat
+
+- add tier-1 global sync mode
+- add deterministic agent-reviewed Arena ELO catalog
+
 ## v0.0.222 (2026-04-28)
 
 ### Feat
 
-- **#739**: discover and account for associated docs in pdd change
-- introduce keyring operation timeouts to prevent CLI hangs and improve auth reliability
+- `pdd change` now discovers associated docs from prompt includes and `architecture.json`, updates them alongside prompt/code edits, verifies each discovered doc is reported as modified/unchanged/conflict, and carries conflicts into PR manual-review notes (#739).
+- The change workflow now runs a bounded pre-flight `pdd update` heal for drifted prompts before implementation, with `python -m pdd` support for those subprocesses.
 
 ### Fix
 
-- avoid duplicate guard empty argv records (#1313)
+- Duplicate CLI guard skips empty argv signatures so hosted or programmatic wrappers do not block unrelated later runs (#1313).
+- Prompt tag parsing ignores YAML front matter before scanning PDD metadata tags, and CI changed-module detection excludes package shims/helper scripts from auto-heal.
+
+### Build
+
+- Refreshed prompt/example drift, architecture metadata, dependency CSVs, package metadata, cloud-image hash, and cloud-batch timings for 0.0.222.
+
+### Docs
+
+- README and internal onboarding now describe the 13-step `pdd change` workflow, associated-document handling, doc-sync verification, and renumbered review-loop steps.
 
 ## v0.0.221 (2026-04-27)
 

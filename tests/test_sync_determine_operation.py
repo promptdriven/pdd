@@ -875,6 +875,46 @@ def test_decision_analyze_conflict_on_multiple_changes(mock_construct, pdd_test_
 
 
 @patch('sync_determine_operation.construct_paths')
+def test_log_mode_conflict_analysis_keeps_metadata(mock_construct, pdd_test_environment):
+    """Read-only analysis must not delete metadata for prompt+derived conflicts."""
+    prompts_dir = pdd_test_environment / "prompts"
+    create_file(prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt", "modified prompt")
+    create_file(pdd_test_environment / f"{BASENAME}.py", "modified code")
+
+    mock_construct.return_value = (
+        {}, {},
+        {
+            'code_file': str(pdd_test_environment / f"{BASENAME}.py"),
+            'example_file': str(pdd_test_environment / f"{BASENAME}_example.py"),
+            'test_file': str(pdd_test_environment / f"test_{BASENAME}.py")
+        },
+        LANGUAGE
+    )
+
+    fp_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json"
+    rr_path = get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json"
+    create_fingerprint_file(fp_path, {
+        "pdd_version": "1.0", "timestamp": "t", "command": "generate",
+        "prompt_hash": "original_prompt_hash", "code_hash": "original_code_hash",
+        "example_hash": None, "test_hash": None
+    })
+    rr_path.write_text("not json", encoding="utf-8")
+
+    decision = sync_determine_operation(
+        BASENAME,
+        LANGUAGE,
+        TARGET_COVERAGE,
+        prompts_dir=str(prompts_dir),
+        log_mode=True,
+    )
+
+    assert decision.operation == 'generate'
+    assert decision.details.get('read_only') is True
+    assert fp_path.exists()
+    assert rr_path.exists()
+
+
+@patch('sync_determine_operation.construct_paths')
 def test_conflict_deletes_fingerprint_and_run_report(mock_construct, pdd_test_environment):
     """When both prompt and derived files changed (no run_report), fingerprint is deleted and sync restarts fresh.
 
