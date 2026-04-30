@@ -66,6 +66,15 @@ _saved_commands_modules = {
     for name, module in sys.modules.items()
     if name.startswith("pdd.commands")
 }
+_side_effect_module_names = (
+    "pdd.core.cli",
+    "pdd.cli",
+    "pdd.sync_orchestration",
+)
+_saved_side_effect_modules = {
+    name: sys.modules.get(name)
+    for name in _side_effect_module_names
+}
 _saved_commands_pkg = sys.modules.get("pdd.commands")
 _saved_commands_attrs = None
 if _saved_commands_pkg is not None:
@@ -124,7 +133,28 @@ finally:
     for _name in _core_side_effects:
         sys.modules.pop(_name, None)
 
-del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name
+    # Importing pdd.commands.generate can pull in sync orchestration while
+    # pdd.operation_log and pdd.core.errors are mocked above. If that side
+    # effect module stays cached, later sync tests inherit MagicMock logging and
+    # error handlers. Restore the prior module, or evict the polluted import.
+    def _restore_module_cache(_name, _module):
+        if _module is not None:
+            sys.modules[_name] = _module
+        else:
+            sys.modules.pop(_name, None)
+
+        _parent_name, _attr = _name.rsplit(".", 1)
+        _parent = sys.modules.get(_parent_name)
+        if _parent is not None:
+            if _module is not None:
+                setattr(_parent, _attr, _module)
+            elif hasattr(_parent, _attr):
+                delattr(_parent, _attr)
+
+    for _name, _module in _saved_side_effect_modules.items():
+        _restore_module_cache(_name, _module)
+
+del _import_mocks, _saved_modules, _saved_generate_module, _saved_commands_modules, _side_effect_module_names, _saved_side_effect_modules, _saved_commands_pkg, _saved_commands_attrs, _mod_name, _restore_module_cache
 
 # --------------------------------------------------------------------------------
 # Z3 FORMAL VERIFICATION

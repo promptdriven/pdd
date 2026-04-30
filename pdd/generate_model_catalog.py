@@ -1,35 +1,38 @@
 #!/usr/bin/env python3
 """
-scripts/generate_model_catalog.py
+pdd/generate_model_catalog.py
 
-Regenerates pdd/data/llm_model.csv from LiteLLM's bundled model registry.
+Regenerates pdd/data/llm_model.csv from LiteLLM's bundled model registry,
+enriched with agent-reviewed coding-arena scores from a checked-in manifest.
 
 Usage:
-    python scripts/generate_model_catalog.py [--output PATH]
+    python pdd/generate_model_catalog.py [--output PATH] [--score-manifest PATH]
 
-The script pulls from litellm.model_cost (local data, no network calls) and:
+The script pulls from litellm.model_cost (local data) and:
   - Filters to chat-mode models only
-  - Skips deprecated models
-  - Skips placeholder/tier entries (e.g. together-ai-4.1b-8b)
+  - Skips deprecated, placeholder, and superseded preview entries
   - Converts per-token costs to per-million-token costs
-  - Looks up display provider names and API key env var names
-  - Applies curated ELO scores for known models; skips models below ELO_CUTOFF
+  - Looks up provider display names and API key env var names
+  - Resolves ELO via the agentic score manifest, falling back to a curated
+    static table; skips models below ELO_CUTOFF
   - Infers structured_output, reasoning_type, max_reasoning_tokens
-  - Sorts by ELO descending, then model name ascending
+  - Applies post-processing fixes (dated-variant dedup, Pareto filter)
 
-Re-run this script whenever you update the litellm package to pick up new models.
+Re-run this script whenever you update the litellm package or the agentic score
+manifest to pick up new models.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # ELO cutoff — models below this score are excluded from the catalog.
@@ -38,15 +41,39 @@ ELO_CUTOFF = 1300
 MAX_COST_PER_MTOK = 100.0  # Sanity cap — drop rows with absurd pricing (LiteLLM bugs)
 
 # ---------------------------------------------------------------------------
-# ELO scores — canonical base model names mapped to coding arena ELO.
-# All known models are listed here; ELO_CUTOFF controls which make the CSV.
-# Keys are normalized base names (as produced by _extract_base_model).
-
-#   Scores sourced from LM Arena *coding* leaderboard (Feb 2026):
-#   https://openlm.ai/chatbot-arena/  (Coding column)
-#   You should update these values every so often. 
+# Agentic ELO manifest configuration.
 # ---------------------------------------------------------------------------
-ELO_SCORES: Dict[str, int] = {
+# PDD's refresh flow is agentic: an agent inspects the current public
+# leaderboard(s), decides the source policy, records exact aliases and
+# provenance in this manifest, and this Python module validates/applies that
+# reviewed data deterministically. No network access or optional parquet/fuzzy
+# dependencies are used during catalog regeneration.
+AGENTIC_ELO_MANIFEST_PATH = Path(__file__).parent / "data" / "arena_elo_manifest.json"
+AGENTIC_ELO_MANIFEST_SCHEMA_VERSION = 2
+ARENA_LEADERBOARD_POLICY = (
+    "agent-reviewed manifest; each entry records its leaderboard/source"
+)
+AGENTIC_REFRESH_ERROR = (
+    "--refresh-elo is not a Python live-fetch path. Refresh scores agentically: "
+    "inspect the current Arena source rows, update pdd/data/arena_elo_manifest.json "
+    "with provenance, then run the generator without --refresh-elo."
+)
+
+# ---------------------------------------------------------------------------
+# Static ELO fallback — used when the Arena leaderboard is unreachable or
+# when a litellm model isn't on the leaderboard yet (new release, niche
+# provider, local-runner roots like lm_studio/ ollama/).
+#
+# This is the same curated table that used to live as ELO_SCORES; we keep it
+# as a safety net rather than slimming it, because:
+#   - new model releases land in litellm before they appear on the leaderboard
+#   - local/self-hosted models never appear on the leaderboard at all
+# Without this fallback those models get ELO=0 and drop out of the catalog.
+#
+# Keys are normalized base names (as produced by _extract_base_model).
+# Source: LMArena coding leaderboard, last full curation Feb 2026.
+# ---------------------------------------------------------------------------
+STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Source: LMArena CODE Arena leaderboard, scraped Feb 22, 2026.
     #   - Scores marked [CODE] are directly from the Code Arena.
@@ -279,6 +306,11 @@ PROVIDERS: Dict[str, Tuple[str, str]] = {
     "lm_studio":          ("LM Studio",                 ""),
 }
 
+# Providers intentionally excluded from the bundled catalog. ChatGPT rows are
+# split out of this PR because the declared LiteLLM range still includes
+# versions that cannot resolve ``chatgpt/*`` model IDs.
+_SKIP_PROVIDER_ROOTS = {"chatgpt"}
+
 # Anthropic provider IDs — these use "budget" reasoning
 _ANTHROPIC_PROVIDERS = {"anthropic", "azure_ai"}  # azure_ai hosts Claude models too
 
@@ -313,7 +345,10 @@ CSV_FIELDNAMES = [
 # Regex patterns for _extract_base_model() — stripping provider/region/version
 # ---------------------------------------------------------------------------
 
-# Known provider prefixes (simple provider/rest format)
+# Known provider prefixes (simple provider/rest format).
+# Local-runner roots (lm_studio, ollama) are included so their
+# sub-models (e.g. lm_studio/qwen3-coder-next) can canonicalize to
+# the same static-fallback entries as the cloud-hosted equivalents.
 _SIMPLE_PREFIX_PROVIDERS = {
     "vertex_ai", "azure_ai", "openrouter", "deepinfra", "together_ai",
     "fireworks_ai", "vercel_ai_gateway", "github_copilot", "groq",
@@ -322,6 +357,8 @@ _SIMPLE_PREFIX_PROVIDERS = {
     "llamagate", "gradient_ai", "moonshot", "snowflake", "heroku",
     "publicai", "deepseek", "xai", "mistral", "gemini", "perplexity",
     "cohere", "cohere_chat", "meta_llama", "dashscope", "minimax",
+    "lm_studio", "ollama", "ollama_chat",
+    "chatgpt", "zai", "baseten", "nebius", "watsonx",
 }
 
 # Bedrock region paths: us-east-1/, ap-northeast-1/, us-gov-west-1/, etc.
@@ -354,10 +391,12 @@ _VENDOR_DOT_PREFIX = re.compile(
 )
 
 # HuggingFace-style org namespaces used by deepinfra, together_ai, openrouter, etc.
+# Also covers second-level org paths after a provider prefix is stripped (e.g.
+# novita/minimax/minimax-m2 -> after stripping novita/, strip minimax/).
 _ORG_NAMESPACE = re.compile(
     r"^(?:deepseek-ai|deepseek|meta-llama|meta|anthropic|google|openai|"
-    r"moonshotai|mistralai|qwen|Qwen|x-ai|xai|cohere|microsoft|"
-    r"allenai|NousResearch|nvidia|MiniMaxAI|zai-org)/",
+    r"moonshotai|mistralai|mistral|qwen|Qwen|x-ai|xai|cohere|microsoft|"
+    r"allenai|NousResearch|nvidia|MiniMaxAI|minimax|zai-org|zai)/",
     re.IGNORECASE,
 )
 
@@ -387,6 +426,12 @@ _VERTEX_VERSION = re.compile(r"@[\w.-]+$")
 
 # Bedrock version suffix: -v1:0, -v2:0, :0
 _BEDROCK_VERSION = re.compile(r"(?:-v\d+:\d+|:\d+)$")
+
+# Dashed release-date suffix used by OpenAI / Azure aliases:
+#   gpt-5.5-2026-04-23, azure/gpt-5.4-mini-2026-03-17.
+# Matches at end of string only; anchored to a preceding "-" so it
+# can't accidentally bite into the model identity portion.
+_DATED_DASH_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 
 # Special mapping for Bedrock deepseek after vendor prefix is stripped
 # e.g. deepseek.v3.2 -> strips to "v3.2" or "v3-v1:0" -> "v3"
@@ -419,9 +464,9 @@ def _extract_base_model(model_id: str) -> Optional[str]:
     Extract a canonical base model name from a litellm model ID by stripping
     provider prefixes, regions, vendor namespaces, and version suffixes.
 
-    Returns a key matching ELO_SCORES if confident, or None if the model
-    cannot be safely identified (conservative — prefers returning None over
-    a wrong match).
+    Returns a key matching STATIC_ELO_FALLBACK if confident, or None if the
+    model cannot be safely identified (conservative — prefers returning None
+    over a wrong match).
     """
     s = model_id.strip()
 
@@ -481,13 +526,13 @@ def _extract_base_model(model_id: str) -> Optional[str]:
         s = s[:-5]
 
     # Step 12: Exact match
-    if s in ELO_SCORES:
+    if s in STATIC_ELO_FALLBACK:
         return s
 
-    # Step 13: Longest-prefix match against ELO_SCORES keys.
+    # Step 13: Longest-prefix match against STATIC_ELO_FALLBACK keys.
     # Sorted longest-first to prefer more specific matches
     # (e.g. "claude-opus-4-1" over "claude-opus-4").
-    for key in sorted(ELO_SCORES, key=len, reverse=True):
+    for key in sorted(STATIC_ELO_FALLBACK, key=len, reverse=True):
         if s.startswith(key):
             remainder = s[len(key):]
             if not remainder:
@@ -591,32 +636,504 @@ def _is_superseded_preview(model_id: str, all_model_ids: set) -> bool:
     return False
 
 
-def _get_elo(model_id: str) -> int:
-    """Look up ELO for a model.
+# Provider, routing, and organization path prefixes stripped during Arena
+# matching. Keep this separate from _extract_base_model's stricter logic so
+# exact Arena lookups can see through provider wrappers such as
+# "openrouter/anthropic/..." and "azure/global/...".
+_NORMALIZE_PATH_PREFIXES = {
+    "accounts",
+    "anthropic",
+    "azure",
+    "azure_ai",
+    "baseten",
+    "bedrock",
+    "bedrock_converse",
+    "cerebras",
+    "chatgpt",
+    "cohere",
+    "cohere_chat",
+    "dashscope",
+    "databricks",
+    "deepinfra",
+    "deepseek",
+    "deepseek-ai",
+    "fireworks",
+    "fireworks_ai",
+    "gemini",
+    "gmi",
+    "google",
+    "github",
+    "github_copilot",
+    "global",
+    "global-standard",
+    "groq",
+    "huggingface",
+    "hyperbolic",
+    "lambda_ai",
+    "lm_studio",
+    "meta",
+    "meta-llama",
+    "mistral",
+    "mistralai",
+    "minimax",
+    "minimaxai",
+    "models",
+    "moonshot",
+    "moonshotai",
+    "novita",
+    "nvidia_nim",
+    "oci",
+    "ollama",
+    "ollama_chat",
+    "openai",
+    "openrouter",
+    "perplexity",
+    "qwen",
+    "replicate",
+    "sambanova",
+    "snowflake",
+    "together_ai",
+    "us",
+    "eu",
+    "ap",
+    "apac",
+    "au",
+    "jp",
+    "vertex",
+    "vertex_ai",
+    "vercel_ai_gateway",
+    "wandb",
+    "watsonx",
+    "x-ai",
+    "xai",
+    "z-ai",
+    "zai",
+    "zai-org",
+    "nebius",
+}
+_NORMALIZE_REGION_SEGMENT = re.compile(
+    r"^(?:[a-z]{2}-[a-z]+-\d+|us-gov-[a-z]+-\d+)$",
+    re.IGNORECASE,
+)
+# Vendor dot-prefix used by Bedrock / OCI ("anthropic.claude-...")
+_NORMALIZE_VENDOR_PREFIX = re.compile(
+    r"^(?:anthropic|meta|amazon|cohere|ai21|mistral|moonshotai|deepseek|"
+    r"qwen|minimax|nvidia|openai|google|writer|twelvelabs|zai|xai)\.",
+    re.IGNORECASE,
+)
+# Cross-region geo prefix on bare IDs (us., eu., apac., ...)
+_NORMALIZE_GEO_PREFIX = re.compile(
+    r"^(?:us|eu|apac|ap|au|jp|global)\.",
+    re.IGNORECASE,
+)
 
-    Lookup order (stops at first hit):
-    1. Exact match in ELO_SCORES
-    2. _extract_base_model() -> ELO_SCORES lookup
-    3. Return 0
+
+def _strip_normalize_path_prefixes(name: str) -> str:
+    """Strip known provider/org/region path segments from the front."""
+    s = name.replace("\\", "/")
+    while "/" in s:
+        head, tail = s.split("/", 1)
+        head_norm = head.strip().lower()
+        if (
+            not head_norm
+            or head_norm in _NORMALIZE_PATH_PREFIXES
+            or _NORMALIZE_REGION_SEGMENT.match(head_norm)
+        ):
+            s = tail
+            continue
+        break
+    return s
+
+
+def _normalize_arena_parenthetical(match: re.Match[str]) -> str:
+    """Drop harness-only labels while preserving parenthetical variants."""
+    label = match.group(1).strip().lower()
+    if label in {"codex-harness"} or label.endswith("-harness"):
+        return ""
+    return f"-{label}"
+
+
+def _strip_arena_variant_suffixes(name: str) -> str:
+    """Remove snapshot/lifecycle noise without erasing reasoning variants."""
+    s = name
+    # Parenthetical harness labels are metadata, but labels like
+    # "(thinking-minimal)" describe a distinct Arena variant and must remain.
+    s = re.sub(r"\s*\(([^)]*)\)", _normalize_arena_parenthetical, s)
+    # Normalize common "p" decimal aliases before separator collapse:
+    # glm-4p7 -> glm-4-7, kimi-k2p5 -> kimi-k2-5.
+    s = re.sub(r"(?<=\d)p(?=\d)", "-", s)
+    s = re.sub(r"[\s_.]+", "-", s)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+
+    # Strip release dates whether compact or dashed.
+    s = re.sub(r"-\d{4}-\d{2}-\d{2}(?=$|-)", "", s)
+    s = re.sub(r"-\d{8}(?=$|-)", "", s)
+    # Strip non-identity lifecycle tags.
+    s = re.sub(r"-(?:preview|latest|experimental)(?=$|-)", "", s)
+    return re.sub(r"-{2,}", "-", s).strip("-")
+
+
+def _normalize_model_name(name: str) -> str:
+    """Lowercase + strip provider/region noise + collapse separators.
+
+    Used for matching litellm IDs against Arena leaderboard names where
+    the surface-form differs but the underlying model is the same
+    (e.g. ``openai/gpt-5-medium`` ↔ ``gpt-5-medium`` ↔ ``gpt 5 medium``).
+    Conservative: only strips well-known prefixes and collapses ``-_.``
+    into a single ``-``; doesn't touch the model identity portion, including
+    reasoning-effort variants such as ``-high`` or ``-minimal``.
     """
-    if model_id in ELO_SCORES:
-        return ELO_SCORES[model_id]
+    s = name.strip().lower()
+
+    # Strip provider/org/routing path prefixes.
+    s = _strip_normalize_path_prefixes(s)
+    # Strip cross-region geo prefix on bare IDs.
+    s = _NORMALIZE_GEO_PREFIX.sub("", s)
+    # Strip vendor dot-prefix (e.g. anthropic.claude-...).
+    s = _NORMALIZE_VENDOR_PREFIX.sub("", s)
+    # Strip vertex @version suffix and bedrock version suffix.
+    s = _VERTEX_VERSION.sub("", s)
+    s = _BEDROCK_VERSION.sub("", s)
+    s = _strip_arena_variant_suffixes(s)
+
+    return s
+
+
+def _static_elo(model_id: str) -> Optional[Tuple[int, str]]:
+    """Return static fallback ELO/source for exact or canonical-prefix hits."""
+    if model_id in STATIC_ELO_FALLBACK:
+        return STATIC_ELO_FALLBACK[model_id], "static"
+
     canonical = _extract_base_model(model_id)
-    if canonical is not None:
-        return ELO_SCORES[canonical]
-    return 0
+    if canonical is not None and canonical in STATIC_ELO_FALLBACK:
+        return STATIC_ELO_FALLBACK[canonical], "static-prefix"
+
+    return None
 
 
-def build_rows() -> List[dict]:
+def _coerce_elo(entry: Any) -> Optional[float]:
+    """Return the numeric ``elo`` field of an arena entry, or None if invalid.
+
+    Used as a defense-in-depth guard inside ``_get_elo`` so a malformed
+    arena_index passed in directly cannot crash catalog generation.
+    """
+    if not isinstance(entry, dict):
+        return None
+    val = entry.get("elo")
+    if isinstance(val, (int, float)):
+        return float(val)
+    return None
+
+
+def _validate_manifest_entry(entry: Any) -> bool:
+    """Schema check for one agent-reviewed score manifest entry."""
+    if not isinstance(entry, dict):
+        return False
+
+    required_str = [
+        "model",
+        "source",
+        "source_url",
+        "raw_model_name",
+        "leaderboard",
+        "category",
+        "retrieved_at",
+        "match_reason",
+    ]
+    if any(not isinstance(entry.get(field), str) for field in required_str):
+        return False
+
+    required_numeric = ["elo", "rating", "vote_count"]
+    if any(not isinstance(entry.get(field), (int, float)) for field in required_numeric):
+        return False
+
+    optional_numeric = ["rank", "rating_lower", "rating_upper"]
+    if any(
+        entry.get(field) is not None
+        and not isinstance(entry.get(field), (int, float))
+        for field in optional_numeric
+    ):
+        return False
+
+    publish_date = entry.get("leaderboard_publish_date")
+    if publish_date is not None and not isinstance(publish_date, str):
+        return False
+
+    aliases = entry.get("aliases", [])
+    if aliases is not None and (
+        not isinstance(aliases, list)
+        or any(not isinstance(alias, str) for alias in aliases)
+    ):
+        return False
+
+    return True
+
+
+def _parse_agentic_elo_manifest(payload: Any) -> Dict[str, Dict[str, Any]]:
+    """Convert a checked-in agentic manifest into the normalized score index.
+
+    Manifest entries are reviewed by the PDD agent. Python does not decide
+    leaderboard policy or fuzzy identity matches at generation time; it only
+    validates the reviewed aliases and exposes them as exact normalized keys.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") != AGENTIC_ELO_MANIFEST_SCHEMA_VERSION:
+        return {}
+    entries = payload.get("scores")
+    if not isinstance(entries, list):
+        return {}
+
+    index: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        if not _validate_manifest_entry(entry):
+            continue
+
+        aliases = [entry["model"]]
+        raw_aliases = entry.get("aliases", [])
+        if isinstance(raw_aliases, list):
+            aliases.extend(a for a in raw_aliases if isinstance(a, str))
+
+        votes_raw = entry.get("vote_count", entry.get("votes", 0))
+        votes = int(votes_raw) if isinstance(votes_raw, (int, float)) else 0
+        record = {
+            "elo": float(entry["elo"]),
+            "votes": votes,
+            "raw_name": entry["raw_model_name"],
+            "source": entry["source"],
+            "source_url": entry["source_url"],
+            "reviewed_by": entry.get("reviewed_by", "agent"),
+            "leaderboard": entry["leaderboard"],
+            "category": entry["category"],
+            "leaderboard_publish_date": entry.get("leaderboard_publish_date"),
+            "retrieved_at": entry["retrieved_at"],
+            "rank": entry.get("rank"),
+            "rating": float(entry["rating"]),
+            "rating_lower": entry.get("rating_lower"),
+            "rating_upper": entry.get("rating_upper"),
+            "match_reason": entry["match_reason"],
+        }
+
+        for alias in aliases:
+            norm = _normalize_model_name(alias)
+            if not norm:
+                continue
+            existing = index.get(norm)
+            if existing:
+                same_record = (
+                    existing.get("raw_name") == record["raw_name"]
+                    and existing.get("elo") == record["elo"]
+                    and existing.get("source") == record["source"]
+                )
+                if not same_record:
+                    return {}
+                continue
+            index[norm] = dict(record)
+
+    return index
+
+
+def _fetch_arena_elo(
+    refresh: bool = False,
+    manifest_path: Optional[Path] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return agent-reviewed Arena scores as a normalized index.
+
+    The name is retained for compatibility with existing call sites/tests. Live
+    Python refresh is intentionally unsupported: the refresh process is agentic,
+    so callers must update the manifest after inspecting current leaderboard
+    sources, then rerun this deterministic generator.
+    """
+    path = Path(manifest_path) if manifest_path is not None else AGENTIC_ELO_MANIFEST_PATH
+    if refresh:
+        raise RuntimeError(AGENTIC_REFRESH_ERROR)
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(
+            f"  arena ELO: manifest unavailable ({type(e).__name__}: {e}); "
+            "using STATIC_ELO_FALLBACK only",
+            file=sys.stderr,
+        )
+        return {}
+
+    index = _parse_agentic_elo_manifest(payload)
+    if not index:
+        print(
+            f"  arena ELO: manifest invalid or empty at {path}; "
+            "using STATIC_ELO_FALLBACK only",
+            file=sys.stderr,
+        )
+        return {}
+
+    print(f"  arena ELO: loaded {len(index)} reviewed aliases from {path}",
+          file=sys.stderr)
+    return index
+
+
+def _get_elo(
+    model_id: str,
+    arena_index: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[int, str]:
+    """Resolve ELO for a litellm model id.
+
+    Lookup chain (stops at first non-zero hit):
+      1. Agent-reviewed manifest exact/alias match.
+      2. STATIC_ELO_FALLBACK exact match.
+      3. STATIC_ELO_FALLBACK longest-prefix match via _extract_base_model.
+      4. (0, "none").
+
+    Returns a tuple ``(elo, source)`` where ``source`` is one of
+    ``"arena-exact"``, ``"static"``, ``"static-prefix"``, ``"none"`` —
+    used for diagnostic logging.
+    ELO is rounded to int to match the static table's domain.
+    """
+    arena_index = arena_index or {}
+
+    norm = _normalize_model_name(model_id)
+    if norm and norm in arena_index:
+        elo_val = _coerce_elo(arena_index[norm])
+        if elo_val is not None:
+            return int(round(elo_val)), "arena-exact"
+        # Bad entry shape — fall through to the static chain rather than
+        # raising. Manifest parsing should have rejected this, but _get_elo
+        # can also be called directly with hand-built dicts.
+
+    static = _static_elo(model_id)
+    if static is not None:
+        return static
+
+    return 0, "none"
+
+
+_LOCAL_PROVIDER_ROOTS = {"lm_studio", "ollama", "ollama_chat"}
+
+# Canonical local-runner catalog rows, seeded on every regen so that a
+# fresh ``--output PATH`` matches the bundled CSV instead of producing a
+# subset that depends on whether the target file already exists. Each
+# row's ELO is re-resolved at build time (so static-fallback updates
+# flow through) and is subject to ``ELO_CUTOFF`` like every other row.
+# Maintainers extend this list when they want a new local-runner model
+# to ship in the bundled catalog.
+_DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
+    {
+        "provider": "lm_studio",
+        "model": "lm_studio/qwen3-coder-next",
+        "input": 0.0,
+        "output": 0.0,
+        "base_url": "http://localhost:1234/v1",
+        "api_key": "",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "none",
+        "location": "",
+    },
+]
+
+
+def _local_runner_rows_from_existing_csv(
+    csv_path: Path,
+    arena_index: Dict[str, Dict[str, Any]],
+) -> List[dict]:
+    """Re-import local-runner rows from a previously-written CSV.
+
+    ``litellm.model_cost`` does not register user-configured local-runner
+    models (lm_studio, ollama), so a fresh ``build_rows()`` would drop them
+    on every regeneration. To preserve those entries we read the existing
+    catalog (if present) and re-emit any local-runner rows with their
+    user-supplied costs / base_url and a freshly-resolved ELO so static
+    fallback updates still apply. Rows below ``ELO_CUTOFF`` are dropped
+    by the same downstream filter that handles litellm-derived rows.
+    """
+    if not csv_path or not Path(csv_path).exists():
+        return []
+
+    preserved: List[dict] = []
+    try:
+        with open(csv_path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                model = (row.get("model") or "").strip()
+                if not model:
+                    continue
+                slash = model.find("/")
+                if slash <= 0:
+                    continue
+                root = model[:slash]
+                if root not in _LOCAL_PROVIDER_ROOTS:
+                    continue
+                # Re-resolve ELO so static-fallback updates flow through.
+                elo, _src = _get_elo(model, arena_index)
+                # Apply the same ELO_CUTOFF that litellm-derived rows go
+                # through — a preserved row for an unknown model would
+                # otherwise survive at ELO=0 and bypass the cutoff filter.
+                if elo < ELO_CUTOFF:
+                    continue
+                # Coerce numeric columns; tolerate missing/malformed values.
+                def _to_float(v: Any) -> float:
+                    try:
+                        return float(v)
+                    except (TypeError, ValueError):
+                        return 0.0
+                def _to_int(v: Any, default: int = 0) -> int:
+                    try:
+                        return int(v)
+                    except (TypeError, ValueError):
+                        return default
+                truthy = {"true", "1", "yes"}
+                struct_raw = str(row.get("structured_output", "")).strip().lower()
+                preserved.append({
+                    "provider": row.get("provider", root.replace("_", " ").title()),
+                    "model": model,
+                    "input": _to_float(row.get("input")),
+                    "output": _to_float(row.get("output")),
+                    "coding_arena_elo": elo,
+                    "base_url": row.get("base_url", "") or "",
+                    "api_key": row.get("api_key", "") or "",
+                    "max_reasoning_tokens": _to_int(row.get("max_reasoning_tokens", 0)),
+                    "structured_output": struct_raw in truthy,
+                    "reasoning_type": row.get("reasoning_type", "none") or "none",
+                    "location": row.get("location", "") or "",
+                })
+    except (OSError, csv.Error) as e:
+        print(f"  local-runner preserve: skipped ({type(e).__name__}: {e})",
+              file=sys.stderr)
+        return []
+
+    return preserved
+
+
+def build_rows(
+    refresh_elo: bool = False,
+    existing_catalog: Optional[Path] = None,
+    score_manifest: Optional[Path] = None,
+) -> List[dict]:
     try:
         import litellm
     except ImportError:
         print("ERROR: litellm is not installed. Run: pip install litellm", file=sys.stderr)
         sys.exit(1)
 
+    arena_index = _fetch_arena_elo(
+        refresh=refresh_elo,
+        manifest_path=score_manifest,
+    )
+    if not arena_index:
+        # Already logged by _fetch_arena_elo; this line just summarizes
+        # what the run is doing so users know scores came from the static
+        # table only.
+        print(
+            f"  arena ELO: using STATIC_ELO_FALLBACK only "
+            f"({len(STATIC_ELO_FALLBACK)} entries)",
+            file=sys.stderr,
+        )
+
     all_model_ids = set(litellm.model_cost.keys())
     rows = []
     skipped_previews = 0
+    elo_source_counts: Dict[str, int] = defaultdict(int)
 
     for model_id, entry in litellm.model_cost.items():
         # Only chat and responses modes (responses = OpenAI's newer API format)
@@ -645,9 +1162,12 @@ def build_rows() -> List[dict]:
 
         litellm_provider: str = entry.get("litellm_provider", "")
         root_provider = _get_provider_root(litellm_provider)
+        if root_provider in _SKIP_PROVIDER_ROOTS:
+            continue
 
         # ELO — skip models below cutoff or with no known score
-        elo = _get_elo(model_id)
+        elo, elo_source = _get_elo(model_id, arena_index)
+        elo_source_counts[elo_source.split(":", 1)[0]] += 1
         if elo < ELO_CUTOFF:
             continue
 
@@ -698,7 +1218,59 @@ def build_rows() -> List[dict]:
         })
 
     if skipped_previews:
-        print(f"  Skipped {skipped_previews} dated preview model(s) superseded by stable GA releases.")
+        print(
+            f"  Skipped {skipped_previews} dated preview model(s) "
+            "superseded by stable GA releases."
+        )
+
+    # Seed canonical local-runner rows + preserve any user customizations.
+    # litellm.model_cost has no entries for lm_studio/ollama. Two sources:
+    #   1. _DEFAULT_LOCAL_RUNNER_ROWS — bundled defaults; always seeded so
+    #      a fresh `--output PATH` reproduces the same catalog as one run
+    #      against an existing file (deterministic regeneration).
+    #   2. Existing CSV at `existing_catalog` — picks up user-added rows
+    #      (e.g. extra ollama models) on top of the defaults.
+    # Each row's ELO is re-resolved so static-fallback updates flow
+    # through; rows below ELO_CUTOFF are dropped just like litellm-
+    # derived rows.
+    local_pool: List[dict] = []
+    seen_local_ids: set = set()
+    for default_row in _DEFAULT_LOCAL_RUNNER_ROWS:
+        elo, _src = _get_elo(default_row["model"], arena_index)
+        if elo < ELO_CUTOFF:
+            continue
+        seeded = dict(default_row)
+        seeded["coding_arena_elo"] = elo
+        local_pool.append(seeded)
+        seen_local_ids.add(seeded["model"])
+    if existing_catalog is not None:
+        for row in _local_runner_rows_from_existing_csv(existing_catalog, arena_index):
+            if row["model"] in seen_local_ids:
+                continue  # default row already covers this model
+            local_pool.append(row)
+            seen_local_ids.add(row["model"])
+
+    if local_pool:
+        existing_ids = {r["model"] for r in rows}
+        new_local = [r for r in local_pool if r["model"] not in existing_ids]
+        if new_local:
+            rows.extend(new_local)
+            for r in new_local:
+                src = "static-prefix" if r["coding_arena_elo"] > 0 else "none"
+                elo_source_counts[src] += 1
+            print(
+                f"  Added {len(new_local)} local-runner row(s) "
+                f"(defaults + preserved user rows)."
+            )
+
+    # ELO source breakdown — useful for spotting silent regressions where
+    # the leaderboard fetch silently fell back to static (e.g. all rows
+    # resolving to "static-prefix" means no Arena hit happened).
+    if elo_source_counts:
+        breakdown = ", ".join(
+            f"{src}={n}" for src, n in sorted(elo_source_counts.items())
+        )
+        print(f"  ELO sources: {breakdown}")
 
     initial_count = len(rows)
 
@@ -729,6 +1301,13 @@ def build_rows() -> List[dict]:
         if stripped != mid and stripped in model_ids_present:
             skipped_dated += 1
             continue
+        # Check OpenAI / Azure dashed-date aliases:
+        # drop "azure/gpt-5.5-2026-04-23" if "azure/gpt-5.5" exists,
+        # drop "gpt-5.4-mini-2026-03-17" if "gpt-5.4-mini" exists.
+        dash_stripped = _DATED_DASH_SUFFIX.sub("", mid)
+        if dash_stripped != mid and dash_stripped in model_ids_present:
+            skipped_dated += 1
+            continue
         kept_after_c.append(row)
     rows = kept_after_c
     if skipped_dated:
@@ -748,8 +1327,16 @@ def build_rows() -> List[dict]:
     for row in rows:
         canonical = _extract_base_model(row["model"])
         if canonical is None:
-            # Can't canonicalize — keep it as-is (use model ID as its own key)
-            canonical = row["model"]
+            # Live-only models (e.g. ``claude-opus-4-7``, ``glm-4p7``) won't
+            # be in STATIC_ELO_FALLBACK until someone refreshes the curated
+            # table, so ``_extract_base_model`` returns None. Falling back
+            # to ``row["model"]`` here would leave routing duplicates like
+            # ``anthropic.claude-opus-4-7`` vs ``global.anthropic.claude-opus-4-7``
+            # (Bedrock geo prefix) and ``fireworks_ai/glm-4p7`` vs
+            # ``fireworks_ai/accounts/fireworks/models/glm-4p7`` as separate
+            # rows. ``_normalize_model_name`` strips the routing prefixes
+            # without touching identity, so it folds them into one bucket.
+            canonical = _normalize_model_name(row["model"]) or row["model"]
             no_canonical += 1
         dedup_buckets[(row["provider"], canonical)].append(row)
 
@@ -760,12 +1347,18 @@ def build_rows() -> List[dict]:
             rows_deduped.append(bucket[0])
         else:
             # Keep the cheapest variant (by avg cost = (input + output) / 2).
-            # Tiebreaker: prefer regionless model IDs so Bedrock users aren't
-            # locked to a specific region (e.g. "bedrock/moonshotai.kimi-k2.5"
-            # over "bedrock/us-east-1/moonshotai.kimi-k2.5").
+            # Tiebreakers in order:
+            #   - regionless ID (so Bedrock users aren't locked to a region)
+            #   - shorter model id (prefers ``anthropic.claude-opus-4-7`` over
+            #     ``global.anthropic.claude-opus-4-7``; needed because
+            #     ``_has_region`` only flags geographic regions, not Bedrock's
+            #     ``global.`` cross-region routing or Fireworks deep paths)
+            #   - lexical (final stable sort)
             bucket.sort(key=lambda r: (
                 (r["input"] + r["output"]) / 2,
                 _has_region(r["model"]),
+                len(r["model"]),
+                r["model"],
             ))
             rows_deduped.append(bucket[0])
             dedup_removed += len(bucket) - 1
@@ -784,7 +1377,10 @@ def build_rows() -> List[dict]:
     ]
     sanity_removed = pre_sanity - len(rows)
     if sanity_removed:
-        print(f"  Sanity filter: Removed {sanity_removed} row(s) with cost > ${MAX_COST_PER_MTOK}/Mtok.")
+        print(
+            f"  Sanity filter: Removed {sanity_removed} row(s) "
+            f"with cost > ${MAX_COST_PER_MTOK}/Mtok."
+        )
 
     # ------------------------------------------------------------------
     # Fix D: Pareto filter — remove models that are strictly dominated
@@ -849,17 +1445,45 @@ def main() -> None:
         default=default_output,
         help=f"Output CSV path (default: {default_output})",
     )
+    parser.add_argument(
+        "--refresh-elo",
+        action="store_true",
+        help=(
+            "Unsupported for this agent-reviewed flow; exits with instructions "
+            "instead of pretending to refresh scores."
+        ),
+    )
+    parser.add_argument(
+        "--score-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an agent-reviewed Arena score manifest "
+            f"(default: {AGENTIC_ELO_MANIFEST_PATH})"
+        ),
+    )
     args = parser.parse_args()
 
     output_path: Path = args.output
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if args.refresh_elo:
+        print(f"ERROR: {AGENTIC_REFRESH_ERROR}", file=sys.stderr)
+        sys.exit(2)
+
     print("Building model catalog from litellm.model_cost...")
-    rows = build_rows()
+    rows = build_rows(
+        refresh_elo=args.refresh_elo,
+        existing_catalog=output_path if output_path.exists() else None,
+        score_manifest=args.score_manifest,
+    )
     print(f"  Found {len(rows)} chat models across all providers.")
 
+    # Force LF line endings so regeneration is byte-stable across platforms;
+    # the csv module otherwise defaults to CRLF, which dirties the whole
+    # committed file on every run.
     with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 

@@ -13,6 +13,8 @@ import pytest
 
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
+    _analyze_global_sync_modules,
+    _architecture_module_basenames,
     _augment_architecture_from_pr_branch,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
@@ -26,8 +28,12 @@ from pdd.agentic_sync import (
     _run_dry_run_validation,
     _run_single_dry_run,
     run_agentic_sync,
+    run_global_sync,
 )
-from pdd.agentic_sync_runner import DepGraphFromArchitectureResult, build_dep_graph_from_architecture
+from pdd.agentic_sync_runner import (
+    DepGraphFromArchitectureResult,
+    build_dep_graph_from_architecture,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +210,322 @@ class TestBuildDepGraphFromArchitecture:
 
         result = build_dep_graph_from_architecture(arch_path, ["foo"])
         assert result.graph["foo"] == []
+
+    def test_preserves_subdirectory_basenames(self, tmp_path):
+        arch = [
+            {"filename": "commands/maintenance_python.prompt", "dependencies": ["agentic_sync_python.prompt"]},
+            {"filename": "agentic_sync_python.prompt", "dependencies": []},
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+
+        result = build_dep_graph_from_architecture(
+            arch_path,
+            ["commands/maintenance", "agentic_sync"],
+        )
+
+        assert result.graph["commands/maintenance"] == ["agentic_sync"]
+        assert result.graph["agentic_sync"] == []
+
+
+# ---------------------------------------------------------------------------
+# Global sync helpers
+# ---------------------------------------------------------------------------
+
+class TestGlobalSyncHelpers:
+    def test_architecture_module_basenames_preserves_subdirectories_and_skips_llm(self):
+        architecture = [
+            {"filename": "agentic_sync_python.prompt"},
+            {"filename": "commands/maintenance_python.prompt"},
+            {"filename": "agentic_change_step1_duplicate_LLM.prompt"},
+            {"filename": "commands/maintenance_python.prompt"},
+        ]
+
+        result = _architecture_module_basenames(architecture)
+
+        assert result == ["agentic_sync", "commands/maintenance"]
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_analyze_global_sync_modules_collects_stale_modules(
+        self, mock_detect_lang, mock_determine, tmp_path
+    ):
+        mock_detect_lang.return_value = {"python": tmp_path / "prompts/foo_python.prompt"}
+        nothing = MagicMock()
+        nothing.operation = "nothing"
+        nothing.reason = "clean"
+        nothing.estimated_cost = 0.0
+        generate = MagicMock()
+        generate.operation = "generate"
+        generate.reason = "prompt changed"
+        generate.estimated_cost = 1.25
+        mock_determine.side_effect = [nothing, generate]
+
+        analysis = _analyze_global_sync_modules(
+            ["clean_mod", "stale_mod"],
+            tmp_path,
+            quiet=True,
+        )
+
+        assert analysis.modules_to_sync == ["stale_mod"]
+        assert analysis.estimated_cost == pytest.approx(1.25)
+        assert "stale_mod" in analysis.module_operations
+        assert all(call.kwargs["read_only"] is True for call in mock_determine.call_args_list)
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_analyze_global_sync_modules_treats_all_synced_as_noop(
+        self, mock_detect_lang, mock_determine, tmp_path
+    ):
+        mock_detect_lang.return_value = {"python": tmp_path / "prompts/foo_python.prompt"}
+        decision = MagicMock()
+        decision.operation = "all_synced"
+        decision.reason = "workflow already complete"
+        decision.estimated_cost = 0.0
+        mock_determine.return_value = decision
+
+        analysis = _analyze_global_sync_modules(
+            ["complete_mod"],
+            tmp_path,
+            quiet=True,
+        )
+
+        assert analysis.modules_to_sync == []
+        assert analysis.estimated_cost == 0.0
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_analyze_global_sync_modules_runs_readonly_check_from_resolved_cwd(
+        self, mock_detect_lang, mock_determine, tmp_path
+    ):
+        import yaml
+
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / ".pddrc").write_text(
+            yaml.dump({
+                "contexts": {
+                    "pkg": {
+                        "paths": ["src/**"],
+                        "defaults": {"prompts_dir": "prompts/src"},
+                    },
+                },
+            }),
+            encoding="utf-8",
+        )
+        mock_detect_lang.return_value = {
+            "python": nested_dir / "prompts/src/mod_python.prompt"
+        }
+
+        seen_cwds = []
+
+        def _fake_determine(**_kwargs):
+            seen_cwds.append(Path.cwd())
+            decision = MagicMock()
+            decision.operation = "nothing"
+            decision.reason = "clean"
+            decision.estimated_cost = 0.0
+            return decision
+
+        mock_determine.side_effect = _fake_determine
+
+        _analyze_global_sync_modules(["src/mod"], tmp_path, quiet=True)
+
+        assert seen_cwds == [nested_dir]
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_analyze_global_sync_modules_skips_non_tier1_operations(
+        self, mock_detect_lang, mock_determine, tmp_path
+    ):
+        mock_detect_lang.return_value = {
+            "python": tmp_path / "prompts/foo_python.prompt"
+        }
+        decision = MagicMock()
+        decision.operation = "fix"
+        decision.reason = "tests failing"
+        decision.estimated_cost = 3.0
+        mock_determine.return_value = decision
+
+        analysis = _analyze_global_sync_modules(
+            ["needs_fix"],
+            tmp_path,
+            quiet=True,
+        )
+
+        assert analysis.modules_to_sync == []
+        assert analysis.estimated_cost == 0.0
+        assert any("outside Tier 1" in entry for entry in analysis.skipped_modules)
+
+
+class TestRunGlobalSync:
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._load_architecture_json", return_value=(None, Path("/tmp/architecture.json")))
+    def test_fails_when_architecture_missing(self, mock_load, mock_root, tmp_path):
+        mock_root.return_value = tmp_path
+
+        success, message, cost, model = run_global_sync(quiet=True)
+
+        assert success is False
+        assert "No architecture.json found" in message
+        assert cost == 0.0
+        assert model == "global-sync"
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+    def test_dry_run_reports_dependency_order_without_running_runner(
+        self, mock_dep_graph, mock_analyze, mock_load, mock_root, tmp_path
+    ):
+        mock_root.return_value = tmp_path
+        mock_load.return_value = (
+            [
+                {"filename": "app_python.prompt"},
+                {"filename": "lib_python.prompt"},
+            ],
+            tmp_path / "architecture.json",
+        )
+        mock_analyze.return_value = MagicMock(
+            modules_to_sync=["app", "lib"],
+            module_cwds={"app": tmp_path, "lib": tmp_path},
+            estimated_cost=2.0,
+            module_operations={"app": ["python: generate - stale"], "lib": ["python: generate - stale"]},
+            skipped_modules=[],
+            all_modules=["app", "lib"],
+        )
+        mock_dep_graph.return_value = DepGraphFromArchitectureResult(
+            graph={"app": ["lib"], "lib": []},
+            warnings=[],
+        )
+
+        success, message, cost, model = run_global_sync(quiet=True, dry_run=True)
+
+        assert success is True
+        assert "2 module(s) would sync" in message
+        assert cost == 0.0
+        assert model == "global-sync"
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    def test_global_sync_runs_async_runner_in_dependency_order(
+        self, mock_runner, mock_dep_graph, mock_analyze, mock_load, mock_root, tmp_path
+    ):
+        mock_root.return_value = tmp_path
+        mock_load.return_value = (
+            [
+                {"filename": "app_python.prompt"},
+                {"filename": "lib_python.prompt"},
+            ],
+            tmp_path / "architecture.json",
+        )
+        mock_analyze.return_value = MagicMock(
+            modules_to_sync=["app", "lib"],
+            module_cwds={"app": tmp_path, "lib": tmp_path},
+            estimated_cost=2.0,
+            module_operations={"app": ["python: generate - stale"], "lib": ["python: generate - stale"]},
+            skipped_modules=[],
+            all_modules=["app", "lib"],
+        )
+        mock_dep_graph.return_value = DepGraphFromArchitectureResult(
+            graph={"app": ["lib"], "lib": []},
+            warnings=[],
+        )
+        mock_runner.return_value.run.return_value = (True, "done", 1.5)
+
+        success, message, cost, model = run_global_sync(
+            quiet=True,
+            budget=3.0,
+            skip_verify=True,
+            one_session=True,
+            local=True,
+            target_coverage=95.0,
+        )
+
+        assert success is True
+        assert message == "done"
+        assert cost == 1.5
+        assert model == "global-sync"
+        runner_kwargs = mock_runner.call_args.kwargs
+        assert runner_kwargs["basenames"] == ["lib", "app"]
+        assert runner_kwargs["github_info"] is None
+        assert runner_kwargs["sync_options"]["total_budget"] == 3.0
+        assert "budget" not in runner_kwargs["sync_options"]
+        assert runner_kwargs["sync_options"]["skip_verify"] is True
+        assert runner_kwargs["sync_options"]["one_session"] is True
+        assert runner_kwargs["sync_options"]["local"] is True
+        assert runner_kwargs["sync_options"]["target_coverage"] == pytest.approx(95.0)
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    def test_global_sync_uses_combined_architecture_for_nested_deps(
+        self, mock_runner, mock_analyze, mock_load, mock_root, tmp_path
+    ):
+        mock_root.return_value = tmp_path
+        mock_load.return_value = (
+            [
+                {"filename": "core_python.prompt", "dependencies": []},
+                {
+                    "filename": "nested/app_python.prompt",
+                    "dependencies": ["nested/lib_python.prompt"],
+                },
+                {"filename": "nested/lib_python.prompt", "dependencies": []},
+            ],
+            tmp_path / "architecture.json",
+        )
+        mock_analyze.return_value = MagicMock(
+            modules_to_sync=["nested/app", "nested/lib"],
+            module_cwds={"nested/app": tmp_path / "nested", "nested/lib": tmp_path / "nested"},
+            estimated_cost=2.0,
+            module_operations={
+                "nested/app": ["python: generate - stale"],
+                "nested/lib": ["python: generate - stale"],
+            },
+            skipped_modules=[],
+            all_modules=["core", "nested/app", "nested/lib"],
+        )
+        mock_runner.return_value.run.return_value = (True, "done", 1.0)
+
+        success, _, _, _ = run_global_sync(quiet=True)
+
+        assert success is True
+        runner_kwargs = mock_runner.call_args.kwargs
+        assert runner_kwargs["basenames"] == ["nested/lib", "nested/app"]
+        assert runner_kwargs["dep_graph"]["nested/app"] == ["nested/lib"]
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    def test_global_sync_rejects_estimated_cost_over_total_budget(
+        self, mock_runner, mock_analyze, mock_load, mock_root, tmp_path
+    ):
+        mock_root.return_value = tmp_path
+        mock_load.return_value = (
+            [{"filename": "app_python.prompt"}],
+            tmp_path / "architecture.json",
+        )
+        mock_analyze.return_value = MagicMock(
+            modules_to_sync=["app"],
+            module_cwds={"app": tmp_path},
+            estimated_cost=5.5,
+            module_operations={"app": ["python: generate - stale"]},
+            skipped_modules=[],
+            all_modules=["app"],
+        )
+
+        success, message, cost, model = run_global_sync(quiet=True, budget=5.0)
+
+        assert success is False
+        assert "exceeds budget" in message
+        assert cost == 0.0
+        assert model == "global-sync"
+        mock_runner.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +1148,24 @@ class TestFilterAlreadySynced:
 
         decision = MagicMock()
         decision.operation = "nothing"
+        mock_determine.return_value = decision
+
+        result = _filter_already_synced(["mod_a"], {"mod_a": cwd}, quiet=True)
+        assert result == []
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    @patch("pdd.agentic_sync._load_pddrc_config")
+    @patch("pdd.agentic_sync._find_pddrc_file")
+    def test_all_synced_operation_filtered_out(self, mock_pddrc_file, mock_config, mock_detect, mock_determine):
+        """Module with operation='all_synced' is also a no-op."""
+        cwd = Path("/project")
+        mock_pddrc_file.return_value = cwd / ".pddrc"
+        mock_config.return_value = {"contexts": {"default": {"defaults": {"prompts_dir": "prompts"}}}}
+        mock_detect.return_value = {"python": Path("prompts/mod_a_python.prompt")}
+
+        decision = MagicMock()
+        decision.operation = "all_synced"
         mock_determine.return_value = decision
 
         result = _filter_already_synced(["mod_a"], {"mod_a": cwd}, quiet=True)

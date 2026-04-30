@@ -19,6 +19,7 @@ from pdd.agentic_sync_runner import (
     _format_duration,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
+    build_dep_graph_from_architecture_data,
 )
 
 
@@ -640,6 +641,32 @@ class TestAsyncSyncRunnerRun:
 
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_total_budget_runs_sequentially_and_stops_after_exhaustion(
+        self, mock_comment, mock_sync
+    ):
+        """total_budget should not queue later modules before cost feedback."""
+        mock_sync.return_value = (True, 1.0, "")
+
+        runner = AsyncSyncRunner(
+            basenames=["a", "b", "c"],
+            dep_graph={"a": [], "b": [], "c": []},
+            sync_options={"total_budget": 1.0},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+
+        assert not success
+        assert "Budget exhausted" in msg
+        assert cost == pytest.approx(1.0)
+        mock_sync.assert_called_once_with("a")
+        assert runner.module_states["a"].status == "success"
+        assert runner.module_states["b"].status == "pending"
+        assert runner.module_states["c"].status == "pending"
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
     def test_empty_basenames(self, mock_comment, mock_sync):
         runner = AsyncSyncRunner(
             basenames=[],
@@ -708,6 +735,90 @@ class TestSyncOneModule:
         assert "--agentic" in cmd
         assert "--no-steer" in cmd
         assert "--budget" in cmd
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_local_mode_is_forwarded_to_child_sync(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Global sync children must preserve the top-level --local flag."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"local": True},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, _ = runner._sync_one_module("foo")
+
+        assert success
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[:4] == ["/usr/bin/pdd", "--force", "--local", "sync"]
+        assert cmd[4] == "foo"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_target_coverage_is_forwarded_to_child_sync(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Global sync children must use the same coverage threshold as planning."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"target_coverage": 95.0},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, _ = runner._sync_one_module("foo")
+
+        assert success
+        cmd = mock_popen.call_args[0][0]
+        coverage_index = cmd.index("--target-coverage")
+        assert cmd[coverage_index + 1] == "95.0"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.10)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_total_budget_passes_remaining_budget(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"total_budget": 1.50},
+            github_info=None,
+            quiet=True,
+            initial_cost=0.50,
+        )
+
+        success, _, _ = runner._sync_one_module("foo")
+
+        assert success
+        cmd = mock_popen.call_args[0][0]
+        budget_index = cmd.index("--budget")
+        assert float(cmd[budget_index + 1]) == pytest.approx(1.0)
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
@@ -1161,6 +1272,26 @@ class TestBuildDepGraphFromArchitecture:
         assert any(
             "missing_module_python.prompt" in w and "orphan" in w.lower() for w in result.warnings
         ), result.warnings
+
+    def test_builds_graph_from_combined_architecture_data(self):
+        """Already-loaded architecture data preserves nested architecture deps."""
+        arch = [
+            {"filename": "root_module_Python.prompt", "dependencies": []},
+            {
+                "filename": "nested/app_Python.prompt",
+                "dependencies": ["nested/lib_Python.prompt"],
+            },
+            {"filename": "nested/lib_Python.prompt", "dependencies": []},
+        ]
+
+        result = build_dep_graph_from_architecture_data(
+            arch,
+            ["nested/app", "nested/lib"],
+            source_name="combined architecture data",
+        )
+
+        assert result.graph == {"nested/app": ["nested/lib"], "nested/lib": []}
+        assert result.warnings == []
 
 
 # ---------------------------------------------------------------------------

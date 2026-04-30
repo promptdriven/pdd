@@ -1,4 +1,4 @@
-"""Example showing how to use run_agentic_sync for GitHub issue-based multi-module sync."""
+"""Examples showing run_agentic_sync (issue URL) and run_global_sync (project-wide Tier 1)."""
 
 import sys
 from pathlib import Path
@@ -8,7 +8,13 @@ from unittest.mock import patch, MagicMock
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
-from pdd.agentic_sync import run_agentic_sync, _is_github_issue_url, _parse_llm_response
+from pdd.agentic_sync import (
+    _is_github_issue_url,
+    _parse_llm_response,
+    run_agentic_sync,
+    run_global_sync,
+)
+from pdd.agentic_sync_runner import DepGraphFromArchitectureResult
 
 
 def main():
@@ -35,6 +41,9 @@ def main():
 
     with patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner_cls, \
          patch("pdd.agentic_sync.build_dep_graph_from_architecture") as mock_graph, \
+         patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
+         patch("pdd.agentic_sync._filter_already_synced") as mock_filter_synced, \
+         patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), \
          patch("pdd.agentic_sync.load_prompt_template") as mock_template, \
          patch("pdd.agentic_sync.run_agentic_task") as mock_task, \
          patch("pdd.agentic_sync._load_architecture_json") as mock_arch, \
@@ -68,7 +77,17 @@ def main():
         )
 
         # Mock dependency graph and runner
-        mock_graph.return_value = {"auth": [], "user_service": ["auth"]}
+        mock_graph.return_value = DepGraphFromArchitectureResult(
+            {"auth": [], "user_service": ["auth"]},
+            [],
+        )
+        mock_dry_run.return_value = (
+            True,
+            {"auth": Path.cwd(), "user_service": Path.cwd()},
+            [],
+            0.0,
+        )
+        mock_filter_synced.return_value = ["auth", "user_service"]
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.50)
         mock_runner_cls.return_value = mock_runner
@@ -84,6 +103,54 @@ def main():
 
     # Output the results
     print("\n--- Result Summary ---")
+    print(f"Success    : {success}")
+    print(f"Model Used : {model}")
+    print(f"Total Cost : ${cost:.2f}")
+    print(f"Message    : {message}")
+
+    # --- Global Sync (no-argument `pdd sync`) ---
+    print("\nRunning project-wide Tier 1 global sync (dry run)")
+    print("-" * 60)
+
+    with patch("pdd.agentic_sync._find_project_root", return_value=Path("/tmp/proj")), \
+         patch("pdd.agentic_sync._load_architecture_json") as mock_arch, \
+         patch("pdd.agentic_sync._architecture_module_basenames") as mock_basenames, \
+         patch("pdd.agentic_sync._analyze_global_sync_modules") as mock_analyze, \
+         patch("pdd.agentic_sync.build_dep_graph_from_architecture_data") as mock_graph, \
+         patch("pdd.agentic_sync._dependency_ordered_modules") as mock_order, \
+         patch("pdd.agentic_sync._print_global_sync_plan"):
+
+        mock_arch.return_value = (
+            {"modules": [
+                {"filename": "auth_python.prompt", "dependencies": []},
+                {"filename": "user_service_python.prompt",
+                 "dependencies": ["auth_python.prompt"]},
+            ]},
+            Path("/tmp/proj/architecture.json"),
+        )
+        mock_basenames.return_value = ["auth", "user_service"]
+
+        analysis = MagicMock()
+        analysis.modules_to_sync = ["auth", "user_service"]
+        analysis.module_cwds = {}
+        analysis.estimated_cost = 0.42
+        mock_analyze.return_value = analysis
+
+        mock_graph.return_value = DepGraphFromArchitectureResult(
+            {"auth": [], "user_service": ["auth"]},
+            [],
+        )
+        mock_order.return_value = ["auth", "user_service"]
+
+        # --- EXECUTE THE MODULE ---
+        success, message, cost, model = run_global_sync(
+            verbose=False,
+            quiet=True,
+            budget=20.0,
+            dry_run=True,
+        )
+
+    print("\n--- Global Sync Result ---")
     print(f"Success    : {success}")
     print(f"Model Used : {model}")
     print(f"Total Cost : ${cost:.2f}")

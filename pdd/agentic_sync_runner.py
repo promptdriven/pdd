@@ -95,6 +95,20 @@ class DepGraphFromArchitectureResult(NamedTuple):
     warnings: List[str]
 
 
+def _basename_from_architecture_filename(filename: str) -> Optional[str]:
+    """Return a sync basename from an architecture filename, preserving folders."""
+    if not filename:
+        return None
+
+    path = Path(filename)
+    basename = extract_module_from_include(path.name)
+    if not basename:
+        return None
+    if path.parent == Path("."):
+        return basename
+    return str(path.parent / basename)
+
+
 def build_dep_graph_from_architecture(
     arch_path: Path, target_basenames: List[str]
 ) -> DepGraphFromArchitectureResult:
@@ -118,7 +132,27 @@ def build_dep_graph_from_architecture(
     except (OSError, json.JSONDecodeError):
         return empty
 
-    modules = extract_modules(arch)
+    return build_dep_graph_from_architecture_data(
+        arch,
+        target_basenames,
+        source_name=str(arch_path),
+    )
+
+
+def build_dep_graph_from_architecture_data(
+    architecture: Any,
+    target_basenames: List[str],
+    *,
+    source_name: str = "architecture.json",
+) -> DepGraphFromArchitectureResult:
+    """
+    Build dependency subgraph from already-loaded architecture data.
+
+    This variant supports combined architecture data loaded from root and nested
+    architecture.json files, preserving dependency ordering for global sync.
+    """
+    empty = DepGraphFromArchitectureResult({b: [] for b in target_basenames}, [])
+    modules = extract_modules(architecture)
     if not modules:
         return empty
 
@@ -126,7 +160,7 @@ def build_dep_graph_from_architecture(
     filename_to_basename: Dict[str, str] = {}
     for entry in modules:
         filename = entry.get("filename", "")
-        basename = extract_module_from_include(filename)
+        basename = _basename_from_architecture_filename(filename)
         if basename:
             filename_to_basename[filename] = basename
 
@@ -155,7 +189,7 @@ def build_dep_graph_from_architecture(
                 if dep_basename is None:
                     warnings.append(
                         f"Orphan dependency {dep_filename!r} on architecture entry "
-                        f"{entry.get('filename', '')!r}: no matching module entry in architecture.json"
+                        f"{entry.get('filename', '')!r}: no matching module entry in {source_name}"
                     )
                     continue
                 if dep_basename == basename:
@@ -206,11 +240,14 @@ class AsyncSyncRunner:
         self.project_root = Path.cwd()
         self.module_cwds = module_cwds or {}
         self.initial_cost = initial_cost
+        self.total_budget = sync_options.get("total_budget")
+        self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in basenames
         }
         self.failed = False
+        self.budget_exhausted = False
         self.comment_id: Optional[int] = None
         self.lock = threading.Lock()
 
@@ -371,10 +408,14 @@ class AsyncSyncRunner:
 
     def _run_inner(self) -> Tuple[bool, str, float]:
         """Inner run loop, separated so signal handlers can be set up around it."""
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures: Dict[Any, str] = {}  # Future -> basename
 
             while not self._all_done():
+                if not self.failed and self._budget_exhausted():
+                    self.failed = True
+                    self.budget_exhausted = True
+
                 # Find modules whose deps are all "success"
                 ready = self._get_ready_modules()
 
@@ -385,7 +426,7 @@ class AsyncSyncRunner:
                 else:
                     # Only submit up to available worker slots so modules
                     # aren't marked "running" while queued in the executor.
-                    available_slots = MAX_WORKERS - len(futures)
+                    available_slots = self.max_workers - len(futures)
                     for basename in ready[:available_slots]:
                         with self.lock:
                             self.module_states[basename].status = "running"
@@ -414,6 +455,9 @@ class AsyncSyncRunner:
                     self._update_github_comment()
                     if not success:
                         self.failed = True
+                    elif self._budget_exhausted():
+                        self.failed = True
+                        self.budget_exhausted = True
 
         # Final update
         self._update_github_comment()
@@ -424,6 +468,18 @@ class AsyncSyncRunner:
         failed = [b for b, s in self.module_states.items() if s.status == "failed"]
         pending = [b for b, s in self.module_states.items() if s.status == "pending"]
 
+        if self.budget_exhausted:
+            budget = float(self.total_budget)
+            msg = (
+                f"Budget exhausted (${total_cost:.2f} of ${budget:.2f}). "
+                f"Succeeded: {succeeded}."
+            )
+            if failed:
+                msg += f" Failed: {failed}."
+            if pending:
+                msg += f" Skipped (budget): {pending}."
+            self._save_state()
+            return False, msg, total_cost
         if failed:
             msg = f"Failed: {failed}. Succeeded: {succeeded}."
             if pending:
@@ -503,6 +559,33 @@ class AsyncSyncRunner:
             state.current_phase = None
         self._save_state()
 
+    def _total_cost_so_far(self) -> float:
+        """Return initial cost plus completed module costs."""
+        with self.lock:
+            return self.initial_cost + sum(s.cost for s in self.module_states.values())
+
+    def _remaining_total_budget(self) -> Optional[float]:
+        """Return remaining total budget, or None when no total budget is set."""
+        if self.total_budget is None:
+            return None
+        return max(float(self.total_budget) - self._total_cost_so_far(), 0.0)
+
+    def _budget_exhausted(self) -> bool:
+        """Return True when the configured total budget is fully spent."""
+        remaining = self._remaining_total_budget()
+        return remaining is not None and remaining <= 0.0
+
+    def _budget_for_module(self, basename: str) -> Optional[float]:
+        """Return the budget cap to pass to a child sync process."""
+        module_budgets = self.sync_options.get("module_budgets") or {}
+        budget = module_budgets.get(basename, self.sync_options.get("budget"))
+        remaining = self._remaining_total_budget()
+        if remaining is None:
+            return budget
+        if budget is None:
+            return remaining
+        return min(float(budget), remaining)
+
     def _on_phase_change(self, basename: str, phase: str) -> None:
         """Handle a phase transition for a module."""
         with self.lock:
@@ -540,6 +623,8 @@ class AsyncSyncRunner:
 
         # Global options first
         cmd.append("--force")
+        if self.sync_options.get("local"):
+            cmd.append("--local")
 
         # Command + positional arg
         cmd.extend(["sync", basename])
@@ -552,8 +637,12 @@ class AsyncSyncRunner:
             cmd.append("--skip-verify")
         if self.sync_options.get("skip_tests"):
             cmd.append("--skip-tests")
-        if self.sync_options.get("budget"):
-            cmd.extend(["--budget", str(self.sync_options["budget"])])
+        target_coverage = self.sync_options.get("target_coverage")
+        if target_coverage is not None:
+            cmd.extend(["--target-coverage", str(target_coverage)])
+        module_budget = self._budget_for_module(basename)
+        if module_budget is not None:
+            cmd.extend(["--budget", str(module_budget)])
         if self.sync_options.get("max_attempts"):
             cmd.extend(["--max-attempts", str(self.sync_options["max_attempts"])])
         if self.sync_options.get("one_session"):

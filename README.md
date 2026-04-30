@@ -231,7 +231,7 @@ pdd setup
 The setup wizard runs these steps:
   1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
   2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
-  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
+  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers  based on your available keys
   4. Optionally creates a `.pddrc` project config
   5. Tests the first available model with a real LLM call 
   6. Prints a structured summary (CLIs, keys, models, test result)
@@ -296,6 +296,10 @@ export ANTHROPIC_API_KEY=your_api_key_here
 export PROVIDER_API_KEY=your_api_key_here
 ```
 
+Some local-mode providers do not use API keys. GitHub Copilot models
+authenticate through LiteLLM's OAuth device flow; run `pdd setup` and choose
+the provider to complete that login.
+
 Add these to your `.bashrc`, `.zshrc`, or equivalent for persistence.
 
 PDD's local mode uses LiteLLM (version 1.75.5 or higher) for interacting with language models, providing:
@@ -321,7 +325,9 @@ The CSV includes columns for:
 - `model`: The LiteLLM model identifier (e.g., "gpt-4", "claude-3-opus-20240229")
 - `input`/`output`: Costs per million tokens
 - `coding_arena_elo`: ELO rating for coding ability
-- `api_key`: The environment variable name for the required API key
+- `api_key`: The environment variable name for required authentication, or
+  blank for local and device-flow providers such as Ollama, LM Studio, and
+  GitHub Copilot
 - `structured_output`: Whether the model supports structured JSON output
 - `reasoning_type`: Support for reasoning capabilities ("none", "budget", or "effort")
 
@@ -823,9 +829,12 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop for a given basename. This command implements the entire synchronized cycle from the whitepaper, intelligently determining what steps are needed and executing them in the correct order with real-time visual feedback and sophisticated state management.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs agentic multi-module issue sync.
 
 ```bash
+# Project-wide architecture sync (no argument)
+pdd [GLOBAL OPTIONS] sync [OPTIONS]
+
 # Single-module sync
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
 
@@ -840,7 +849,10 @@ pdd --force sync BASENAME
 ```
 
 Arguments:
+- No argument: Scan `architecture.json` and sync all modules that need deterministic Tier 1 prompt-to-code updates.
+- `architecture.json` as a positional value is not a global-sync alias in v1; use no-argument `pdd sync` for project-wide Tier 1 sync.
 - `BASENAME`: The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
+- `GITHUB_ISSUE_URL`: A GitHub issue URL for agentic issue-driven multi-module sync.
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
@@ -848,7 +860,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
-- `--dry-run`: Display real-time sync analysis for this basename instead of running sync operations. This performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing any operations, allowing inspection even when another sync process is active.
+- `--dry-run`: Display real-time sync analysis instead of running sync operations. For no-argument project-wide sync, this prints the dependency-ordered module list and estimated cost without executing any module syncs. For single-module sync, it performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing operations.
 - `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
@@ -903,6 +915,9 @@ By default, sync runs each step (example, crash-fix, verify, test, fix) as a sep
 One-session mode is enabled by default for agentic sync (GitHub issue URLs) and disabled by default for single-module sync. Use `--one-session` or `--no-one-session` to override.
 
 ```bash
+# Project-wide sync dry run
+pdd sync --dry-run
+
 # Single-module sync with one-session mode
 pdd sync --one-session factorial_calculator
 
@@ -3042,6 +3057,8 @@ This tiered approach allows for both shared project configurations and individua
 
 **Note:** You can manually edit this CSV, but running `pdd setup` again is the recommended way to add providers and update models.
 
+**ELO scores are agent-reviewed.** The `coding_arena_elo` column is populated from the checked-in `pdd/data/arena_elo_manifest.json` score manifest plus a curated static fallback for local and niche models. The intended refresh path is agentic: inspect current Arena source rows, record the raw model row, leaderboard/category, publish date, rank, rating bounds, vote count, match reason, and aliases in the manifest, then run the deterministic generator. See [Regenerate Model Catalog](#regenerate-model-catalog-pddgenerate_model_catalogpy) under Utilities.
+
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
 
 
@@ -3390,6 +3407,31 @@ python pdd/update_model_costs.py [--csv-path path/to/your/project/llm_model.csv]
 ```
 
 *Note: The `max_reasoning_tokens` column requires manual maintenance.*
+
+### Regenerate Model Catalog (`pdd/generate_model_catalog.py`)
+
+This script rebuilds the bundled `pdd/data/llm_model.csv` catalog from `litellm.model_cost` metadata, enriched with agent-reviewed coding-arena scores from `pdd/data/arena_elo_manifest.json`. Python generation is intentionally deterministic: it does not scrape or fetch leaderboard data at runtime.
+
+It performs the following steps:
+*   **Loads** reviewed scores, aliases, and row-level provenance from `pdd/data/arena_elo_manifest.json`.
+*   **Normalizes** LiteLLM model IDs and applies only exact reviewed aliases from the manifest. Runtime fuzzy matching is intentionally disabled so model identity decisions stay reviewable. Reasoning-effort variants such as `-high`, `-medium`, `-low`, and `-minimal` remain distinct unless the manifest explicitly maps them.
+*   **Falls back** gracefully — if the manifest is missing or malformed, the run still succeeds using a curated static fallback dict for local-runner roots like `lm_studio/`, `ollama/`, aliases, and not-yet-reviewed models.
+*   Applies pricing overrides, deprecation/placeholder filtering, dedup, and a per-provider Pareto filter, then writes the resulting CSV.
+
+**Usage:**
+
+```bash
+conda activate pdd
+# Use the checked-in agentic score manifest.
+python pdd/generate_model_catalog.py [--output path/to/llm_model.csv]
+
+# Test with an alternate reviewed manifest.
+python pdd/generate_model_catalog.py --score-manifest path/to/arena_elo_manifest.json
+```
+
+To refresh scores, use a PDD agent to inspect the current public Arena sources, update `pdd/data/arena_elo_manifest.json` with exact aliases and provenance, then run the command above. This keeps policy choices such as WebDev vs Text/Coding explicit in review instead of hidden in Python fetch logic.
+
+`--refresh-elo` is intentionally not a live Python fetch path. It exits with an instruction to perform the agentic manifest refresh instead of silently producing a stale refresh.
 
 ## Patents
 
