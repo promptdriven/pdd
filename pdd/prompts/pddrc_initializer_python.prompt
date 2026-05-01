@@ -27,7 +27,15 @@ Uses `rich` for console output (Console, Syntax for YAML preview).
 2. If .pddrc exists in cwd: inform user and return False
 3. If no .pddrc: show YAML preview via `rich.syntax.Syntax`, prompt `Create .pddrc? [Y/n]` (Enter = yes)
 4. Language detection priority: Python (setup.py, pyproject.toml, setup.cfg, Pipfile, requirements.txt) > TypeScript (package.json with `typescript` in deps/devDeps) > Go (go.mod) > Rust (Cargo.toml). Prompt user with numbered menu if unclear.
-5. Path defaults by language: Python: pdd/, tests/, context/ | TypeScript: src/, __tests__/, examples/ | Go: ., ., examples/ | Rust: src/, tests/, examples/
+5. Path defaults by language (the third value is `example_output_path`):
+   Python: pdd/, tests/, examples/ | TypeScript: src/, __tests__/, examples/ |
+   Go: ., ., examples/ | Rust: src/, tests/, examples/.
+   The `example_output_path` default MUST be imported from
+   `pdd.generate_output_paths.EXAMPLES_DIR` (the canonical SSOT) rather than
+   hard-coded as a literal string in this module. This keeps the directory
+   `pdd setup` writes into `.pddrc` in lock-step with the directory `pdd example`
+   actually writes example files into, preventing `[File not found: ...]`
+   placeholders in generated prompts when users follow the scaffold defaults.
 6. Expose `SCAFFOLD_DEFAULT_STRENGTH = 0.818` as a module constant and reference it from `STANDARD_DEFAULTS`. Keep this scaffold default independent from env-overridable runtime defaults so generated `.pddrc` files are deterministic. Standard defaults: strength=0.818, temperature=0.0, target_coverage=80.0, budget=10.0, max_attempts=3
 
 % Requirements — Auto-generation for Scan
@@ -48,7 +56,7 @@ contexts:
     defaults:
       generate_output_path: "pdd/"
       test_output_path: "tests/"
-      example_output_path: "context/"
+      example_output_path: "examples/"
       default_language: "python"
       target_coverage: 80.0
       strength: 0.818

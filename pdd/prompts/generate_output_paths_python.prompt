@@ -1,3 +1,16 @@
+<pdd-reason>Determines output file paths for PDD commands; canonical SSOT for default examples directory via EXAMPLES_DIR.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "generate_output_paths", "signature": "(command: str, output_locations: Dict[str, Optional[str]], basename: str, language: str, file_extension: str, context_config: Optional[Dict[str, str]] = None, input_file_dir: Optional[str] = None, input_file_dirs: Optional[Dict[str, str]] = None, config_base_dir: Optional[str] = None, path_resolution_mode: Literal['config_base', 'cwd'] = 'config_base') -> Dict[str, str]", "returns": "Dict[str, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python software engineer.
 
 % Role & Scope
@@ -72,6 +85,13 @@
 % Deliverables
   Single file with:
   - Module-level constants: EXAMPLES_DIR = "examples"
+      This constant is the **canonical single source of truth** for the default
+      example-output directory used across PDD when no `.pddrc` is present.
+      Other modules (`construct_paths`, `pddrc_initializer`) MUST import this
+      constant rather than redefining the literal — keeping one place to change
+      the default keeps `pdd example` (which writes to this directory) and the
+      `EXAMPLE_OUTPUT_PATH` injected into LLM templates in agreement, so
+      generated `<include>` tags resolve to real files.
   - Module-level configuration dictionaries: COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES,
     ENV_VAR_MAP, CONTEXT_CONFIG_MAP
   - Helper: _get_default_filename(command, output_key, basename, language, file_extension)

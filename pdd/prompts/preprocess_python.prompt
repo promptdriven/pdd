@@ -64,7 +64,17 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 - Debug mode: when `PDD_PREPROCESS_DEBUG=1`, log detailed processing events to console. When `PDD_PREPROCESS_DEBUG_FILE` is also set, write a debug report to that file path.
 - After processing, scan for risky placeholders remaining outside code fences and log via debug output (no effect on returned prompt):
   - Single-brace variables like `{name}` that weren't doubled (potential PromptTemplate errors)
-  - `${...}` template literals
+  - `${name}` template literals
+- Unresolved-include surfacing (loud-failure): on the final non-recursive pass, after
+  all tag processing, scan the returned prompt for `[File not found: ...]` placeholders
+  emitted earlier by `<include>`/`<include-many>` resolution. For each placeholder
+  found, emit a single warning line via the standard logger AND via Rich console
+  output (suppressed when `PDD_QUIET=1`) of the form:
+    `Warning: Unresolved include in preprocessed prompt: <path>. Generated code may be missing dependency context. Check that example_output_path in .pddrc matches where example files are written (default: 'examples/').`
+  Do NOT mutate the returned prompt — surfacing is observational only. Recursive
+  passes (`recursive=True`) MUST NOT emit this warning, since unresolved tags are
+  expected to be resolved later. This converts the previously silent placeholder
+  failure into a visible signal at the `pdd generate` boundary.
 
 % Curly Brace Handling (when double_curly_brackets=True)
 - Double single braces: `{var}` → `{{var}}`

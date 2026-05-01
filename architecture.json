@@ -946,8 +946,8 @@
     }
   },
   {
-    "reason": "Determines output file paths for generated code.",
-    "description": "Calculates where generated files should be written based on project structure and conventions.",
+    "reason": "Determines output file paths for PDD commands; canonical SSOT for default examples directory via EXAMPLES_DIR.",
+    "description": "Calculates where generated files should be written based on project structure and conventions. Exports EXAMPLES_DIR as the canonical single source of truth for the default example-output directory used across PDD when no .pddrc is present.",
     "dependencies": [],
     "priority": 30,
     "filename": "generate_output_paths_python.prompt",
@@ -975,6 +975,106 @@
     "position": {
       "x": 12880,
       "y": 1100
+    }
+  },
+  {
+    "reason": "Resolves configuration, validates input files, determines output paths, and handles overwrite confirmation for PDD commands.",
+    "description": "Central path-resolution module. Reads .pddrc, applies precedence rules, and produces resolved_config and output_file_paths. Imports EXAMPLES_DIR from generate_output_paths as the SSOT default for examples_dir when no .pddrc example_output_path is configured.",
+    "dependencies": [
+      "generate_output_paths_python.prompt",
+      "get_extension_python.prompt",
+      "get_language_python.prompt"
+    ],
+    "priority": 30,
+    "filename": "construct_paths_python.prompt",
+    "filepath": "pdd/construct_paths.py",
+    "tags": [
+      "module",
+      "python",
+      "paths"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "construct_paths",
+            "signature": "(input_file_paths: dict, force: bool, quiet: bool, command: str, command_options: dict, create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]",
+            "returns": "Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "description": "Preprocesses prompt files for LLMs by resolving XML-like tags (<pdd>, <include>, <include-many>, <shell>, <web>) and optionally escaping curly braces. Surfaces unresolved-include placeholders as warnings on the final non-recursive pass to convert previously silent failures into visible signals.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "content_selector_python.prompt",
+      "include_query_extractor_python.prompt"
+    ],
+    "priority": 30,
+    "filename": "preprocess_python.prompt",
+    "filepath": "pdd/preprocess.py",
+    "tags": [
+      "module",
+      "python",
+      "preprocess"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "preprocess",
+            "signature": "(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "get_file_path",
+            "signature": "(file_name) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
+    "description": "Provides interactive `pdd setup` initialization and programmatic auto-generation of .pddrc contexts for `pdd update --directory/--repo`. Imports EXAMPLES_DIR from generate_output_paths as the SSOT default for example_output_path so scaffolded .pddrc files match where pdd example actually writes.",
+    "dependencies": [
+      "generate_output_paths_python.prompt"
+    ],
+    "priority": 30,
+    "filename": "pddrc_initializer_python.prompt",
+    "filepath": "pdd/pddrc_initializer.py",
+    "tags": [
+      "module",
+      "python",
+      "config"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "offer_pddrc_init",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "infer_contexts_from_scan",
+            "signature": "(scan_dir: str, repo_root: str, code_files: List[str]) -> Dict[str, Dict]",
+            "returns": "Dict[str, Dict]"
+          },
+          {
+            "name": "ensure_pddrc_for_scan",
+            "signature": "(scan_dir: str, repo_root: str, code_files: List[str], quiet: bool = False) -> Optional[Path]",
+            "returns": "Optional[Path]"
+          }
+        ]
+      }
     }
   },
   {
@@ -6836,7 +6936,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
