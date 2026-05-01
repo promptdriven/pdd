@@ -2919,6 +2919,10 @@ PDD supports multiple configuration methods to customize its behavior for differ
 
 **Recommended for multi-context projects** (e.g., monorepos with backend/frontend)
 
+`.pddrc` is **optional** — PDD ships with sensible defaults (e.g., `pdd/` for code,
+`tests/` for tests, `examples/` for examples). You only need a `.pddrc` when you
+want to override these defaults or define multiple contexts.
+
 Create a `.pddrc` file in your project root to define different contexts with their own settings:
 
 ```yaml
@@ -2973,7 +2977,11 @@ PDD automatically detects the appropriate context based on:
 - `prompts_dir`: Directory where prompt files are located (default: "prompts")
 - `generate_output_path`: Where generated code files are saved
 - `test_output_path`: Where test files are saved
-- `example_output_path`: Where example files are saved
+- `example_output_path`: Where example files are saved (canonical default: `examples/`,
+  matching where `pdd example` writes). This is also the directory that `<include>`
+  tags in generated prompts resolve dependency examples from — when this setting
+  diverges from the actual examples location, generated prompts will contain
+  `[File not found: ...]` placeholders. See troubleshooting note 10 below.
 - `default_language`: Default programming language for the context
 - `target_coverage`: Default test coverage target
 - `strength`: Default AI model strength (0.0-1.0)
@@ -3189,6 +3197,20 @@ Here are some common issues and their solutions:
    - **State corruption or unexpected behavior**: Delete `.pdd/meta/{basename}_{language}.json` to reset fingerprint state
    - **Animation display issues**: Sync operations work in background; animation is visual feedback only and doesn't affect functionality
    - **Fingerprint mismatches**: Use `pdd sync --dry-run basename` to see what changes were detected and why operations were recommended
+
+10. **`[File not found: ...]` placeholders in generated prompts**: If a prompt
+    produced by `pdd generate` contains a placeholder like
+    `[File not found: context/foo_example.py]` inside a `<include>` block, the
+    `example_output_path` configured for the active context does not match the
+    directory where example files are actually written. PDD now emits a loud
+    warning to the console at the end of preprocessing when this is detected,
+    so the failure is no longer silent. To resolve:
+    - Check that your `.pddrc`'s `example_output_path` matches your real
+      examples directory (canonical default: `examples/`).
+    - If you have no `.pddrc`, ensure example files live under `examples/`
+      (where `pdd example` writes) — this is now the default for all languages.
+    - Override per-context in `.pddrc` if your project uses a non-standard
+      layout (e.g., `context/`, `fixtures/`, `extensions/app/examples/`).
 
 If you encounter persistent issues, consult the PDD documentation or post an issue on GitHub for assistance.
 

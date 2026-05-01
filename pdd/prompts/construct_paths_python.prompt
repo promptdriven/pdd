@@ -1,3 +1,20 @@
+<pdd-reason>Resolves configuration, validates input files, determines output paths, and handles overwrite confirmation for PDD commands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "construct_paths", "signature": "(input_file_paths: dict, force: bool, quiet: bool, command: str, command_options: dict, create_error_file: bool = True, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, path_resolution_mode: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]", "returns": "Tuple[Dict[str, Any], Dict[str, str], Dict[str, str], str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>generate_output_paths_python.prompt</pdd-dependency>
+<pdd-dependency>get_extension_python.prompt</pdd-dependency>
+<pdd-dependency>get_language_python.prompt</pdd-dependency>
+
 % You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that resolves configuration, validates input files, determines output paths, and handles overwrite confirmation.
 
 <include>context/python_preamble.prompt</include>
@@ -130,4 +147,16 @@
 
 9. Finalize: Add output paths and inferred directories to resolved_config.
    - Determine examples_dir: use ROOT directory (first path component) from raw context config's
-     example_output_path, defaulting to "context". Do NOT use resolved absolute paths.
+     example_output_path. When no `.pddrc` example_output_path is configured, default to
+     `EXAMPLES_DIR` imported from `pdd.generate_output_paths` (currently `"examples"`).
+     Do NOT hard-code the literal `"context"` — the canonical default lives in
+     `generate_output_paths.EXAMPLES_DIR` so it stays in lock-step with where
+     `pdd example` actually writes files. Do NOT use resolved absolute paths.
+
+10. EXAMPLE_OUTPUT_PATH env-var injection: When invoking templates that reference
+    `EXAMPLE_OUTPUT_PATH` (e.g., `generate_prompt.prompt`), the value injected MUST come
+    from the same precedence chain (CLI > .pddrc > env > default). The default — when
+    no `.pddrc` and no env var override are present — MUST be `EXAMPLES_DIR` imported
+    from `pdd.generate_output_paths`, not a hard-coded `"context"` literal. This
+    guarantees that `<include>` tags emitted by generated prompts resolve to the same
+    directory `pdd example` writes into.
