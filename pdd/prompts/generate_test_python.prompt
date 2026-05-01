@@ -1,0 +1,91 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'prompt' - A string containing the prompt that generated the code file to be processed.
+        'code' - Optional string containing the code to generate a unit test from. Default is None. Mutually exclusive with 'example'.
+        'example' - Optional string containing an example showing how the module should be used. Default is None. Mutually exclusive with 'code'.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
+        'temperature' - A float that is the temperature of the LLM model to use. Default is 0.0.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
+        'language' - A string that is the language of the unit test to be generated. Default is 'python'.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'source_file_path' - Optional string. Absolute or relative path to the code under test or example file. Default is None.
+        'test_file_path' - Optional string. Destination path for the generated test file. Default is None.
+        'module_name' - Optional string. Module name (without extension) for proper imports. Default is None.
+        'existing_tests' - Optional string. Content of existing tests to append to (for merge mode). Default is None.
+    Outputs as a tuple:
+        'unit_test'- A string that is the generated unit test code.
+        'total_cost' - A float that is the total cost to generate the unit test code.
+        'model_name' - A string that is the name of the selected LLM model.
+
+% Here is how to use the internal modules:
+    <internal_modules>
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
+
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+
+        For preprocessing prompts:
+        <preprocess_example>
+            <include>context/preprocess_example.py</include>
+        </preprocess_example>
+
+        For handling unfinished prompts:
+        <unfinished_prompt_example>
+            <include>context/unfinished_prompt_example.py</include>
+        </unfinished_prompt_example>
+
+        For continuing generation:
+        <continue_generation_example>
+            <include>context/continue_generation_example.py</include>
+        </continue_generation_example>
+
+        For postprocessing results:
+        <postprocess_example>
+            <include>context/postprocess_example.py</include>
+        </postprocess_example>
+    </internal_modules>
+
+% This program will do the following:
+    Step 1. Determine which prompt template to use:
+        - If 'example' is provided (not None): Load the 'generate_test_from_example_LLM' prompt template.
+        - Otherwise: Load the 'generate_test_LLM' prompt template.
+        - Validate that exactly one of 'code' or 'example' is provided (both None or both provided should raise an error).
+    Step 2. Preprocess both the Step 1 prompt template and the original 'prompt' using the preprocess function without recursion or doubling of the curly brackets.
+    Step 3. Run the inputs through the model using llm_invoke, passing the 'time' parameter to the llm_invoke function.
+        3a. Pass the following string parameters to the prompt during invoke:
+            - 'prompt_that_generated_code': preprocess the original prompt using the preprocess function without recursion or doubling of the curly brackets.
+            - If using example mode (example is not None):
+                - 'example': the example content
+            - If using code mode (example is None):
+                - 'code': the code content
+            - 'language'
+            - 'source_file_path': use empty string if None
+            - 'test_file_path': use empty string if None
+            - 'module_name': use empty string if None
+            - 'existing_tests': use empty string if None
+        3b. Forward 'strength', 'temperature', and 'time' to llm_invoke as provided.
+        3c. If verbose is True, print a short message that generation is running and the estimated cost (include token counts if available).
+    Step 4. If verbose is True, pretty print the markdown formatting that is present in the Step 3 result via the rich Markdown function. Also print the initial cost (include token counts if available).
+    Step 5. Detect if the generation is incomplete using the unfinished_prompt function by passing in the last 600 characters of the Step 3 LLM result.
+        - Use the provided 'strength' and also pass 'temperature', 'time', and 'language' as needed.
+        - If the last 600 characters are empty after stripping whitespace, consider the generation complete without calling unfinished_prompt.
+        - a. If incomplete, call the continue_generation function to complete the generation; update the result, aggregate the cost, and update the model name.
+    Step 6. Postprocess the final result (initial or continued) using the postprocess function with a strength of EXTRACTION_STRENGTH. Aggregate the postprocessing cost.
+        - If postprocess fails, fall back to extracting a fenced code block from the result (prefer substantial blocks that contain 'def test_' or 'import'); if none found, use the raw result.
+    Step 7. If verbose is True, print out the total_cost accumulated across the steps (include per-function costs and token counts if available).
+    Step 8. Return the unit_test, total_cost and model_name.
+
+% Parameter passing and defaults:
+    - Pass 'language', 'temperature', and 'time' through to helper functions where applicable.
+    - Defaults: language='python', temperature=0.0, strength=DEFAULT_STRENGTH, time=DEFAULT_TIME, verbose=False.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses. Validate inputs early (non-empty strings, numeric ranges) and provide informative error messages.

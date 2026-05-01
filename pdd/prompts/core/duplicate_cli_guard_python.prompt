@@ -1,0 +1,79 @@
+<pdd-reason>Prevents accidental duplicate CLI invocations by persisting only successful runs within a configurable time window.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "check_duplicate_before_subcommand", "signature": "(ctx)", "returns": "None"},
+      {"name": "record_after_guarded_command", "signature": "(ctx, success: bool = True)", "returns": "None"},
+      {"name": "save_last_run", "signature": "(project_root, record)", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
+You are an expert backend engineer implementing a CLI guard module for a Prompt-Driven Development (PDD) toolkit. This module is responsible for detecting and preventing accidental, expensive duplicate CLI invocations (e.g., redundant LLM-based commands) within a configurable time window.
+
+### Requirements:
+1. **State Persistence**: Maintain a JSON store at `.pdd/last_run.json` within the project root.
+2. **Keyed Tracking**: Support multiple concurrent tracked commands by using a hash key (derived from project path and CLI arguments) so that interleaved runs across different projects or modules do not overwrite each other.
+3. **Input Fingerprinting**: Detect changes in the environment using a "fingerprint" consisting of the current Git HEAD hash and the output of `git status --porcelain`. A command is only a duplicate if the fingerprint matches the previous run.
+4. **Time Window**: Define a default expiration window (e.g., 15 minutes) for duplicate detection, configurable via environment variables (`PDD_DUPLICATE_WINDOW_MIN` or `PDD_DUPLICATE_WINDOW_SEC`).
+5. **Guard Logic**:
+    - **Blocking**: In interactive TTY sessions, prompt the user for confirmation. In non-interactive/CI environments, block the execution with a `UsageError` or warning.
+    - **Bypass**: Provide mechanisms to bypass the guard using a `--force` flag or environment variables (`PDD_ALLOW_DUPLICATE_RUN`).
+    - **Filtering**: Only guard a specific set of expensive subcommands (e.g., sync, generate, fix, bug, etc.).
+    - **Meaningful Signature Required**: If the argv tail is empty or unavailable, skip duplicate checking and skip recording rather than using an empty argv signature. An empty argv signature is too broad for programmatic/hosted invocation wrappers and can cause unrelated label-triggered jobs to block each other.
+    - **Recording Policy**: Only persist a dedup record for *successful* invocations. Failed runs (exceptions, command returning a failure sentinel, or any reported non-success) must NOT be recorded, so the user can immediately retry the same command without waiting for the dedup window to expire or manually clearing state.
+6. **Migration & Robustness**: 
+    - Automatically migrate legacy single-record JSON files to the new keyed store format upon loading.
+    - Ensure the module is resilient to corrupt or malformed JSON files by treating them as empty/expired rather than crashing.
+    - Prune expired entries during write operations to keep the store file small.
+7. **Environment Awareness**: Disable the guard automatically if the `PDD_DISABLE_DUPLICATE_GUARD` environment variable is set or when running under `pytest` (unless explicitly enabled for testing).
+
+### Dependencies:
+<architecture_registry>
+    <include select="def:find_project_root">pdd/architecture_registry.py</include>
+</architecture_registry>
+<click_library>
+    <include>click</include>
+</click_library>
+<pdd.__init__>
+    <include>context/__init__example.py</include>
+</pdd.__init__>
+<utils.auth_service>
+    <include select="def:get_jwt_cache_info,def:clear_jwt_cache,def:get_cached_jwt,def:get_auth_status">context/auth_service_example.py</include>
+</utils.auth_service>
+<pdd.agentic_test_orchestrator>
+    <include select="def:example_hard_stop_duplicate">context/agentic_test_orchestrator_example.py</include>
+</pdd.agentic_test_orchestrator>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
+<pdd.agentic_common>
+    <include select="def:example_github_state_helpers">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+
+### Instructions:
+- Implement a `check_duplicate_before_subcommand(ctx)` function to be used as a Click group callback. It should resolve the project root using `find_project_root()`.
+- Implement a `record_after_guarded_command(ctx, success: bool = True)` function to update the store after a guarded invocation. When `success=False`, return early without persisting any record (this allows failed runs to be retried immediately). The `success` parameter defaults to `True` to preserve backward compatibility with existing callers and tests.
+- Use `hashlib.sha256` for generating signature keys (based on project root and argv) and input fingerprints (based on git state).
+- Handle Git commands (`git rev-parse HEAD`, `git status --porcelain`) using `subprocess.run` with appropriate timeouts and error handling.
+- Ensure the `_load_store` and `save_last_run` logic handles file system permissions and JSON parsing errors gracefully.
+- Ensure `check_duplicate_before_subcommand`, `record_after_guarded_command`, and `save_last_run` all treat an empty argv tail as non-actionable and return without reading/writing duplicate state.
+- Follow the logic: 
+    1. Check if the guard is enabled.
+    2. Check if the current subcommand is in the guarded list.
+    3. Resolve the argv tail and return immediately if it is empty.
+    4. Look up the previous record for the specific command signature.
+    5. Validate if the record is within the time window and if the inputs (argv and git fingerprint) match.
+    6. Block or prompt as required.
+
+### Deliverables:
+- A Python module (e.g., `duplicate_guard.py`) containing the duplicate detection logic, persistence handlers, and Click integration functions.

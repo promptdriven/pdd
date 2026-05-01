@@ -1,0 +1,98 @@
+% You are an expert Python engineer. Your goal is to write a module that analyzes prompt file dependencies and generates a topologically-sorted sync order.
+
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+A utility module that parses `<include>` tags from prompt files, builds a dependency graph, performs topological sort, and outputs an executable shell script with pdd sync commands in the correct order.
+
+% Requirements
+
+1. Function: extract_includes_from_file(file_path: Path) -> Set[str]
+   - Parse `<include>...</include>` and `<include-many>...</include-many>` tags from a prompt file. Mirror **all three forms** that `pdd.preprocess.process_include_tags` supports:
+     - bare body:        `<include>path</include>`
+     - attributed body:  `<include query="...">path</include>` (or any other attribute — discovery doesn't inspect them, just allows them on the opening tag)
+     - self-closing:     `<include path="..." />`
+   - Body-form regex: `r'<include(?:\s+[^>]*?)?(?<!/)>(.*?)</include>'` with `re.DOTALL`. The `(?<!/)>` negative lookbehind is required so a self-closing `<include path="..." />` is NOT picked up by the body-form regex (without it, the body-form would absorb everything between the self-closing tag and the next `</include>`, dropping inner includes entirely).
+   - Self-closing regex: `r'<include\s+([^>]*?)\s*/>'` with `re.DOTALL`, then extract the `path` attribute via `r'path\s*=\s*["\']([^"\']+)["\']'` from the captured attrs.
+   - `<include-many>` body regex: `r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>'` (attributes optional on the opening tag).
+   - For `<include-many>` payload, mirror `pdd.preprocess.process_include_many_tags`: split on newlines first, then on commas within each line, strip each piece, drop empties. Both separators must be supported because real prompts write the list either inline (`<include-many>a, b, c</include-many>`) or one-per-line (`<include-many>\na\nb\nc\n</include-many>`).
+   - Return set of included paths (whitespace-stripped). Self-closing payloads contribute the value of `path="..."`; body-form contributes the inner text.
+   - Return empty set if file doesn't exist or can't be read.
+   - Rationale (preprocessor parity): the Step 5 docs-discovery prompt promises to traverse the include graph. A single-tag, bare, or comma-only extractor silently garbles documents declared via attributed bodies, self-closing tags, or the multiline `<include-many>` form the preprocessor already supports — which means real PDD prompts would slip past #739's safety net.
+
+2. Function: extract_module_from_include(include_path: str) -> Optional[str]
+   - Map include paths to module names
+   - For example files: "context/llm_invoke_example.py" -> "llm_invoke"
+   - For example files: "context/cli_example.ts" -> "cli"
+   - For prompt includes: "prompts/cli_python.prompt" -> "cli"
+   - Return None for non-module includes (preambles, shared context files without _example suffix)
+   - Strip language suffix (_python, _typescript, _LLM) and _example suffix
+
+3. Function: build_dependency_graph(prompts_dir: Path) -> Dict[str, List[str]]
+   - Scan all prompt files matching: *_python.prompt, *_typescript.prompt, *_LLM.prompt
+   - For each prompt, extract module name from filename (e.g., "foo_python.prompt" -> "foo")
+   - Parse includes and map to module dependencies
+   - Build graph: module_name -> list of modules it depends on
+   - Skip self-references (module including its own example)
+   - Return empty dict if prompts_dir doesn't exist
+
+4. Function: topological_sort(graph: Dict[str, List[str]]) -> Tuple[List[str], List[List[str]]]
+   - Implement Kahn's algorithm for topological sorting
+   - Return tuple of (sorted_list, cycles_detected)
+   - sorted_list: modules in dependency order (dependencies come before dependents)
+   - cycles_detected: list of cycles found (each cycle is a list of module names)
+   - If cycles exist, sorted_list contains all non-cyclic modules in order
+
+5. Function: get_affected_modules(sorted_modules: List[str], modified: Set[str], graph: Dict[str, List[str]]) -> List[str]
+   - Given modified modules, find all modules that transitively depend on them
+   - Build reverse graph to find dependents efficiently
+   - Return subset of sorted_modules: modified modules + their transitive dependents
+   - Preserve topological order (dependencies before dependents)
+   - Return empty list if no modules affected
+
+6. Function: generate_sync_order_script(modules: List[str], output_path: Path, worktree_path: Optional[Path] = None) -> str
+   - If modules is empty, return empty string (no script created)
+   - Generate executable .sh file with ordered pdd sync commands
+   - Include header comments: script purpose, module count, generation timestamp
+   - Use "set -e" to fail on first error
+   - For each module, add: echo "[N/total] Syncing module_name..." and pdd sync with the module name properly shell-quoted via `shlex.quote()` to handle special characters (brackets, parentheses, etc.) in basenames
+   - Make file executable (chmod 0o755)
+   - Return script content as string
+
+7. Function: discover_associated_documents(modified_prompts: Set[Path], prompts_dir: Path, architecture_path: Optional[Path] = None, max_depth: int = 3) -> List[str]
+   - Discover documentation files (.md, .rst, .txt) that are associated with a set of modified prompts, for the Step 10.5 doc-sync contract (`pdd change`, issue #739).
+   - Phase 1 — direct includes: for each modified prompt, call `extract_includes_from_file()` and filter the results through `_is_document_include()` so only documentation files remain (prompts, example .py, generated code are excluded).
+   - Phase 2 — architecture BFS: when `architecture_path` points to a valid `architecture.json`, walk it in BFS order up to `max_depth` levels, starting from modules whose prompts are in `modified_prompts`. For each transitively-reachable module, read its prompt file and collect document includes. This catches docs that are included by prompts one or more edges away in the dependency graph.
+   - Graceful degradation: missing architecture.json, malformed JSON, missing prompt files, or architecture entries without a `dependencies` field must not raise — log and continue with whatever has been collected so far.
+   - Dedup across both phases; preserve a deterministic, sorted order in the returned list.
+   - Cycle-safe: the BFS must track visited module identifiers so include cycles or mutually-dependent modules don't cause infinite traversal.
+   - Return an empty list when no associated documents are discovered or when `modified_prompts` is empty — the contract is then trivially satisfied.
+
+Helper: `_is_document_include(include_path: str) -> bool`
+   - True when the path ends with a documentation extension (`.md`, `.rst`, `.txt`) and is NOT a `.prompt` file, an `_example.*` file, or a code file. Used to filter raw `<include>` and `<include-many>` payloads down to doc candidates.
+
+% Dependencies
+<auto_include_example>
+<include select="def:main">context/auto_include_example.py</include>
+</auto_include_example>
+<utils.architecture_sync>
+    <include select="def:example_sync_all,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+</utils.architecture_sync>
+<pdd.agentic_common>
+    <include select="def:example_run_agentic_task">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+
+% Instructions
+- Reuse regex pattern from auto_include.py for parsing `<include>` tags
+- Handle missing files gracefully (log warning with logging module, skip)
+- Module name extraction: use regex to strip language suffix (_python, _typescript, _LLM) and _example suffix
+- Use pathlib.Path throughout for cross-platform compatibility
+- Use collections.deque for Kahn's algorithm queue
+- Include docstrings for all public functions
+
+% Deliverables
+- Code: pdd/sync_order.py

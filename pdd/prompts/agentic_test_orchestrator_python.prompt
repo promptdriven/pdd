@@ -1,0 +1,55 @@
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
+% You are an expert LLM Prompt Engineer.
+% Role: Senior Backend Engineer / Automation Architect.
+
+# Role and Scope
+The module is an **Agentic Test Orchestrator** for an 18-step automated test generation workflow. Its responsibility is to manage the lifecycle of an "issue-to-test" conversion process by executing sequential and conditional agentic tasks. It maintains state, handles workspace isolation via git worktrees, manages complex context passing between steps (including special handling for web/Playwright tests), and supports resume-from-failure functionality using both local and remote (GitHub) state persistence.
+
+# Requirements
+1. **Workflow Execution**: Implement a linear sequence of 18 steps (including fractional steps like 5.5) defined by specific prompt templates.
+2. **State Management**: 
+    - Support persistence and resumption using `load_workflow_state` and `save_workflow_state`.
+    - Track `total_cost`, `model_used`, and `last_completed_step`.
+    - Clear state upon successful completion.
+3. **Workspace Isolation**:
+    - Automatically create and manage isolated git worktrees for each issue (branch name format: `test/issue-{number}`).
+    - Handle cleanup of existing worktrees/branches to ensure a clean state.
+4. **Context Propagation**:
+    - Parse tags from LLM outputs (e.g., `FILES_CREATED`, `TEST_TYPE`, `STOP_CONDITION`).
+    - Dynamically detect `likely_ci_cwd` by searching for `.pddrc` files relative to generated test files.
+    - Pass outputs from previous steps as context for subsequent steps.
+5. **Conditional Logic**:
+    - Implement a "Hard Stop" mechanism based on `STOP_CONDITION` tags or specific failure criteria (e.g., duplicate detection).
+    - Handle specialized paths for "web" frontend types, including manual testing loops (Steps 6-11) and Playwright integration.
+6. **Parallel/Cloud Integration**: Support an optional cloud-based manual testing execution by polling for results in a JSON file if `PDD_CLOUD_RUN` is enabled.
+7. **Progress Reporting**: Use `set_agentic_progress` to provide real-time updates on step completion and `rich` for console output.
+8. **Resilience**: Implement timeouts per step (mapped in `TEST_STEP_TIMEOUTS`) and utilize a retry mechanism for agentic tasks.
+
+# Dependencies
+<agentic_common>
+    <include>context/agentic_common_example.py</include>
+</agentic_common>
+<pytest_output>
+    <include>context/pytest_output_example.py</include>
+</pytest_output>
+<load_prompt_template>
+    <include>context/load_prompt_template_example.py</include>
+</load_prompt_template>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
+
+# Instructions
+1. **Timeouts**: Use a mapping for `TEST_STEP_TIMEOUTS` where Step 12 (Generation) and Step 8 (Manual) have the highest limits (1800s and 1000s respectively).
+2. **Git Helpers**: Implement private helpers for `_get_git_root`, `_worktree_exists`, `_setup_worktree`, and `_detect_ci_cwd`. The `_detect_ci_cwd` helper must find the project root for sub-projects within a mono-repo.
+3. **Parsing Logic**: Use regex to extract file lists from `FILES_CREATED` and `FILES_MODIFIED`. Handle "none" or "n/a" as empty lists.
+4. **The Loop (Steps 8-11)**: For web tests, implement a loop (max 3 iterations) that performs manual browser testing (Step 8), creates regression tests (Step 9), validates them (Step 10), and checks for completion (Step 11).
+5. **Resume Logic**: When resuming, ensure `likely_ci_cwd` is recalculated from the cached Step 12 output to ensure subsequent test execution steps run in the correct directory.
+6. **Stop Conditions**: 
+    - If Step 1 detects a duplicate, stop. 
+    - If Step 3 (Clarification) returns a stop condition, save the state such that it re-runs Step 3 on resume (save `last_completed_step` as Step 2).
+7. **Output Formatting**: Ensure all console output uses the `rich` library for consistent styling.
+
+# Deliverable
+A Python module named `agentic_test_orchestrator.py` containing the primary entry point `run_agentic_test_orchestrator`. The function must return a tuple: `(success: bool, message: str, total_cost: float, model: str, changed_files: List[str])`.

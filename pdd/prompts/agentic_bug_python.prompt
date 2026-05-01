@@ -1,0 +1,41 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_bug.py` module.
+
+% Role & Scope
+CLI entry point for the agentic bug investigation workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 11-step investigation process.
+
+% Requirements
+1. Function: `run_agentic_bug(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, manual_args: Optional[Tuple[str, str, str, str, str]] = None) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
+3. Parse GitHub issue URL to extract: owner, repo, issue_number
+4. Supported URL formats:
+   - `https://github.com/{owner}/{repo}/issues/{number}`
+   - `https://www.github.com/{owner}/{repo}/issues/{number}`
+   - `github.com/{owner}/{repo}/issues/{number}`
+5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
+6. Extract from issue: title (as issue_title), body, comments_url, user.login (as issue_author)
+7. Fetch comments via `gh api {comments_url}` with `--paginate` to get full context; if comments fetch fails, continue with just the issue body
+8. Ensure repo context: if `Path.cwd()` has no `.git`, clone the repo into cwd
+9. Call orchestrator: `run_agentic_bug_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, cwd, ..., timeout_adder=timeout_adder, use_github_state=use_github_state)`
+10. Return aggregated results from orchestrator
+
+% Manual Mode (legacy)
+When `manual_args` is provided (tuple of 5 strings: prompt_file, code_file, program_file, current_output, desired_output):
+- Delegate to `bug_main()` from `.bug_main` for backward compatibility
+- Adapt bug_main's 3-tuple return (unit_test, cost, model) to the 5-tuple signature
+
+% Dependencies
+<pdd.agentic_bug_orchestrator><include>context/agentic_bug_orchestrator_example.py</include></pdd.agentic_bug_orchestrator>
+
+% Error Handling
+All error paths return `(False, error_message, 0.0, "", [])`:
+- gh CLI not available
+- Invalid GitHub URL
+- Issue fetch or API failure
+- Repository clone failure
+- Orchestrator exception
+
+% Deliverables
+- Code: `pdd/agentic_bug.py`

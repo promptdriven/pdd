@@ -1,0 +1,39 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_change.py` module.
+
+% Role & Scope
+CLI entry point for the agentic change workflow. Fetches a GitHub issue, extracts content and metadata, then invokes the orchestrator to run the 13-step change process (steps 1–13, with Step 8.5 pre-flight drift heal and Step 10.5 doc-sync verifier as inline sub-steps). The orchestrator handles state persistence to support resumption after clarification or architectural question pauses, and includes a review loop (steps 11–12) before creating a PR.
+
+% Requirements
+1. Function: `run_agentic_change(issue_url: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
+3. Parse GitHub issue URL to extract: owner, repo, issue_number
+4. Supported URL formats:
+   - `https://github.com/{owner}/{repo}/issues/{number}`
+   - `https://www.github.com/{owner}/{repo}/issues/{number}`
+   - `github.com/{owner}/{repo}/issues/{number}`
+4a. Also expose a sibling helper `_parse_pr_url(url) -> Optional[Tuple[str, str, int]]` that returns `(owner, repo, pr_number)` for GitHub pull-request URLs. This helper is imported and reused by `pdd/agentic_checkup.py` and `pdd/commands/checkup.py` for `pdd checkup --pr` mode, so it lives next to `_parse_issue_url` rather than being duplicated. Supported PR URL formats mirror the issue formats:
+   - `https://github.com/{owner}/{repo}/pull/{number}`
+   - `https://www.github.com/{owner}/{repo}/pull/{number}`
+   - `github.com/{owner}/{repo}/pull/{number}`
+   Use `re.search` (not `re.match`) so a PR URL embedded in surrounding prose still parses; return `None` on no match (including when an issue URL is passed).
+5. Fetch issue content via `gh api repos/{owner}/{repo}/issues/{number}` (requires `gh` CLI)
+6. Extract from issue: title (as issue_title), body, labels, state, comments_url, user.login (as issue_author)
+7. Fetch comments via `gh api {comments_url}` to get full context
+8. Clone/checkout the repository to a temp directory if not already in it
+9. Call orchestrator: `run_agentic_change_orchestrator(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, ..., timeout_adder=timeout_adder, use_github_state=use_github_state)`
+10. Return aggregated results from orchestrator
+
+% Dependencies
+<pdd.agentic_change_orchestrator><include query="definition and usage of run_agentic_change_orchestrator">context/agentic_change_orchestrator_example.py</include></pdd.agentic_change_orchestrator>
+<pdd.agentic_common><include select="def:example_github_state_helpers,def:example_run_agentic_task">context/agentic_common_example.py</include></pdd.agentic_common>
+
+% Error Handling
+- Return `(False, "gh CLI not found", 0.0, "", [])` if `gh` command not available
+- Return `(False, "Invalid GitHub URL", 0.0, "", [])` if URL parsing fails
+- Return `(False, "Issue not found: {error}", 0.0, "", [])` if `gh api` fails
+
+% Deliverables
+- Code: `pdd/agentic_change.py`

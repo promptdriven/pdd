@@ -72,6 +72,106 @@ from ..core.errors import handle_error
         "resolve. Used as issue context for verification."
     ),
 )
+@click.option(
+    "--review-loop",
+    is_flag=True,
+    default=False,
+    help="In PR mode, run the primary-reviewer/fixer loop before returning a verdict.",
+)
+@click.option(
+    "--review-only",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --review-loop, run only the primary reviewer first pass and do "
+        "not invoke the fixer, commit, or push."
+    ),
+)
+@click.option(
+    "--reviewers",
+    type=str,
+    default="codex,claude",
+    show_default=True,
+    help="Legacy comma-separated role order for --review-loop: reviewer,fixer.",
+)
+@click.option(
+    "--reviewer",
+    type=str,
+    default=None,
+    show_default=False,
+    help="Primary reviewer role for --review-loop. Overrides the first --reviewers role.",
+)
+@click.option(
+    "--fixer",
+    type=str,
+    default=None,
+    show_default=False,
+    help="Fixer role for --review-loop. Overrides the second --reviewers role.",
+)
+@click.option(
+    "--max-review-rounds",
+    type=int,
+    default=5,
+    show_default=True,
+    help="Maximum primary-reviewer/fixer rounds.",
+)
+@click.option(
+    "--max-review-cost",
+    type=float,
+    default=10.0,
+    show_default=True,
+    help="Maximum review-loop LLM cost in USD.",
+)
+@click.option(
+    "--max-review-minutes",
+    type=float,
+    default=90.0,
+    show_default=True,
+    help="Maximum wall-clock minutes for the review loop.",
+)
+@click.option(
+    "--require-all-reviewers-clean/--no-require-all-reviewers-clean",
+    default=True,
+    show_default=True,
+    help="Compatibility flag; the primary reviewer is the authoritative ship gate.",
+)
+@click.option(
+    "--continue-on-reviewer-limit",
+    is_flag=True,
+    default=False,
+    help=(
+        "Report provider/rate/context-limit reviewer failures as degraded instead "
+        "of failed. This never marks the reviewer clean or continues mutation."
+    ),
+)
+@click.option(
+    "--require-final-fresh-review/--no-require-final-fresh-review",
+    default=True,
+    show_default=True,
+    help="Compatibility flag; the primary reviewer's clean verification is final.",
+)
+@click.option(
+    "--blocking-severities",
+    type=str,
+    default=None,
+    show_default=False,
+    help=(
+        "Comma-separated highest-priority severities for review-loop reporting "
+        "and prompt guidance. The fixer still receives every valid reviewer "
+        "finding. Default: blocker,critical,medium. Unknown severities are dropped."
+    ),
+)
+@click.option(
+    "--clean-reviewer-states",
+    type=str,
+    default=None,
+    show_default=False,
+    help=(
+        "Compatibility parser for downstream reviewer-status gates. Default: "
+        "clean. The tokens 'failed', 'degraded', and 'missing' are always "
+        "treated as not-clean regardless of this flag."
+    ),
+)
 @click.pass_context
 @track_cost
 def checkup(
@@ -85,6 +185,19 @@ def checkup(
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
+    review_loop: bool,
+    review_only: bool,
+    reviewers: str,
+    reviewer: Optional[str],
+    fixer: Optional[str],
+    max_review_rounds: int,
+    max_review_cost: float,
+    max_review_minutes: float,
+    require_all_reviewers_clean: bool,
+    continue_on_reviewer_limit: bool,
+    require_final_fresh_review: bool,
+    blocking_severities: Optional[str],
+    clean_reviewer_states: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -112,6 +225,36 @@ def checkup(
 
     # PR-mode argument validation
     pr_mode = pr_url is not None or issue_url_opt is not None
+    if review_loop and not pr_mode:
+        raise click.BadParameter(
+            "--review-loop requires --pr and --issue.",
+            param_hint="'--review-loop'",
+        )
+    if review_only and not review_loop:
+        raise click.BadParameter(
+            "--review-only requires --review-loop.",
+            param_hint="'--review-only'",
+        )
+    if review_loop and no_fix and not review_only:
+        raise click.BadParameter(
+            "--review-loop cannot be combined with --no-fix; the loop owns the fixer step.",
+            param_hint="'--review-loop'",
+        )
+    if review_loop and max_review_rounds < 1:
+        raise click.BadParameter(
+            "--max-review-rounds must be >= 1.",
+            param_hint="'--max-review-rounds'",
+        )
+    if review_loop and max_review_cost <= 0:
+        raise click.BadParameter(
+            "--max-review-cost must be > 0.",
+            param_hint="'--max-review-cost'",
+        )
+    if review_loop and max_review_minutes <= 0:
+        raise click.BadParameter(
+            "--max-review-minutes must be > 0.",
+            param_hint="'--max-review-minutes'",
+        )
     if pr_mode:
         if target is not None:
             raise click.BadParameter(
@@ -142,7 +285,7 @@ def checkup(
         # fixes exist on a local branch). Push-back is a separate follow-up;
         # until it lands, force --no-fix when --pr is set and warn so the
         # user can re-invoke without --pr if they wanted fixes applied.
-        if not no_fix:
+        if not no_fix and not review_loop:
             click.echo(
                 "Warning: --pr forces --no-fix because push-back to the PR "
                 "is not yet implemented. Generated fixes inside the PR "
@@ -183,6 +326,19 @@ def checkup(
             use_github_state=not no_github_state,
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             pr_url=pr_url,
+            review_loop=review_loop,
+            review_only=review_only,
+            reviewers=reviewers,
+            reviewer=reviewer,
+            fixer=fixer,
+            max_review_rounds=max_review_rounds,
+            max_review_cost=max_review_cost,
+            max_review_minutes=max_review_minutes,
+            require_all_reviewers_clean=require_all_reviewers_clean,
+            continue_on_reviewer_limit=continue_on_reviewer_limit,
+            require_final_fresh_review=require_final_fresh_review,
+            blocking_severities=blocking_severities,
+            clean_reviewer_states=clean_reviewer_states,
         )
 
         if not quiet:

@@ -1,0 +1,49 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_update.py` module.
+
+% Role & Scope
+The `agentic_update` module coordinates an "agentic" update of a prompt file using an external CLI agent (such as Claude Code, Gemini, or Codex). It acts as a bridge between the local file system and AI agents, ensuring that the agents have the necessary context (code and tests) to produce high-quality, compact prompt updates.
+
+% Requirements
+1. **Primary Function**: Implement `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`.
+2. **Return Contract**: Return a 5-tuple: `(success, message, cost, model_used, changed_files)`.
+3. **Agent Availability**: If no agentic CLIs are available (via `get_available_agents`), return `(False, "No agentic CLI available", 0.0, "", [])`.
+4. **Test Discovery**: 
+    - If `test_files` is `None`, auto-discover tests using the pattern `test_{code_stem}*{code_suffix}`.
+    - If explicit `test_files` are provided, validate their existence and fail early with a descriptive error if any are missing.
+5. **Search Strategy**: Search for tests in the following order:
+    - `tests_dir` (if provided via config).
+    - `tests/` relative to the code file.
+    - The same directory as the code file.
+    - Sibling `../tests/` directory.
+    - Project root `tests/`.
+6. **Prompt Templating**: Load the `agentic_update_LLM` template using `load_prompt_template()` and format it with `prompt_path`, `code_path`, and a formatted list of `test_paths`.
+7. **Execution**: Use `run_agentic_task()` from `agentic_common` to execute the update with `DEFAULT_MAX_RETRIES`.
+8. **Change Detection**: 
+    - Snapshot file modification times (mtimes) before and after the agent run.
+    - Detect changed files (created, modified, or deleted).
+    - Re-discover test files after the run to catch any newly created tests.
+9. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
+10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common` where `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`. Import it alongside the other agentic_common imports. This prevents the agent from accidentally deleting or modifying unrelated files.
+
+% Dependencies
+<pdd.agentic_common>
+    <include>context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.load_prompt_template>
+    <include>context/load_prompt_template_example.py</include>
+</pdd.load_prompt_template>
+<pdd.prompt.agentic_update_LLM>
+    <include>prompts/agentic_update_LLM.prompt</include>
+</pdd.prompt.agentic_update_LLM>
+
+% Instructions
+- Use `pathlib.Path` for all path manipulations and ensure paths are resolved/relativized appropriately for the prompt template.
+- Implement helper functions for `_snapshot_mtimes`, `_detect_changed_files`, and `_discover_test_files` to keep the main function clean.
+- Ensure robust error handling for file system operations and template formatting, providing clear feedback via `rich.console` unless `quiet` is True.
+- The `changed_files` return value should contain resolved string paths of all files modified during the agent's execution.
+
+% Deliverables
+- Code: `pdd/agentic_update.py`

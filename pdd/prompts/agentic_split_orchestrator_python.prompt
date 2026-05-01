@@ -1,0 +1,172 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Orchestrates the 9-step agentic split workflow for diagnosing and splitting large PDD dev units.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_split_orchestrator", "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_worktree_python.prompt</pdd-dependency>
+<pdd-dependency>split_validation_python.prompt</pdd-dependency>
+<pdd-dependency>split_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
+% Goal
+Write the `pdd/agentic_split_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 9-step agentic split workflow. Diagnoses whether a PDD dev unit has an architectural problem, and if so, splits the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. Runs each LLM step as a separate agentic task, executes deterministic verification gates (tests, lint, regen, arch sync) in Python, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state.
+
+% Requirements
+1. Function: `run_agentic_split_orchestrator(target_file: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, diagnose_only: bool = False, propose_only: bool = False, delete_dead: bool = False, force_split: bool = False, no_verify: bool = False, skip_regen_gate: bool = False, experimental_language: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 9 steps: survey, diagnose, investigate, propose_options, setup_worktree, extract (fan-out), verify_local (7a), regen_gate (7b), arch_sync (7c), repair (8)
+4. Steps 1-4 use `run_agentic_task`; step 5 is Python (worktree setup); step 6 is `run_agentic_task` x N (one per child); steps 7a/7b/7c are Python (deterministic); step 8 is `run_agentic_task` x max 5 per child
+5. Language tier gate: `supported = ["python"]`. Non-Python requires `--experimental-language` flag or abort with `LANGUAGE_UNSUPPORTED`
+6. `--diagnose` flag: run steps 1-2 only, return diagnosis report
+7. `--propose-only` flag: run steps 1-4 only, return all options
+8. `--force-split` flag: override `DIAGNOSIS: LEAVE_ALONE` from step 2
+9. `--no-verify` flag: skip step 7a test gate (dev only, logged loudly)
+10. `--skip-regen-gate` flag: skip step 7b (dev only, logged loudly in PR body)
+11. `--delete-dead` flag: opt-in dead symbol deletion in step 6 last child
+
+% Per-Step Timeouts
+Define locally:
+```python
+SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
+    "1_survey": 900.0,
+    "2_diagnose": 400.0,
+    "3_investigate": 600.0,
+    "4_propose_options": 500.0,
+    "5_setup_worktree": 30.0,
+    "6_extract": 1000.0,       # per child
+    "7a_verify_local": 900.0,
+    "7b_regen_gate": 1800.0,   # 600s + 1200s/unit
+    "7c_arch_sync": 60.0,
+    "7_assess": 300.0,         # qualitative assessment
+    "8_repair": 600.0,         # per child per iteration
+}
+```
+
+% Data Model
+Use stdlib `dataclasses` for: `Diagnosis`, `ModuleInvestigation`, `SplitPlan`, `Child`, `ParentChanges`, `PromptMetadata`, `TestOwnership`, `QualitativeAssessment`, `SplitOption`, `OptionsConsidered`. These are internal representations parsed from agent output markers; the agent produces JSON, the orchestrator parses into dataclasses for type safety.
+
+% Step Sequence
+| Step | Template Name | Tool | Purpose |
+|------|---------------|------|---------|
+| 1 | agentic_split_step1_survey_LLM | run_agentic_task | Neighborhood survey + target-file scan |
+| 2 | agentic_split_step2_diagnose_LLM | run_agentic_task | Classify architectural problem, can return LEAVE_ALONE |
+| 3 | agentic_split_step3_investigate_LLM | run_agentic_task | Extend with test-seam data + test ownership classification |
+| 4 | agentic_split_step4_propose_options_LLM | run_agentic_task | 2-4 SplitPlan options, auto-pick winner |
+| 5 | (none) | Python | Setup worktree via shared helpers |
+| 6 | agentic_split_step6_extract_LLM | run_agentic_task x N | One child per call, full dev unit |
+| 7a | (none) | Python | Deterministic gates: tests, lint, metrics, byte-equiv |
+| 7b | (none) | Python (pdd sync) | pdd sync per unit, regen gate |
+| 7c | (none) | Python (arch_sync) | architecture_sync.sync_all_prompts_to_architecture() |
+| 7-assess | agentic_split_step7_assess_LLM | run_agentic_task | Qualitative self-assessment |
+| 8 | agentic_split_step8_repair_LLM | run_agentic_task x 5/child | Fix failures from 7a/7b/7c |
+
+% Prompt Preprocessing
+Before formatting each step's prompt template, apply a two-step process:
+1. Call `preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))` to expand `<include>` tags and escape curly braces in included content
+2. Call `substitute_template_variables(processed_template, context)` to replace `{key}` placeholders
+
+% Step Execution
+For LLM steps (1-4, 6, 7-assess, 8):
+1. Check if step already completed (from saved state) — if so, skip and use cached output
+2. Track progress: Call `set_agentic_progress(workflow="split", current_step=step_num, total_steps=9, step_name=description, completed_steps=[...])`
+3. Load the step prompt template via `load_prompt_template(template_name)`
+4. Preprocess and format template with context
+5. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout + timeout_adder, label=label, max_retries=DEFAULT_MAX_RETRIES)`
+6. Store the output for use by subsequent steps
+7. Save state to file after step completes (for resumption)
+8. Accumulate cost: `total_cost += step_cost`
+
+For Python steps (5, 7a, 7b, 7c):
+- Step 5: Import `setup_worktree` from `pdd.agentic_common_worktree`, call it with `(repo_root, f"split/{target_basename}")`
+- Step 7a: Run deterministic gates from `pdd.split_validation.validate_extraction()`, run `get_test_command()` and `get_lint_commands()`, compute metrics pre vs post, then invoke step 7 assess prompt for qualitative assessment, then apply the tightened decision matrix
+- Step 7b: For each new/modified dev unit in topological order (children first, parent last): snapshot code, run `pdd sync <basename> --max-attempts 1 --budget 5.0` via subprocess, run tests via `get_test_command()`
+- Step 7c: Call `architecture_sync.sync_all_prompts_to_architecture(prompts_dir, architecture_path, dry_run=False)`, verify every child prompt has an arch entry
+
+% Context Accumulation
+- Step 1 receives: target_file, language, cwd
+- Step 2 receives: target_file, language, cwd, step1_output
+- Step 3 receives: target_file, language, cwd, step1_output, step2_output
+- Step 4 receives: target_file, language, step1_output, step2_output, step3_output
+- Step 6 receives: target_file, language, worktree_path, selected_option, current_child_index, children_extracted, step3_output
+- Step 7-assess receives: target_file, language, step1_output, selected_option, post_split_state, quantitative_metrics
+- Step 8 receives: target_file, child, verify_failures, previous_fixes, repair_iteration, max_repair_iterations
+
+% Early Exit Conditions
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | architecture.json has no entry for target | Output contains "ARCHITECTURE_STALE" |
+| 2 | File should not be split | Output contains "DIAGNOSIS: LEAVE_ALONE" (unless --force-split) |
+| 3 | Architecture stale or no test file | Output contains "ARCHITECTURE_STALE" or "NO_TEST_FILE" |
+| 4 | No option scores above 0 | Output contains "NO_IMPROVEMENT_POSSIBLE" |
+| 6 | Extraction blocked | Output contains "EXTRACTION_BLOCKED" |
+| 7a | Architectural regression | Decision matrix returns abort |
+| 7b | Regen failed for all children | All children fail regen |
+| 8 | Repair exhausted for child | Output contains "REPAIR_EXHAUSTED" |
+
+% Improvement Gate Decision Matrix (Step 7a, after qualitative assessment)
+| Quantitative | Qualitative | Action |
+|---|---|---|
+| >=1 metric improves, 0 regress | clear or moderate | Auto-ship |
+| >=1 metric improves, 0 regress | none or not_an_improvement | Auto-ship with soft warning |
+| 0 improve, 0 regress | clear_improvement | HUMAN_REVIEW_REQUIRED |
+| 0 improve, 0 regress | moderate | HUMAN_REVIEW_REQUIRED with MARGINAL_IMPROVEMENT |
+| 0 improve, 0 regress | none or not_an_improvement | Abort with NO_IMPROVEMENT_DETECTED |
+| Any metric regresses | clear_improvement | HUMAN_REVIEW_REQUIRED |
+| Any metric regresses | moderate | Abort with ARCHITECTURAL_REGRESSION |
+| Any metric regresses | none or not_an_improvement | Abort with ARCHITECTURAL_REGRESSION |
+
+% State Persistence
+State persisted as GitHub comment marker + `.pdd/split-state/` JSON cache. Use shared functions from `agentic_common`:
+- `load_workflow_state(cwd, issue_number, "split", state_dir, ...)`
+- `save_workflow_state(cwd, issue_number, "split", state, state_dir, ...)`
+- `clear_workflow_state(cwd, issue_number, "split", state_dir, ...)`
+
+State structure: `workflow`, `target_file`, `last_completed_step`, `step_outputs`, `total_cost`, `model_used`, `worktree_path`, `children_extracted`, `options_considered`, `selected_option`, `repair_iterations`, `previous_fixes`, `discovered_commands`
+
+% Console Output
+Use rich console output (unless `quiet`). Key markers:
+- Header: `Splitting {target_file}...`
+- Step progress: `[Step N/9] {description}...`
+- Diagnosis result: `Diagnosis: {recommended_action}` with rationale
+- Options summary: table of all options with scores
+- Per-child extraction: `Extracting child {N}/{total}: {child_name}...`
+- Verification: gate-by-gate progress
+- Final summary: total cost, files changed, improvement metrics, PR URL
+
+% Error Handling
+- Return `(False, "Language not supported: {lang}. Use --experimental-language.", 0.0, "", [])` for unsupported languages
+- Return `(False, "Diagnosis: LEAVE_ALONE - {rationale}", cost, model, [])` on leave-alone
+- Return `(False, "No improvement possible", cost, model, [])` when no option scores > 0
+- Return `(False, "Verification failed: {details}", cost, model, changed_files)` on gate failures
+- Log warning and continue if `run_agentic_task()` returns failure without matching a hard stop
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `set_agentic_progress`, `clear_agentic_progress`
+Import from `agentic_common_worktree`: `setup_worktree`, `check_target_file_unchanged`, `revert_out_of_scope_changes_with_dirs`, `extract_block_marker`, `save_state`, `load_state`
+Import from `split_validation`: `validate_extraction`, `get_test_command`, `get_lint_commands`
+Import from `split`: `split` (the prompt-splitting primitive for step 6)
+Import from `architecture_sync`: `sync_all_prompts_to_architecture`
+Import from `pdd.preprocess`: `preprocess`
+<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:set_agentic_progress,def:clear_agentic_progress">context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_common_worktree><include optional>examples/agentic_common_worktree_example.py</include></pdd.agentic_common_worktree>
+<pdd.split_validation><include optional>examples/split_validation_example.py</include></pdd.split_validation>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.split><include>context/split_example.py</include></pdd.split>
+<pdd.architecture_sync><include select="def:sync_all_prompts_to_architecture">context/architecture_sync_example.py</include></pdd.architecture_sync>
+
+% Deliverables
+- Code: `pdd/agentic_split_orchestrator.py`

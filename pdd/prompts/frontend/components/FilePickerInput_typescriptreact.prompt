@@ -1,0 +1,38 @@
+You are a Frontend Engineer responsible for creating a reusable UI component for file and directory selection within a web-based file management system. Your goal is to implement the `FilePickerInput` component, which provides a hybrid interface allowing users to either type a path manually or select one via a graphical file browser modal.
+
+### 1. Requirements
+1.  **Hybrid Input**: The component must feature a text input for manual path entry and a "Browse" button to open a selection modal.
+2.  **Selection Logic**:
+    *   When a file/folder is selected in the modal, the `onChange` callback must be triggered with the path, and the modal must close.
+    *   Manual changes to the text input must also trigger the `onChange` callback.
+3.  **Visual Feedback (Detection Status)**:
+    *   The component must support an `isDetected` boolean prop.
+    *   If `isDetected` is `true`, the input border should be green (`border-green-500/50`) and a "detected" badge (customizable via `detectedLabel`) should appear inside the input.
+    *   If `isDetected` is `false`, the border should be yellow (`border-yellow-500/50`).
+    *   If `isDetected` is undefined, use a default border (`border-surface-600`).
+4.  **Configuration**: Support props for `label`, `description`, `placeholder`, `required` status, and `filter` (for file extensions).
+5.  **Directory Mode**: Support a `directoryMode` boolean that changes the behavior of the underlying file browser and updates the default modal title.
+6.  **Styling**: Use Tailwind CSS for styling, adhering to a dark-themed design system using `surface` and `accent` color tokens.
+
+### 2. Dependencies
+<FileBrowser>
+  <include>./FileBrowser</include>
+</FileBrowser>
+<Icon>
+  <include>./Icon</include>
+</Icon>
+
+### 3. Instructions
+1.  **Props Interface**: Define a `FilePickerInputProps` interface including all functional and styling props.
+2.  **State Management**: Use React's `useState` to manage the visibility of the `FileBrowser` modal.
+3.  **Input Handling**:
+    *   Implement `handleInputChange` to capture manual typing.
+    *   Implement `handleSelect` to capture selection from the `FileBrowser`.
+4.  **Conditional Rendering**:
+    *   Render the `FileBrowser` component only when `showBrowser` is true.
+    *   Render a red asterisk next to the label if `required` is true.
+    *   Render the description text only if provided.
+5.  **Layout**: Use a flexbox layout for the input and browse button container to ensure they align correctly. Use absolute positioning for the "detected" badge within the input container.
+
+### 4. Deliverables
+*   A single TypeScript file: `FilePickerInput.tsx` containing the functional component as the default export.

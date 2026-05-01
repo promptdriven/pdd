@@ -1,0 +1,161 @@
+<pdd-reason>Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
+      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)", "returns": "Tuple[bool, str, str, int, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>failure_classification_python.prompt</pdd-dependency>
+
+% You are an expert Python Software Engineer. Your goal is to write a robust Python module containing the `fix_error_loop` function and its associated helpers. This module implements an iterative, agentic workflow to fix errors in unit tests and their corresponding code files using an LLM.
+
+### Role and Scope:
+This module acts as the core execution engine for an automated code-repair system. It manages the lifecycle of a "fix attempt," which includes running tests, capturing failures, invoking an LLM to suggest repairs, verifying those repairs, and falling back to a more powerful agentic fix if the iterative loop fails. It is responsible for state management (backups and restoration) and detailed logging.
+
+The module supports both local and cloud execution modes:
+- **Local mode**: LLM calls are made directly using local libraries
+- **Cloud mode (hybrid)**: LLM calls go through the cloud fixCode endpoint, but test execution remains local
+
+### Requirements:
+1.  **Iterative Fixing Logic:** The `fix_error_loop` must attempt to resolve code/test mismatches over multiple iterations (up to `max_attempts`). It must track failures, errors, and warnings at each step. When `failure_aware_retries=True` (default), apply **failure-aware early exit** (see below); when `failure_aware_retries=False`, preserve the legacy behavior of running the loop up to `max_attempts` (still subject to `budget`), without those early exits.
+2.  **Statistics & Improvement Tracking:** Maintain a `stats` dictionary to track initial/final states, improvement percentages, and identify the `best_iteration`.
+3.  **Structured XML Logging:** Implement a dictionary-based log structure. This must be formatted into a string using XML tags (`<pytest_output>`, `<fix_attempt>`, `<verification_output>`) for each iteration and written to `error_log_file`.
+4.  **Best State Recovery:** If the final iteration is not the most successful (prioritizing lowest errors, then fails, then warnings), the module must restore the file contents from the best recorded iteration backups.
+5.  **Verification Step:** After every code update, run a verification program using `detect_host_python_executable`. If the verification returns a non-zero exit code, restore the previous code backup immediately and log the restoration.
+6.  **Agentic Fallback:** If the loop finishes without total success and budget remains, invoke `run_agentic_fix`. This includes:
+    - Normal loop exhaustion (max_attempts reached)
+    - Early exits due to errors within the loop (backup creation failures, file read errors, pytest exceptions) - these must use `break` rather than `return`
+    - Initial test/verification exceptions (before the loop starts) - trigger agentic fallback directly if `agentic_fallback=True`
+    Ensure the `error_log_file` is populated with the current state before the agent is called.
+7.  **Non-Python Support:** Detect non-Python files by extension. Use `get_test_command_for_file` to run initial verification. If it fails, skip the standard pytest loop and go directly to the agentic fallback.
+8.  **Cost & Budget Management:** Accumulate `total_cost` from LLM calls and stop the loop immediately if the `budget` is exceeded.
+9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local. When passing failure context to the cloud, **prepend** a `[PDD failure classification] ...` line (or equivalent prefix) to the `errors` string payload so the remote fix step sees the same classification as local `fix_errors_from_unit_tests`. <pdd>`protect_tests` should be forwarded in the payload (as `protectTests`) and accepted in the `cloud_fix_errors` signature. The pdd_cloud `fixCode` backend does not yet read this field, so it is a forward-looking no-op in cloud mode — the flag is fully honored in local mode. Keep the param so the contract matches local `fix_errors_from_unit_tests` and flips on when the backend adds support.</pdd>
+10. **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
+    *   *Note:* If checks pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and the same model-name convention as implementation (`""` for Python initial pass; `"N/A"` for non-Python initial pass).
+11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
+
+12. **Failure classification & failure-aware retries:** Import from `pdd.failure_classification`: `FailureKind`, `classify_failure`, `extract_failure_signature`, `failure_classification_hint`, `format_signature_hint` (or equivalent names matching `failure_classification_python.prompt`). After each test/verification run that still fails:
+    - Classify the captured output with `classify_failure(...)`.
+    - **Timeouts before syntax:** classification must treat timeout/flaky patterns (e.g. `"timed out"`) as `timeout_flaky` before classifying as `syntax_import`, so log noise does not mis-route.
+    - **Syntax / import (`FailureKind.syntax_import`):** After **at least one** completed fix attempt, if `extract_failure_signature` matches the previous iteration’s signature (unchanged failure pattern), **stop early** and print a **yellow** console hint (via `format_signature_hint` / `failure_classification_hint`) that imports, environment, or missing files may need manual fixes—not more blind LLM iterations.
+    - **Timeout / flaky (`FailureKind.timeout_flaky`):** Track **consecutive** iterations without improvement; when **≥ 2**, **stop early** with the timeout/flaky message (isolate tests, increase timeout, manual investigation).
+    - **Assertion / logic (`FailureKind.assertion_logic`):** Do **not** apply the syntax-import or timeout early-exit rules; continue until `max_attempts` or `budget` as today.
+    - **Local fix call:** Ensure each `fix_errors_from_unit_tests` invocation receives sufficient failure classification context (same spirit as cloud: structured hint or prefixed error text).
+    - When `failure_aware_retries=False`, skip all of the above early-exit branches; only `max_attempts` / `budget` / existing loop guards apply.
+
+### Public Interface:
+
+```python
+def cloud_fix_errors(
+    unit_test: str,
+    code: str,
+    prompt: str,
+    error: str,
+    error_file: str,
+    strength: float,
+    temperature: float,
+    verbose: bool = False,
+    time: float = DEFAULT_TIME,
+    code_file_ext: str = ".py",
+    protect_tests: bool = False,
+    failure_classification: str | None = None,
+) -> Tuple[bool, bool, str, str, str, float, str]:
+    """
+    Call the cloud fixCode endpoint to fix errors in code and unit tests.
+
+    This function has the same interface as fix_errors_from_unit_tests to allow
+    seamless switching between local and cloud execution in the fix loop.
+
+    Args:
+        protect_tests: When True, prevents the LLM from modifying test files.
+        failure_classification: Optional classification string to send to cloud.
+
+    Returns: (update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name)
+
+    Raises:
+        RuntimeError: When cloud execution fails with non-recoverable error
+    """
+
+def fix_error_loop(
+    unit_test_file: str,
+    code_file: str,
+    prompt_file: str,
+    prompt: str,
+    verification_program: str,
+    strength: float,
+    temperature: float,
+    max_attempts: int,
+    budget: float,
+    error_log_file: str = "error_log.txt",
+    verbose: bool = False,
+    time: float = DEFAULT_TIME,
+    agentic_fallback: bool = True,
+    protect_tests: bool = False,
+    use_cloud: bool = False,
+    test_files: list[str] | None = None,
+    failure_aware_retries: bool = True,
+) -> tuple[bool, str, str, int, float, str]:
+    """
+    Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
+
+    Args:
+        protect_tests: When True, prevents the LLM from modifying test files. The LLM will
+                      only fix code, treating tests as read-only specifications. Default is False.
+        use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
+        test_files: Optional list of all test files to run together for test isolation detection.
+        failure_aware_retries: When True (default), use failure classification to stop early on
+            stuck syntax/import or timeout/flaky patterns. When False, use the legacy loop that
+            runs up to max_attempts (subject to budget) without those early exits.
+    """
+```
+
+### Behavioral Constraints
+- Keep behavior-oriented requirements authoritative; avoid prescribing exact step-by-step implementation flow unless required for correctness.
+- Ensure early loop aborts (when enabled by `failure_aware_retries`) still preserve existing fallback semantics: unresolved state with remaining budget can still proceed to `run_agentic_fix`.
+- Keep non-fatal loop errors (`backup`, file read, local test execution exceptions) compatible with fallback entry rather than prematurely exiting the command.
+
+### Dependencies:
+<python_preamble>
+    <include>context/python_preamble.prompt</include>
+</python_preamble>
+<internal_modules>
+    <get_language>
+        <include>context/get_language_example.py</include>
+    </get_language>
+    <fix_errors_from_unit_tests>
+        <include>context/fix_errors_from_unit_tests_example.py</include>
+    </fix_errors_from_unit_tests>
+    <cloud_config>
+        <include>context/core/cloud_example.py</include>
+    </cloud_config>
+    <agentic_fix>
+        <include>context/agentic_fix_example.py</include>
+    </agentic_fix>
+    <agentic_langtest>
+        <include>context/agentic_langtest_example.py</include>
+    </agentic_langtest>
+    <pytest_output>
+        <include>context/pytest_example.py</include>
+    </pytest_output>
+    <python_env_detector>
+        <include>context/python_env_detector_example.py</include>
+    </python_env_detector>
+</internal_modules>
+
+<include optional>failure_classification_python.prompt</include>
+
+### Instructions
+1.  Keep helper responsibilities cohesive (`run_pytest_on_file`, `format_log_for_output`, `_normalize_agentic_result`) and aligned to the requirements/output contract.
+2.  In cloud mode, use the existing cloud timeout helper (`get_cloud_request_timeout`) rather than a hard-coded constant, and keep cloud error handling non-silent but recoverable where required by the command behavior.
+3.  Keep user-visible output concise, Rich-safe, and behavior-focused (attempts, improvements, fallback handoff), without prescribing fixed internal control-flow scaffolding.
+
+### Deliverables:
+*   A standalone Python file containing `run_pytest_on_file`, `format_log_for_output`, `fix_error_loop`, and the normalization helpers.
+*   The module must include an `if __name__ == "__main__":` block demonstrating a sample execution with mock parameters.

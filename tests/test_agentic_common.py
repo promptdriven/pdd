@@ -14,6 +14,7 @@ from pdd.agentic_common import (
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
+    _run_with_provider,
     _log_agentic_interaction,
     ANTHROPIC_PRICING_BY_FAMILY,
     GEMINI_PRICING_BY_FAMILY,
@@ -150,7 +151,10 @@ def test_default_timeout_sufficient_for_complex_tasks():
 
 @pytest.fixture
 def mock_env():
-    with patch.dict(os.environ, {}, clear=True):
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=False),
+    ):
         yield os.environ
 
 @pytest.fixture
@@ -936,18 +940,36 @@ def test_get_available_agents_anthropic_cli_only(mock_shutil_which, mock_env, mo
     assert "anthropic" in agents
     assert "google" not in agents
 
-def test_get_available_agents_google_needs_key(mock_shutil_which, mock_env, mock_load_model_data):
-    """Test that Google requires both CLI and API key."""
+def test_get_available_agents_google_needs_key_or_cli_oauth(
+    mock_shutil_which,
+    mock_env,
+    mock_load_model_data,
+):
+    """Test that Google accepts API-key auth or Gemini CLI OAuth auth."""
     def which_side_effect(cmd):
         return "/bin/gemini" if cmd == "gemini" else None
     mock_shutil_which.side_effect = which_side_effect
     
-    # No key
+    # No key or stored CLI OAuth
     assert "google" not in get_available_agents()
     
     # With key
     mock_env["GEMINI_API_KEY"] = "secret"
     assert "google" in get_available_agents()
+
+
+def test_get_available_agents_google_gemini_cli_oauth(
+    mock_shutil_which,
+    mock_env,
+    mock_load_model_data,
+):
+    """Gemini CLI stored OAuth credentials are sufficient for Google provider."""
+    mock_shutil_which.side_effect = lambda cmd: "/bin/gemini" if cmd == "gemini" else None
+
+    with patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=True):
+        agents = get_available_agents()
+
+    assert "google" in agents
 
 def test_get_available_agents_google_vertex_ai_auth(mock_shutil_which, mock_env, mock_load_model_data):
     """
@@ -1740,6 +1762,36 @@ class TestCliDiscoveryBug:
         assert "anthropic" in agents, (
             "Should include 'anthropic' when Claude exists in ~/.local/bin. "
             "The fix uses _find_cli_binary() instead of shutil.which()."
+        )
+
+    def test_get_available_agents_finds_gemini_in_npm_global_with_oauth(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """Gemini installed under ~/.npm-global/bin is available with CLI OAuth."""
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+        monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+        monkeypatch.setattr(
+            "pdd.agentic_common._has_gemini_oauth_credentials",
+            lambda: True,
+        )
+
+        npm_bin = tmp_path / ".npm-global" / "bin"
+        npm_bin.mkdir(parents=True)
+        fake_gemini = npm_bin / "gemini"
+        fake_gemini.write_text("#!/bin/bash\necho gemini")
+        fake_gemini.chmod(0o755)
+
+        agents = get_available_agents()
+
+        assert "google" in agents, (
+            "Should include 'google' when Gemini exists in ~/.npm-global/bin "
+            "and Gemini CLI OAuth credentials are present."
         )
 
 
@@ -5574,6 +5626,48 @@ def test_issue1232_substantive_finding_starting_with_error_prefix_not_demoted(
 # Issue #1232: cloud-worker Anthropic "Not logged in" must classify as permanent
 # so multi-provider runs don't burn an attempt on a known-broken provider.
 # ---------------------------------------------------------------------------
+
+
+def test_codex_stale_chatgpt_token_returns_actionable_message(
+    mock_cwd, mock_env, mock_shutil_which, mock_subprocess
+):
+    """Codex 401 refresh failures should not leak raw websocket auth noise."""
+    prompt_path = mock_cwd / "prompt.txt"
+    prompt_path.write_text("Say ok.", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/codex"
+    mock_subprocess.return_value = MagicMock(
+        returncode=1,
+        stderr=(
+            "failed to connect to websocket: HTTP error: 401 Unauthorized, "
+            "url: wss://chatgpt.com/backend-api/codex/responses"
+        ),
+        stdout=json.dumps({
+            "type": "error",
+            "message": (
+                "Your access token could not be refreshed because you have since "
+                "logged out or signed in to another account. Please sign in again."
+            ),
+        }),
+    )
+
+    success, msg, cost = _run_with_provider(
+        "openai", prompt_path, mock_cwd, timeout=10, quiet=True
+    )
+
+    assert success is False
+    assert cost == 0.0
+    assert "Codex CLI authentication failed" in msg
+    assert "codex login" in msg
+    assert "PDD_CODEX_AUTH_AVAILABLE" in msg
+    assert "wss://" not in msg
+    assert "websocket" not in msg
+
+
+def test_codex_stale_auth_message_is_permanent():
+    """Normalized Codex auth failures should skip pointless retries."""
+    assert _is_permanent_error(
+        "Codex CLI authentication failed: the stored token could not be refreshed."
+    ) is True
 
 
 class TestIssue1232NotLoggedInPermanent:

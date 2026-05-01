@@ -1038,46 +1038,47 @@ def _has_unpushed_commits(cwd: Path) -> bool:
     return False
 
 
-def _push_with_retry(
+def push_with_retry(
     cwd: Path,
+    *,
     repo_owner: str,
     repo_name: str,
+    remote: str = "origin",
+    refspec: str = "HEAD",
+    set_upstream: bool = True,
 ) -> Tuple[bool, str]:
+    """Push to a git remote with shared non-fast-forward and token-refresh retries.
+
+    Used by both the e2e fix orchestrator (default `origin HEAD` push of the
+    fix branch) and `pdd checkup --review-loop` (push back to a PR head ref,
+    which may live on a fork's `clone_url`).
+
+    Behaviour:
+    - First attempt: ``git push [-u] <remote> <refspec>``.
+    - Non-fast-forward: retry with ``--force-with-lease`` (safe — only
+      overwrites the remote if it still matches what we last fetched).
+    - Auth failure (``Authentication failed``, ``HTTP 401``,
+      ``could not read Username``, ``HTTP Basic: Access denied``): if
+      ``PDD_GH_TOKEN_FILE`` points at a non-empty file, save the current
+      remote URL, rewrite it to
+      ``https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git``,
+      retry the push once, and restore the original URL in ``finally`` so
+      the token never leaks into git config.
+
+    Returns ``(success, error_message)``.
     """
-    Pushes to remote, retrying on non-fast-forward or auth failure.
+    base_cmd = ["git", "push"]
+    if set_upstream:
+        base_cmd.append("-u")
+    base_cmd.extend([remote, refspec])
 
-    On non-fast-forward error (branch diverged after rebase):
-    - Retry with --force-with-lease, which safely overwrites the remote only
-      if it hasn't changed since the last fetch.
-
-    On push auth failure (Authentication failed, HTTP 401, could not read Username,
-    or HTTP Basic: Access denied):
-    - If PDD_GH_TOKEN_FILE env var is set and the file exists with non-empty content:
-      - Read the token from the file (strip whitespace)
-      - Save the current remote origin URL
-      - Set remote origin URL to https://x-access-token:{token}@github.com/{repo_owner}/{repo_name}.git
-      - Retry the push once
-      - Restore the original remote URL in a finally block (prevents token leakage in git config)
-    - If no token file available, file is empty, or retry also fails: return (False, error)
-
-    Returns:
-        (success, message)
-    """
-    push_result = subprocess.run(
-        ["git", "push", "-u", "origin", "HEAD"],
-        cwd=cwd,
-        capture_output=True,
-        text=True
-    )
-
+    push_result = subprocess.run(base_cmd, cwd=cwd, capture_output=True, text=True)
     if push_result.returncode == 0:
         return True, ""
 
     stderr = push_result.stderr
 
     # Non-fast-forward: branch diverged (e.g. after rebase onto main).
-    # Retry with --force-with-lease which is safe — it only overwrites
-    # the remote if it matches what we last fetched.
     # Only match specific non-ff markers — avoid generic "[rejected]" which
     # could be protected branches, pre-receive hooks, etc.
     non_ff_markers = ["non-fast-forward", "tip of your current branch is behind"]
@@ -1088,23 +1089,27 @@ def _push_with_retry(
             "[yellow]WARNING: Push rejected (non-fast-forward). "
             "Retrying with --force-with-lease...[/yellow]"
         )
-        retry_result = subprocess.run(
-            ["git", "push", "--force-with-lease", "-u", "origin", "HEAD"],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
+        force_cmd = ["git", "push", "--force-with-lease"]
+        if set_upstream:
+            force_cmd.append("-u")
+        force_cmd.extend([remote, refspec])
+        retry_result = subprocess.run(force_cmd, cwd=cwd, capture_output=True, text=True)
         if retry_result.returncode == 0:
             return True, ""
         return False, retry_result.stderr
 
-    auth_errors = ["Authentication failed", "HTTP 401", "could not read Username", "HTTP Basic: Access denied"]
+    auth_errors = [
+        "Authentication failed",
+        "HTTP 401",
+        "could not read Username",
+        "HTTP Basic: Access denied",
+    ]
     is_auth_failure = any(err in stderr for err in auth_errors)
 
     if not is_auth_failure:
         return False, stderr
 
-    # Auth failure — try PDD_GH_TOKEN_FILE
+    # Auth failure — try PDD_GH_TOKEN_FILE.
     token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
     if not token_file_path:
         return False, stderr
@@ -1117,54 +1122,84 @@ def _push_with_retry(
     if not token:
         return False, stderr
 
-    # Save original remote URL — abort retry if we can't capture it
+    # Save original remote URL — abort retry if we can't capture it.
     url_result = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
+        ["git", "remote", "get-url", remote],
         cwd=cwd,
         capture_output=True,
-        text=True
+        text=True,
     )
-    if url_result.returncode != 0:
-        return False, stderr
-    original_url = url_result.stdout.strip()
+    original_url = url_result.stdout.strip() if url_result.returncode == 0 else ""
 
-    try:
-        # Set remote URL with token (URL-encode to guard against reserved characters)
-        from urllib.parse import quote
-        token_url = f"https://x-access-token:{quote(token, safe='')}@github.com/{repo_owner}/{repo_name}.git"
-        subprocess.run(
-            ["git", "remote", "set-url", "origin", token_url],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
+    # Some callers pass a clone URL as `remote` (e.g. the review-loop pushing to
+    # the PR head repo via its clone URL rather than a configured remote name).
+    # In that case `git remote get-url` won't recognize it. Detect via heuristic
+    # and rewrite the URL inline rather than via `git remote set-url`.
+    remote_is_url = remote.startswith(("http://", "https://", "git@", "ssh://"))
 
-        # Retry push
-        retry_result = subprocess.run(
-            ["git", "push", "-u", "origin", "HEAD"],
-            cwd=cwd,
-            capture_output=True,
-            text=True
-        )
+    from urllib.parse import quote
+    token_url = (
+        f"https://x-access-token:{quote(token, safe='')}@github.com/"
+        f"{repo_owner}/{repo_name}.git"
+    )
 
+    if remote_is_url:
+        retry_cmd = ["git", "push"]
+        if set_upstream:
+            retry_cmd.append("-u")
+        retry_cmd.extend([token_url, refspec])
+        retry_result = subprocess.run(retry_cmd, cwd=cwd, capture_output=True, text=True)
         if retry_result.returncode == 0:
             return True, ""
-        else:
-            return False, retry_result.stderr
+        return False, retry_result.stderr
+
+    if not original_url:
+        return False, stderr
+
+    try:
+        subprocess.run(
+            ["git", "remote", "set-url", remote, token_url],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        retry_cmd = ["git", "push"]
+        if set_upstream:
+            retry_cmd.append("-u")
+        retry_cmd.extend([remote, refspec])
+        retry_result = subprocess.run(retry_cmd, cwd=cwd, capture_output=True, text=True)
+        if retry_result.returncode == 0:
+            return True, ""
+        return False, retry_result.stderr
     finally:
-        # Restore original remote URL (prevents token leakage in git config)
         if original_url:
             restore = subprocess.run(
-                ["git", "remote", "set-url", "origin", original_url],
+                ["git", "remote", "set-url", remote, original_url],
                 cwd=cwd,
                 capture_output=True,
-                text=True
+                text=True,
             )
             if restore.returncode != 0:
                 console.print(
                     "[yellow]WARNING: Failed to restore original remote URL:"
                     f" {restore.stderr}[/yellow]"
                 )
+
+
+def _push_with_retry(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Backwards-compatible wrapper for ``push_with_retry`` (origin HEAD)."""
+    return push_with_retry(
+        cwd,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        remote="origin",
+        refspec="HEAD",
+        set_upstream=True,
+    )
 
 
 def _commit_and_push(

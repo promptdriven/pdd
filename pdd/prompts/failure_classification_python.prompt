@@ -1,0 +1,29 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Classify pytest / verification output so `fix_error_loop` can adapt retries by failure type (syntax/import, assertion/logic, timeout/flaky).</pdd-reason>
+
+% Goal
+Write `pdd/failure_classification.py`.
+
+% Role & Scope
+Pure helpers used by `fix_error_loop` (and optionally other callers). No I/O, no LLM calls. Classification is heuristic over captured test/verification text.
+
+% Requirements
+
+1. **`FailureKind` (enum or `Literal`)** — at least:
+   - `syntax_import` — `SyntaxError`, `IndentationError`, `ImportError`, `ModuleNotFoundError`, and similar import/syntax issues.
+   - `assertion_logic` — pytest assertion diffs, expectation mismatches, general test failures that are not clearly syntax/import or timeout/flaky.
+   - `timeout_flaky` — test timeouts, “timed out”, flaky/intermittent patterns.
+
+2. **Classification order** — When scanning output, **check timeout/flaky patterns before syntax/import** so strings like `"timed out"` win over incidental `SyntaxError` substrings in logs.
+
+3. **`classify_failure(output: str) -> FailureKind`** — Map captured failure text to a `FailureKind`.
+
+4. **`extract_failure_signature(output: str) -> str`** — Produce a **stable, comparable** signature for “same failure as last iteration” (e.g. normalized error type + location hints). Used to detect unchanged syntax/import failures across fix attempts.
+
+5. **`failure_classification_hint(kind: FailureKind) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next.
+
+6. **`format_signature_hint(sig: str) -> str`** — Keep this helper focused on formatting/truncating the extracted signature for console-safe display (callers may apply Rich yellow styling). User-facing early-stop guidance text should be produced by caller-side logic (e.g. `fix_error_loop`) rather than embedded here.
+
+% Deliverables
+- Code: `pdd/failure_classification.py`

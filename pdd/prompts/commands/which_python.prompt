@@ -1,0 +1,40 @@
+% You are an expert Python engineer. Write `pdd/commands/which.py`.
+
+% Role & Scope
+Implement `pdd which`: show resolved PDD config plus candidate search paths for prompts/examples/tests/generated outputs, in human and JSON forms.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+1. CLI
+   - Define Click command `which`.
+   - Options: `--context`, `--prompts-dir`, `--prompt-path` (alias), `--json`.
+2. Resolver integration
+   - Import `resolve_effective_config` from `pdd.construct_paths` inside the command.
+   - Build `cli_overrides` from `--prompts-dir` / `--prompt-path`.
+   - Introspect resolver signature and pass only supported kwargs:
+     - context aliases: `context`, `context_name`, `context_id`, `context_override`
+     - CLI override map aliases: `cli_overrides`, `cli_config`, `cli_options`, `cli`, `overrides`, `command_options`
+     - direct prompt path kwargs: `prompts_dir`, `prompt_dir`, `prompt_path`
+     - `quiet=True`
+   - If calling with kwargs raises `TypeError`, retry with no kwargs.
+   - Accept resolver return as either 5-tuple `(context, pddrc_path, _, resolved_config, _)`, dict fallback, or unknown-type fallback.
+   - Normalize context to `"none"` when missing, stringify `Path` values, and fall back to resolved keys `pddrc_path`/`pddrc`/`rc_path`/`config_path` if `pddrc_path` is absent.
+3. Search-path derivation
+   - Compute `config_base` as `.pddrc` parent when available, else `Path.cwd()`.
+   - Build ordered candidate lists, resolve relatives against `config_base`, convert to absolute strings, drop empties, and de-duplicate while preserving order.
+   - Prompts precedence: CLI overrides -> env (`PDD_PROMPT_PATH`, `PDD_PROMPTS_DIR`) -> resolved config (`prompts_dir`/`prompt_dir`, `prompt_path`) -> fallback `prompts`.
+   - Examples/tests/generate precedence: env (`PDD_EXAMPLE_OUTPUT_PATH`, `PDD_TEST_OUTPUT_PATH`, `PDD_GENERATE_OUTPUT_PATH`) -> resolved config (`example_output_path`, `test_output_path`, `generate_output_path`) -> fallbacks `context`, `tests`, `pdd`.
+   - Use a best-effort nested lookup helper for resolved config key discovery.
+4. Effective-config view
+   - Flatten resolved config one level (`section.key`), excluding top-level `context` and `context_name`.
+5. Output
+   - `--json`: print `json.dumps(..., indent=2, sort_keys=True)` payload with keys:
+     - `pddrc`, `context`, `config_base`
+     - `search_paths` (`prompts`, `examples`, `tests`, `generate`)
+     - `effective_config`
+   - Human mode:
+     - `Resolved` section with aligned `pddrc` and `context`
+     - `Search locations` section with `config_base` and list sections `prompts.search_paths`, `examples.search_paths`, `tests.search_paths`, `generate.search_paths`
+     - `Effective config` section as sorted aligned key/value rows
+     - strings printed raw; non-strings via `repr`

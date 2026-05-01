@@ -1,0 +1,54 @@
+<pdd-reason>Job queue manager for async PDD command execution via subprocesses.</pdd-reason>
+
+% You are an expert Python engineer. Your goal is to write `pdd/server/jobs.py`.
+
+% Role & Scope
+  Async job queue manager that executes PDD commands as subprocesses. Supports
+  concurrency control (semaphore), real-time output streaming, and robust
+  cancellation (SIGTERM/SIGKILL).
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Requirements
+  1. **Job dataclass**: id, command, args, options, status (JobStatus), result,
+     error, cost, timestamps (created/started/completed). Includes `live_stdout`
+     and `live_stderr` for real-time polling.
+
+  2. **JobCallbacks class**: Async callbacks for `on_start`, `on_output`
+     (handles stream_type and text), `on_progress`, and `on_complete`.
+
+  3. **JobManager class**:
+     - `__init__`: Initialize semaphore, thread pool, and process tracking.
+     - `submit`: Create background task using `asyncio.create_task`.
+     - `cancel`: Robustly terminate/kill subprocess and cancel task.
+     - `cleanup_old_jobs`, `shutdown`, and query methods.
+
+  4. **Subprocess Executor (`_run_click_command`)**:
+     - **Arg Building**: Place global options (force, strength, verbose, etc.)
+       BEFORE the subcommand. Place command-specific options AFTER.
+     - **Positionals**: Map args to positional for: sync, generate, test, example,
+       fix, bug, update, crash, verify, split, change, detect, auto-deps,
+       conflicts, preprocess.
+     - **Manual Mode**: For `fix`/`change`, if semantic file keys (prompt_file,
+       code_file, etc.) are present but `args` is missing, convert to positional
+       `args` and add `--manual`.
+     - **Execution**: Run `subprocess.Popen` in thread pool with headless env
+       (CI=1, PDD_FORCE=1). Use threads to stream stdout/stderr line-by-line.
+     - **Timeouts**: Enforce `JOB_TIMEOUT` (1800s). SIGTERM then SIGKILL.
+     - **Sync Failure**: Detect "Failed" ONLY if on the "Overall status:" line.
+
+  5. **Resilient Output**: Ensure `job.result` preserves `live_stdout`/`live_stderr`
+     on all failure and exception paths to prevent data loss.
+
+% Dependencies
+  <server.jobs><include>context/server/jobs_example.py</include></server.jobs>
+  <server.models><include>context/server/models_example.py</include></server.models>
+
+% Instructions
+  - Locate `pdd` executable or fallback to `sys.executable -c`.
+  - Use `asyncio.run_coroutine_threadsafe` for reader thread callbacks.
+  - Import `JobStatus` from `.models`. Robust fallback for `rich.console`.
+  - Export: Job, JobManager, JobCallbacks.
+
+% Deliverables
+  - Code: `pdd/server/jobs.py`

@@ -1,0 +1,28 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/components/Toast.tsx` as a global toast notification system with optional browser notifications.
+
+Requirements
+1. Export `ToastType = 'success' | 'error' | 'info'` and `ToastMessage { id: string; message: string; type: ToastType; duration?: number }`.
+2. Define a toast context API `addToast(message, type, duration?)` and `removeToast(id)` with `createContext<ToastContextType | null>(null)`.
+3. Export `useToast()` that reads the context and throws `Error('useToast must be used within a ToastProvider')` when used outside the provider.
+4. Implement `requestNotificationPermission(): Promise<boolean>` using the browser `Notification` API:
+   - Return `false` if notifications are unsupported.
+   - Return `true` immediately when permission is already `granted`.
+   - When permission is neither granted nor denied, request it and return whether it became `granted`.
+5. Implement `showBrowserNotification(title, body, icon?)` that creates `new Notification(...)` only when permission is `granted`, with `icon || '/favicon.ico'` and `silent: false`.
+6. Build `ToastItem` with props `{ toast, onDismiss }` that:
+   - Auto-dismisses with `setTimeout` only when `toast.duration > 0`, and clears the timer on cleanup.
+   - Uses variant-specific Tailwind classes/icons for `success`, `error`, and `info`.
+   - Renders the message text and a close button that calls `onDismiss`.
+   - Applies inline style animation `slideIn 0.3s ease-out`.
+7. Add `ToastStyles` that injects a `<style>` block defining `@keyframes slideIn`, `@keyframes indeterminate`, and `.animate-indeterminate`.
+8. Add `ToastContainer` receiving `{ toasts, removeToast }`, always rendering `ToastStyles`, and rendering a fixed top-right stack (`fixed top-4 right-4 z-[100] space-y-2 max-w-sm`) only when there are toasts.
+9. Implement `ToastProvider` (named export and default export) that:
+   - Stores `toasts` in state.
+   - Removes toasts by id via filtering.
+   - Adds toasts with default duration `5000`, id format `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`, and append semantics.
+   - When `document.hidden` and type is `success` or `error`, calls `showBrowserNotification` with title `Job Completed` or `Job Failed`.
+   - Requests notification permission once on mount.
+10. Render provider children and `ToastContainer` inside the context provider.
+
+Deliverable
+- Output only `pdd/frontend/components/Toast.tsx`.

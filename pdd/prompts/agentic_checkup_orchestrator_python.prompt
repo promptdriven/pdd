@@ -1,0 +1,53 @@
+1) This module acts as the multi-step agentic orchestrator for the `pdd checkup` command, responsible for managing an 8-step workflow that analyzes, fixes, and verifies software issues. It coordinates between LLM-based agents, local environment execution, and git state management, ensuring that changes are isolated in worktrees and that the workflow can be resumed gracefully after interruptions.
+
+2) Requirements:
+    1. Implement an 8-step workflow: 1. Discover, 2. Deps, 3. Build, 4. Interfaces, 5. Test, 6. Fix (split into 6.1 Fix, 6.2 Regression, 6.3 E2E), 7. Verify, and 8. Create PR.
+    2. Manage an iterative "Fix-Verify" loop for steps 3-7; if Step 7 does not contain the string "All Issues Fixed", the workflow should loop back to Step 3, up to a maximum of `MAX_FIX_VERIFY_ITERATIONS` (default 3).
+    3. Ensure process isolation by creating and operating within a git worktree for all fix-related steps (Steps 6-8). The worktree must include both uncommitted changes and untracked files from the main repository.
+    4. Provide robust resume support by persisting the workflow state (last completed step, outputs, costs, worktree path, AND `mode` ∈ {"issue", "pr"}, AND `pr_number`, `pr_owner`, `pr_repo` when in PR mode) to a local `.pdd/checkup-state` directory and optionally to GitHub comments. When loading state, validate three identity axes before reuse: (a) `mode` matches the current invocation, (b) `pr_number` matches when both runs are PR-mode, (c) `pr_owner/pr_repo` matches when both are present. ANY mismatch discards the cached state and forces a fresh setup — the same `issue_number` can verify different PRs over time, and reusing a stale `.pdd/worktrees/checkup-pr-A` path during a verification of PR B silently runs all subsequent steps against the wrong code. When the saved worktree path is missing on resume, recreate it via the SAME helper that originally built it: `_setup_pr_worktree(...)` for PR mode (using saved `pr_owner/pr_repo/pr_number`), `_setup_worktree(...)` for issue mode. Calling the issue-mode helper on a PR-mode resume would silently rebuild from HEAD instead of the PR head.
+    5. Handle fractional steps (e.g., 6.1, 6.2) for internal logic and template loading, while mapping them to user-friendly labels (e.g., 6a, 6b) in the console output.
+    6. Support a `--no-fix` mode which runs analysis steps (1-5) and verification (7) linearly without creating worktrees or PRs.
+    7. Support a PR-verification mode (orchestrator parameters `pr_url`, `pr_owner`, `pr_repo`, `pr_number`). When `pr_mode` is true:
+       - Set up the worktree via `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet)` BEFORE Step 1 so all subsequent steps see the PR's code, not HEAD.
+       - Resolve the PR's source repo via `pr_owner/pr_repo` (NOT a hardcoded `origin`): walk `git remote -v` looking for a remote whose URL matches `pr_owner/pr_repo`; if none, fetch via the explicit URL `https://github.com/{pr_owner}/{pr_repo}.git pull/{pr_number}/head:{branch_name}`. This is what makes fork-PR verification actually work — a clone of `myfork/repo` cannot fetch `pull/N/head` from `origin` when the PR lives on `upstream/repo`.
+       - Skip Step 8 entirely (the PR already exists; the job is to verify it, not open another).
+       - When the user passes `--pr` without `--no-fix`, the CLI must force `no_fix=True` and warn — generating fixes inside `.pdd/worktrees/checkup-pr-N/` without pushing them silently abandons the work. (Push-back is a separate follow-up.)
+    8. Implement per-step timeouts and error handling, including a mechanism to abort if agent providers fail consecutively.
+
+3) Dependencies:
+    <agentic_common>
+        <include select="def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_github_state_helpers">context/agentic_common_example.py</include>
+    </agentic_common>
+    <load_prompt_template>
+        <include>context/load_prompt_template_example.py</include>
+    </load_prompt_template>
+    <preprocess>
+        <include>context/preprocess_example.py</include>
+    </preprocess>
+    <agentic_bug_orchestrator>
+        <include query="implementation of the multi-step orchestrator pipeline and error handling">context/agentic_bug_orchestrator_example.py</include>
+    </agentic_bug_orchestrator>
+    <pdd.agentic_e2e_fix_orchestrator>
+        <include query="iterative loop logic and mock external dependencies">context/agentic_e2e_fix_orchestrator_example.py</include>
+    </pdd.agentic_e2e_fix_orchestrator>
+    <utils.agentic_langtest>
+        <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
+    </utils.agentic_langtest>
+
+4) Instructions:
+    1. Use `subprocess` for all git operations (worktree creation, branch management, diffing, and applying changes).
+    2. When setting up a worktree, ensure the environment is clean by removing stale directories or registered worktrees at the target path.
+    3. Implement `_copy_uncommitted_changes` to sync the worktree with the user's current working state (using `git diff HEAD` and `git ls-files --others`).
+    4. For each step, load the corresponding template (e.g., `agentic_checkup_step6_1_fix_LLM`), preprocess it to handle recursive variables, and execute via `run_agentic_task`.
+    5. Maintain a `context` dictionary that accumulates outputs from previous steps to provide full context to subsequent LLM calls.
+    6. In the iterative loop, track `previous_fixes` across iterations and inject them into the prompt context so the agent knows what has already been attempted.
+    7. Use `rich.console` for all user-facing status updates and progress bars.
+
+5) Deliverable:
+    - A Python module `agentic_checkup_orchestrator.py` containing the main entry point function `run_agentic_checkup_orchestrator`.
+    - Internal helper functions for git worktree management:
+      - `_setup_worktree` — issue-mode worktree at `.pdd/worktrees/checkup-issue-{N}` checked out from HEAD, with uncommitted/untracked files copied in.
+      - `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False)` — PR-mode worktree at `.pdd/worktrees/checkup-pr-{N}` checked out at the PR's head branch, NO uncommitted-file copy (the PR's state must be authoritative). Remote resolution as described in Requirement 7.
+      - `_copy_uncommitted_changes` (issue-mode only).
+    - State persistence (`_build_state`) including a top-level `mode: "issue"|"pr"` field for resume validation.
+    - Logic to handle the transition between linear steps and the iterative loop, plus the PR-mode early branches: skip Step 8 in PR mode; populate `pr_mode/pr_url/pr_owner/pr_repo/pr_number` keys in the per-step `context` dict so step prompts (notably Step 7) can render PR-aware verdicts and route comments to BOTH `gh pr comment` (PR thread, for human reviewers) AND `gh issue comment` (issue thread, the canonical location downstream consumers — e.g. `pdd_cloud`'s checkup_verifier — fetch Step-7 reports from). The orchestrator must NOT replace the issue comment with a PR-only comment in PR mode; both posts are part of the consumer contract. The exact comment-routing contract lives in `agentic_checkup_step7_verify_LLM.prompt`.

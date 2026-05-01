@@ -1,0 +1,34 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/templates.py`.
+
+% Role & Scope
+  This module contains the `templates` command group and its subcommands (`list`, `show`, `copy`).
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **templates_group**:
+     - Defines `templates` group as described in `README.md`.
+  2. **list**:
+     - Interface: Match `templates list` in `README.md`. Supports `--json` and `--filter` (by tag).
+     - Logic: Call `template_registry.list_templates`. Render as JSON or text.
+     - Text rendering: Print name (bold, no_wrap) followed by details (version, description, tags) on next line.
+  3. **show**:
+     - Interface: Match `templates show` in `README.md`. Accepts a template `name`.
+     - Logic: Call `template_registry.show_template`. Render detailed summary, variables, usage, discovery, output schema, and notes.
+     - Rendering: Use `Rich` tables (simple box style) for summary and variables. Handle list/dict values in usage and discovery sections. Escape markup for user content.
+  4. **copy**:
+     - Interface: Match `templates copy` in `README.md`. Accepts `name` and `--to` (required directory).
+     - Logic: Call `template_registry.copy_template`. Print success message on completion.
+
+% Instructions
+  - Use `_echo_rich` helper to render `Rich` objects via `click.echo` for `CliRunner` compatibility.
+  - Use `handle_error` for all commands.
+  - Follow existing conventions for `Rich` styling (`info`, `success`, `path`, `command`, `bold`).
+
+% Deliverables
+  - Code: `pdd/commands/templates.py`

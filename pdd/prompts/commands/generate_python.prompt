@@ -1,0 +1,61 @@
+<pdd-reason>CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.</pdd-reason>
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "generate", "description": "Generate code from prompt or trigger agentic architecture from GitHub issue"},
+      {"name": "test", "description": "Generate or enhance unit tests (agentic or manual mode)"},
+      {"name": "example", "description": "Generate context examples from prompt and code"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_architecture_python.prompt</pdd-dependency>
+% You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
+
+% Role & Scope
+  Implement the "Generate Suite" CLI commands using `click` and `rich`. These commands interface with LLM-driven generation workflows for code, tests, and examples.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **generate**:
+     - **Interface**: `prompt_file` (arg, `click.UNPROCESSED`), `--template`, `-e/--env` (multiple), `--output`, `--original-prompt`, `--incremental` (flag), `--unit-test`, `--exclude-tests` (flag), `--skip-prompts` (flag), `--output-dir`.
+     - **Agentic Mode**: If `prompt_file` matches a GitHub issue URL, call `run_agentic_architecture(issue_url=prompt_file, skip_prompts=skip_prompts, target_dir=output_dir, ...)`.
+     - **Standard Mode**: Validate `prompt_file` vs `--template` exclusivity. Resolve templates via `load_template`. Parse `env` as `KEY=VALUE` or `KEY` (from `os.environ`).
+     - **Logic**: Call `code_generator_main` with parsed options.
+     - **Decorators**: `@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`.
+
+  2. **example**:
+     - **Interface**: `prompt_file`, `code_file` (args), `--output`, `--format` (choice: code, md).
+     - **Logic**: Call `context_generator_main`.
+     - **Decorators**: `@log_operation(operation="example", updates_fingerprint=True)`, `@track_cost`.
+
+  3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
+     - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
+     - **Agentic Mode**: Triggered if first arg is a URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, ...)`.
+     - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
+     - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
+
+% Implementation Details
+  - Use `GenerateCommand(click.Command)` to handle help text for conditionally required arguments.
+  - Defer heavy imports (like `code_generator_main`) to avoid slow module load.
+  - Use `handle_error(e, command_name, quiet)` for general exceptions.
+  - **CRITICAL**: Re-raise `click.Abort` and `click.UsageError` type exceptions; do not swallow them in `handle_error`.
+  - Use `rich.console.Console` for stylized output in agentic modes.
+
+% Dependencies
+  <include>context/command_logging.prompt</include>
+  <include select="def:code_generator_main">context/code_generator_main_example.py</include>
+  <include>context/agentic_architecture_example.py</include>
+  <include>context/context_generator_main_example.py</include>
+  <include select="def:cmd_test_main">context/cmd_test_main_example.py</include>
+  <include>context/agentic_test_example.py</include>
+  <include>context/track_cost_example.py</include>
+  <utils.auth_service>
+      <include select="def:verify_auth">context/auth_service_example.py</include>
+  </utils.auth_service>
+
+% Deliverables
+  - Code: `pdd/commands/generate.py`

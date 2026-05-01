@@ -271,13 +271,20 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
     "codex": [
         Path.home() / ".npm-global" / "bin" / "codex",
         Path.home() / ".local" / "bin" / "codex",
+        Path.home() / "bin" / "codex",
         Path("/usr/local/bin/codex"),
         Path("/opt/homebrew/bin/codex"),
+        Path("/home/linuxbrew/.linuxbrew/bin/codex"),
+        Path.home() / ".nvm" / "versions" / "node",
     ],
     "gemini": [
+        Path.home() / ".npm-global" / "bin" / "gemini",
         Path.home() / ".local" / "bin" / "gemini",
+        Path.home() / "bin" / "gemini",
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
+        Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
+        Path.home() / ".nvm" / "versions" / "node",
     ],
 }
 
@@ -325,13 +332,36 @@ def _is_permanent_error(error_message: str) -> bool:
         r"daily\s+quota",
         r"terminal\s*quota\s*error",
         # Issue #1232: Anthropic CLI OAuth/login failure on cloud workers
-        # ("Not logged in · Please run /login"). Without this, every cloud
+        # ("Not logged in - Please run /login"). Without this, every cloud
         # one-session run burns its first attempt on Anthropic before falling
         # through to OpenAI.
         r"not\s+logged\s+in",
         r"please\s+run\s+/login",
     ]
     return any(re.search(p, msg) for p in permanent_patterns)
+
+
+def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
+    """Return a concise user-facing message for stale Codex CLI auth."""
+    msg = error_detail.lower()
+    auth_patterns = [
+        "access token could not be refreshed",
+        "please sign in again",
+        "codex/responses",
+        "chatgpt.com/backend-api/codex",
+    ]
+    if not any(pattern in msg for pattern in auth_patterns):
+        return None
+    if "401" not in msg and "unauthorized" not in msg and "sign in" not in msg:
+        return None
+
+    return (
+        "Codex CLI authentication failed: the stored ChatGPT/Codex login token "
+        "could not be refreshed. Run `codex login` (or `codex login --device-auth`; "
+        "use `codex login --with-api-key` for API-key auth) and retry. "
+        "To avoid Codex for this run, unset `PDD_CODEX_AUTH_AVAILABLE` or set "
+        "`PDD_AGENTIC_PROVIDER=anthropic,google`."
+    )
 
 
 # Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
@@ -580,9 +610,10 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
     if path_result:
         return path_result
 
-    # Strategy 3: Search common installation directories
-    common_paths = _COMMON_CLI_PATHS.get(name, [])
-    for path in common_paths:
+    # Strategy 3: Search common installation directories. Home-relative paths
+    # are added at runtime because tests and embedding environments may patch
+    # Path.home() after this module has already been imported.
+    for path in _iter_common_cli_paths(name):
         # Handle nvm-style paths that need glob expansion
         # nvm installs to ~/.nvm/versions/node/vX.Y.Z/bin/
         if "nvm" in str(path) and path.name == "node":
@@ -600,6 +631,35 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
     return None
 
 
+def _iter_common_cli_paths(name: str) -> List[Path]:
+    """Return common CLI paths, including runtime-expanded home paths.
+
+    ``_COMMON_CLI_PATHS`` is intentionally kept as a mutable module-level table
+    for tests and .pddrc-style overrides, but entries containing ``Path.home()``
+    are evaluated when the module is imported. Add an equivalent runtime set so
+    discovery still honors the current home directory.
+    """
+    paths = list(_COMMON_CLI_PATHS.get(name, []))
+    if name in {"claude", "codex", "gemini"}:
+        home = Path.home()
+        paths.extend([
+            home / ".npm-global" / "bin" / name,
+            home / ".local" / "bin" / name,
+            home / "bin" / name,
+            home / ".nvm" / "versions" / "node",
+        ])
+
+    seen: set[str] = set()
+    unique_paths: List[Path] = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_paths.append(path)
+    return unique_paths
+
+
 def _get_cli_diagnostic_info(name: str) -> str:
     """
     Generate diagnostic information for CLI discovery failures.
@@ -613,7 +673,7 @@ def _get_cli_diagnostic_info(name: str) -> str:
         f"2. Common installation paths searched:",
     ]
 
-    for path in _COMMON_CLI_PATHS.get(name, []):
+    for path in _iter_common_cli_paths(name):
         lines.append(f"   - {path}")
 
     lines.extend([
@@ -645,7 +705,9 @@ def get_available_agents() -> List[str]:
         available.append("anthropic")
 
     # 2. Google (Gemini)
-    # Available if 'gemini' CLI exists AND (API key is set OR Vertex AI auth is configured)
+    # Available if 'gemini' CLI exists AND any supported non-interactive auth
+    # path is configured. The Gemini CLI can run headless from its stored OAuth
+    # credentials even when GOOGLE_API_KEY/GEMINI_API_KEY are unset.
     has_gemini_cli = _find_cli_binary("gemini") is not None
     has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
     has_vertex_auth = (
@@ -655,8 +717,9 @@ def get_available_agents() -> List[str]:
             or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
         )
     )
+    has_gemini_oauth = _has_gemini_oauth_credentials()
 
-    if has_gemini_cli and (has_google_key or has_vertex_auth):
+    if has_gemini_cli and (has_google_key or has_vertex_auth or has_gemini_oauth):
         available.append("google")
 
     # 3. OpenAI (Codex)
@@ -667,6 +730,23 @@ def get_available_agents() -> List[str]:
         available.append("openai")
 
     return available
+
+
+def _has_gemini_oauth_credentials() -> bool:
+    """Return True when Gemini CLI stored OAuth credentials are present.
+
+    Gemini CLI supports first-party OAuth auth stored under ~/.gemini. Treating
+    API keys and Vertex env as the only available auth paths makes PDD skip a
+    working local Gemini CLI and fall into broken providers.
+    """
+    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
+    try:
+        data = json.loads(creds_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(data.get("refresh_token") or data.get("access_token"))
 
 def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
     """Calculates cost for Gemini based on token stats."""
@@ -1308,6 +1388,17 @@ def _run_with_provider(
 
     if result.returncode != 0:
         error_detail = result.stderr or result.stdout[:500]
+        if provider == "openai":
+            combined_error = "\n".join(
+                part for part in [
+                    result.stderr or "",
+                    (result.stdout or "")[:MAX_ERROR_SNIPPET_LENGTH],
+                ]
+                if part
+            )
+            codex_auth_message = _codex_auth_failure_message(combined_error)
+            if codex_auth_message:
+                return False, codex_auth_message, 0.0
         return False, f"Exit code {result.returncode}: {error_detail}", 0.0
 
     # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.

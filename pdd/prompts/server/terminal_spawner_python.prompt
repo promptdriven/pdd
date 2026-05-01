@@ -1,0 +1,78 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/server/terminal_spawner.py module.
+
+% Role & Scope
+Cross-platform terminal spawning utilities for running commands in isolated terminal windows.
+This allows the server to spawn commands that run independently, with output visible directly
+to the user in a new terminal window rather than captured by the server.
+
+% Requirements
+1. **TerminalSpawner class** (static methods only):
+   - `spawn(command, working_dir, job_id, server_port) -> bool`: Main entry point
+     - Prepends `cd working_dir &&` if working_dir provided
+     - Dispatches to platform-specific method based on sys.platform
+     - Passes job_id and server_port for callback functionality
+     - Returns True on success, False on failure
+
+   - `_darwin(command, job_id, server_port) -> bool`: macOS implementation
+     - Creates temporary shell script in /tmp with unique name (using pid and id)
+     - Script runs command, captures exit code
+     - If job_id provided: POST callback to server with success/exit_code
+       - URL: http://localhost:{server_port}/api/v1/commands/spawned-jobs/{job_id}/complete
+       - Payload: {"success": true/false, "exit_code": N}
+       - Use curl with debug output for troubleshooting
+     - Shows result message (green checkmark or red X)
+     - Ends with `exec bash` to keep terminal open
+     - Makes script executable (chmod 0o755)
+     - Opens with Terminal.app via `open -a Terminal <script>`
+
+   - `_linux(command, job_id, server_port) -> bool`: Linux implementation
+     - Tries terminal emulators in order: gnome-terminal, xfce4-terminal, konsole, alacritty, kitty, tilix, terminator, xterm
+     - Uses shutil.which() to check availability
+     - Builds command with callback if job_id provided (same as macOS)
+     - Each terminal runs: bash -c "{command_with_callback}; exec bash"
+     - Returns False if no supported terminal found
+
+   - `_windows(command, job_id, server_port) -> bool`: Windows implementation
+     - Tries Windows Terminal first: wt.exe new-tab powershell -NoExit -Command
+     - Falls back to PowerShell: powershell.exe -NoExit -Command
+     - Includes callback via Invoke-RestMethod if job_id provided
+     - Returns True if either succeeds
+
+2. **Python Environment Preservation**:
+   - Detect if parent process is running in a conda environment (check CONDA_PREFIX and CONDA_DEFAULT_ENV env vars)
+   - Detect if parent process is running in a virtualenv (check VIRTUAL_ENV env var)
+   - When spawning terminal, prepend environment activation commands to the generated script:
+     - For conda: `conda activate <env_name>` (or `source <conda_prefix>/bin/activate` as fallback)
+     - For virtualenv: `source <venv_path>/bin/activate` (Unix) or `<venv_path>\Scripts\Activate.ps1` (Windows PowerShell)
+   - This ensures the spawned terminal inherits the same Python environment as the parent process
+   - If no virtual environment is detected, skip activation (allow normal system Python)
+
+3. **Callback URL Construction**:
+   - Default server_port: 9876
+   - Callback endpoint: /api/v1/commands/spawned-jobs/{job_id}/complete
+   - JSON payload: {"success": <exit_code==0>, "exit_code": <exit_code>}
+
+4. **Error handling**:
+   - All methods catch exceptions and return False
+   - Print error message on failure for debugging
+
+% Dependencies
+- os: for getpid(), environ
+- shutil: for which() on Linux
+- subprocess: for Popen()
+- sys: for platform detection
+- pathlib.Path: for script file operations
+
+% Instructions
+- Use subprocess.Popen for non-blocking process creation
+- Keep terminal open after command completes (exec bash / -NoExit)
+- Use unique script names to avoid conflicts between concurrent spawns
+- Handle FileNotFoundError gracefully when terminal not found
+- Environment activation must happen before the user's command runs
+
+% Deliverables
+- Code: `pdd/server/terminal_spawner.py`
+- Export: TerminalSpawner

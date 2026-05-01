@@ -1,0 +1,93 @@
+<pdd-reason>CLI wrapper for splitting a prompt into sub-prompt and modified-prompt with legacy flag support.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "split_main", "signature": "(ctx, input_prompt_file, input_code_file, example_code_file, output_sub, output_modified, legacy)", "returns": "Tuple[Dict[str, str], float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "split_main", that will be the CLI wrapper for splitting a prompt into a sub_prompt and modified_prompt. This function will handle reading the input files, calling the split function, and managing the output locations.
+
+<include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
+
+% Function signature and contract (implementation-aligned):
+    Signature:
+        def split_main(
+            ctx: click.Context,
+            input_prompt_file: str,
+            input_code_file: str,
+            example_code_file: str,
+            output_sub: Optional[str],
+            output_modified: Optional[str],
+            legacy: bool = False,
+        ) -> Tuple[Dict[str, str], float, str]
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
+        - 'input_prompt_file' (`str`): Path to the input prompt file to be split.
+        - 'input_code_file' (`str`): Path to the code file generated from the input prompt.
+        - 'example_code_file' (`str`): Path to the example code file showing usage.
+        - 'output_sub' (`Optional[str]`): Path where to save the sub-prompt. If None, uses default naming convention.
+        - 'output_modified' (`Optional[str]`): Path where to save the modified prompt. If None, uses default naming convention.
+        - 'legacy' (`bool`): When True, invoke the old 2-LLM-call splitting path. When False (default), `split_main` acts as the prompt-splitting primitive for the agentic split orchestrator. Threaded from `ctx.obj.get('legacy', False)`.
+    Outputs following the standardized return order (result_data, cost, model_name):
+        - Returns a tuple containing:
+            - `Dict[str, str]`: A dictionary containing:
+                - 'sub_prompt_content': The extracted functionality content
+                - 'modified_prompt_content': The modified prompt content
+                - 'output_sub': Path where the sub-prompt was saved
+                - 'output_modified': Path where the modified prompt was saved
+            - `float`: The total cost of the operation
+            - `str`: The model name used
+
+% Here is how to use the internal modules:
+    <internal_modules>
+        For splitting prompts:
+        <split_example>
+            <include>context/split_example.py</include>
+        </split_example>
+
+
+        For constructing output paths:
+        <construct_paths_example>
+            <include>context/construct_paths_example.py</include>
+        </construct_paths_example>
+    </internal_modules>
+
+% Here is the README for the cli command that has details of how the 'split' command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>
+
+% Implementation Steps:
+    1. Construct paths and read inputs
+        - Build `input_file_paths` as:
+          {"input_prompt": input_prompt_file, "input_code": input_code_file, "example_code": example_code_file}
+        - Build `command_options` as:
+          {"output_sub": output_sub, "output_modified": output_modified}
+        - Call `construct_paths(input_file_paths, force=ctx.obj.get('force', False), quiet=ctx.obj.get('quiet', False), command="split", command_options=command_options, context_override=ctx.obj.get('context'))` and capture `(resolved_config, input_strings, output_file_paths, _)`.
+
+    2. Gather parameters and invoke split
+        - Read `strength = ctx.obj.get('strength', 0.5)`, `temperature = ctx.obj.get('temperature', 0)`, `time = ctx.obj.get('time')`.
+        - Call `result_tuple, total_cost, model_name = split(input_prompt=input_strings["input_prompt"], input_code=input_strings["input_code"], example_code=input_strings["example_code"], strength=strength, temperature=temperature, time=time, verbose=not ctx.obj.get('quiet', False))`.
+        - Unpack `sub_prompt, modified_prompt = result_tuple`.
+
+    3. Persist outputs
+        - Write `sub_prompt` to `output_file_paths["output_sub"]`.
+        - Write `modified_prompt` to `output_file_paths["output_modified"]`.
+
+    4. User feedback (respect `quiet`)
+        - If not quiet, print success message, saved paths, model name, and total cost using Rich.
+
+    5. Return values
+        - Return `(result_data, total_cost, model_name)` where `result_data` is a dict with keys: `sub_prompt_content`, `modified_prompt_content`, `output_sub`, `output_modified`.
+
+    6. Error handling
+        - Wrap the main body in `try/except`. On exception, if not quiet, print an error message and add hint lines for common cases (`FileNotFoundError`, `IOError`, `ValueError`). Then `sys.exit(1)`.

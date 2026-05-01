@@ -1,0 +1,54 @@
+<pdd-reason>Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_ci_validation_loop", "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet)", "returns": "Tuple[bool, str, float]"},
+      {"name": "post_ci_failure_comment", "signature": "(repo_owner, repo_name, pr_number, failures, attempts, cwd)", "returns": "bool"},
+      {"name": "detect_ci_system", "signature": "(cwd)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+<pdd.agentic_common>
+<include>context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.ci_validation>
+<include>context/ci_validation_example.py</include>
+</pdd.ci_validation>
+
+% Goal
+Write the `pdd/ci_validation.py` module.
+
+% Role & Scope
+Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation. This module bridges the gap between external CI systems (GitHub Actions, Cloud Build) and the agentic fix workflow by detecting failures, retrieving logs, and invoking an LLM to apply fixes.
+
+% Requirements
+1. Function: `run_ci_validation_loop(cwd: Path, repo_owner: str, repo_name: str, issue_number: int, max_retries: int, step_template: str, run_agentic_task_fn: Callable, timeout: float, quiet: bool) -> Tuple[bool, str, float]` — returns (ci_passed, message, cost).
+2. Discover the current branch's open PR and capture `pr_number` plus current head SHA; if no PR is found, return success with an informational message.
+3. Poll CI status via `gh pr checks --required --json name,state,bucket,link` with structured output. Handle exit codes: 0=pass, 1=fail, 8=pending. Use the `bucket` field to distinguish pass/fail/pending states and re-query checks after each new push/SHA so the loop does not act on stale results from the previous head.
+4. Handle startup delay: wait 30s initial delay after push, then poll every 30s up to 10 minutes for checks to appear/complete.
+5. On CI failure: retrieve failure logs via tiered fallback — `gh run view --log-failed` → `gh api` zip download → fallback to check link URL.
+6. On failure with logs: format context and call `run_agentic_task_fn` with the step 10 LLM template to interpret and fix.
+7. After fix: Only commit/push when the LLM output contains `CI_FIX_APPLIED`. Stage changed files and commit with message `"ci: fix CI failures for #{issue_number}"`, push, and re-poll.
+8. Artifact Exclusion: When staging changes, explicitly exclude the same debug/intermediate artifact patterns filtered by the main orchestrator (`_fixed.py`, `.bak`, `.tmp`, `error_output*.txt`, `.pdd/` except state).
+9. On max retries exhausted: return `(False, summary_of_remaining_failures, total_cost)`.
+10. Function: `post_ci_failure_comment(repo_owner: str, repo_name: str, pr_number: int, failures: List[str], attempts: int, cwd: Path) -> bool` — posts a structured PR comment describing unresolved CI failures and what was attempted using `post_pr_comment`.
+11. Function: `detect_ci_system(cwd: Path) -> str` — detect CI setup from repo config files (`.github/workflows/`, `cloudbuild.yaml`, etc.) for informational logging.
+12. Handle race condition: if no checks appear after initial polling window, return `(True, "No CI checks detected", 0.0)` — don't fail when repo has no CI.
+13. Partial-check-data error handling: when `gh pr checks` exits with returncode=1, inspect stderr *before* classifying. Partial check JSON in stdout can accompany permission/config errors in stderr, so checking `latest_checks` first would mask the real error.
+    - If stderr contains the GitHub "no required checks" phrase → return `("no_checks", [])` immediately, even when partial check JSON was returned in stdout.
+    - If stderr contains "resource not accessible by integration" → log a yellow warning that the GitHub App may lack `checks:read` permission, then return `("no_checks", [])` immediately, even with partial check JSON in stdout.
+    - If `latest_checks` is empty → mark `saw_ambiguous_error=True`, log the stderr (yellow), and continue polling.
+    - If `latest_checks` is non-empty and none of the stderr patterns above matched but stderr is non-empty → log the stderr with an explicit prefix making it clear the result will be classified as failed from the exit code (e.g. `"CI polling warning (classifying as failed from exit code 1): {stderr}"`), then fall through to `_classify_check_result` so a real check failure isn't lost. Without this log, the LLM fix loop can be triggered silently when a transport error masquerades as a real failure.
+14. Include `<include>context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
+
+% Deliverables
+- Code: `pdd/ci_validation.py`

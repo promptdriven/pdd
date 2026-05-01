@@ -1,0 +1,35 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/ExecutionModeToggle.tsx`, a compact local/remote execution mode segmented toggle.
+
+Requirements
+1. Export a default `ExecutionModeToggle` React functional component with props:
+   - `mode: 'local' | 'remote'`
+   - `onModeChange: (mode: 'local' | 'remote') => void`
+   - optional `disabled?: boolean` defaulting to `false`
+2. No local state or effects; this is a controlled presentational component driven by props.
+3. Render root wrapper `<div className="flex items-center gap-1.5 sm:gap-2">`.
+4. Inside root, render segmented-control container:
+   - classes: `flex bg-surface-800 border border-surface-700 rounded-lg p-0.5 sm:p-1`
+   - accessibility: `role="group"` and `aria-label="Execution mode"`
+5. Render two buttons in order: Local then Remote. Both must:
+   - call `onModeChange('local'|'remote')` on click
+   - respect `disabled`
+   - share base classes: `flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-all`
+   - append `disabled:opacity-50 disabled:cursor-not-allowed`
+6. Local button:
+   - active (`mode === 'local'`): `bg-blue-500 text-white shadow-sm`
+   - inactive: `text-surface-400 hover:text-surface-200`
+   - `title="Execute commands on this machine"`
+   - include inline computer SVG icon (`w-3.5 h-3.5 sm:w-4 sm:h-4`, stroked outline) and label text `Local`
+7. Remote button:
+   - active (`mode === 'remote'`): `bg-purple-500 text-white shadow-sm`
+   - inactive: `text-surface-400 hover:text-surface-200`
+   - `title="Control a remote session via cloud"`
+   - include inline cloud SVG icon (`w-3.5 h-3.5 sm:w-4 sm:h-4`, stroked outline) and label text `Remote`
+8. When `mode === 'remote'` and not disabled, render a trailing remote-info hint:
+   - `<span className="hidden sm:flex text-xs text-purple-400 items-center gap-1">`
+   - include inline info-circle SVG icon (`w-3.5 h-3.5`)
+   - exact text: `Commands will execute on the selected remote session`
+9. Keep Tailwind classes and responsive behavior consistent with dark surface tokens used by the app.
+
+Deliverable
+- Output only `pdd/frontend/components/ExecutionModeToggle.tsx`.

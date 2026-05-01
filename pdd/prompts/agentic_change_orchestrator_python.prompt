@@ -1,0 +1,438 @@
+<pdd-reason>Orchestrates the 13-step agentic change workflow for implementing GitHub issues.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_change_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
+
+% Role & Scope
+Orchestrator for the 13-step agentic change workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes a review loop (steps 11-12) that iterates until no issues are found.
+
+% Requirements
+1. Function: `run_agentic_change_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, issue_updated_at: str = "", *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+3. Run 13 steps, with steps 11-12 in a review loop (max 5 iterations)
+4. Accumulate step outputs to pass as context to subsequent steps
+5. Track total cost across all steps
+6. For Step 9: Parse agent output for `FILES_CREATED: path1, path2`, `FILES_MODIFIED: path1, path2`, or `DIRECT_EDITS: path1, path2` lines to extract changed files. Direct edits are code files that were modified directly (not via prompts) because no corresponding prompt exists. Also extract `files_created`, `files_modified`, and `direct_edits` separately.
+7. Pass extracted files to subsequent steps via `files_to_stage` context variable
+7b. For Step 10: Parse agent output for `ARCHITECTURE_FILES_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_MODIFIED: path1, path2`, `ASSOCIATED_DOCS_CONFLICTS: path1, path2`, and `ASSOCIATED_DOCS_UNCHANGED: path1, path2` lines. Append `ARCHITECTURE_FILES_MODIFIED` and `ASSOCIATED_DOCS_MODIFIED` entries to `changed_files` / `files_to_stage`. `ASSOCIATED_DOCS_CONFLICTS` entries are logged but NOT auto-added (they need human review). `ASSOCIATED_DOCS_UNCHANGED` entries are logged only, not staged.
+7c. For Step 6: Parse agent output for "Direct Edit Candidates" table. Extract file paths and store in `context["direct_edit_candidates"]` list. These are frontend/code files with no corresponding prompt that need scoped edits (uncomment, remove placeholder). Pass this list to Step 9.
+7d. For Step 8.5 (see "Pre-Flight Drift Heal" section): After the worktree is set up and before Step 9 rewrites prompts, call `_preflight_drift_heal()` once per workflow to find and heal modules whose prompts are stale relative to their code (`decision.operation == "update"`). Must be contained to the worktree. Record healed/failed basenames in `state["preflight_healed_modules"]` and `state["preflight_failed_heal_modules"]`. Use `state["preflight_drift_healed"]` as idempotency flag on resume.
+7e. For Step 10.5 (see "Associated-Document Contract Verifier" section): Before Step 10, call `pdd.sync_order.discover_associated_documents(...)` and store the result in `context["associated_documents"]` (for the Step 10 LLM) and `context["_associated_documents_discovered"]` (for the post-step verifier). Build `modified_prompts` from the authoritative changed-file set, not only `files_created` / `files_modified`: include `files_created`, `files_modified`, `files_to_stage`, and the in-memory `changed_files` list so Step 9's successful worktree fallback path cannot bypass doc discovery when the LLM omitted `FILES_*` markers. After Step 10 completes, run `_verify_doc_sync_contract()` to confirm every discovered doc appears in EXACTLY ONE of the `ASSOCIATED_DOCS_MODIFIED` / `ASSOCIATED_DOCS_CONFLICTS` / `ASSOCIATED_DOCS_UNCHANGED` buckets. Silent drops (doc missing from all three) and overlaps (doc in 2+ buckets) are both contract violations; append `ORCHESTRATOR_POSTCHECK_WARNINGS` with `DOC_SYNC_SILENT_DROPS:` and/or `DOC_SYNC_BUCKET_OVERLAPS:` marker lines. Strict mode (env var `PDD_STRICT_DOC_SYNC=1`/`true`/`yes`) aborts the workflow with `success=False` and a message naming the dropped/overlapping docs; default non-strict mode forwards the warnings to Step 11 via `step10_output` for review-loop recovery.
+8. **State Persistence**: Save step outputs to state file after each step completes
+9. **Step Resumption**: On start, load saved state and skip steps that have already completed
+10. **Review Loop**: Steps 11-12 repeat until step 11 output contains "no issues found" (case-insensitive, max 5 iterations)
+11. **Sync Order Generation**: After review loop completes (before Step 13):
+    - Import from pdd.sync_order: build_dependency_graph, topological_sort, get_affected_modules, generate_sync_order_script, extract_module_from_include
+    - Build dependency graph from prompts_dir = worktree_path / "prompts"
+    - Extract modified modules from files_to_stage using `extract_module_from_include()` on files matching `prompts/*.prompt`
+    - Get affected modules (modified + transitive dependents)
+    - If affected modules exist, generate sync_order.sh in both user's CWD and worktree root
+    - Generate clean `pdd sync X` command list for sync_order_list (NOT the full bash script with shebang/set -e)
+    - Add to context: sync_order_script (path or ""), sync_order_list (newline-separated commands or "No modules to sync")
+    - Ensure sync_order.sh is added to changed_files for Step 13 to commit
+    - Print warning if circular dependencies detected
+12. **Existing PR Guard**: Before starting the workflow, use `_check_existing_pr()` to check if an open PR already exists for `change/issue-{issue_number}`. If so, return early: `(True, "PR already exists: {url}", 0.0, "unknown", [])`.
+13. **Stale State Detection**: If `issue_updated_at` differs from stored `state["issue_updated_at"]`, clear state and start fresh (issue was modified since last run).
+14. **Impacted Tests**: Before Step 13, identify test files for changed modules by matching changed file basenames (stripping language suffixes like `_python`) against `test_{basename}*` in `test_dir`. Add to context as `impacted_tests`.
+
+% Per-Step Timeouts
+Define locally (workflow-specific configuration stays with the workflow):
+```python
+CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
+    1: 240.0,   # Duplicate Check
+    2: 240.0,   # Docs Comparison
+    3: 340.0,   # Research
+    4: 340.0,   # Clarify
+    5: 340.0,   # Docs Changes
+    6: 340.0,   # Identify Dev Units
+    7: 340.0,   # Architecture Review
+    8: 600.0,   # Analyze Prompt Changes (Complex)
+    9: 1000.0,  # Implement Changes (Most Complex)
+    10: 600.0,  # Architecture Update + associated-doc sync (Complex)
+    11: 340.0,  # Identify Issues
+    12: 600.0,  # Fix Issues (Complex)
+    13: 340.0,  # Create PR
+}
+```
+Step 10 bumped from 340s to 600s because the step now covers both architecture metadata updates AND associated-document sync (README, CHANGELOG, etc.) — see "Associated-Document Contract Verifier" section below. The original 340s was sufficient for metadata-only work but risks truncating when the LLM has to also propose edits for multiple doc files.
+
+% Prompt Preprocessing
+Before formatting each step's prompt template, apply a two-step process:
+1. Call `preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=list(context.keys()))` to expand `<include>` tags and escape curly braces in included content
+2. Call `substitute_template_variables(processed_template, context)` to replace `{key}` placeholders
+
+This prevents curly braces in included prompt content from being treated as format variables.
+
+% Step Execution
+For steps 1-10 and 13:
+1. **Check if step already completed** (from saved state) - if so, skip and use cached output
+2. **Track progress**: Call `set_agentic_progress(workflow="change", current_step=step_num, total_steps=13, step_name=description, completed_steps=[1..step_num-1])`
+3. Load the step prompt template via `load_prompt_template(f"agentic_change_step{n}_{name}_LLM")`
+4. Preprocess and format template (see Prompt Preprocessing section)
+5. Call `run_agentic_task(instruction=formatted_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder, label=f"step{step_num}", max_retries=DEFAULT_MAX_RETRIES)`
+6. Store the output for use by subsequent steps
+7. **Save state to file** after step completes (for resumption)
+8. Accumulate cost: `total_cost += step_cost`
+
+% Review Loop (Steps 11-12)
+Steps 11 and 12 form a review loop that repeats until no issues are found:
+
+```python
+review_iteration = 0
+MAX_REVIEW_ITERATIONS = 5
+previous_fixes = ""
+
+while review_iteration < MAX_REVIEW_ITERATIONS:
+    review_iteration += 1
+
+    # Step 11: Identify Issues
+    step11_output = run_step_11(review_iteration, previous_fixes)
+
+    if _review_loop_no_issues(step11_output):
+        break  # Exit loop, proceed to step 13
+
+    # Step 12: Fix Issues
+    step12_output = run_step_12(step11_output, review_iteration)
+    previous_fixes += f"\n\nIteration {review_iteration}:\n{step12_output}"
+
+if review_iteration >= MAX_REVIEW_ITERATIONS:
+    # Warn but continue to PR creation
+    print("Warning: Maximum review iterations reached")
+```
+
+Helper: `_review_loop_no_issues(output: str) -> bool` — case-insensitive check for "no issues found" in output. LLMs don't reliably emit exact magic tokens, so this is intentionally loose.
+
+Context for review loop:
+- Step 11 receives: files_to_stage, worktree_path, step9_output, review_iteration, previous_fixes
+- Step 12 receives: step11_output, worktree_path, review_iteration
+
+% Step Sequence
+| Step | Template Name | Purpose |
+|------|---------------|---------|
+| 1 | agentic_change_step1_duplicate_LLM | Search for duplicate issues |
+| 2 | agentic_change_step2_docs_LLM | Check if already implemented |
+| 3 | agentic_change_step3_research_LLM | Research to clarify specifications |
+| 4 | agentic_change_step4_clarify_LLM | Verify requirements are clear, ask questions if not |
+| 5 | agentic_change_step5_docs_change_LLM | Analyze documentation changes needed |
+| 6 | agentic_change_step6_devunits_LLM | Identify dev units involved |
+| 7 | agentic_change_step7_architecture_LLM | Review architecture, ask questions if decisions needed |
+| 8 | agentic_change_step8_analyze_LLM | Analyze how prompts should change |
+| 9 | agentic_change_step9_implement_LLM | Implement the prompt changes |
+| 10 | agentic_change_step10_architecture_update_LLM | Update architecture metadata for new/modified prompts |
+| 11 | agentic_change_step11_identify_issues_LLM | Identify issues with prompts/docs (loop start) |
+| 12 | agentic_change_step12_fix_issues_LLM | Fix identified issues (loop end) |
+| 13 | agentic_change_step13_create_pr_LLM | Create PR and link to issue |
+
+% Project Configuration Context (.pddrc)
+Before the step loop begins, load `.pddrc` configuration to provide context keys needed by step templates (especially Step 6):
+
+1. **Imports**: Add to existing imports:
+   - `from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context`
+   - `from pdd.get_extension import get_extension`
+
+2. **Helper function** `_load_pddrc_context(cwd: Path) -> Dict[str, str]`:
+   - Define sensible defaults: `{"language": "python", "source_dir": "src/", "test_dir": "tests/", "example_dir": "context/", "ext": "py", "lang": "_python"}`
+   - Call `_find_pddrc_file(cwd)` to locate `.pddrc`
+   - If not found, return defaults
+   - Call `_load_pddrc_config(pddrc_path)` to parse YAML
+   - Call `_detect_context(cwd, config)` to detect context name (NOTE: argument order is `cwd` first, then `config`)
+   - Extract from context's `defaults` nested key:
+     - `language` from `default_language`
+     - `source_dir` from `generate_output_path`
+     - `test_dir` from `test_output_path`
+     - `example_dir` from `example_output_path`
+   - Derive `ext` using `get_extension(language)` (strip leading dot if present)
+   - Derive `lang` as `f"_{language}"`
+   - Return dict with all 6 keys
+   - On any exception, return defaults
+
+3. **Add to context dict** before step loop:
+   ```python
+   pddrc_context = _load_pddrc_context(cwd)
+   context = {
+       "issue_url": issue_url,
+       # ... other issue fields ...
+       **pddrc_context,  # Adds: language, source_dir, test_dir, example_dir, ext, lang
+   }
+   ```
+
+% Context Accumulation
+- Step 1 receives: issue_content
+- Step 2 receives: issue_content, step1_output
+- Step 3 receives: issue_content, step1_output, step2_output
+- Step 4 receives: issue_content, step1_output, step2_output, step3_output, issue_author
+- Step 5 receives: issue_content, step1_output through step4_output
+- Step 6 receives: issue_content, step1_output through step5_output, dependency_context
+- Step 7 receives: issue_content, step1_output through step6_output, issue_author
+- Step 8 receives: issue_content, step1_output through step7_output
+- Step 9 receives: issue_content, step7_output, step8_output, worktree_path, direct_edit_candidates (from Step 6)
+- Step 10 receives: issue_content, step9_output, worktree_path, files_created, files_modified, direct_edits, **associated_documents** (list of doc paths discovered from the include graph + architecture BFS — LLM must emit `ASSOCIATED_DOCS_{MODIFIED,CONFLICTS,UNCHANGED}` markers, one bucket per doc)
+- Step 11 receives: issue_content, step9_output, **step10_output** (so DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers emitted by Step 10.5 reach the review loop), worktree_path, files_to_stage, review_iteration, previous_fixes
+- Step 12 receives: issue_content, step11_output, worktree_path, review_iteration
+- Step 13 receives: issue_content, step8_output, worktree_path, files_to_stage, issue_title, sync_order_script, sync_order_list, impacted_tests
+
+% Dependency Context (Before Step 6)
+Before Step 6 runs, build a formatted dependency graph to help identify transitively affected modules:
+
+Helper: `_build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str`:
+- Build dependency graph using `build_dependency_graph(prompts_dir)`
+- Compute reverse dependencies (module → modules that depend on it)
+- Format as "## Module Dependency Graph" with sections showing modules sorted by number of dependents (limit top 30, max 10 dependents shown per module)
+- Add to `context["dependency_context"]`
+- Return empty string if prompts_dir doesn't exist or on any error
+
+% Files to Stage
+After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracted file list to subsequent steps:
+- `context["files_to_stage"] = ", ".join(changed_files)` (includes all three types)
+- Also extract `context["files_created"]`, `context["files_modified"]`, and `context["direct_edits"]` separately for Step 10
+- Step 9 fallback: if no FILES markers found in output but worktree has changes, use `_detect_worktree_changes()` to discover them
+- Step 10 associated-document discovery must consume the fallback-detected prompt files via `changed_files` / `files_to_stage`, not only the explicit `FILES_CREATED` / `FILES_MODIFIED` marker context
+- Step 10 updates prompts and may add files via ARCHITECTURE_FILES_MODIFIED - append these to files_to_stage
+- Step 11 uses files_to_stage to know which files to review
+- Step 13 uses files_to_stage to know which files to commit
+
+% Direct Edit Candidates (from Step 6)
+After Step 6 completes, parse the "Direct Edit Candidates" table from the output:
+- Extract file paths from rows in the table
+- Store in `context["direct_edit_candidates"]` as a list
+- Pass to Step 9 so it knows which files can be directly edited
+- Step 9 can only directly edit files that appear in this list
+
+Helper function: `_parse_direct_edit_candidates(step6_output: str) -> List[str]`:
+- Use regex to find the "Direct Edit Candidates" table section
+- Extract file paths from table rows (format: `| file_path | edit_type | markers |`)
+- Return list of file paths (first column of each row)
+- Return empty list if no table found
+
+% Early Exit Conditions (Hard Stops)
+
+The orchestrator must parse step output to detect stop conditions. Use `_check_hard_stop(step_num, output)`:
+
+| Step | Stop Condition | Detection |
+|------|----------------|-----------|
+| 1 | Issue is a duplicate | Output contains "Duplicate of #" |
+| 2 | Already implemented | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*already implemented` with `re.MULTILINE`. Accepts both bold (`**Status:**`) and plain (`Status:`) formats. Must be at start of line to avoid matching quoted instructions or discussion prose. |
+| 3 | Research complete | (no stop condition - continues to step 4) |
+| 4 | Clarification needed | Requires explicit `STOP_CONDITION:` tag with "clarification" |
+| 5 | Docs analysis complete | (no stop condition - continues to step 6) |
+| 6 | No dev units found | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*no dev units found` with `re.MULTILINE`. Accepts bold and plain formats, must be at start of line. |
+| 7 | Architectural decision needed | Requires explicit `STOP_CONDITION:` tag with "architectural" |
+| 8 | No changes needed | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*no changes required` with `re.MULTILINE`. Accepts bold and plain formats, must be at start of line. |
+| 9 | Implementation failed | Output contains "FAIL:" |
+| 10 | Architecture update complete | (no stop condition - continues to step 11) |
+| 11 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 13) |
+
+**STOP_CONDITION tag**: A universal `STOP_CONDITION: <reason>` tag is recognized on any step as a fallback. Steps 4 and 7 (clarification steps) ONLY stop via this tag (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose.
+
+**Hard stop behavior:**
+- Call `post_step_comment()` to post findings to GitHub
+- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
+- Do NOT continue to subsequent steps
+
+**Clarification steps (4, 7) special behavior:**
+- Save `last_completed_step = step_num - 1` (so the step re-runs on resume after user responds)
+- After saving state, call `_fetch_issue_updated_at()` to refresh the timestamp (bot's own comment changes it) and store the refreshed value in state
+
+**Soft failures (continue):**
+- If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
+
+% Consecutive Provider Failure Tracking
+
+Track consecutive steps where output contains "All agent providers failed":
+- Increment counter on provider failure, reset to 0 on any success or non-provider failure
+- If 3+ consecutive provider failures: post step comment, save state, return `(False, "Aborting: N consecutive steps failed — agent providers unavailable", ...)`
+
+% Architecture Sanitization (After Step 10)
+
+After Step 10 completes, sanitize architecture.json in the worktree:
+
+1. **Snapshot before Step 10**: Before running Step 10, read `architecture.json` into `previous_architecture` for later comparison.
+
+2. **`_sanitize_architecture_dependencies(worktree_path)`**: Remove corrupted dependency values from architecture.json — keep only strings that end with `.prompt`, contain no newlines, and are ≤100 chars.
+
+3. **`_sanitize_architecture_interfaces(worktree_path, previous_architecture)`**: Compare current architecture.json against `previous_architecture`. For each entry that exists in both, call `_merge_interface_signatures(old_interface, new_interface)` to preserve existing interface parameters that Step 10's LLM may have dropped. Append any merge warnings to step output under `ORCHESTRATOR_POSTCHECK_WARNINGS:`.
+
+4. **Auto-register untracked prompts (narrow safety net, in-workflow scope only)**: After all sanitizers run, build an `only_files` scope set restricted to **this workflow's prompt files**, then call `register_untracked_prompts(prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", dry_run=False, only_files=only_files)` from `pdd.architecture_sync`. Build `only_files` by iterating `changed_files` (which contains Step 9's `FILES_CREATED` / `FILES_MODIFIED` plus Step 10's own arch_files output), normalizing each path (replace `\\` with `/`, find the last `prompts/` index, take everything after it), and keeping only entries ending in `.prompt`. Skip the call entirely if `only_files` is empty. This catches modified prompts that have correct PDD tags but no pre-existing arch.json entry — the case where Step 10's LLM rule 5(b) falls through — **WITHOUT silently sweeping unrelated repo-wide drift into the PR**. A full-scan call (no `only_files`) would auto-register every untracked prompt in the repo: in current state that is 38+ unrelated prompts, including nonstandard paths like `frontend/components/*.prompt` where `_infer_filepath` would produce an incorrect Python-style filepath. The scope filter is required for correctness, not just politeness: any out-of-scope registration is an unreviewed mutation of shared project state and may write wrong metadata. If `reg_result["registered"]` is non-empty, append `\n\nORCHESTRATOR_AUTO_REGISTERED: {comma-separated list}` to step_output and print `[blue]Auto-registered untracked prompts in arch.json: {list}[/blue]` (unless quiet).
+
+% Step 8.5 — Pre-Flight Drift Heal (Issue #739)
+
+Between Step 8 (Analyze Prompt Changes) and Step 9 (Implement), the orchestrator must heal any prompts whose code has drifted, so that Step 9 rewrites the *current* prompt rather than a stale one.
+
+1. Helper function: `_preflight_drift_heal(worktree_path: Path, quiet: bool = False, timeout_per_module: float = 300.0, max_modules: int = _PREFLIGHT_MAX_HEAL_MODULES) -> Tuple[List[str], List[str], List[str]]`
+   - Contained to the isolated worktree — never touches the user's main tree
+   - Uses a process-wide `threading.Lock` (`_PREFLIGHT_CHDIR_LOCK`) to serialize the `os.chdir(worktree_path)` window so concurrent workflow instances do not leak each other's CWD
+   - Imports `pdd.ci_drift_heal.detect_drift` lazily inside the lock; on import failure, log a yellow warning and return `([], [], [])` so the orchestrator continues gracefully
+   - Calls `detect_drift()` to partition modules into `(prompt_drifts, example_drifts)`. Only `prompt_drifts` (operation == "update") are healed here — example drift is a separate class
+   - When `prompt_drifts` is empty: print `[Step 8.5/13] Pre-flight drift check: all prompts in sync with code.` (unless quiet) and return `([], [], [])`
+   - Cap fan-out: when more than `max_modules` (default `_PREFLIGHT_MAX_HEAL_MODULES = 10`) prompt drifts are detected, only the alphabetically-first `max_modules` are healed; the rest are logged as deferred to the CI auto-heal pipeline. With `timeout_per_module=300s`, an unbounded fan-out costs `N × 5min` worst case
+   - Build a headless heal env that mirrors `ci_drift_heal._build_ci_env`: `PDD_FORCE=1`, `CI=1`, `NO_COLOR=1`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`. The last two are required to avoid LM-Studio hangs on a Cloud Run executor and to keep `.pdd/meta` in a consistent state when `pdd update` times out mid-mutation
+   - For each prompt drift with a resolved `code_path`: run `subprocess.run([sys.executable, "-m", "pdd", "update", code_path], cwd=str(worktree_path), capture_output=True, text=True, timeout=timeout_per_module, env=heal_env)`. `sys.executable + -m pdd` is required so the heal subprocess uses the orchestrator's venv; a bare `["pdd", ...]` picks up whatever pdd is on `$PATH` (potentially a different version)
+   - Classify each attempt: returncode 0 → append basename to `healed` AND append `drift.prompt_path` (when set) to `healed_prompts`. Non-zero exit, timeout (`TimeoutExpired`), missing `code_path`, or any other exception → append basename to `failed`. Always restore the original CWD in `finally`
+   - Return `(healed, failed, healed_prompts)` — three lists. The third element is the list of prompt-file paths the heal subprocesses rewrote; Step 10's discovery sweep merges these so docs reachable from a just-healed prompt's `<include>` graph still pass through the doc-sync contract
+
+2. Call site in orchestrator loop:
+   - Fires inside the `if step_num == 9:` block, after the worktree has been set up (so healing is contained) and before Step 9 runs
+   - Idempotency: skip when both `state.get("preflight_drift_healed") is True` AND `state.get("preflight_healed_worktree") == str(worktree_path)`. The worktree-path check is required because a strict-mode abort can delete `.pdd/worktrees/change-issue-{N}/`; on resume the new worktree starts clean so the heal must run again to land its effects
+   - After the call, set `state["preflight_drift_healed"] = True`, `state["preflight_healed_worktree"] = str(worktree_path)`, `state["preflight_healed_modules"] = healed`, `state["preflight_failed_heal_modules"] = failed`, `state["preflight_healed_prompt_paths"] = healed_prompts`. Also set the context keys `preflight_healed_modules` and `preflight_failed_heal_modules` (comma-separated strings or the literal `"None"`) for any downstream step templates that want to reason about the healing.
+   - Step 10's discovery block reads `state["preflight_healed_prompt_paths"]` and merges those prompt paths into the `discover_associated_documents` input set, so any healed-but-otherwise-untouched prompt's `<include>` docs still reach the doc-sync contract.
+
+3. Known v1 limitation (documented in the helper's docstring): a heal-induced cascade (healing module A triggers drift in module B) is NOT handled here. CI auto-heal (`pdd.ci_drift_heal`) is the post-PR safety net. Don't rerun `_preflight_drift_heal` in a fixed-point loop — it's intentionally single-pass to cap cost and worktree mutations.
+
+4. Heal failures are **non-fatal**: the workflow continues even when some modules did not heal. Operators inspect `state["preflight_failed_heal_modules"]` for visibility.
+
+% Step 10.5 — Associated-Document Contract Verifier (Issue #739)
+
+Step 10 now has two responsibilities: (a) update `architecture.json` metadata as before, and (b) sync any associated documentation files reachable from the modified prompts' `<include>` / `<include-many>` graph. The verifier below enforces the contract deterministically so an LLM omission cannot silently ship a doc-out-of-sync PR.
+
+1. Pre-Step-10 discovery call:
+   - Before Step 10 runs (guarded by `if step_num == 10 and worktree_path and worktree_path.exists():`), call `pdd.sync_order.discover_associated_documents(modified_prompts=..., prompts_dir=worktree_path / "prompts", architecture_path=worktree_path / "architecture.json", max_depth=3)`
+   - Build the input `modified_prompts` set from `files_created + files_modified + files_to_stage + changed_files`, keeping only paths that look like prompts (`*.prompt`). Resolve each to an absolute path under the worktree. This is required because the Step 9 fallback path can succeed with worktree-detected changes while `files_created` and `files_modified` are empty. If the computed set is empty, skip discovery and set both context keys to `"None"` / `[]`.
+   - On resume from a cached Step 9 output with no `FILES_*` markers, re-run `_detect_worktree_changes(worktree_path, _parse_direct_edit_candidates(context.get("step6_output", "")))` to recover the authoritative changed-file set from the existing worktree before Step 10 discovery.
+   - Populate two context keys:
+     - `context["associated_documents"]` — human-facing comma-joined list the Step 10 LLM template will render inline after `ASSOCIATED_DOCUMENTS:`. Empty list → literal string `"None"`.
+     - `context["_associated_documents_discovered"]` — machine-facing list preserved verbatim for the post-step verifier.
+   - On discovery failure (missing prompts_dir, malformed architecture.json, unexpected exception): log yellow warning, set both context keys to `"None"` / `[]`, and continue — never abort the workflow from the discovery phase.
+
+2. Post-Step-10 verifier call:
+   - After Step 10 completes and `step_output` is captured, run `_verify_doc_sync_contract(discovered_docs, step10_output)` which returns `(modified, conflicted, unchanged, silently_dropped, overlapping)`
+   - **Silent drop** = discovered doc absent from all three `ASSOCIATED_DOCS_*` buckets. **Overlap** = discovered doc present in 2+ buckets (contradictory state). Both are contract violations.
+   - When violations exist, append to `step_output`:
+     ```
+     ORCHESTRATOR_POSTCHECK_WARNINGS:
+     - Associated doc silently dropped by Step 10: {path}
+     - Associated doc placed in multiple buckets by Step 10: {path}
+     DOC_SYNC_SILENT_DROPS: {comma-separated list}
+     DOC_SYNC_BUCKET_OVERLAPS: {comma-separated list}
+     ```
+     Only emit a marker line when its corresponding violation list is non-empty. The `ORCHESTRATOR_POSTCHECK_WARNINGS` header is always present when at least one violation fires.
+
+3. Strict mode (`PDD_STRICT_DOC_SYNC`):
+   - Read `os.environ.get("PDD_STRICT_DOC_SYNC", "").lower()`; treat `"1"`, `"true"`, `"yes"` as strict.
+   - On any violation under strict mode: print red abort banner, save state with `step_output` prefixed `FAILED:`, and return `(False, f"Stopped at step 10: PDD_STRICT_DOC_SYNC {'; '.join(violations)}", total_cost, model_used, changed_files)`. Do NOT proceed to Step 11.
+
+4. Non-strict (default) mode:
+   - Violations are logged and appended to `step_output` but do NOT abort. Step 11 receives the annotated output via `{step10_output}` and is instructed to surface silent drops / overlaps as issues for Step 12 to fix. This is the review-loop recovery path.
+
+5. Contract scope: the verifier only protects docs that `discover_associated_documents` actually found (i.e. declared via `<include>` or `<include-many>` in the modified prompts' graph or reachable through architecture BFS). Docs that *should* be referenced but aren't tagged are out of scope here — semantic auto-deps discovery is separate future work.
+
+% Git Worktree Isolation
+
+Before Step 9, create an isolated git worktree for prompt changes. This prevents the workflow from disturbing the user's current branch.
+
+1. Helper function: `_resolve_main_ref(git_root: Path) -> str`
+   - Resolve the main branch ref for use as worktree base
+   - Try refs in order: `origin/main`, `origin/master`, `main`, `master`
+   - For each, run `git rev-parse --verify <ref>` — return the commit hash on success
+   - If none resolve, return the literal string `"HEAD"` as last resort
+   - This prevents worktrees from being based on the user's current feature branch
+
+2. Helper function: `_setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]`
+   - Create worktree at `.pdd/worktrees/change-issue-{issue_number}/` relative to git root
+   - Branch name: `change/issue-{issue_number}`
+   - If worktree already exists at path, remove with `git worktree remove --force`
+   - If directory exists but is NOT a worktree, remove with `shutil.rmtree()`
+   - If branch already exists locally, attempt to delete with `git branch -D`
+     - Check the return value from `_delete_branch(cwd, branch_name)` which returns `Tuple[bool, str]`
+     - If deletion succeeds: Create new branch with `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
+     - If deletion fails (e.g., branch is currently checked out): Use existing branch with `git worktree add --force {path} {branch}` (without `-b` flag, `--force` required because git refuses to checkout a branch already in use by another worktree)
+   - If branch does not exist: Create worktree with new branch using `git worktree add -b {branch} {path} _resolve_main_ref(git_root)` — use main ref, NOT HEAD
+   - Return (worktree_path, None) on success, (None, error_msg) on failure
+
+3. In orchestrator loop, before Step 9:
+   - Check current branch with `git rev-parse --abbrev-ref HEAD`. If NOT "main" or "master" and NOT quiet, print warning: `[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]`
+   - Call `_setup_worktree(cwd, issue_number, quiet)`
+   - If worktree creation fails, return early with error: `(False, "Failed to create worktree: {error}", ...)`
+   - Switch working directory to worktree path for Steps 9-13
+   - Add `worktree_path` to context dict (for Steps 9-13 prompt formatting)
+   - Print: `"[blue]Working in worktree: {worktree_path}[/blue]"` (unless quiet)
+
+4. Additional helper functions:
+   - `_get_git_root(cwd: Path) -> Optional[Path]` - Get repo root via `git rev-parse --show-toplevel`
+   - `_worktree_exists(cwd: Path, worktree_path: Path) -> bool` - Check if path is in `git worktree list --porcelain` output
+   - `_branch_exists(cwd: Path, branch: str) -> bool` - Check via `git show-ref --verify refs/heads/{branch}`
+   - `_remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]` - Remove via `git worktree remove --force`
+   - `_delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]` - Delete via `git branch -D`
+   - `_detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]` - Detect file changes in worktree via `git status --porcelain`. By default only allows `.prompt` and `.md` files. If `direct_edit_candidates` list is provided, also allow those specific files (enables detecting direct edits). Skip temp files matching `.agentic_prompt_*`.
+   - `_parse_direct_edit_candidates(step6_output: str) -> List[str]` - Parse Step 6 output for "Direct Edit Candidates" table and extract file paths from the first column of each row. Return empty list if no table found.
+   - `_check_existing_pr(repo_owner, repo_name, issue_number) -> Optional[str]` - Use `gh pr list` to check for open PR with `head:change/issue-{issue_number}`. Return PR URL if found.
+   - `_fetch_issue_updated_at(repo_owner, repo_name, issue_number) -> str` - Fetch current `updated_at` timestamp for the GitHub issue via `gh api`. Used after clarification stops to capture the timestamp AFTER the bot's own comment.
+
+% Console Output
+
+Use rich console output (unless `quiet`). Key markers:
+- Header: `Implementing change for issue #{issue_number}: "{issue_title}"`
+- Step progress: `[Step N/13] {description}...` (with iteration count for review loop steps)
+- Step result: `  -> {brief_result}` (last line of output, truncated to 80 chars)
+- Step completion: `  → Step {step_num} complete.` (REQUIRED — executor's credential waterfall depends on this)
+- Hard stop: `Investigation stopped at Step N: {reason}`
+- Final summary: total cost, files changed, PR URL, review iterations, and next steps (run sync_order.sh)
+
+Use `quiet` flag to suppress all output except errors. Use `verbose` flag to show full agentic task output.
+
+% Progress Tracking
+
+Call `clear_agentic_progress()` at start (clear stale progress) and on successful completion.
+Call `set_agentic_progress(workflow="change", current_step=N, total_steps=13, ...)` before each step so KeyboardInterrupt can report how far the workflow got.
+
+% State Persistence (GitHub + Local)
+
+To avoid re-running completed steps when the workflow is paused (e.g., for clarification or architectural decisions), implement state persistence using shared functions from agentic_common. GitHub is primary storage (enables cross-machine resume), local file is cache.
+
+1. **State file location**: `.pdd/change-state/issue-{issue_number}.json` (local cache)
+
+2. **State file structure**: JSON with keys: `workflow`, `issue_url`, `issue_number`, `last_completed_step`, `step_outputs` (dict keyed by step number string), `total_cost`, `model_used`, `worktree_path`, `github_comment_id`, `issue_updated_at`, `review_iteration`, `previous_fixes`
+
+3. **Use shared functions from agentic_common**:
+   - `load_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
+   - `save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)` - Save to GitHub first, then local
+   - `clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` - Clear on completion
+   - State directory: `_get_state_dir(cwd) -> Path` returns `.pdd/change-state/` relative to git root
+
+4. **Orchestrator logic**:
+   - On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
+   - Track `github_comment_id` from load result for subsequent saves
+   - **State validation on load**: After loading state, call `validate_cached_state()` to find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". This prevents resuming past failed steps.
+   - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
+   - For steps < start_step: Use cached output from `state["step_outputs"]`
+   - For steps >= start_step: Execute normally, call `save_workflow_state()` after each
+     - On success: Store output in step_outputs, set `last_completed_step = step_num`
+     - On failure (not hard stop): Store "FAILED: {output}" in step_outputs, keep `last_completed_step` unchanged from its current value (do NOT set to `step_num - 1`, as that step may also have failed)
+   - On successful completion (step 13 completes AND no failed steps): Call `clear_workflow_state()`
+   - On hard stop (e.g., clarification needed): State remains for next run
+   - Review loop state: Store current iteration count and previous_fixes in state
+
+5. **Console output for resumption**: Print which steps are cached and which step is starting.
+
+% Error Handling
+- Return `(False, "Failed to create worktree: {error}", cost, model, [])` if worktree setup fails
+- Return `(False, "Stopped at step N: {reason}", cost, model, changed_files)` on hard stop conditions
+- Log warning and continue if `run_agentic_task()` returns failure without matching a hard stop condition
+- On state file read/write errors, log warning and continue without persistence
+
+% Dependencies
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`
+Import from `pdd.preprocess`: `preprocess`
+Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
+Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+<pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
+<pdd.construct_paths><include>context/construct_paths_example.py</include></pdd.construct_paths>
+<pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
+<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.architecture_sync><include query="_merge_interface_signatures and register_untracked_prompts usage examples">context/architecture_sync_example.py</include></pdd.architecture_sync>
+
+% Deliverables
+- Code: `pdd/agentic_change_orchestrator.py`

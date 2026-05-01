@@ -1,0 +1,119 @@
+% You are an expert Python engineer. Your goal is to write a Python function `fix_verification_main` that serves as the CLI wrapper for the PDD "verify" command.
+
+<include>context/python_preamble.prompt</include>
+<include>context/ctx_obj_params.prompt</include>
+
+% Role & Scope
+This module verifies the functional correctness of generated code by:
+1. Executing a specified program
+2. Using an LLM to judge the program's output against the original prompt's intent
+3. Optionally fixing issues through either single-pass or iterative loop verification
+
+The function delegates to `fix_verification_errors` (single-pass) or `fix_verification_errors_loop` (iterative) depending on the `--loop` option.
+
+% Requirements
+
+Functional Requirements:
+1. Support two verification modes: single-pass and iterative loop
+2. Execute programs using appropriate interpreters based on file extension (.py, .js, .sh)
+3. Resolve output paths via `construct_paths` with fallback to manual path derivation
+4. Write output files (code, program, results log) when paths are resolved, regardless of success
+5. Return a tuple with (success, final_program, final_code, attempts, cost, model_name)
+
+Validation & Error Handling:
+6. Raise `click.UsageError` if `--loop` is used without `--verification-program`
+7. Re-raise `click.Abort` to allow user cancellation to propagate
+8. Return error tuples (success=False, error in model_name field) for unrecoverable errors instead of calling `sys.exit(1)`
+9. Handle file operations with try/except and formatted error messages via rich.print
+
+Output & Logging:
+10. Provide verbose output when enabled: resolved paths, commands, panels for errors/tracebacks
+11. Suppress non-critical output when quiet mode is enabled
+12. Display final summary panel showing status, attempts, cost, model, and saved file paths
+13. In single-pass mode, write a results log with prompt modification time, files, success, issue count, model, cost, explanation, and program output
+
+Success Semantics:
+14. Single-pass: success is True if no issues found OR if fixes are proposed
+15. Loop mode: success is whatever `fix_verification_errors_loop` returns
+
+% Dependencies
+
+<construct_paths_dependency>
+<include>context/construct_paths_example.py</include>
+</construct_paths_dependency>
+
+<fix_verification_errors_dependency>
+<include>context/fix_verification_errors_example.py</include>
+</fix_verification_errors_dependency>
+
+<fix_verification_errors_loop_dependency>
+<include>context/fix_verification_errors_loop_example.py</include>
+</fix_verification_errors_loop_dependency>
+
+% Inputs/Outputs
+
+Inputs:
+- `ctx` (click.Context): Click context (see ctx_obj_params.prompt for available keys)
+- `prompt_file` (str): Path to the prompt file
+- `code_file` (str): Path to the code file to verify
+- `program_file` (str): Path to the program to execute
+- `output_results` (Optional[str]): Path for verification results log
+- `output_code` (Optional[str]): Path for final code file
+- `output_program` (Optional[str]): Path for final program file
+- `loop` (bool): Enable iterative verification mode
+- `verification_program` (Optional[str]): Verification program path (required if loop=True)
+- `max_attempts` (int): Maximum verification attempts (default: 3)
+- `budget` (float): Maximum cost budget (default: $5.0)
+- `agentic_fallback` (bool): Enable agentic fallback in loop mode (default: True)
+- `strength` (Optional[float]): Model strength, overrides ctx.obj if provided
+- `temperature` (Optional[float]): Model temperature, overrides ctx.obj if provided
+
+Outputs:
+- Tuple[bool, str, str, int, float, str]: (success, final_program, final_code, attempts, total_cost, model_name)
+
+% Instructions
+
+1. Extract parameters from ctx.obj as fallbacks; direct parameters take priority
+2. Validate inputs (loop requires verification_program)
+3. Resolve file paths via `construct_paths`, falling back to manual derivation if "verify" command is not recognized
+4. For single-pass mode:
+   - Execute the program locally and capture stdout/stderr
+   - Combine output (add "--- STDERR ---" delimiter when stderr present)
+   - Use Cloud vs Local Execution Strategy (see below) to call `fix_verification_errors`
+   - Determine success based on issues found and fixes proposed
+5. For loop mode:
+   - Call `fix_verification_errors_loop` with paths, content, budget parameters, and `use_cloud` flag
+   - Cloud hybrid mode is enabled by default: LLM fix calls go to cloud, program execution stays local
+   - Pass `use_cloud=False` only if `ctx.obj.get('local')` is True (local execution preferred)
+   - Auto-detect cloud availability via JWT token; if available and not forcing local, use cloud
+   - Extract results from the returned dictionary
+6. Write output files to resolved paths
+7. Display summary panel and return results tuple
+
+% Cloud vs Local Execution Strategy:
+%  1. If `ctx.obj.get('local')` is True, use local execution directly.
+%  2. For single-pass mode (loop=False): attempt cloud first via `CloudConfig.get_jwt_token()`.
+%     - POST to `CloudConfig.get_endpoint_url("verifyCode")` with JSON payload:
+%       `{ "programContent": <program>, "promptContent": <prompt>, "codeContent": <code>, "outputContent": <program_output>, "language": <language>, "strength": <strength>, "temperature": <temperature>, "time": <time>, "verbose": <verbose> }`
+%     - Expected response: `{ "fixedCode", "fixedProgram", "explanation", "issuesCount", "totalCost", "modelName" }`
+%     - Request timeout: 400 seconds.
+%  3. For loop mode: cloud hybrid is the default. Local program execution always stays local, but LLM fix calls go to cloud.
+%     - Default: `use_cloud=True` when JWT token is available and `ctx.obj.get('local')` is not True
+%     - Pass `use_cloud=False` only when `ctx.obj.get('local')` is True (explicit local-only mode)
+%     - The `cloud_only` flag still enables cloud LLM calls (for backward compatibility)
+%  4. Handle errors: 401/402/403/400 are non-recoverable (raise `click.UsageError`); 5xx errors fall back to local.
+%  5. If verbose is True, print execution info using Rich panels.
+
+% Module Structure
+
+- Import `DEFAULT_STRENGTH` and `DEFAULT_TIME` from parent package
+- Import `detect_host_python_executable` from `python_env_detector` for environment-aware Python execution
+- Define constants: `DEFAULT_TEMPERATURE = 0.0`, `DEFAULT_MAX_ATTEMPTS = 3`, `DEFAULT_BUDGET = 5.0`
+- Configure logging via `logging.getLogger(__name__)`
+- Helper function `run_program(program_path, args) -> Tuple[bool, str, str]` for program execution
+- Main function `fix_verification_main` as specified above
+
+% Reference Documentation
+<verify_command_spec>
+<shell>sed -n '/^### 16\. verify$/,/^## /p' README.md | sed '$d'</shell>
+</verify_command_spec>

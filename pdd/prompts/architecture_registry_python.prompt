@@ -1,0 +1,137 @@
+% Module: architecture_registry.py
+% Purpose: Architecture registry for tracking multi-issue generation provenance.
+%
+% Maintains `.pdd/architecture_registry.json` to record which modules came from
+% which GitHub issue, and provides merge logic for combining new architecture
+% entries with existing ones.
+
+% Dependencies: None (standard library only: json, logging, os, datetime, pathlib, typing)
+
+% ============================================================================
+% SECTION: Module-level setup
+% ============================================================================
+% - Use `from __future__ import annotations`
+% - Create a module-level logger via `logging.getLogger(__name__)`
+% - Module docstring should describe the registry purpose and location of the JSON file
+
+% ============================================================================
+% SECTION: Helper extractors
+% ============================================================================
+
+% Function: extract_modules(data: Any) -> List[Dict[str, Any]]
+% - Tolerant accessor that accepts either a bare JSON array or a dict with a "modules" key containing an array.
+% - If `data` is a list, return all elements that are dicts.
+% - If `data` is a dict with a "modules" key that is a list, return all dict elements from that list.
+% - Otherwise return [].
+% - Never raises exceptions.
+
+% Function: extract_prd_files(data: Any) -> List[str]
+% - Return prd_files from object format; [] otherwise.
+% - If `data` is a dict with a "prd_files" key that is a list, return all string elements.
+% - Otherwise return [].
+
+% ============================================================================
+% SECTION: Registry persistence
+% ============================================================================
+
+% Function: load_registry(project_root: Path) -> dict
+% - Load the architecture registry from `.pdd/architecture_registry.json`.
+% - If the file doesn't exist, return `{"version": 1, "generations": []}`.
+% - If the file exists but contains invalid JSON or is not a dict, return the same empty structure.
+% - Handle json.JSONDecodeError and OSError gracefully.
+
+% Function: save_registry(project_root: Path, registry: dict) -> None
+% - Save the architecture registry to `.pdd/architecture_registry.json`.
+% - Create the `.pdd` directory (with parents) if it doesn't exist.
+% - Write with indent=2 and ensure_ascii=False.
+
+% Function: record_generation(project_root, issue_number, issue_url, modules_added, modules_updated, target_dir=None) -> None
+% - Parameters:
+%   - project_root: Path
+%   - issue_number: int
+%   - issue_url: str
+%   - modules_added: List[str]
+%   - modules_updated: List[str]
+%   - target_dir: Optional[str] = None
+% - Load the existing registry, append a generation entry with:
+%   - issue_number, issue_url
+%   - timestamp: datetime.now(timezone.utc).isoformat()
+%   - target_dir: use provided value or "."
+%   - modules_added, modules_updated
+% - Save the updated registry.
+
+% ============================================================================
+% SECTION: Architecture merging
+% ============================================================================
+
+% Function: merge_architecture(existing_arch, new_arch, issue_number, issue_url) -> Tuple[List[dict], dict]
+% - Parameters:
+%   - existing_arch: List[dict] — current architecture entries
+%   - new_arch: List[dict] — newly generated architecture entries
+%   - issue_number: int
+%   - issue_url: str
+% - Match modules by exact "filename" field.
+% - Build an origin metadata dict: {"issue_number": ..., "issue_url": ..., "generated_at": <utc iso timestamp>}
+% - Processing logic:
+%   1. Index existing entries by filename.
+%   2. Index new entries by filename.
+%   3. For each existing entry:
+%      - If filename also in new: use the new entry's data, attach origin metadata, mark as "updated".
+%      - If filename only in existing: preserve unchanged, mark as "unchanged".
+%   4. For each new entry not in existing: attach origin metadata, mark as "added".
+% - After merging, call _renumber_priorities on the merged list.
+% - Return (merged_list, merge_report) where merge_report = {"added": [...], "updated": [...], "unchanged": [...]}.
+%   The lists contain filename strings.
+
+% Function: _renumber_priorities(arch: List[dict]) -> None
+% - Re-number priorities to form a valid topological order.
+% - Build a filename-to-index map.
+% - Build adjacency list from "dependencies" field (each dependency is a filename string).
+% - Use Kahn's algorithm for topological sort:
+%   - Initialize queue with nodes having in_degree == 0.
+%   - Sort queue by original "priority" (default 999) for stability.
+%   - At each step, sort queue again and pop the first element.
+% - Handle cycles: append any remaining nodes sorted by original priority.
+% - Assign sequential priority numbers starting from 1 based on topological order.
+% - Modify the list in-place using slice assignment (arch[:] = sorted_entries).
+
+% ============================================================================
+% SECTION: Project discovery
+% ============================================================================
+
+% Function: find_architecture_for_project(project_root: Path) -> List[Path]
+% - Discover all architecture.json files under project_root (root + subdirs).
+% - Check root first: project_root / "architecture.json".
+% - Recursively scan subdirectories using os.walk with:
+%   - max_depth = 4
+%   - excluded dirs: {"node_modules", "__pycache__", ".git", "venv", ".venv", "env"}
+%   - Also skip directories starting with "."
+%   - Sort remaining directory names alphabetically
+% - Return paths with root first, then alphabetically by subdir.
+% - Log warnings on OSError/IOError but don't raise.
+
+% Function: find_project_root(start: Optional[Path] = None) -> Path
+% - Walk up from `start` (default: cwd) looking for a directory containing `.pddrc` or `.git`.
+% - Limit to 20 parent traversals.
+% - If not found, return start.resolve().
+
+% Function: load_combined_architecture_data(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]
+% - Load and merge all architecture.json lists under project_root.
+% - Use find_architecture_for_project to discover files.
+% - If no files found, return (None, project_root / "architecture.json").
+% - Primary path is the first file found (typically root).
+% - For each file, load JSON and use extract_modules to get entries; skip files with errors.
+% - If combined list is empty after processing, return (None, primary_path).
+% - Otherwise return (combined_entries, primary_path).
+
+% Function: get_modules_for_issue(arch_data: List[dict], issue_number: int) -> List[dict]
+% - Filter architecture entries where entry["origin"] is a dict and entry["origin"]["issue_number"] == issue_number.
+% - Return matching entries as a list.
+
+% ============================================================================
+% SECTION: Deliverables
+% ============================================================================
+% - Single Python file with all functions above.
+% - All type hints using typing module (Dict, List, Optional, Tuple, Any).
+% - Use `from __future__ import annotations` for forward references.
+% - No external dependencies beyond the Python standard library.

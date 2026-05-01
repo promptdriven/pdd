@@ -1,0 +1,61 @@
+% Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Click command: `@click.command("checkup")`, `@click.pass_context`, `@track_cost`.
+- Params:
+  - `target` arg (positional, optional — required for issue mode)
+  - `--no-fix` flag
+  - `--timeout-adder` (float, default `0.0`)
+  - `--no-github-state` flag
+  - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against module prompt `<include>` tags; mutually exclusive with `target` and `--pr`/`--issue`)
+  - `--project-root` (path, used with `--validate-arch-includes`)
+  - `--strict` flag (used with `--validate-arch-includes`)
+  - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; requires `--issue`, mutually exclusive with `target`)
+  - `--issue <issue-url>` (PR-mode companion to `--pr` — the source issue the PR is meant to resolve)
+  - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop)
+  - `--review-only` (requires `--review-loop`; run only the primary reviewer first pass and do not invoke fixer/commit/push; may be combined with `--no-fix`)
+  - `--reviewers` (legacy comma-separated role order, default `codex,claude`; first role is reviewer, second role is fixer)
+  - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)
+  - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
+  - `--max-review-rounds` (int, default `5`)
+  - `--max-review-cost` (float, default `10.0`)
+  - `--max-review-minutes` (float, default `90.0`)
+  - `--require-all-reviewers-clean/--no-require-all-reviewers-clean` (default true)
+  - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit reviewer failures as `degraded` instead of `failed`, but never marks them clean or continues mutation)
+  - `--require-final-fresh-review/--no-require-final-fresh-review` (default true)
+  - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
+  - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
+- Signature returns `Optional[Tuple[str, float, str]]`.
+- Mode validation:
+  - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
+  - If `--review-only` is set without `--review-loop`: reject it.
+  - If `--review-loop` is set: require PR mode (`--pr` and `--issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values are positive (`--max-review-rounds >= 1`, cost/minutes > 0).
+  - If `--pr` or `--issue` is set: BOTH must be present; `target` must be `None`; validate `--pr` via `_parse_pr_url(pr_url)` (mention "GitHub pull-request URL" in error); validate `--issue` via `_is_github_issue_url(issue_url_opt)` (mention "GitHub issue URL" in error); use `issue_url_opt` as the effective issue URL.
+  - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").
+- Force `--no-fix` when `--pr` is set and `--review-loop` is NOT set (legacy PR verification still cannot push fixes). Print a warning to stderr explaining why and how to re-invoke if fixes were intended.
+- `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
+- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states)` where `pr_url` is `None` in non-PR modes.
+- If not quiet, `click.echo` exactly these lines:
+  - `Status: Success|Failed`
+  - `Message: {message}`
+  - `Cost: ${cost:.4f}`
+  - `Model: {model}`
+- If `not success`: raise `click.exceptions.Exit(1)`; else return `(message, cost, model)`.
+- Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error(exception, "checkup", ctx.obj.get("quiet", False))` and return `None`.
+
+% Dependencies
+<include-many>context/agentic_checkup_example.py, context/agentic_sync_example.py, context/track_cost_example.py, context/core/errors_example.py</include-many>
+<pdd.agentic_common>
+    <include select="def:example_github_state_helpers,def:example_validate_cached_state,def:_parse_pr_url,def:_is_github_issue_url">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.architecture_sync>
+    <include select="def:example_validate_dependencies,def:example_validate_interface,def:run_validate_arch_includes_cli">context/architecture_sync_example.py</include>
+</pdd.architecture_sync>
+<pdd.agentic_checkup_orchestrator>
+    <include select="def:main">context/agentic_checkup_orchestrator_example.py</include>
+</pdd.agentic_checkup_orchestrator>
+<pdd.agentic_sync>
+    <include>context/agentic_sync_example.py</include>
+</pdd.agentic_sync>

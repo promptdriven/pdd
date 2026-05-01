@@ -587,7 +587,7 @@ graph TB
 - **Entry points**: `pdd connect` (web UI), direct CLI, or the GitHub App
 - **Start**: `pdd generate <url>` scaffolds architecture, prompts, and `.pddrc` from a PRD GitHub issue
 - **Core loop**: `pdd sync` runs the full auto-deps → generate → example → crash → verify → test → fix → update cycle for each module
-- **Health check**: `pdd checkup <url>` identifies what needs attention next
+- **Health check**: `pdd checkup <url>` identifies what needs attention next; `pdd checkup --pr ... --issue ...` verifies existing PRs
 - **Defect path**: `test <url>` or `bug <url>` surfaces failing tests → `fix <url>` resolves them
 - **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules
 
@@ -598,7 +598,7 @@ graph TB
 ### Agentic Commands (Issue-Driven)
 - **[`change`](#8-change)**: Implement feature requests from GitHub issues (13-step workflow)
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
-- **[`checkup`](#17-checkup)**: Run automated project health check from a GitHub issue (8-step workflow)
+- **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or verify existing PRs against source issues
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
 - **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename)
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (18-step workflow in agentic mode)
@@ -2582,17 +2582,31 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 
 Run an automated health check on a project from a GitHub issue. The checkup workflow explores the project, identifies problems (missing deps, build errors, interface mismatches, failing tests, orphan pages, inconsistent API patterns), optionally fixes them, writes regression and e2e tests, and creates a PR.
 
+`checkup` can also verify an existing pull request against its source issue. The default PR mode is verification-only; the optional review-loop mode runs a reviewer/fixer loop that can commit and push fixes back to the PR branch.
+
 ```
-pdd [GLOBAL OPTIONS] checkup [OPTIONS] GITHUB_ISSUE_URL
+pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
 ```
 
 Arguments:
-- `GITHUB_ISSUE_URL`: GitHub issue URL describing what to check (e.g., "Check the entire CRM app")
+- `GITHUB_ISSUE_URL`: GitHub issue URL describing what to check (e.g., "Check the entire CRM app"). Omit this argument in PR mode and pass `--pr` plus `--issue` instead.
 
 Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub state persistence, use local-only
+- `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
+- `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
+- `--review-loop`: In PR mode, run the primary-reviewer/fixer loop. The primary reviewer reviews the PR, the fixer addresses actionable findings, fixes are committed and pushed to the PR branch, and the primary reviewer verifies until clean or a limit is reached.
+- `--review-only`: With `--review-loop`, run only the primary reviewer first pass. This never invokes the fixer, commits, or pushes.
+- `--reviewer ROLE`: Primary reviewer role for `--review-loop` (for example, `codex`).
+- `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
+- `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
+- `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
+- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 10.0).
+- `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
+- `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
+- `--continue-on-reviewer-limit`: Report provider, rate, context-window, and timeout failures as `degraded` instead of `failed`. Degraded reviewers are still not clean and do not continue mutation.
 
 **How it works (8-step workflow with iterative fix-verify loop):**
 
@@ -2618,6 +2632,10 @@ Options:
 
 Each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail.
 
+**PR Verification Mode**: Use `--pr` and `--issue` to verify an existing PR against the issue it is intended to resolve. Without `--review-loop`, this mode remains verification-only and refuses to apply fixes or push to the PR branch.
+
+**Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the same reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification, and reviewer provider failures remain not-clean.
+
 Example:
 ```bash
 # Full checkup with fixes
@@ -2628,6 +2646,26 @@ pdd checkup --no-fix https://github.com/myorg/myrepo/issues/42
 
 # With extra timeout for large projects
 pdd checkup --timeout-adder 120 https://github.com/myorg/myrepo/issues/42
+
+# Verify an existing PR against its source issue without applying fixes
+pdd checkup \
+  --pr https://github.com/myorg/myrepo/pull/123 \
+  --issue https://github.com/myorg/myrepo/issues/42
+
+# Run Codex as reviewer and Claude as fixer on an existing PR
+pdd checkup \
+  --pr https://github.com/myorg/myrepo/pull/123 \
+  --issue https://github.com/myorg/myrepo/issues/42 \
+  --review-loop \
+  --reviewer codex \
+  --fixer claude
+
+# Review-loop audit only: no fixer, commits, or pushes
+pdd checkup \
+  --pr https://github.com/myorg/myrepo/pull/123 \
+  --issue https://github.com/myorg/myrepo/issues/42 \
+  --review-loop \
+  --review-only
 ```
 
 ### 18. connect

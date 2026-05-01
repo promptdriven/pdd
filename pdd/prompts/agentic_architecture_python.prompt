@@ -1,0 +1,53 @@
+<pdd-reason>CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, discovers cross-project context, invokes orchestrator.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_architecture", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_is_github_issue_url", "signature": "(url: str)", "returns": "bool"},
+      {"name": "_parse_github_url", "signature": "(url: str)", "returns": "Optional[Tuple[str, str, int]]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_architecture_orchestrator_python.prompt</pdd-dependency>
+
+% Role & Scope
+The `pdd/agentic_architecture.py` module serves as the CLI entry point for the agentic architecture workflow. Its responsibility is to validate GitHub issue URLs, fetch issue content and comments via the `gh` CLI, ensure the local repository context is correctly set up (cloning if necessary), discover cross-project context (such as sibling architectures and existing configurations), and finally invoke the orchestrator to begin the generation process.
+
+% Requirements
+1. **Core Function**: Implement `run_agentic_architecture(issue_url, *, verbose=False, quiet=False, timeout_adder=0.0, use_github_state=True, skip_prompts=False, target_dir=None, force_single=False) -> Tuple[bool, str, float, str, List[str]]`.
+2. **Return Contract**: Must return a 5-tuple: `(success: bool, message: str, total_cost: float, model_used: str, output_files: List[str])`.
+3. **URL Parsing**:
+    - `_is_github_issue_url(url) -> bool`: Detects valid GitHub issue URLs.
+    - `_parse_github_url(url) -> Optional[Tuple[str, str, int]]`: Extracts `owner`, `repo`, and `issue_number`.
+    - Supported formats: `https://github.com/`, `https://www.github.com/`, or `github.com/` followed by `{owner}/{repo}/issues/{number}`.
+4. **GitHub Integration**:
+    - Use `gh api` to fetch the issue: `repos/{owner}/{repo}/issues/{number}`.
+    - Use `gh api {comments_url} --paginate` to fetch all comments.
+    - Extract: `title`, `body`, `user.login`, and `comments_url`.
+5. **Repository Management**:
+    - `_ensure_repo_context(owner, repo, cwd, quiet)`:
+        - If the current directory is the matching git repo, use it.
+        - If it's a mismatched git repo, warn the user but proceed.
+        - If not in a git repo, check for a `{repo}/` subdirectory or clone it using `gh repo clone`.
+6. **Context Discovery**:
+    - `_extract_target_dir(issue_body) -> Optional[str]`: Parse target subdirectory from the issue body. Match backtick-quoted (`` in `dir` ``), double-quote-quoted (`in "dir"`), or unquoted directory-like names (must contain underscore or slash). CLI parameter `target_dir` takes precedence.
+    - `_parse_related_issues(body)`: Extract `#NNN` references from a `### Related sub-issues:` section.
+    - `_fetch_sibling_architectures(cwd, target_dir)`: Scan peer directories for `architecture.json` files (ignoring hidden, `node_modules`, and `__pycache__`). When generating into a subdir, also check root `architecture.json`. Format findings as a Markdown table with filename, filepath, description, interface type, and origin issue columns.
+    - `_read_existing_pddrc(cwd)`: Read the content of the root `.pddrc` file if present.
+    - `_read_existing_architecture(cwd, target_dir)`: Read existing `architecture.json` at the target location (for merge context).
+7. **Orchestration**: Pass all gathered context (`sibling_architectures`, `existing_pddrc`, `existing_architecture`, `related_issues`, `target_dir`, `force_single`) to the `run_agentic_architecture_orchestrator`.
+
+% Dependencies
+Import `run_agentic_architecture_orchestrator` from `pdd.agentic_architecture_orchestrator`.
+
+% Instructions
+- Use `subprocess.run` for executing `gh` and `git` commands, capturing output for processing.
+- Use `rich.console` for user-facing logging and warnings.
+- Ensure robust error handling for missing `gh` CLI, invalid URLs, API failures, and cloning errors.
+- When scanning for sibling architectures, normalize each `architecture.json` through `pdd.architecture_registry.extract_modules` before including it in the context. `extract_modules` tolerates both on-disk shapes (bare array and `{"prd_files": [...], "modules": [...]}` wrapper) and never raises, so a missing or malformed file produces `[]` and is skipped cleanly.
+
+% Deliverables
+- `pdd/agentic_architecture.py`

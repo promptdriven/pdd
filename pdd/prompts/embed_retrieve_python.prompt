@@ -1,0 +1,36 @@
+<pdd-reason>Provides embedding-based coarse retrieval for ranking text candidates by semantic similarity.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "embed_and_retrieve", "signature": "(query: str, candidates: List[str], top_n: int = 50)", "returns": "List[Tuple[str, float]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write a Python module that provides embedding-based coarse retrieval for ranking text candidates by semantic similarity to a query.
+
+% Role & Scope
+This module handles embedding computation via `litellm.embedding()` and cosine similarity ranking. It is used by auto_include to pre-filter large candidate sets before LLM-based reranking.
+
+% Requirements
+1. Function: `embed_and_retrieve(query: str, candidates: List[str], top_n: int = 50) -> List[Tuple[str, float]]`
+2. Input: `query` is the prompt text to match against. `candidates` is a list of candidate text strings (file summaries). `top_n` controls how many top results to return.
+3. Output: A list of `(candidate_text, similarity_score)` tuples sorted by descending cosine similarity score.
+4. Use `litellm.embedding()` to compute embeddings for the query and all candidates. Batch candidates for efficiency.
+5. Use a configurable embedding model via environment variable `PDD_EMBEDDING_MODEL` (default: `text-embedding-3-small`).
+6. Compute cosine similarity between the query embedding and each candidate embedding using numpy dot product / norms.
+7. Return the top-N candidates sorted by descending similarity.
+8. Error handling: If the embedding API call fails (network error, missing API key, unsupported model), log a warning and return all candidates with a similarity score of 0.0 (graceful fallback).
+9. If `candidates` is empty or `top_n <= 0`, return an empty list.
+
+% Deliverables
+- Code: `pdd/embed_retrieve.py`
+- Example: `context/embed_retrieve_example.py`
+- Test: `tests/test_embed_retrieve.py`

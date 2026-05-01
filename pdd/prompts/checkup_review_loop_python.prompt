@@ -1,0 +1,145 @@
+% Write `pdd/checkup_review_loop.py`, implementing `pdd checkup --review-loop`.
+
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_change_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_e2e_fix_orchestrator_python.prompt</pdd-dependency>
+
+% Goal
+Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
+
+% Public API
+1. `parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]`.
+2. `run_checkup_review_loop(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str]`.
+3. Dataclasses (all dataclasses must be importable from this module): `ReviewLoopContext`, `ReviewLoopConfig`, `ReviewLoopState`, `ReviewFinding`, `ReviewResult`, `FixResult`.
+
+% Reviewer/fixer roles
+- Default role order: reviewer=`codex`, fixer=`claude`. `ReviewLoopConfig.reviewers` remains as backward-compatible shorthand where the first normalized role is the reviewer and the second normalized role is the fixer. Explicit `ReviewLoopConfig.reviewer` and `ReviewLoopConfig.fixer` override that shorthand.
+- Aliases: `chatgpt|openai → codex`, `anthropic → claude`, `google → gemini`. Unknown names are dropped.
+- Provider mapping (`ROLE_TO_PROVIDER`): `codex → openai`, `claude → anthropic`, `gemini → google`. Each role runs through `run_agentic_task` with the matching `PDD_AGENTIC_PROVIDER` set via a context manager that always restores the prior value.
+- Reviewer and fixer must be different roles. If role resolution produces the same role for both, short-circuit with a final report whose primary reviewer status is `failed` and whose `stop_reason` explains that reviewer and fixer must be different.
+- The primary reviewer is the sole source of truth. The fixer may return `not_valid` or `blocked`, but those dispositions only close a finding if the primary reviewer accepts the rationale on the next verification pass.
+- `ReviewLoopConfig.review_only` runs the same primary reviewer prompt once, persists the normal review artifacts/final report, and never invokes the fixer, fetches push metadata, commits, or pushes. In review-only mode the reviewer/fixer distinct-role check is skipped because no fixer is used.
+
+% Worktree, cwd, and checkout ownership
+4. The loop owns the worktree lifecycle for the entire session.
+   - Create exactly one worktree via `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False)` before any reviewer runs.
+   - Never re-fetch or re-create the worktree mid-loop.
+   - Reviewer, fixer, and verifier roles all run with this worktree as their `cwd`. They never operate on the user's primary checkout.
+5. Each reviewer/fixer/verifier role MUST be invoked with `cwd=worktree`. Document this in code comments and ensure no role escapes the worktree by computing paths via `_get_git_root` or by falling back to the current process cwd.
+6. The fixer mutates files in the worktree, then `_commit_and_push_if_changed` commits and pushes. The verifier MUST run only after a successful push, against the same worktree the fixer wrote. A failed push aborts the loop with `state.stop_reason` set; no verifier runs against unpushed local commits, and the failed reviewer's status remains non-clean.
+
+% --no-github-state contract
+7. `use_github_state` is a write-only suppression switch:
+   - When `False`, the loop MUST NOT post the final report to the source issue or PR (skip both `repos/.../issues/{n}/comments` and `pr comment`).
+   - When `False`, all read-side calls (`gh api repos/.../pulls/{n}` to obtain `head_ref`/`clone_url`) still run; the loop has no stdout/stdin ingest path for issue or PR content.
+   - The flag does not change reviewer prompts, artifact persistence, or push behavior.
+8. Do not parse stdout-supplied issue/PR content. Issue and PR context come from `ReviewLoopContext`, which `agentic_checkup.py` fills via authenticated `gh api` calls. If a future offline mode is added, it must be a separate, named flag, not a silent fallback.
+
+% Authenticated push contract
+9. Pushing fixes back to the PR head branch reuses the shared token-refresh helper from `agentic_e2e_fix_orchestrator` (`_push_with_retry_remote`, exposed as `pdd.agentic_e2e_fix_orchestrator.push_with_retry` or equivalent). The helper MUST:
+   - Accept `(cwd, remote, repo_owner, repo_name, refspec)` so it can target the PR head repo's clone URL and the PR head ref instead of `origin HEAD`.
+   - Run `git push <remote> <refspec>` first; on `non-fast-forward`, retry with `--force-with-lease`.
+   - On auth failure (`Authentication failed`, `HTTP 401`, `could not read Username`, `HTTP Basic: Access denied`), read `PDD_GH_TOKEN_FILE`, rewrite the remote URL to `https://x-access-token:{quote(token, safe='')}@github.com/{owner}/{repo}.git`, retry the push, and then restore the original URL in a `finally` block. Never leave a tokenized URL in git config.
+10. `_commit_and_push_if_changed` MUST:
+   - Stage with `git add -A`, then commit with the explicit bot identity `PDD Bot <pdd-bot@users.noreply.github.com>` only when `git status --porcelain` is non-empty.
+   - Resolve `(clone_url, head_ref)` from `gh api repos/{pr_owner}/{pr_repo}/pulls/{pr_number}` via `_fetch_pr_metadata`. Missing values abort with a clear message.
+   - Delegate the push itself to the shared retry helper, passing the head repo's `clone_url` and `HEAD:{head_ref}` as the refspec.
+
+% Configurable reviewer status gates
+11. `ReviewLoopConfig` exposes the gate knobs (also surfaced through CLI flags):
+    - `blocking_severities: Tuple[str, ...]` — highest-priority severities that decide review-loop urgency and historical ship-gate compatibility. Default `("blocker", "critical", "medium")`.
+    - `clean_reviewer_states: Tuple[str, ...]` — compatibility parser for downstream reviewer-status gates. Default `("clean",)`. `degraded`, `failed`, and `missing` are hard not-clean states and must be dropped even if a caller lists them.
+    - `require_all_reviewers_clean: bool` — retained for backward-compatible CLI/API shape, but the primary reviewer is the only ship gate.
+    - `continue_on_reviewer_limit: bool` — when true, provider/rate/quota/context-window/timeout reviewer failures are reported as `degraded` instead of `failed`; this never marks the reviewer clean, never lets the loop ship, and never continues into fixer/push mutation without a completed review.
+12. `_required_findings` must read from `config.blocking_severities`. Never hard-code the priority set. The list is a priority label only: every valid, in-scope reviewer finding remains actionable until fixed or explicitly accepted by the reviewer as resolved.
+12a. The reviewer prompt and the fixer prompt MUST also inject `config.blocking_severities` into their text (e.g. `"Highest-priority severities: blocker, critical"`). Hard-coding "blocker, critical, and medium" in prompt prose lets the LLM keep flagging severities the user has narrowed off, producing prompt/code drift exactly like the one this PR fixes for `pdd checkup`.
+12b. The reviewer prompt MUST explicitly say it is the automated equivalent of this manual request: "review PR as a user workflow perspective; check if any prompt, example, or architecture update is needed; fully review the PR with the existing codebase; check for no regressions; verify it fully aligns with and resolves the issue; make sure it does not open more holes."
+12c. The reviewer prompt MUST ask for a full PR review from a user-workflow perspective before code-internal checks. It must tell the reviewer to trace how a real CLI/API user experiences the changed behavior, verify the PR fully resolves the issue, check alignment with the existing codebase, decide whether prompts/examples/architecture/docs/CLI help/tests need updates, and look for regressions or newly opened holes in security, billing/cost, API, reliability, UX, compatibility, tests, and maintainability.
+12d. The reviewer prompt MUST evaluate issue intent instead of mechanically enforcing the issue's literal proposed implementation. If a PR intentionally uses a different approach, the reviewer should accept it when PR/issue context justifies the change and the new approach fully solves the underlying user problem. It should still report findings when the direction change is unjustified, contradicted by user comments, leaves the underlying problem unresolved, leaves stale user-facing flags/docs/examples/acceptance language promising the old behavior, omits required documentation/tests/prompt/architecture updates, or creates new risks.
+12e. For source-of-truth, catalog, manifest, cache, leaderboard, or generated-data changes, the reviewer prompt MUST ask the reviewer to check provenance and authoritative sources when practical, including model/variant identity, normalization, dates, subsets, ranks, confidence fields, and whether reviewers can audit where each value came from. It must also tell the reviewer to check whether the PR recreates the same bug class in a different form.
+12f. For model catalog and manifest-based scoring changes, the reviewer prompt MUST explicitly ask the reviewer to verify provider roots and aliases actually produce catalog rows, default models are not assigned high/low/minimal reasoning-variant scores, and normalization does not collapse distinct Arena variants into one score.
+12g. The reviewer prompt MUST tell the reviewer not to collapse independently actionable problems into one broad finding. When a PR changes architecture, it should also review the alternate architecture on its own terms and report prompt/docs/contract, provenance, data-quality, or auditability fixes that would still be needed if maintainers accepted the new direction.
+12h. The reviewer prompt MUST require an explicit issue-contract trace. If the issue or PR describes numbered steps, acceptance criteria, workflow phases, dry-run/non-dry-run behavior, state transitions, or failure handling, the reviewer must verify each item against implementation evidence and report skipped or partially implemented steps separately.
+12i. The reviewer prompt MUST require state/side-effect ordering checks: workflows must not save hashes, checkpoints, cache entries, success markers, comments, or reports that imply completion when a required downstream step failed or was skipped. Partial failures must not make later runs short-circuit as if the input was handled.
+12i-1. For security, credential, token, logging, and redaction changes, the reviewer prompt MUST require tracing every log, exception, warning, retry, auth-refresh, and diagnostic path. It must explicitly require verifying secret scrubbing before truncation/slicing/formatting/previewing so partial token fragments cannot leak. It must also require a concrete search sweep for exception/diagnostic patterns such as `str(e)`, `repr(e)`, `stderr`, `stdout`, `logger.warning`, `logger.exception`, `RuntimeError`, slicing (`[:...`), and truncate/preview helpers.
+12i-2. For prompt-driven modules, the reviewer prompt MUST require prompt/example/architecture/docs/generated-metadata synchronization checks, including architecture entries, prompt contracts, `.pdd/meta` hashes/run records, examples, and tests when they exist.
+12j. The reviewer prompt MUST require a caller-compatibility sweep for changed public functions, CLI flags, imports, and generated module interfaces, using repository searches such as `rg "function_name\("` or `rg "import_name"` to verify all callers still pass valid arguments and import existing symbols.
+12k. The reviewer prompt MUST ask for targeted read-only-safe repros when practical: compile touched Python files, import changed modules, inspect CLI help, or execute minimal workflows in a temporary directory. If a repro cannot run, the reviewer should still trace the concrete code path a user would hit.
+12k-1. The reviewer prompt MUST explicitly exclude external GitHub/CI readiness state from findings. It must tell reviewers to ignore pending/action-required GitHub status checks, Cloud Build status, auto-heal status, mergeability, synthetic merge status, and required-check readiness unless that state is direct evidence of a concrete code or repository-file regression introduced by the PR.
+12l. Put the manual-review standard before the large issue/PR/architecture context in the prompt so the reviewer sees the task frame before reading source material.
+12m. `ReviewLoopContext` must include PR title/body/head/base context plus changed-file inventory, PR conversation comments, and submitted PR reviews fetched from GitHub. The reviewer prompt must include that PR context, not only the PR URL. Direction changes are often explained in the PR body/comments/reviews; hiding that context causes the reviewer to over-enforce stale issue mechanics or miss reviewer-requested checks.
+12n. In `mode="verify"`, the reviewer prompt MUST explicitly say the verifier pass is not a narrow checkbox verification. It must first verify every previous finding and fixer response, then perform a fresh full PR review again using the same manual-review standard. It must look for newly visible issues, missed issues, regressions from the fix, and prompt/example/architecture/docs/test drift, and it must explain that the loop repeats until the reviewer reports no actionable findings or `max_rounds` is reached.
+
+% Findings model
+13. Normalize reviewer output into `ReviewFinding(severity, reviewer, area, evidence, finding, required_fix, location, status, round_number)`.
+    - Accept JSON in fenced ```json blocks, fenced ``` blocks, or first/last brace fallback.
+    - Fall back to `[severity] message` bracket parsing for free-text reviewers.
+    - Also parse Codex PR-review priority bullets like `- [P1] [file](path:line) message`, mapping `P0->blocker`, `P1->critical`, `P2->medium`, and `P3->low`.
+    - For markdown priority headings followed by explanatory paragraphs, preserve that paragraph in `evidence` and extract the first linked `path:line` from the paragraph when the heading itself has no location.
+    - Also parse manual Codex review lines like `1. Blocking: ...`, `2. High: ...`, and `- Medium: ...`, mapping `Blocking->blocker` and `High->critical`.
+    - Also parse numbered markdown finding headings with no explicit severity, such as `1. **Finding title.**`, defaulting severity to `medium` and extracting the first linked `path:line` from the following paragraph when present.
+    - When a numbered heading starts with a free-form severity phrase such as `Blocking workflow hole: ...`, infer the leading severity (`Blocking` -> `blocker`) even when the word before the colon is not exactly the severity token.
+    - Also parse concrete unprioritized markdown bullets under `**Findings**`, such as `- [path.py:12](.../path.py:12) message`, defaulting severity to `medium` when a file/location link is present.
+    - When a reviewer returns no JSON and no parsed findings, treat only explicit clean markers as clean. Accept exact clean lines such as `Findings: none`, `No actionable findings`, and real verifier prose that starts with `No actionable issues found.` when the rest of that line does not contain negating words such as `but`, `however`, `failed`, or `error`. Generic prose such as `Everything looks fine, no issues` remains failed/unparsable.
+    - If a successful reviewer/verifier call still produces non-JSON output with no parsed findings and no provider-failure markers, run one bounded same-role parse-repair call. The repair prompt must instruct the role to convert only the raw reviewer text into the required JSON schema, not to perform a new review or add findings. Accept the repair only when it returns parseable JSON with `status` clean/findings/failed. If repair fails, preserve the original failed/unparsable status.
+    - After JSON or markdown parsing, filter out findings that only describe external PR readiness state (`auto-heal-pr`, GitHub status checks, Cloud Build, mergeability, pending/action-required required checks) when the finding has no concrete repository-file location or file reference. If every parsed finding is filtered this way, normalize the reviewer result to `status="clean"`; hard-not-clean statuses such as `failed`, `degraded`, and `missing` remain not-clean.
+    - `severity` lower-cased; unknown values default to `medium`.
+14. Dedup key: `severity|location|compact(finding)|compact(required_fix)`, truncated to 500 chars. Dedup must never discard a finding because only one reviewer found it; it only suppresses repeat work in subsequent rounds.
+15. When the original reviewer verifies a finding as fixed, mark that finding `status="fixed"` and exclude it from the final report's remaining-findings table. When a verifier re-reports only part of the original finding set, mark absent original findings fixed and keep only the re-reported findings open.
+15a. Disagreement protocol: track fix attempts by finding key. If the fixer returns `not_valid`, `partially_fixed`, or `blocked`, include that disposition and rationale in the verifier prompt. If the primary reviewer accepts the rationale, the finding disappears from the verifier's findings and is marked fixed/resolved. If the primary reviewer rejects the rationale, it must re-report the finding with concrete evidence and a reason the fixer should act on it; the finding remains open and returns to the fixer on the next round. No fixer disposition is terminal by itself.
+
+% Loop semantics
+16. The primary reviewer runs first in `mode="review"`. If it reports no actionable findings, stop clean and mark `fresh_final_status="clean"` for Step-7 report compatibility without spawning another reviewer.
+16a. In `review_only=True`, stop after that first primary-reviewer pass. If findings exist, mark reviewer status `findings`, leave `fresh_final_status="missing"`, and write a final report whose stop reason says review-only mode reported findings. If no findings exist, mark reviewer status and fresh-final clean. Do not run the fixer, fetch PR push metadata, commit, or push.
+17. The fixer receives all of the primary reviewer's actionable findings, not only the highest-priority severities. After the fixer edits, commits, and pushes successfully, the same primary reviewer re-runs in `mode="verify"` with the original findings and the fixer's structured response injected into the prompt.
+17a. The fixer prompt must require per-finding dispositions in JSON: `fixed`, `not_valid`, `partially_fixed`, or `blocked`, keyed by each finding's stable key, with a short rationale. Accept legacy `not_a_bug` by normalizing it to `not_valid`. Persist the parsed disposition/rationale in the fixer artifact and final state.
+17b. The fixer prompt MUST ask the fixer to address every valid, in-scope finding when practical, while prioritizing the configured blocking severities because those determine whether the loop continues. It must explain that "focused fixes" means avoiding unrelated refactors and broad churn, not leaving real issues unfixed. If the fixer leaves any valid finding unfixed, it must return `partially_fixed` or `blocked` with a concrete rationale.
+18. The verifier pass is also the next full review pass: it must verify prior fixes and then re-review the whole PR. If it returns actionable findings, those findings become the next round's fixer input. Do not run an extra reviewer at the start of the next round unless there is no pending verifier finding set. This models the manual Codex-review / Claude-fix / Codex-review workflow and avoids two independent reviewers arguing.
+19. A reviewer that hits a provider/rate/quota/context-window limit, times out, or returns unparsable output produces `status` in `{"failed", "degraded", "missing"}` (use `_failure_status` to classify based on output keywords and `continue_on_reviewer_limit`). With the default `continue_on_reviewer_limit=False`, provider/rate/quota/context-window/timeout failures are `failed`; with the flag enabled they are `degraded`. Such statuses are NOT clean even if `clean_reviewer_states` is widened — preserve safety. Do not classify normal finding prose as degraded merely because it contains the word "context"; require context-window/length/limit wording.
+20. Budget caps:
+    - `max_rounds` (int, ≥ 1)
+    - `max_cost` (float USD, > 0)
+    - `max_minutes` (float wall clock, > 0)
+    Crossing any cap stops the loop, sets the relevant `*_reached` flag on state, and renders a final report whose reviewer-status reflects the unfinished round.
+
+% Persisted artifacts
+21. Artifacts live under `<git_root>/.pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/`. The directory is created before the first reviewer runs.
+22. For every reviewer/fixer/verifier invocation, persist:
+    - `round-{N}-{mode}-{role}.prompt.txt` — the exact prompt sent to the role.
+    - `round-{N}-{mode}-{role}.output.txt` — the raw LLM output.
+    - `round-{N}-{mode}-{role}.findings.json` — `_normalize_findings(...)` output as JSON list (empty list when none parse out). Fix steps write `{"summary": "...", "changed_files": [...], "dispositions": {...}, "rationales": {...}}` JSON instead.
+23. After every reviewer or fixer step completes, write `dedup-state-round-{N}.json` containing the cumulative findings (one per dedup key) with their current `status`, `reviewer`, `round_number`, and full payload. Overwriting at each step is fine; we only need the latest cumulative snapshot per round.
+24. At end of loop write:
+    - `final-report.md` — exact bytes returned to the caller.
+    - `final-state.json` — `{reviewer_status, fresh_final_status, stop_reason, total_cost, last_model, max_rounds_reached, max_cost_reached, max_duration_reached, fix_attempts_by_key, dispute_notes_by_key, reviewer_feedback_by_key, findings: [...]}` — the canonical machine-readable verdict.
+25. `_write_artifact(path, content)` MUST `mkdir(parents=True, exist_ok=True)` and write UTF-8.
+
+% Final report
+26. Begin the report with `## Step 7/8: Review Loop Final Report`. Required keys, in order:
+    - `PR: {pr_url}`
+    - `Issue: {issue_url}`
+    - `issue_aligned: true|false`
+    - `reviewer-status: codex=... claude=fixer fresh-final=...` (primary reviewer status, fixer role marker, plus `fresh-final`)
+    - `fresh-final-review: clean|findings|failed|degraded|missing`
+    - `max-rounds-reached: true|false`
+    - `max-cost-reached: true|false`
+    - `max-duration-reached: true|false`
+27. Sections, in order: `### Summary`, `### Per-Reviewer Status` (markdown table including primary reviewer, fixer role marker, and `fresh-final`), `### Findings` (markdown table; only unfixed findings with columns `Severity | Status | Location | Finding | Required fix | Reviewer`; placeholder row when empty), `### Fixer Rationale` (one bullet per remaining finding with latest fixer disposition/rationale, or `- none`), `### Fixes Attempted` (one bullet per `FixResult`).
+28. Pipe characters and newlines inside finding fields must be escaped via a helper before being inserted into table rows.
+
+% GitHub posting
+29. When `use_github_state` is `True`, post the final report to BOTH the issue (`POST repos/{owner}/{repo}/issues/{n}/comments`) and the PR (`gh pr comment`). When `False`, skip both.
+
+% Return contract
+30. Return `(success=True, report_str, total_cost, last_model)` whenever the loop completes and produces a report — even when reviewer-status is non-clean. Downstream verdict adapters classify ship/not-ready/unknown from the report. Only return `success=False` when the function would otherwise be unable to produce a report (e.g., catastrophic interpreter-level error — but in this module's normal flow this does not occur).
+
+% Dependencies
+<pdd.agentic_common><include select="def:run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_change><include select="def:_run_gh_command">context/agentic_change_example.py</include></pdd.agentic_change>
+<pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
+<pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
+
+% Deliverables
+- Code: `pdd/checkup_review_loop.py`

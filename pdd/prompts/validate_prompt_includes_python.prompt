@@ -1,0 +1,65 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python module that validates and cleans `<include>` tags in generated prompt files, removing or replacing references to non-existent files.
+
+% This module addresses Issue #225: When using the generic/generate_prompt template, the LLM may generate `<include>` tags that reference files that don't exist (e.g., `<include>context/some_module_example.py</include>`). This module validates these references and cleans them up before the prompt is saved.
+
+% Dependencies
+<pdd.auto_include>
+    <include select="def:main">context/auto_include_example.py</include>
+</pdd.auto_include>
+
+% Here are the functions to implement:
+
+% Function 1: validate_include_tag
+    Inputs:
+        'file_path' - A string containing the file path from an `<include>` tag.
+        'base_dir' - A string containing the base directory to resolve relative paths against.
+    Outputs:
+        'exists' - A boolean indicating whether the file exists.
+
+% Function 2: validate_prompt_includes
+    Inputs:
+        'content' - A string containing the generated prompt content with `<include>` tags.
+        'base_dir' - A string containing the base directory to resolve relative paths against. Defaults to current working directory.
+        'remove_invalid' - A boolean indicating whether to remove invalid `<include>` tags (True) or replace them with comments (False). Defaults to False.
+    Outputs:
+        'validated_content' - A string containing the prompt with invalid `<include>` tags handled.
+        'invalid_includes' - A list of strings containing the file paths that were found to be invalid.
+
+% Implementation details:
+    1. Use regex to find all `<include>...</include>` patterns in the content.
+    2. For each match, extract the file path and check if the file exists relative to base_dir.
+    3. If the file does not exist:
+        - If remove_invalid is True: Remove the entire XML block containing the `<include>` tag (e.g., `<dependency_name><include>...</include></dependency_name>`).
+        - If remove_invalid is False: Replace the `<include>` tag with a comment describing the missing dependency (e.g., `<!-- Missing: path/to/file.py -->`).
+    4. Track all invalid includes and return them along with the validated content.
+    5. Handle edge cases:
+        - Nested tags (e.g., `<dependency><include>...</include></dependency>`)
+        - Multiple includes on the same line
+        - Paths with special characters or spaces
+
+% Example usage:
+```python
+from pdd.validate_prompt_includes import validate_prompt_includes
+
+content = '''
+Dependencies
+<database_models>
+  <include>context/database_models_example.py</include>
+</database_models>
+<auth_utils>
+  <include>context/auth_utils_example.py</include>
+</auth_utils>
+'''
+
+validated, invalid = validate_prompt_includes(content, base_dir=".", remove_invalid=False)
+# invalid will contain ['context/database_models_example.py', 'context/auth_utils_example.py']
+# if those files don't exist
+```
+
+% The module should:
+    - Use pathlib.Path for file path operations
+    - Use re module for regex operations
+    - Handle both absolute and relative paths
+    - Be efficient and avoid re-reading the same file multiple times
+    - Include proper type hints
+    - Include docstrings for all functions

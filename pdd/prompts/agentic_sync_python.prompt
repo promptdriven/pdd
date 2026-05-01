@@ -1,0 +1,107 @@
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+
+% Goal
+Write the `pdd/agentic_sync.py` module.
+
+% Role & Scope
+Entry point for sync orchestration. Supports two public workflows:
+1. `run_agentic_sync(...)`: accepts a GitHub issue URL, fetches issue content, identifies which modules need syncing (preferring deterministic branch-diff detection, falling back to LLM), validates architecture.json dependencies, then dispatches to the AsyncSyncRunner for parallel execution with dependency-aware scheduling. Before dispatch, validates each module via dry-run with per-module cwd resolution and LLM fallback, filters hallucinated basenames, then filters already-synced modules via fingerprint check.
+2. `run_global_sync(...)`: Tier 1 no-argument global sync. Triggered by the CLI when `pdd sync` is invoked with no BASENAME. Do not use PRD files, PRD fingerprinting, architecture schema migration, or agentic PRD analysis in v1.
+
+% Requirements
+1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str]`
+2. Return 4-tuple: (success, message, total_cost, model_used)
+3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
+4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
+5. Escape curly braces in issue content for safe `.format()` calls (reuse `_escape_format_braces`)
+6. Load architecture via `find_architecture_for_project` (from `architecture_registry`): discovers multiple architecture.json files (root + subdirs), combines all entries into one list. Return None if none found or all invalid.
+7. **Module identification (two strategies, try in order):**
+   a. `_detect_modules_from_branch_diff(project_root)`: deterministic, free — diff current branch against main, extract basenames from changed `.prompt` files (excluding `_LLM.prompt`). Uses `extract_module_from_include` for basename extraction, preserves subdirectory prefixes. Returns empty list on main/master/HEAD or on error.
+   b. LLM fallback (only if branch diff returns empty): build LLM prompt using `load_prompt_template("agentic_sync_identify_modules_LLM")` with `{issue_content}` and `{architecture_json}` placeholders. Call `run_agentic_task()` to identify modules and validate dependencies.
+8. Parse LLM response for `MODULES_TO_SYNC: [...]`, `DEPS_VALID: true|false`, and optional `DEPS_CORRECTIONS: [...]`. Deduplicate modules in the list preserving first-occurrence order.
+9. Strip language suffixes from basenames using `extract_module_from_include(m + ".prompt")` — LLM returns architecture.json filenames (e.g. "crm_models_Python") but pdd sync expects bare basenames (e.g. "crm_models"). After stripping, deduplicate again.
+10. Filter hallucinated basenames via `_filter_invalid_basenames(modules, architecture)`: validate each basename exists in architecture.json (using `extract_module_from_include` for standard filenames, fallback stripping for `_LLM.prompt` and other non-standard suffixes). Fail if all basenames are invalid.
+11. If LLM flags dependency corrections: update architecture.json in-place before building the graph
+12. Build dependency subgraph from architecture.json via `build_dep_graph_from_architecture`, which returns `DepGraphFromArchitectureResult(graph=..., warnings=...)`. Use **only** `result.graph` as `dep_graph` for `AsyncSyncRunner`. If `result.warnings` is non-empty and **`not quiet`**, print each warning as a **yellow** line prefixed with `Warning:` (Rich yellow styling) so operators see orphan deps and partial-sync omitted edges.
+13. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py` (no architecture warnings in that path)
+14. Run dry-run validation for each module (see Dry-Run Validation below); fail the workflow if any module cannot be validated
+15. Filter already-synced modules via fingerprint check (see Fingerprint Filtering below); skip workflow if all modules are synced
+16. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, `module_cwds` map from dry-run validation, and `initial_cost` (the sum of LLM identification + dry-run LLM fallback costs) so the runner can display the full cost in its GitHub progress comment
+17. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
+18. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to `AsyncSyncRunner`
+
+% Global Sync (Tier 1)
+1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False) -> Tuple[bool, str, float, str]`
+2. Load combined architecture data using existing `_load_architecture_json(project_root)` / `load_combined_architecture_data`. Fail clearly if no architecture data exists.
+3. Extract syncable basenames from architecture `filename` values. Preserve subdirectory prefixes, e.g. `commands/maintenance_python.prompt` becomes `commands/maintenance`; skip non-syncable filenames such as `_LLM.prompt`.
+4. For each architecture module, resolve cwd/context/prompts_dir with the same nearest-config behavior used by issue sync, then call `sync_determine_operation(..., log_mode=True, read_only=True, ...)` from the module's resolved cwd for each detected language. Suppress info-level logs from `pdd.sync_determine_operation` around the read-only calls so global dry-run output stays readable and metadata files are never changed during analysis.
+5. Analysis scope is Tier 1 prompt staleness only: queue modules whose read-only decision is `generate` or `auto-deps`; treat `nothing`/`all_synced` as clean; skip non-Tier-1 decisions such as `example`, `test`, `fix`, `update`, `verify`, or `crash` so no-argument global sync does not expand into example/test/fix workflows. Skip entries with no syncable prompt file and report them as warnings in dry-run output.
+6. Build a dependency subgraph from the already-loaded combined architecture data (root + nested architecture files) with `build_dep_graph_from_architecture_data`; order queued modules with `topological_sort`.
+7. `dry_run=True`: print a concise plan including number of scanned architecture modules, stale module count, estimated cost, dependency-ordered module list, architecture graph warnings, and skipped-module warnings. Do not run `AsyncSyncRunner`; return success with zero cost and model `global-sync`.
+8. `dry_run=False`: if no modules are queued, return success `"All modules are already synced — nothing to do."`; otherwise reject execution when estimated global cost exceeds the user-supplied total budget, then run `AsyncSyncRunner` with `github_info=None`, `issue_url=None`, ordered basenames, dependency graph, module cwds, and forwarded sync options, including `local` so child sync subprocesses preserve top-level `--local`, and `target_coverage` so child syncs use the same coverage threshold as planning. Pass the user budget as `total_budget`, not as a repeated per-module child budget.
+9. Keep no-argument global sync v1 strictly scoped to prompt/code sync. Do not inspect PRD files, `prd_files`, architecture schema migrations, PRD fingerprints, or Tier 2 PRD-analysis sync. `pdd sync architecture.json` is not a global-sync alias in v1; with a positional value, it remains single-module sync input.
+
+% Dry-Run Validation
+Before dispatching to the runner, validate each module can actually sync:
+1. `_resolve_module_cwd(basename, project_root)`: determine correct cwd by scanning .pddrc files using nearest-config-wins resolution. First scan subdirectories (max depth 2, deepest match wins) for nested .pddrc files whose context patterns match the basename. Skip catch-all pattern matches (`**`, `*`) from subdirectories via `_is_catchall_match`. If a nested .pddrc matches, return its directory as cwd. Only fall back to root .pddrc / project_root when no nested .pddrc claims the module. Uses `_detect_context_from_basename` and `_load_pddrc_config` from `construct_paths`.
+2. `_run_single_dry_run(basename, cwd)`: run `pdd --force sync <basename> --dry-run --agentic --no-steer` as subprocess with 60s timeout and env `PDD_FORCE=1, CI=1`. Return (success, stderr).
+3. On dry-run failure, invoke `_llm_fix_dry_run_failure` as fallback: load `agentic_sync_fix_dry_run_LLM` prompt template with project tree (2 levels), .pddrc locations, and the error. Run the LLM-suggested command via shell, extract effective cwd using a pwd marker appended to the command. Validate resolved cwd is within project root.
+4. `_run_dry_run_validation(modules, project_root)`: orchestrates the above per module, returns (all_valid, module_to_cwd_map, errors, total_llm_cost).
+
+% Fingerprint Filtering
+After dry-run validation, check which modules are already fully synced:
+1. `_filter_already_synced(modules, module_cwds, quiet)`: for each module, use `sync_determine_operation` in log_mode/read-only mode to check if operation is `nothing` or `all_synced` (all hashes match / workflow complete). Modules returning only no-op operations for ALL languages are filtered out.
+2. Detect context and prompts_dir using nearest-config-wins .pddrc resolution: for each module, attempt to find the nearest .pddrc by searching from the module's resolved cwd (which may be a nested directory) via `_find_pddrc_file`, then use `_load_pddrc_config` and `_detect_context_from_basename`. When a module's cwd points to a subdirectory with its own .pddrc, that nested config takes precedence over the root .pddrc.
+3. Discover languages via `_detect_languages_with_context(basename, prompts_dir, context_name)`
+4. For each language, call `sync_determine_operation(basename, language, target_coverage=90.0, log_mode=True, read_only=True, prompts_dir=str(prompts_dir), context_override=context_name)`. If ANY language has an operation outside `nothing`/`all_synced`, keep the module.
+5. Return only modules that need syncing. If list is empty, workflow returns early with success message.
+
+% Helper Functions
+- `_is_github_issue_url(s: str) -> bool`: regex check for `github\.com/.+/issues/\d+`
+- `_detect_modules_from_branch_diff(project_root: Path) -> List[str]`: detect modules from git diff against main (changed .prompt files, excluding _LLM.prompt)
+- `_filter_invalid_basenames(modules: List[str], architecture: Optional[List]) -> Tuple[List[str], List[str]]`: validate basenames against architecture.json entries, return (valid, invalid)
+- `_find_project_root(start: Path) -> Path`: walk up to find `.pddrc` or `.git`
+- `_load_architecture_json(project_root: Path, issue_number: Optional[int] = None) -> Tuple[Optional[List], Path]`: discover and combine architecture files via `find_architecture_for_project`
+- `_parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict]]`: extract modules (deduplicated), deps validity, corrections
+- `_apply_architecture_corrections(arch_path, architecture, corrections, quiet) -> List[Dict]`: patch and write architecture.json
+- `_is_catchall_match(basename: str, config: Dict) -> bool`: check if match is only from wildcard patterns (specificity 0)
+- `_resolve_module_cwd(basename: str, project_root: Path) -> Path`: determine correct working directory for a module using nearest-config-wins .pddrc resolution (nested .pddrc takes precedence over root)
+- `_run_single_dry_run(basename: str, cwd: Path, quiet: bool) -> Tuple[bool, str]`: run pdd sync dry-run
+- `_llm_fix_dry_run_failure(basename, project_root, dry_run_error, ...) -> Tuple[bool, Optional[Path], float, str]`: LLM fallback for failed dry-runs
+- `_run_dry_run_validation(modules, project_root, ...) -> Tuple[bool, Dict[str, Path], List[str], float]`: orchestrate dry-run validation
+- `_filter_already_synced(modules, module_cwds, quiet) -> List[str]`: filter out fully-synced modules via fingerprint check
+- `run_global_sync(...) -> Tuple[bool, str, float, str]`: no-argument Tier 1 global sync over architecture modules
+- `_post_error_comment(owner, repo, issue_number, message)`: post error to GitHub issue
+
+% Dependencies
+<pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
+<pdd.agentic_common><include select="def:example_run_agentic_task,def:example_github_state_helpers,def:example_post_step_comment">context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_sync_runner><include select="class:AsyncSyncRunner,def:_find_pdd_executable">context/agentic_sync_runner_example.py</include></pdd.agentic_sync_runner>
+<pdd.sync_order><include select="def:build_dependency_graph,def:extract_module_from_include,def:topological_sort">context/sync_order_example.py</include></pdd.sync_order>
+<pdd.architecture_sync>
+    <include select="def:example_get_entry,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+</pdd.architecture_sync>
+<pdd.auto_deps_main>
+    <include select="def:mock_construct_paths">context/auto_deps_main_example.py</include>
+</pdd.auto_deps_main>
+Also imports from `construct_paths`: `_detect_context_from_basename`, `_load_pddrc_config`, `_find_pddrc_file`
+Also imports from `agentic_sync_runner`: `_find_pdd_executable`
+Also imports from `sync_order`: `extract_module_from_include`, `topological_sort`
+Also imports from `architecture_registry`: `find_architecture_for_project` (function-scope import inside `_load_architecture_json`)
+Also imports from `sync_determine_operation`: `sync_determine_operation`
+Also imports from `sync_main`: `_detect_languages_with_context`
+
+% Error Handling
+- Return `(False, "gh CLI not found...", 0.0, "")` if `gh` command not available
+- Return `(False, "Invalid GitHub issue URL: {url}", 0.0, "")` if URL parsing fails
+- Return `(False, "Failed to fetch issue: {error}", 0.0, "")` if GitHub API fails
+- Return `(False, "LLM identified no modules to sync", cost, provider)` if LLM returns empty list
+- Return `(False, "No valid modules to sync (all basenames were invalid: ...)", cost, provider)` if all basenames fail validation
+- Return `(False, "Dry-run validation failed:\n{details}", cost, provider)` if dry-run validation fails
+- Return `(True, "All modules are already synced — nothing to do.", cost, provider)` if fingerprint check filters all modules
+- Post error comment on GitHub issue when LLM fails, basenames invalid, or dry-run fails (if `use_github_state` is True)
+
+% Deliverables
+- Code: `pdd/agentic_sync.py`

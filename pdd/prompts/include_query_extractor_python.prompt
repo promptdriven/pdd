@@ -1,0 +1,55 @@
+<pdd-reason>Handles semantic extraction from files using LLMs with persistent caching for reproducibility.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "IncludeQueryExtractor.extract", "signature": "(file_path: str, query: str)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/include_query_extractor.py` module.
+
+% Role & Scope
+When a PDD prompt contains `<include query="...">file</include>`, the system needs to extract relevant content from that file using an LLM. This module handles that extraction and caches the results in `.pdd/extracts/` so repeated generations don't re-query the LLM for unchanged files.
+
+% Requirements
+1. Class: `IncludeQueryExtractor` with an `extract(file_path: str, query: str) -> str` method
+2. Also expose a standalone `compute_cache_key(file_path: str, query: str) -> str` function (used by other modules)
+3. Load the companion LLM template `include_query_extractor_LLM` and preprocess it
+   - Exclude keys `file_content` and `query` from curly-brace doubling
+4. Call `llm_invoke` with `input_json={"file_content": ..., "query": ...}` at `strength=1.0`
+   - Extract the `"result"` key from the response as the extracted content string
+5. Cache key: deterministic `sha256(project_relative_path + '\n' + query)`
+   - Absolute paths are resolved to project-relative form (via `find_project_root_from_path`) before hashing, so the same file referenced by different path styles produces the same key
+   - Relative paths are normalized via `os.path.normpath` to remove trivial variations like `./`
+6. Cache layout: `.pdd/extracts/{cache_key}.md` (content) and `.pdd/extracts/{cache_key}.meta.json` (metadata)
+7. Metadata fields: `source_path` (project-relative), `source_hash`, `query`, `timestamp` (ISO format), `token_count` (word count of result)
+8. Cache writes must be atomic — on failure, clean up partial files to prevent orphan cache entries
+9. Freshness: on cache lookup, verify `source_hash` against current file content hash
+   - Match → return cached content
+   - Stale or corrupted → delete both cache files and re-extract
+10. `EXTRACTS_CACHE_ENABLE` env var (default `true`) controls all cache I/O
+11. Show status updates via `rich` (e.g., "Querying...", "Using cached extract...")
+12. Imports of `llm_invoke`, `preprocess`, `load_prompt_template`, and `find_project_root_from_path` must not happen at module load time — this module is imported by those modules' consumers, so top-level imports would create circular dependencies. A missing dependency should raise a real error, not silently fall back.
+13. Use `find_project_root_from_path` (from `path_resolution`) instead of `get_config()["project_root"]` for determining the project root for cache directory location and project-relative path computation
+
+% Dependencies
+<internal_modules>
+    <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
+    <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+</internal_modules>
+
+% Deliverables
+- Code: `pdd/include_query_extractor.py`

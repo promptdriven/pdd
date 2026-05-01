@@ -1,0 +1,61 @@
+<pdd-reason>Implements the pdd fix command with agentic E2E, user story, and manual fix modes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "fix", "description": "Iteratively fix code and tests or orchestrate an agentic GitHub issue fix"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_e2e_fix_python.prompt</pdd-dependency>
+<pdd-dependency>fix_main_python.prompt</pdd-dependency>
+<pdd-dependency>track_cost_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/commands/fix.py`.
+
+% Role & Scope
+  This module implements the `fix` command with three modes:
+  - Agentic E2E Fix: Orchestrates an 11-step GitHub issue fix with post-push CI validation.
+  - User Story Fix: Updates multiple prompts from a single `story__*.md` file.
+  - Manual Mode: Iteratively fixes code and unit tests from explicit paths.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  - **Routing**: Use `nargs=-1` for `args`. Route in this order:
+    1) Agentic mode (not `--manual` and first arg is a GitHub/HTTP URL):
+       Call `run_agentic_e2e_fix(issue_url, timeout_adder=timeout_adder, max_cycles=max_cycles, resume=resume, force=force, verbose=verbose, quiet=quiet, use_github_state=use_github_state, protect_tests=protect_tests, ci_retries=ci_retries, skip_ci=skip_ci)`.
+       Result: `{"success": success, "message": message, "changed_files": changed_files}`.
+    2) User story mode (not `--manual`, exactly one arg matches `story__*.md`):
+       Call `run_user_story_fix(...)` with keyword arguments using `ctx`, `story_file`, and values from `ctx.obj`.
+       Result: `{"success": success, "message": message, "changed_files": changed_files}`.
+    3) Manual mode (`--manual` or other args):
+       Loop Mode (`--loop`): `unit_test_files = args[2:]`, `error_file = None`.
+       Non-Loop Mode: `unit_test_files = args[2:-1]`, `error_file = args[-1]`.
+       Iterate over `unit_test_files`, calling `fix_main(..., protect_tests=protect_tests)` for each.
+       Result: `{"success": all_success, "fixed_unit_test": (first fixed), "fixed_unit_tests": (all fixed), "fixed_code": ..., "attempts": ..., "message": ...}`.
+  - **Console Output**: Use `Console(file=sys.stdout)` for compatibility. Print bold green/red success/failure messages for each mode.
+  - **Options**:
+    - Agentic: `--timeout-adder`, `--max-cycles`, `--resume/--no-resume` (T), `--force`, `--no-github-state` (sets `use_github_state=False`), `--ci-retries INT` (default 3), `--skip-ci` (default False).
+    - Manual: `--output-test`, `--output-code`, `--output-results`, `--loop`, `--verification-program`, `--max-attempts` (3), `--budget` (5.0), `--auto-submit`, `--agentic-fallback/--no-agentic-fallback` (T).
+    - Both: `--protect-tests/--no-protect-tests` (F).
+  - **Technical Details**:
+    - Decorate with `@log_operation(operation="fix", clears_run_report=True)` and `@track_cost`.
+    - Use deferred imports inside the command for mode-specific functions.
+    - Return `Optional[Tuple[result_dict, cost, model]]`.
+    - Re-raise Click exceptions; use `handle_error(e, "fix", quiet)` for others.
+
+% Dependencies
+  <include>context/command_logging.prompt</include>
+  <pdd.fix_main><include>context/fix_main_example.py</include></pdd.fix_main>
+  <pdd.agentic_e2e_fix><include>context/agentic_e2e_fix_example.py</include></pdd.agentic_e2e_fix>
+  <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
+  - Import `run_user_story_fix` from `..user_story_tests`.
+  - Import `handle_error` from `..core.errors`.
+
+% Deliverables
+  - Code: `pdd/commands/fix.py`

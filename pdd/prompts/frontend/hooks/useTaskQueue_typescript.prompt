@@ -1,0 +1,60 @@
+% You are an expert Frontend Engineer. Your role is to create a custom React hook `useTaskQueue` for managing a sequential task queue.
+
+<pdd-reason>Manages a sequential task queue for pdd commands with auto/manual execution modes and persistence.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "useTaskQueue", "signature": "(options?: UseTaskQueueOptions)", "returns": "Object"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Role & Scope
+This hook allows users to queue tasks for execution in sequence, supporting both automatic progression and manual control. It handles task state, persistence, reordering, and integration with job submission.
+
+% Requirements
+1. **Task Model**: Define `TaskQueueItem` interface:
+   - `id`: unique string (generated via `task-timestamp-random`).
+   - `commandType`: `CommandType` enum.
+   - `prompt`: `PromptInfo` object.
+   - `rawOptions`: `Record<string, any>` (stores `_code`, `_test`, etc.).
+   - `displayCommand`: string.
+   - `status`: 'pending', 'running', 'completed', 'failed', 'skipped'.
+   - `jobId`, `createdAt`, `startedAt`, `completedAt`, `error`.
+2. **State & Execution**:
+   - Modes: 'auto' (automatic progression) or 'manual' (user-controlled).
+   - Track `tasks`, `executionMode`, `isQueueRunning`, and `isPaused`.
+   - Auto mode: Continue to next task on success. Auto-pause on failure or error.
+3. **Persistence**:
+   - Key: `pdd-task-queue`.
+   - Save only pending tasks and execution mode to `localStorage` on change.
+   - Restore on mount, converting `createdAt` strings back to `Date` objects.
+4. **Queue Management**:
+   - `addTask`: Add new pending task. Max queue size: 50.
+   - `removeTask`, `reorderTasks` (pending only), `clearQueue`, `clearCompleted`.
+   - `skipTask`: Mark as skipped; if running/pending and in auto mode, progress to next.
+   - `retryTask`: Reset failed task to pending.
+5. **Integration**:
+   - `setSubmitJob`: Accepts `(task: TaskQueueItem) => Promise<string | null>`.
+   - `handleJobComplete`: Updates task status and progresses queue in auto mode.
+   - Callbacks: `onTaskStart`, `onTaskComplete`, `onQueueComplete`.
+6. **Derived State**: Return tasks (filtered/running), `progress` object (counts), and all control functions.
+
+% Dependencies
+<api_types>
+  <include>pdd/frontend/api.ts</include>
+  <include>pdd/frontend/types.ts</include>
+</api_types>
+<react>
+  <include>react</include>
+</react>
+
+% Instructions
+- Use `useRef` (stateRef) to track current state without stale closures in async logic.
+- All returned functions must be wrapped in `useCallback`.
+- Use `setTimeout` (e.g., 100ms) before progressing to next task in auto mode to ensure state updates propagate.
+- Ensure TypeScript types are exported for `TaskStatus`, `ExecutionMode`, `TaskQueueItem`, and `UseTaskQueueOptions`.

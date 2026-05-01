@@ -1,0 +1,319 @@
+    - Know that the generated test will be in a different directory (`tests`) than the module (in directory `pdd`) it is calling and will need an absolute reference. The module file name will be same as the function name.
+    - Created files should be in the `output` directory.
+    - Data files (language_format.csv and llm_model.csv) already exist in the PDD_PATH/`data` directory. Do not write over them. It already contains data for popular languages and LLM models and can be used for tests.
+    - The PDD_PATH environment variable is already set.
+
+% EXTERNAL SERVICE BOUNDARY RULES:
+% CRITICAL: Tests must mock ALL external service boundaries. This ensures tests run without credentials.
+
+% WHEN TO MOCK (External Boundaries — ALWAYS mock these):
+    - HTTP calls to third-party APIs (Stripe, Twilio, SendGrid, AWS, GCP, Firebase, etc.)
+    - OAuth/OIDC token verification (Google, GitHub, Auth0, Okta, etc.)
+    - Database connections and queries (PostgreSQL, MongoDB, Redis, Firestore, DynamoDB)
+    - Message queue publish/subscribe (Kafka, RabbitMQ, SQS, Pub/Sub)
+    - File storage operations (S3, GCS, Azure Blob)
+    - Email/SMS sending (SMTP, Twilio, SNS)
+    - External service SDKs (firebase-admin, stripe, boto3, google-cloud-*)
+
+% WHEN NOT TO MOCK (Internal Logic — test directly):
+    - Pure functions (data transformations, calculations, validations)
+    - Data serialization/deserialization (JSON parsing, schema validation)
+    - Business logic that doesn't touch external services
+    - Route handler logic (mock only the external service it calls, not the handler itself)
+    - The function you are testing — NEVER mock the function under test
+
+% MOCK QUALITY RULES:
+    - Mock return values MUST match the real return type/shape from the source code
+    - DO NOT invent fields — use only fields that exist in the real response
+    - DO NOT omit required fields — include all fields the code under test accesses
+    - Use realistic values (valid emails, UUIDs, timestamps) not "test" or "dummy"
+    - Always test error paths: what happens when the mock raises an exception or returns an error?
+    - Derive mock shapes from: Pydantic models, TypeScript interfaces, dataclass definitions,
+      or the actual function's return type annotation in the source code
+
+% PYTEST TEST ISOLATION AND ANTI-POLLUTION RULES:
+% CRITICAL: Generated tests MUST be isolated and not pollute state for other tests. Follow these rules strictly:
+
+% 1. ENVIRONMENT VARIABLES:
+    - ALWAYS use monkeypatch.setenv() or monkeypatch.delenv() instead of os.environ["VAR"] = "value"
+    - NEVER use direct os.environ manipulation - it persists beyond the test and pollutes other tests
+    - BAD:  os.environ["API_KEY"] = "test_key"  # POLLUTION: persists after test ends
+    - GOOD: monkeypatch.setenv("API_KEY", "test_key")  # Auto-cleaned by pytest
+
+% 2. MOCKING EXTERNAL DEPENDENCIES:
+    - Use context managers or monkeypatch for mocks - they auto-cleanup after the test
+    - Prefer monkeypatch.setattr() over unittest.mock.patch() decorators at module level
+    - BAD:  @patch('module.func') at module/class level  # Can leak if exception occurs
+    - GOOD: monkeypatch.setattr('module.func', mock_func)  # Always cleaned up
+    - GOOD: with patch('module.func') as mock:  # Context manager ensures cleanup
+
+% 3. FIXTURE CLEANUP WITH YIELD:
+    - Use yield-based fixtures with cleanup code after yield for any resources
+    - Prefer function-scoped fixtures over module or session scope to ensure isolation
+    - BAD:  @pytest.fixture(scope="module") without cleanup  # State leaks between tests
+    - GOOD: @pytest.fixture with yield and cleanup after yield  # Always cleans up
+    - Example of proper fixture:
+        @pytest.fixture
+        def temp_resource():
+            resource = setup_resource()
+            yield resource
+            resource.cleanup()  # Always runs after test, even on failure
+
+% 4. SYS.MODULES MANIPULATION:
+    - AVOID manipulating sys.modules directly whenever possible
+    - If unavoidable, ALWAYS save and restore in try/finally or fixture with yield
+    - BAD:  sys.modules["module"] = mock_module  # Pollutes all subsequent tests
+    - GOOD: Use a fixture that saves, mocks, and restores:
+        @pytest.fixture
+        def mock_module():
+            saved = sys.modules.get("module")
+            sys.modules["module"] = MagicMock()
+            yield
+            if saved is not None:
+                sys.modules["module"] = saved
+            elif "module" in sys.modules:
+                del sys.modules["module"]
+
+% 5. FILE SYSTEM OPERATIONS:
+    - ALWAYS use the tmp_path fixture for creating temporary files and directories
+    - NEVER create files in the working directory or fixed paths
+    - BAD:  with open("test_output.txt", "w") as f: ...  # Leaves file behind
+    - GOOD: def test_file(tmp_path): (tmp_path / "test_output.txt").write_text(...)
+
+% 6. GLOBAL/MODULE STATE:
+    - Never modify global variables or module-level state directly in tests
+    - Use monkeypatch.setattr() for any module-level variables that need changing
+    - Reset any singleton instances using fixtures with proper teardown
+
+% SUMMARY OF GOOD PATTERNS:
+    - Use tmp_path fixture for file operations
+    - Use monkeypatch fixture for environment variables and attributes
+    - Use pytest.raises() as context manager for exception testing
+    - Prefer function-scoped fixtures over module or session scope
+    - Use yield in fixtures to ensure cleanup runs even on test failure
+
+% 7. MODULE-LEVEL SYS.MODULES FOR IMPORT-TIME DEPENDENCIES:
+    - Sometimes you must mock modules BEFORE importing the code under test
+      (e.g., when decorators or top-level imports need mocking)
+    - ALWAYS save original values, apply mocks, load module, then RESTORE immediately
+    - BAD:  sys.modules.update(mocks); exec_module(...)  # No cleanup - pollutes all tests!
+    - GOOD: See PATTERN 7 in pytest_isolation_example.py for the full save/restore pattern
+
+% 8. SYS.STDOUT AND SYS.STDERR MANIPULATION:
+    - Code under test may wrap sys.stdout/stderr (e.g., for output capture, logging, CLI tools)
+    - If wrappers aren't restored, subsequent tests see corrupted streams and fail mysteriously
+    - ALWAYS save and restore streams in fixtures when testing CLI or output-capturing code
+    - BAD:  sys.stdout = custom_stream  # Persists and corrupts subsequent tests
+    - GOOD: Use a fixture that saves, replaces, and restores:
+        @pytest.fixture
+        def captured_output():
+            import io
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            yield sys.stdout, sys.stderr
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+    - When testing Click CLI commands with CliRunner:
+      - CliRunner isolates streams during invoke(), but code that wraps streams
+        and exits early (e.g., ctx.exit(0)) may leave streams wrapped
+      - Add defensive cleanup in conftest.py for CLI test modules:
+        @pytest.fixture(autouse=True)
+        def restore_streams():
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            yield
+            # Restore if streams were replaced with wrappers
+            if sys.stdout is not original_stdout:
+                sys.stdout = original_stdout
+            if sys.stderr is not original_stderr:
+                sys.stderr = original_stderr
+
+    - See PATTERN 8 in pytest_isolation_example.py for concrete examples
+
+% 9. NEVER USE patcher.start() AT MODULE LEVEL WITHOUT IMMEDIATE stop():
+    - patch.dict(sys.modules, ...).start() at module level is EXTREMELY DANGEROUS
+    - If you forget patcher.stop(), ALL subsequent tests in the ENTIRE pytest run see mocked modules
+    - This is the #1 cause of mysterious test failures that only happen when running the full suite
+
+    - BAD (caused 70 test failures in our codebase):
+        patcher = patch.dict(sys.modules, module_mocks)
+        patcher.start()  # NEVER STOPPED - pollutes entire test suite!
+        from my_module import my_func
+        # All subsequent test files see mocked sys.modules forever!
+
+    - GOOD: Use save/restore pattern that cleans up IMMEDIATELY after import:
+        _saved = {{}}
+        for name in module_mocks:
+            _saved[name] = sys.modules.get(name)
+            sys.modules[name] = module_mocks[name]
+
+        from my_module import my_func  # Import with mocks active
+
+        # RESTORE IMMEDIATELY after import - don't wait for tests!
+        for name in module_mocks:
+            if _saved[name] is not None:
+                sys.modules[name] = _saved[name]
+            elif name in sys.modules:
+                del sys.modules[name]
+
+% 10. TOP-LEVEL IMPORTS VS DEFERRED IMPORTS:
+    - Top-level imports (e.g., `from module import func` at file start) bind names at import time
+    - Patching sys.modules AFTER import doesn't affect already-bound names!
+
+    - SCENARIO: Code under test has top-level import:
+        # In pdd/commands/fix.py (code under test)
+        from pdd.core.errors import handle_error  # Binds at import time
+
+    - BAD: Patching sys.modules in fixture - TOO LATE:
+        with patch.dict(sys.modules, {{"pdd.core.errors": mock}}):
+            # handle_error in fix.py is still the ORIGINAL, not mock!
+            result = runner.invoke(fix, args)
+            mock.handle_error.assert_called()  # FAILS - original was called
+
+    - GOOD: Patch the bound name directly in the module where it was imported:
+        with patch("pdd.commands.fix.handle_error", mock_func):
+            result = runner.invoke(fix, args)
+            mock_func.assert_called()  # PASSES - we patched the bound name
+
+% 11. WHEN TO USE FIXTURE vs MODULE-LEVEL MOCKING:
+    - PREFER fixture-based mocking - pytest handles cleanup automatically
+    - ONLY use module-level mocking when you MUST mock BEFORE importing
+      (e.g., decorators that run at import time, top-level code that executes on import)
+
+    - Module-level mocking rules:
+      1. Mock ONLY for the import phase
+      2. RESTORE immediately after import completes
+      3. Use fixtures for test-time mocking (during test execution)
+
+    - NEVER leave module-level mocks active "for all tests in this file"
+      It will pollute OTHER test files that run after yours!
+
+    - Example decision tree:
+      Q: Does the code under test have decorators or top-level code that needs mocking?
+      YES → Use module-level save/mock/import/restore pattern (PATTERN 7, Section 9)
+      NO  → Use fixture-based mocking with patch() context manager
+
+% 12. RESTORING MUTABLE CONTAINERS (DICTS, LISTS):
+    - When saving/restoring shared mutable containers, use IN-PLACE operations, not reference assignment
+    - Other modules may hold references to the original object - replacing the reference doesn't update them
+    - This applies to: dicts, lists, sets, and any mutable object shared across modules
+
+    - BAD (reference assignment - causes test pollution):
+        @pytest.fixture(autouse=True)
+        def restore_commands():
+            original = cli.commands.copy()  # shallow copy
+            yield
+            cli.commands = original  # ❌ Replaces reference, but other modules still see old object!
+
+    - GOOD (in-place restoration):
+        @pytest.fixture(autouse=True)
+        def restore_commands():
+            original = cli.commands.copy()
+            yield
+            cli.commands.clear()           # ✅ Modify the SAME object
+            cli.commands.update(original)  # ✅ Other modules see the restored state
+
+    - For lists:
+        BAD:  my_list = original_list      # Reference replacement
+        GOOD: my_list.clear(); my_list.extend(original_list)  # In-place
+
+    - For sets:
+        BAD:  my_set = original_set        # Reference replacement
+        GOOD: my_set.clear(); my_set.update(original_set)     # In-place
+
+    - WHY THIS MATTERS:
+        Module A: cli.commands = {{}}        # Creates dict, holds reference
+        Module B: from A import cli        # B now references SAME dict object
+        Test:     cli.commands = backup    # A.cli.commands points to backup
+                                           # But B's reference still points to original!
+        Result:   Tests in B see corrupted state → flaky tests
+
+% 13. PYTEST-XDIST AND MODULE IMPORTS:
+    - When running with pytest-xdist (-n), tests share module state within each worker
+    - Modules imported by earlier tests remain cached in sys.modules
+    - ALWAYS import modules at file/module level, NEVER inside test functions or patch contexts
+    - This ensures consistent import state regardless of test execution order
+
+    - BAD (causes flaky tests with xdist):
+        def test_something():
+            with patch("module.func") as mock:
+                from package import cli  # ❌ Import inside patch context
+                runner.invoke(cli.cli, args)
+                mock.assert_called()  # May fail depending on worker state!
+
+    - GOOD (consistent behavior with xdist):
+        from package import cli  # ✅ Module-level import - always consistent
+
+        def test_something():
+            with patch("module.func") as mock:
+                runner.invoke(cli.cli, args)  # Uses already-imported module
+                mock.assert_called()  # Reliable assertion
+
+    - WHY THIS MATTERS:
+      - In single-process pytest: Imports inside tests work (state is fresh each run)
+      - In xdist workers: Module may already be cached from earlier tests
+      - Import behavior becomes non-deterministic based on test execution order
+      - Tests pass individually but fail when run in parallel with other tests
+
+    - EXCEPTION: If you MUST delay import (e.g., to avoid circular imports):
+        @pytest.fixture
+        def cli_module():
+            import importlib
+            import pdd.cli
+            importlib.reload(pdd.cli)  # Force fresh import
+            yield pdd.cli
+
+% 14. AUTH/OAUTH TEST ISOLATION:
+    - Auth modules (OAuth, JWT, session auth, API key management) require special test isolation
+      because they interact with external identity providers and manage sensitive tokens.
+
+    - MOCK OAUTH PROVIDER (monkeypatch-based):
+        @pytest.fixture
+        def mock_token_exchange(monkeypatch):
+            async def fake_exchange(code: str, redirect_uri: str):
+                return {{"access_token": "fake-access-token", "token_type": "bearer", "expires_in": 3600, "refresh_token": "fake-refresh-token"}}
+            monkeypatch.setattr("myapp.auth.oauth.exchange_code_for_token", fake_exchange)
+
+        @pytest.fixture
+        def mock_get_user_info(monkeypatch):
+            async def fake_user_info(token: str):
+                return {{"sub": "user-123", "email": "test@example.com", "name": "Test User"}}
+            monkeypatch.setattr("myapp.auth.oauth.get_user_info", fake_user_info)
+
+    - JWT FIXTURE PATTERN (pre-generated tokens using pyjwt):
+        @pytest.fixture
+        def jwt_fixtures():
+            import jwt as pyjwt
+            secret = "test-secret-key"
+            valid = pyjwt.encode({{"sub": "user-123", "exp": datetime.utcnow() + timedelta(hours=1), "scope": "read write"}}, secret, algorithm="HS256")
+            expired = pyjwt.encode({{"sub": "user-123", "exp": datetime.utcnow() - timedelta(hours=1)}}, secret, algorithm="HS256")
+            no_scope = pyjwt.encode({{"sub": "user-123", "exp": datetime.utcnow() + timedelta(hours=1)}}, secret, algorithm="HS256")
+            return {{"valid": valid, "expired": expired, "no_scope": no_scope, "secret": secret}}
+
+    - TOKEN STORAGE ISOLATION (in-memory mock for keyring/token stores):
+        @pytest.fixture
+        def mock_token_store():
+            store = {{}}
+            class FakeTokenStore:
+                def get(self, key): return store.get(key)
+                def set(self, key, value): store[key] = value
+                def delete(self, key): store.pop(key, None)
+            return FakeTokenStore()
+
+    - OAUTH FLOW STAGE TESTING:
+        - Test each OAuth flow stage independently, not as a single end-to-end flow:
+          1. Authorization redirect: verify redirect URL contains correct client_id, scope, state, redirect_uri
+          2. Callback handling: verify code extraction, state validation, CSRF check
+          3. Token exchange: mock the provider's token endpoint, verify request payload and response parsing
+          4. Token refresh: test refresh before expiry, test refresh with expired refresh_token
+          5. User info retrieval: mock the provider's userinfo endpoint, verify field mapping
+          6. Revocation: verify revocation request is sent, verify local token cleanup
+        - Each stage should be a separate test function with its own mocks
+        - NEVER call a real OAuth provider in tests
+
+<isolation_example>
+<include>context/pytest_isolation_example.py</include>
+</isolation_example>

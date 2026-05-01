@@ -1,0 +1,67 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/analysis.py`.
+
+% Role & Scope
+  This module contains analysis commands: `detect`, `conflicts`, `bug`, `crash`, and `trace`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **detect**: Support two modes:
+     - Standard mode:
+       - Validate `>= 2` positional files (last is `change_file`, preceding are prompt files).
+       - Call `detect_change_main(ctx=..., prompt_files=..., change_file=..., output=...)`.
+       - Option: `--output`.
+     - User story validation mode (`--stories`):
+       - Disallow positional file arguments in this mode (raise `click.UsageError`).
+       - Disallow `--output` in this mode (raise `click.UsageError`).
+       - Call `run_user_story_tests(...)` with:
+         - `prompts_dir`, `stories_dir`
+         - `strength`, `temperature`, `time`, `verbose`, `quiet` from `ctx.obj`
+         - `include_llm_prompts=include_llm`
+         - `fail_fast=fail_fast`
+       - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
+       - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`, `--fail-fast/--no-fail-fast`.
+  2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
+  3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
+     - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=..., timeout_adder=..., use_github_state=...)`.
+     - Manual mode (`--manual` flag): Call `bug_main(ctx, prompt_file, code_file, program_file, current_output, desired_output, ...)`.
+     Options: `--manual`, `--output`, `--language`, `--timeout-adder` (float, default 0.0, agentic mode only), `--no-github-state` (flag, disables GitHub state persistence, agentic mode only).
+  4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
+     - Log operation using `@log_operation(operation="crash", clears_run_report=True)`.
+  5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
+
+% Dependencies
+  <include>context/command_logging.prompt</include>
+  <detect_change_main_example>
+  <pdd.detect_change_main><include>context/detect_change_main_example.py</include></pdd.detect_change_main>
+  </detect_change_main_example>
+  <conflicts_main_example>
+  <pdd.conflicts_main><include>context/conflicts_main_example.py</include></pdd.conflicts_main>
+  </conflicts_main_example>
+  <bug_main_example>
+  <pdd.bug_main><include>context/bug_main_example.py</include></pdd.bug_main>
+  </bug_main_example>
+  <run_agentic_bug_example>
+  <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>
+  </run_agentic_bug_example>
+  <crash_main_example>
+  <pdd.crash_main><include>context/crash_main_example.py</include></pdd.crash_main>
+  </crash_main_example>
+  <trace_main_example>
+  <pdd.trace_main><include>context/trace_main_example.py</include></pdd.trace_main>
+  </trace_main_example>
+  <track_cost_example>
+  <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
+  </track_cost_example>
+  - Import and use `run_user_story_tests` from `..user_story_tests` for `detect --stories`.
+
+% Instructions
+  - Use `handle_error` for non-click runtime exceptions.
+  - Re-raise `click.Abort` and `click.ClickException` to preserve Click semantics.
+  - Apply `@track_cost` decorator to all commands.
+  - Access context flags via `ctx.obj.get("key", default)`.
+  - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
+  - Return `None` when an error is handled.
+
+% Deliverables
+  - Code: `pdd/commands/analysis.py`

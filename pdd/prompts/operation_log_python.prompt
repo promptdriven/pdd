@@ -1,0 +1,47 @@
+% You are an expert Python engineer. Your goal is to write the `pdd/operation_log.py` module.
+
+% Role & Scope
+A shared logging infrastructure module for tracking all PDD operations. Provides functions for log file I/O, module identity inference, state file management, and a `@log_operation` decorator for CLI commands.
+
+% Requirements
+- The file must start with `from __future__ import annotations`.
+- All functions must be fully type-hinted.
+- Maintain backwards compatibility with existing sync log format.
+- Old log entries without `invocation_mode` field should be treated as `"sync"` mode.
+- Log entries include `invocation_mode` field: `"sync"` for sync-initiated or `"manual"` for CLI-invoked operations.
+
+% Core Functions
+
+1. **Log File Operations** - Load, create, update, and append log entries to JSONL files in `.pdd/meta/{safe_basename}_{language}_sync.log`. Basenames containing `/` (from subdirectory prompts) are sanitized by replacing `/` with `_` to produce flat filenames. Language is always lowercased via `language.lower()`. Entries include timestamp, operation, reason, cost, model, duration, and success status.
+
+2. **Manual Invocation Support** - Convenience functions for creating log entries with `invocation_mode="manual"` and `reason="Manual invocation via CLI"`.
+
+3. **Module Identity Inference** - Extract basename and language from prompt file paths. Reconstructs directory context relative to the nearest `prompts/` ancestor, so `prompts/frontend/settings/page_typescriptreact.prompt` yields basename `frontend/settings/page` and language `typescriptreact`. Paths without a `prompts/` ancestor fall back to filename-only. Language is always normalized to lowercase.
+
+4. **State File Management** - Save fingerprints (`.json`), run reports (`_run.json`), and sync logs (`_sync.log`) to `.pdd/meta/`. All paths use sanitized basenames and `language.lower()`. Clear stale run reports before operations that invalidate them.
+   - `save_fingerprint` must write the full `Fingerprint` dataclass format (from `sync_determine_operation`) using `calculate_current_hashes` so that `read_fingerprint` can parse it. This ensures manual commands (generate, example) don't break sync's fingerprint tracking. Pass stored `include_deps` from previous fingerprint for prompt hash calculation.
+
+5. **Event Logging** - Log special events (lock_acquired, budget_warning, etc.) to the sync log.
+
+% The @log_operation Decorator
+
+A decorator for CLI commands that automatically logs operations and manages state files. Parameters control which state files are updated:
+- `updates_fingerprint` - Save fingerprint on success
+- `updates_run_report` - Save run report on success (if result is a dict)
+- `clears_run_report` - Clear stale report before execution
+
+The decorator must:
+- Work with Click commands
+- Extract module identity from the `prompt_file` parameter, falling back to the first `.prompt`-suffixed value in an `args` tuple (for `nargs=-1` commands)
+- Handle cases where module identity cannot be inferred (skip logging to disk)
+- Extract cost/model from result tuples via helpers in `sync_orchestration`
+
+% Dependencies
+<module_dependencies>
+<pdd.sync_determine_operation>
+    <include>context/sync_determine_operation_example.py</include>
+</pdd.sync_determine_operation>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/operation_log.py` containing all functions and the `@log_operation` decorator.

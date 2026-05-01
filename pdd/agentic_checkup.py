@@ -23,6 +23,14 @@ from .agentic_change import (
     _run_gh_command,
 )
 from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+from .checkup_review_loop import (
+    ReviewLoopConfig,
+    ReviewLoopContext,
+    parse_reviewers,
+    parse_severity_list,
+    parse_state_list,
+    run_checkup_review_loop,
+)
 from .agentic_sync import _find_project_root, _load_architecture_json
 
 console = Console()
@@ -142,6 +150,161 @@ def _post_error_comment(owner: str, repo: str, issue_number: int, message: str) 
     ])
 
 
+def _fetch_pr_context(owner: str, repo: str, pr_number: int) -> str:
+    """Fetch PR, comments, reviews, and changed-file context for review-loop prompts."""
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}"]
+    )
+    if not success:
+        return f"Failed to fetch PR context: {output}"
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError:
+        return "Failed to parse PR context JSON."
+
+    head = data.get("head") or {}
+    base = data.get("base") or {}
+    changed_files = _fetch_pr_changed_files(owner, repo, pr_number)
+    conversation = _fetch_pr_conversation(owner, repo, pr_number)
+    reviews = _fetch_pr_reviews(owner, repo, pr_number)
+    return _truncate_context(
+        f"Title: {data.get('title', '')}\n"
+        f"Base: {base.get('label') or base.get('ref') or ''}\n"
+        f"Head: {head.get('label') or head.get('ref') or ''}\n"
+        f"State: {data.get('state', '')}\n"
+        f"Mergeable state: {data.get('mergeable_state', '')}\n"
+        f"Description:\n{data.get('body') or ''}\n\n"
+        f"Changed files:\n{changed_files}\n\n"
+        f"PR conversation comments:\n{conversation}\n\n"
+        f"PR reviews:\n{reviews}",
+        60000,
+    )
+
+
+def _fetch_pr_changed_files(owner: str, repo: str, pr_number: int) -> str:
+    """Fetch a concise changed-file inventory for reviewer context."""
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100"]
+    )
+    if not success:
+        return f"Failed to fetch changed files: {output}"
+    try:
+        files = json.loads(output)
+    except json.JSONDecodeError:
+        return "Failed to parse changed-file JSON."
+    if not isinstance(files, list) or not files:
+        return "No changed files reported."
+
+    lines = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        filename = item.get("filename") or ""
+        status = item.get("status") or ""
+        additions = item.get("additions", 0)
+        deletions = item.get("deletions", 0)
+        patch = item.get("patch") or ""
+        patch_hint = ""
+        if patch:
+            patch_hint = " | patch excerpt: " + _one_line(patch, 500)
+        lines.append(
+            f"- {filename} ({status}, +{additions}/-{deletions}){patch_hint}"
+        )
+    return "\n".join(lines) if lines else "No changed files reported."
+
+
+def _fetch_pr_conversation(owner: str, repo: str, pr_number: int) -> str:
+    """Fetch PR issue-thread comments, which often explain direction changes."""
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100"]
+    )
+    if not success:
+        return f"Failed to fetch PR comments: {output}"
+    return _format_github_comment_list(output, body_key="body")
+
+
+def _fetch_pr_reviews(owner: str, repo: str, pr_number: int) -> str:
+    """Fetch submitted PR reviews for reviewer context."""
+    success, output = _run_gh_command(
+        ["api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100"]
+    )
+    if not success:
+        return f"Failed to fetch PR reviews: {output}"
+    return _format_github_comment_list(output, body_key="body", include_state=True)
+
+
+def _format_github_comment_list(
+    output: str,
+    *,
+    body_key: str,
+    include_state: bool = False,
+) -> str:
+    try:
+        items = json.loads(output)
+    except json.JSONDecodeError:
+        return "Failed to parse GitHub comment JSON."
+    if not isinstance(items, list) or not items:
+        return "None."
+
+    lines = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        user = item.get("user") or {}
+        author = user.get("login") if isinstance(user, dict) else ""
+        created = item.get("submitted_at") or item.get("created_at") or ""
+        state = f" [{item.get('state')}]" if include_state and item.get("state") else ""
+        body = _one_line(item.get(body_key) or "", 1200)
+        if not body:
+            continue
+        lines.append(f"- {author}{state} at {created}: {body}")
+    return "\n".join(lines) if lines else "None."
+
+
+def _one_line(text: str, limit: int) -> str:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _truncate_context(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 120)].rstrip() + (
+        "\n\n[PR context truncated to keep the reviewer prompt within budget.]"
+    )
+
+
+def _truncate_issue_context(text: str, limit: int) -> str:
+    """Truncate issue context while preserving the latest issue comments.
+
+    Issue bodies often become stale while later maintainer/user comments narrow
+    or replace the contract. Review-loop prompts must retain that tail context
+    when large bot logs force truncation.
+    """
+    if len(text) <= limit:
+        return text
+    marker = "\nComments:\n"
+    if marker not in text:
+        return _truncate_context(text, limit)
+
+    header, comments = text.split(marker, 1)
+    notice = "\n\n[Issue context truncated; latest comments preserved.]"
+    available = max(0, limit - len(marker) - len(notice))
+    tail_budget = min(max(limit // 3, 12000), max(0, available // 2))
+    head_budget = max(0, available - tail_budget)
+
+    if len(header) > head_budget:
+        header = header[:head_budget].rstrip()
+    if len(comments) > tail_budget:
+        comment_notice = "[Older issue comments truncated; newest comments retained.]\n"
+        retained_budget = max(0, tail_budget - len(comment_notice))
+        comments = comment_notice + comments[-retained_budget:].lstrip()
+
+    return f"{header.rstrip()}{marker}{comments.rstrip()}{notice}"
+
+
 def run_agentic_checkup(
     issue_url: str,
     *,
@@ -152,6 +315,19 @@ def run_agentic_checkup(
     use_github_state: bool = True,
     reasoning_time: Optional[float] = None,
     pr_url: Optional[str] = None,
+    review_loop: bool = False,
+    review_only: bool = False,
+    reviewers: str = "codex,claude",
+    reviewer: Optional[str] = None,
+    fixer: Optional[str] = None,
+    max_review_rounds: int = 5,
+    max_review_cost: float = 10.0,
+    max_review_minutes: float = 90.0,
+    require_all_reviewers_clean: bool = True,
+    continue_on_reviewer_limit: bool = False,
+    require_final_fresh_review: bool = True,
+    blocking_severities: Optional[str] = None,
+    clean_reviewer_states: Optional[str] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -165,6 +341,10 @@ def run_agentic_checkup(
         pr_url: When set, verify this existing PR against ``issue_url`` instead
             of creating a new branch/PR. Step 8 (create_pr) is skipped and the
             worktree is based on the PR's head branch.
+        review_loop: When true in PR mode, run the primary-reviewer/fixer
+            loop instead of the legacy single-pass checkup path.
+        review_only: When true with ``review_loop``, run only the primary
+            reviewer first pass and do not invoke the fixer or push changes.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -210,32 +390,83 @@ def run_agentic_checkup(
     except json.JSONDecodeError:
         return False, "Failed to parse issue JSON", 0.0, ""
 
-    title = issue_data.get("title", "")
+    raw_title = issue_data.get("title", "")
     body = issue_data.get("body", "") or ""
 
     # Fetch comments for full context
     comments_url = issue_data.get("comments_url", "")
     comments_text = _fetch_comments(comments_url) if comments_url else ""
 
-    full_content = (
-        f"Title: {title}\n"
+    raw_full_content = (
+        f"Title: {raw_title}\n"
         f"Description:\n{body}\n\n"
         f"Comments:\n{comments_text}"
     )
 
     # Escape braces so .format() doesn't choke on user content
-    title = _escape_format_braces(title)
-    full_content = _escape_format_braces(full_content)
+    title = _escape_format_braces(raw_title)
+    full_content = _escape_format_braces(raw_full_content)
 
     # 4. Load project context
     project_root = _find_project_root(Path.cwd())
     architecture, _ = _load_architecture_json(project_root)
-    arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
-    arch_json_str = _escape_format_braces(arch_json_str)
-    pddrc_content = _escape_format_braces(_load_pddrc_content(project_root))
+    raw_arch_json_str = (
+        json.dumps(architecture, indent=2)
+        if architecture
+        else "No architecture.json available."
+    )
+    arch_json_str = _escape_format_braces(raw_arch_json_str)
+    raw_pddrc_content = _load_pddrc_content(project_root)
+    pddrc_content = _escape_format_braces(raw_pddrc_content)
 
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
+
+    if review_loop:
+        if pr_url is None or pr_owner is None or pr_repo is None or pr_number is None:
+            return False, "--review-loop requires --pr and --issue.", 0.0, ""
+        loop_issue_content = _truncate_issue_context(raw_full_content, 60000)
+        loop_architecture = _truncate_context(raw_arch_json_str, 40000)
+        loop_context = ReviewLoopContext(
+            issue_url=issue_url,
+            issue_content=loop_issue_content,
+            repo_owner=owner,
+            repo_name=repo,
+            issue_number=issue_number,
+            issue_title=raw_title,
+            architecture_json=loop_architecture,
+            pddrc_content=raw_pddrc_content,
+            pr_url=pr_url,
+            pr_owner=pr_owner,
+            pr_repo=pr_repo,
+            pr_number=pr_number,
+            project_root=project_root,
+            pr_content=_fetch_pr_context(pr_owner, pr_repo, pr_number),
+        )
+        loop_config = ReviewLoopConfig(
+            reviewers=parse_reviewers(reviewers),
+            reviewer=reviewer,
+            fixer=fixer,
+            review_only=review_only,
+            max_rounds=max_review_rounds,
+            max_cost=max_review_cost,
+            max_minutes=max_review_minutes,
+            require_all_reviewers_clean=require_all_reviewers_clean,
+            continue_on_reviewer_limit=continue_on_reviewer_limit,
+            require_final_fresh_review=require_final_fresh_review,
+            timeout_adder=timeout_adder,
+            reasoning_time=reasoning_time,
+            blocking_severities=parse_severity_list(blocking_severities),
+            clean_reviewer_states=parse_state_list(clean_reviewer_states),
+        )
+        return run_checkup_review_loop(
+            context=loop_context,
+            config=loop_config,
+            cwd=project_root,
+            verbose=verbose,
+            quiet=quiet,
+            use_github_state=use_github_state,
+        )
 
     # 5. Invoke orchestrator
     try:
@@ -295,8 +526,12 @@ def _fetch_comments(comments_url: str) -> str:
         formatted = []
         for comment in comments_data:
             user = comment.get("user", {}).get("login", "Unknown")
+            created_at = str(comment.get("created_at") or "").strip()
             body = comment.get("body", "")
-            formatted.append(f"--- Comment by {user} ---\n{body}\n")
+            if created_at:
+                formatted.append(f"--- Comment by {user} at {created_at} ---\n{body}\n")
+            else:
+                formatted.append(f"--- Comment by {user} ---\n{body}\n")
         return "\n".join(formatted)
     except (json.JSONDecodeError, TypeError):
         return ""

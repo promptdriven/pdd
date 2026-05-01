@@ -1,9 +1,44 @@
+## v0.0.224 (2026-04-30)
+
+### Feat
+
+- **checkup**: add PR review/fix loop
+- implement global tier-1 sync mode, deterministic manifest-driven model catalog, and improved dependency-aware CLI architecture management
+
+### Refactor
+
+- remove LLM prompt sync pattern and clear cap_only configuration in sync-config.yml
+
 ## v0.0.223 (2026-04-29)
 
 ### Feat
 
-- add tier-1 global sync mode
-- add deterministic agent-reviewed Arena ELO catalog
+- `pdd sync` with no basename now runs Tier 1 global sync: it scans combined `architecture.json` data read-only, queues modules needing `generate` or `auto-deps`, orders them by architecture dependencies, and supports dry-run plans. A positional `architecture.json` remains single-module sync input.
+- Global sync resolves budget and target coverage from CLI options or `.pddrc`, uses a new $20.00 default budget, forwards local/coverage/session options to child syncs, and enforces a total budget sequentially instead of treating it as a per-module cap.
+- Model catalog generation now uses `pdd/data/arena_elo_manifest.json`, a strict agent-reviewed LMArena WebDev score manifest, with deterministic alias validation and the previous static ELO table as fallback.
+- Catalog regeneration seeds default local-runner rows and preserves local-runner rows from an existing catalog, skips unsupported `chatgpt/*` LiteLLM IDs, removes redundant dated aliases, adds `--score-manifest`, and rejects `--refresh-elo` with agentic-refresh instructions.
+
+### Fix
+
+- `sync_determine_operation(..., read_only=True)` and `log_mode=True` no longer delete `.pdd/meta` conflict metadata during analysis; global sync also suppresses noisy info logs while scanning.
+- Model catalog deduplication now normalizes provider/routing aliases and uses deterministic tiebreakers, preventing duplicate routed rows while preferring cleaner IDs such as regionless Bedrock models.
+- CI changed-module detection excludes `generate_model_catalog` so headless auto-heal does not rewrite the manifest-driven generator.
+- Test import cleanup now evicts sync/CLI side-effect modules polluted by mocked decorators before later sync tests run.
+
+### Build
+
+- Regenerated `pdd/data/llm_model.csv` from the reviewed manifest, adding/updating rows such as Claude Opus 4.7, GPT-5.5, `grok-4-1-fast-reasoning`, Baseten, and Nebius while removing unsupported ChatGPT rows.
+- Refreshed prompt specs, examples, `architecture.json`, `project_dependencies.csv`, PyPI description, cloud image hash, and cloud-batch timings for the sync and catalog changes.
+- Added and updated regression coverage for global sync planning/dispatch, runner budget gating, read-only sync analysis, model catalog manifest validation/deduplication, CI detection, and command import isolation.
+
+### Refactor
+
+- Shared module sync context resolution and added `build_dep_graph_from_architecture_data` so global sync reuses issue-sync cwd/context handling and dependency ordering against already-loaded combined architecture data.
+
+### Docs
+
+- README documents no-argument global sync versus single-module and issue sync, global dry-run behavior, the $20.00 sync budget default, the model catalog manifest refresh workflow, the ELO cutoff change to 1300, and blank API-key rows for Ollama, LM Studio, and GitHub Copilot device flow.
+- Bash and zsh completions now reflect optional `sync` basename usage and the expanded sync option set.
 
 ## v0.0.222 (2026-04-28)
 

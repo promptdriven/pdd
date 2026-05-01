@@ -1,0 +1,69 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/websocket.py`.
+
+% Role & Scope
+  This module provides WebSocket endpoints for real-time streaming.
+  It enables the web frontend to receive live command output,
+  send interactive input, and watch for file changes.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI WebSockets:
+    <web>https://fastapi.tiangolo.com/advanced/websockets/</web>
+  - watchdog:
+    <web>https://python-watchdog.readthedocs.io/en/stable/</web>
+
+% Requirements
+  1. **WS /ws/jobs/{job_id}/stream**:
+     - Streams job output in real-time
+     - Server sends: stdout, stderr, progress, complete, error, input_request
+     - Client sends: cancel, input
+     - Auto-close when job completes; handle disconnect gracefully
+     - If job not found, close with WS_1008_POLICY_VIOLATION
+     - If job already completed, send result immediately and close
+
+  2. **WS /ws/watch**:
+     - Watches for file changes in project
+     - Client sends subscription: {"paths": ["path1", "path2"]}
+     - Server sends: file_change events (created, modified, deleted)
+     - Use watchdog Observer with AsyncFileEventHandler bridging to asyncio queue
+     - Debounce rapid changes (100ms via DEBOUNCE_SECONDS constant)
+
+  3. **ConnectionManager**:
+     - Track active connections, job subscriptions, and watch subscriptions
+     - Methods: connect, disconnect, subscribe_to_job, subscribe_to_watch
+     - Broadcast methods for job messages and file changes
+     - `broadcast_to_all(message)`: Send to ALL connected clients (for spawned jobs)
+     - Clean up dead connections on send failures
+
+  4. **Job Event Integration** (emit helpers):
+     - `emit_job_output(job_id, stream, text)`: Broadcast stdout/stderr with ANSI cleaning
+     - `emit_job_progress(job_id, current, total, message)`: Broadcast progress
+     - `emit_job_complete(job_id, result, success, cost)`: Broadcast completion
+     - `emit_spawned_job_complete(job_id, command, success, exit_code)`: Broadcast spawned terminal job completion to ALL clients (uses broadcast_to_all)
+
+  5. **App Integration**:
+     - `create_websocket_routes(app, connection_manager, job_manager)`: Register router and callbacks
+     - Replaces global manager instance
+     - Registers on_output and on_complete callbacks with job_manager if provided
+
+  6. **Dependencies**:
+     - Dependency functions `get_job_manager()` and `get_project_root()` as injection points
+     - Raise NotImplementedError to be overridden by app's dependency_overrides
+
+% Dependencies
+  Use models from pdd/server/models.py: WSMessage, StdoutMessage, StderrMessage, ProgressMessage, JobStatus
+  <pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
+
+  Use job manager for job status and control:
+  <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>
+
+% Instructions
+  - Create router with tags=["websocket"]
+  - Use `clean_ansi(text)` utility to strip ANSI escape sequences
+  - File watching with watchdog Observer; AsyncFileEventHandler bridges events to asyncio
+  - Graceful shutdown of watchers on disconnect
+
+% Deliverables
+  - Code: `pdd/server/routes/websocket.py`
+  - Export: `websocket_router` (alias: router), `ConnectionManager`, `create_websocket_routes`

@@ -1,0 +1,404 @@
+# sync_orchestration_python.prompt
+
+Create a Python module that orchestrates the complete PDD (Prompt-Driven Development) sync workflow by coordinating operations and animations in parallel.
+
+## Context
+
+<readme>
+    <include>README.md</include>
+</readme>
+
+<whitepaper>
+    <include>./docs/whitepaper.md</include>
+</whitepaper>
+
+The sync command is the primary command in PDD that automatically executes the complete workflow loop from dependency injection through code generation, testing, and verification. This orchestration module coordinates the execution while providing real-time feedback to users via a Textual-based TUI.
+
+## Architecture
+
+This module works in conjunction with related modules:
+
+- **sync_main**: Handles CLI parameter extraction, validation, language detection, path resolution via `construct_paths()`, and .pddrc configuration management
+- **sync_orchestration**: Focuses solely on workflow orchestration, TUI coordination, and operation execution using the resolved paths provided by sync_main
+- **sync_tui**: Provides the Textual-based TUI components (`SyncApp`, `show_exit_animation`, `maybe_steer_operation`) that display real-time animation, log output, and interactive steering
+
+## Requirements
+
+### Function Signature
+
+```python
+def sync_orchestration(
+    basename: str,
+    target_coverage: float = 90.0,
+    language: str = "python",
+    prompts_dir: str = "prompts",
+    code_dir: str = "src",
+    examples_dir: str = "examples",
+    tests_dir: str = "tests",
+    max_attempts: int = 3,
+    budget: float = 10.0,
+    skip_verify: bool = False,
+    skip_tests: bool = False,
+    dry_run: bool = False,
+    force: bool = False,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
+    time_param: float = 0.25,
+    verbose: bool = False,
+    quiet: bool = False,
+    output_cost: Optional[str] = None,
+    review_examples: bool = False,
+    local: bool = False,
+    context_config: Optional[Dict[str, str]] = None,
+    context_override: Optional[str] = None,
+    confirm_callback: Optional[Callable[[str, str], bool]] = None,
+    no_steer: bool = False,
+    steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
+    agentic_mode: bool = False,
+) -> Dict[str, Any]:
+```
+
+Defense in depth: at the top of `sync_orchestration()`, replace `None` values for `target_coverage`, `budget`, and `max_attempts` with their defaults (CLI may pass None).
+
+### Return Value
+
+Returns a dictionary containing:
+- `success`: bool indicating overall success
+- `operations_completed`: List of completed operation names
+- `skipped_operations`: List of skipped operation names
+- `total_cost`: float total cost in dollars
+- `total_time`: float elapsed time in seconds
+- `final_state`: Dict mapping file types to `{exists, path}` info
+- `errors`: List of error messages
+- `error`: Semicolon-joined error string or None
+- `model_name`: Name of the last model used
+- `log_entries`: List of log entries (only when `dry_run=True`)
+
+## Dependencies
+
+<examples>
+    <operation_log_example>
+        <include>context/operation_log_example.py</include>
+    </operation_log_example>
+    <sync_determine_operation_example>
+        <include>context/sync_determine_operation_example.py</include>
+    </sync_determine_operation_example>
+    <auto_deps_main_example>
+        <include>context/auto_deps_main_example.py</include>
+    </auto_deps_main_example>
+    <code_generator_main_example>
+        <include>context/code_generator_main_example.py</include>
+    </code_generator_main_example>
+    <context_generator_main_example>
+        <include>context/context_generator_main_example.py</include>
+    </context_generator_main_example>
+    <crash_main_example>
+        <include>context/crash_main_example.py</include>
+    </crash_main_example>
+    <fix_verification_main_example>
+        <include>context/fix_verification_main_example.py</include>
+    </fix_verification_main_example>
+    <cmd_test_main_example>
+        <include>context/cmd_test_main_example.py</include>
+    </cmd_test_main_example>
+    <fix_main_example>
+        <include>context/fix_main_example.py</include>
+    </fix_main_example>
+    <update_main_example>
+        <include>context/update_main_example.py</include>
+    </update_main_example>
+    <get_test_command_example>
+        <include>context/get_test_command_example.py</include>
+    </get_test_command_example>
+    <get_extension>
+        <include>context/get_extension_example.py</include>
+    </get_extension>
+    <python_env_detector>
+        <include>context/python_env_detector_example.py</include>
+    </python_env_detector>
+    <get_run_command>
+        <include>context/get_run_command_example.py</include>
+    </get_run_command>
+    <pytest_output>
+        <include>context/pytest_output_example.py</include>
+    </pytest_output>
+</examples>
+
+### Module-Level Imports
+
+```python
+from .sync_tui import maybe_steer_operation, DEFAULT_STEER_TIMEOUT_S
+from .sync_tui import SyncApp
+from .operation_log import (
+    load_operation_log,
+    create_log_entry,
+    update_log_entry,
+    append_log_entry,
+    log_event,
+    save_fingerprint,
+    save_run_report,
+    clear_run_report,
+)
+from .sync_determine_operation import (
+    sync_determine_operation,
+    get_pdd_file_paths,
+    RunReport,
+    SyncDecision,
+    PDD_DIR,
+    META_DIR,
+    SyncLock,
+    read_run_report,
+    calculate_sha256,
+    calculate_current_hashes,
+    _safe_basename,
+)
+from .auto_deps_main import auto_deps_main
+from .code_generator_main import code_generator_main
+from .context_generator_main import context_generator_main
+from .crash_main import crash_main
+from .fix_verification_main import fix_verification_main
+from .cmd_test_main import cmd_test_main
+from .fix_main import fix_main
+from .update_main import update_main
+from .python_env_detector import detect_host_python_executable
+from .get_run_command import get_run_command_for_file
+from .pytest_output import extract_failing_files_from_output, _find_project_root
+from . import DEFAULT_STRENGTH
+```
+
+### Function-Scope Imports
+
+- `get_extension` - at the start of `sync_orchestration()`
+- `get_test_command_for_file` from `.get_test_command` - in `_execute_tests_and_create_run_report()` and fix operation
+- `show_exit_animation` - after `app.run()` completes
+- `shutil` - inside auto-deps operation block
+- `traceback` - in exception handlers
+
+### Standard Library
+
+```python
+import threading, time, json, datetime, subprocess, re, os, sys, logging, tempfile
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Callable
+from dataclasses import asdict, dataclass, field
+import click
+```
+
+## Workflow Operations
+
+The orchestrator executes these operations as determined by `sync_determine_operation`:
+
+1. **auto-deps**: Inject relevant dependencies into the prompt
+2. **generate**: Create or update code from prompt
+3. **example**: Generate usage example
+4. **crash**: Fix runtime errors to make code executable
+5. **verify**: Verify against prompt intent (unless `--skip-verify`)
+6. **test**: Generate unit tests (unless `--skip-tests`)
+7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
+8. **fix**: Resolve test failures
+9. **update**: Back-propagate learnings to prompt
+
+Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`
+
+## Core Behaviors
+
+### Dry-Run Mode
+
+When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
+
+### Interactive Steering
+
+After each `sync_determine_operation` call, allow the user to override the recommended operation via `maybe_steer_operation()`:
+- When `no_steer=True`, skip steering and use the recommended operation directly
+- Otherwise call `maybe_steer_operation(operation, reason, app_ref, quiet, skip_tests, skip_verify, timeout_s=steer_timeout)` which returns `(steered_op, should_abort)`
+- If `should_abort` is True, break the workflow loop with a steering abort error
+- If `steered_op != operation`, log a `steering_override` event and update the decision's operation to match
+
+### TUI Integration
+
+1. Instantiate `SyncApp` with `worker_func` containing the main workflow loop
+2. Use mutable reference lists (`function_name_ref`, `cost_ref`, `*_color_ref`, `*_path_ref`) and `stop_event` (threading.Event) to coordinate with TUI
+3. Store app reference in `app_ref` list for confirmation dialogs via `app.request_confirmation()`
+4. Track `user_confirmed_overwrite` to avoid repeated confirmation prompts
+5. Maintain `progress_callback_ref` for TUI ProgressBar updates during auto-deps
+6. Call `show_exit_animation()` after completion (unless quiet mode)
+7. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
+8. If `app.run()` returns None, return error dict indicating sync was interrupted
+
+### Headless Mode
+
+Detect headless environments (no TTY, CI environment variable, or `quiet=True`) and run worker logic directly without TUI:
+- Set `PDD_FORCE=1` to skip API key prompts
+- Run `sync_worker_logic()` directly instead of via SyncApp
+- Skip exit animation in headless mode
+- `get_confirm_callback()` must return a wrapper that calls `click.confirm` AND sets `user_confirmed_overwrite[0]=True`, so subsequent calls auto-confirm (prevents repeated prompts)
+
+### State Persistence
+
+Use `AtomicStateUpdate` context manager for consistent state writes:
+- Ensures run_report and fingerprint are both written or neither is written
+- Uses temp file + atomic rename pattern for crash safety
+- After each successful operation, save a `Fingerprint` to disk with current file hashes
+- **Case-insensitive language in paths**: All metadata file paths (fingerprint `.json`, run report `_run.json`, sync log `_sync.log`) must use `language.lower()` for consistent paths on case-sensitive filesystems. This applies to any direct path construction in this module (e.g., `f"{_safe_basename(basename)}_{language.lower()}_run.json"`).
+
+### Skip Handling
+
+When `skip_verify` or `skip_tests` is set:
+- Log that the operation was skipped
+- Save fingerprint with 'skip:' prefix (e.g., 'skip:verify') to distinguish from actual execution
+- Cascading: `skip_tests` also skips `verify` and `crash`
+- For crash skip: create synthetic run_report with exit_code=0 to prevent infinite loop
+
+### Operation Dispatch
+
+- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. The one-session sync path in `sync_main` follows the same convention.
+
+### Post-Operation Validation
+
+- After **generate**: Delete stale run_report to force re-validation
+- After **crash**:
+  - Python: Re-run example locally to verify fix, update run report
+  - Non-Python: Trust the agentic result (agent already verified with language-appropriate tools). Save a synthetic successful RunReport so sync_determine_operation advances.
+- After **fix**:
+  - Python: Re-run tests to update run report
+  - Non-Python: Trust the agentic result (agent already verified tests pass). Save a synthetic successful RunReport.
+- After **test** and **test_extend**: Execute tests to create/update run report
+
+### Non-Python Crash Detection
+
+For non-Python languages, skip Python-based program verification during crash detection. Instead, delegate crash detection to the agentic handler which uses the correct language-specific run command. Set `has_crash=True` with a descriptive crash_log_content to trigger the agentic crash handler.
+
+### Multi-Language Test Support
+
+For non-Python languages, use `get_test_command_for_file()` to determine the appropriate test runner command. The `_parse_test_output()` helper parses output from pytest, Jest/Vitest/Mocha, go test, and cargo test.
+
+### Pytest Project Root Discovery
+
+For Python test execution (both in `_execute_tests_and_create_run_report()` and the fix operation's pre-test run), use `_find_project_root(test_file)` to discover the project root. When found, set `PYTHONPATH` to include the root and its `src/` subdirectory, and pass `--rootdir` and `-c /dev/null` to pytest to prevent parent config interference.
+
+### Multiple Test Files Support
+
+Support running multiple test files (e.g., `test_module.py`, `test_module_1.py`):
+- `get_pdd_file_paths()` may return `test_files` list in `pdd_files` dict (alongside the primary `test` path)
+- Accept `test_files` list parameter in `_execute_tests_and_create_run_report()`
+- Run pytest on all matching test files
+- Store test file hashes in `test_file_hashes` dict in RunReport
+- Use `extract_failing_files_from_output()` to identify which test file to pass to fix_main
+- When calling `fix_main`, set `output_test` to the identified failing file (not always the primary test file)
+- Pass all test files to `fix_main` via `test_files` parameter so `fix_error_loop` runs them together for test isolation detection
+
+### Example Error Detection
+
+Implement helpers for running examples with error detection:
+- `_detect_example_errors(output)`: Detect Python tracebacks and ERROR log messages
+- `_run_example_with_error_detection()`: Run example with timeout, handle server-style examples that block
+- `_try_auto_fix_import_error()`: Attempt auto-fix for common import errors before expensive agentic calls
+
+## Helper Functions
+
+### Imported from operation_log
+
+Use these functions from `operation_log` module (already imported above):
+
+- `load_operation_log(basename, language)` - Load JSONL log entries (handles backward compatibility for entries without `invocation_mode`)
+- `create_log_entry(operation, reason, invocation_mode, estimated_cost, confidence, decision_type)` - Create log entry dict
+- `update_log_entry(entry, success, cost, model, duration, error)` - Add execution results to log entry
+- `append_log_entry(basename, language, entry)` - Append entry to log file
+- `log_event(basename, language, event_type, details, invocation_mode)` - Log system events (lock_acquired, budget_warning, etc.)
+- `save_fingerprint(basename, language, operation, paths, cost, model)` - Save fingerprint after success
+- `save_run_report(basename, language, report_data)` - Save RunReport dict
+- `clear_run_report(basename, language)` - Remove stale run report
+
+**Creating sync log entries from SyncDecision**: Extract fields from the decision object:
+```python
+entry = create_log_entry(
+    operation=decision.operation,
+    reason=decision.reason,
+    invocation_mode="sync",
+    estimated_cost=decision.estimated_cost,
+    confidence=decision.confidence,
+    decision_type=decision.decision_type
+)
+```
+
+### Local helpers (implement in this module)
+
+- `_display_sync_log(basename, language, verbose)` - Format and display sync log using `load_operation_log()`
+- `_create_mock_context(**kwargs)` - Create Click context for command execution
+- `_parse_test_output(output, language)` - Parse test runner output to extract (tests_passed, tests_failed, coverage)
+- `_execute_tests_and_create_run_report(test_file, basename, language, target_coverage, *, code_file=None, atomic_state=None, test_files=None)` - Run tests with coverage; uses `test_files` when provided
+- `_python_cov_target_for_code_file(code_file)` - Determine dotted module path for pytest-cov
+- `_python_cov_target_for_test_and_code(test_file, code_file, fallback)` - Analyze test imports to pick best `--cov` target
+
+## Error Handling
+
+### Path Construction
+
+Use `get_pdd_file_paths()` to resolve file paths. Handle errors gracefully:
+- If `FileNotFoundError` mentions test files, construct default paths and continue (test will be generated). Use case-insensitive prompt file lookup in fallback path construction (iterate directory, compare `.lower()` names).
+- For other path errors, return error dict immediately with clear message
+
+### Cycle Detection
+
+Detect and break infinite loops with these limits:
+- Auto-deps: 2+ occurrences in last 3 operations → force advance to generate
+- Crash-verify alternation: Break after 2 cycles (4 operations pattern)
+- Test-fix alternation: Break after 2 cycles (4 operations pattern)
+- Consecutive fix operations: Break after 5
+- Consecutive test operations: Break after `MAX_CONSECUTIVE_TESTS` (3)
+- Consecutive crash operations: Break after `MAX_CONSECUTIVE_CRASHES` (3)
+- Test_extend attempts: Accept current coverage after `MAX_TEST_EXTEND_ATTEMPTS` (2)
+
+### Budget and Lock Management
+
+- Stop workflow if `total_cost >= budget`
+- Log budget warnings when < 20% remaining
+- Use `SyncLock` context manager; always release on exit
+- Log lock_acquired and lock_released events
+
+### Subprocess Isolation
+
+For test execution and example runs:
+- Remove TUI environment variables (`FORCE_COLOR`, `COLUMNS`)
+- Use `start_new_session=True` to isolate from TUI terminal control
+- Use `stdin=subprocess.DEVNULL` to prevent blocking
+
+### Return Value Parsing
+
+Handle command results in multiple formats:
+- Dict: Extract `success`, `cost`, `model` fields directly
+- Tuple (3-element): Cost is second-to-last element, model is last element
+- Tuple (5-element from cmd_test_main): `(content, cost, model, agentic_success, error_message)` - use explicit indexing for test operation
+- For test operation with 5-tuple: use `result[1]` for cost and `result[2]` for model (not negative indexing). Extract cost and model regardless of success or failure.
+- For test operation success: if `agentic_success` (4th element) is not None, trust it; otherwise check if file exists
+- For test operation failure: if `result[4]` (error_message) is non-empty, append it to the errors list so it reaches the sync log
+- For crash/fix operations returning tuples: extract error message from `result[1]` on failure and append to errors list
+- Save fingerprint after successful operations regardless of format
+
+### Non-Python Language Handling and Agentic Mode
+
+Implement a helper function `_use_agentic_path(language: str, agentic_mode: bool) -> bool` that returns True if we should use agentic path (non-Python OR agentic_mode for Python). When agentic_mode is True, Python behaves like TypeScript/other languages.
+
+For non-Python languages (or when `agentic_mode=True` for Python), set `max_attempts=0` to skip iterative loops and go directly to agentic fallback in crash, verify, and fix operations. Use `_use_agentic_path()` to check this condition.
+
+### Agentic Test Generation Success Handling
+
+For both the **test** and **test_extend** operations: after `cmd_test_main` completes, always execute tests locally via `_execute_tests_and_create_run_report()` to capture real results (tests_passed, tests_failed, coverage). This applies to all languages. Never use synthetic RunReports for test/test_extend operations — `sync_determine_operation` requires accurate `tests_failed` counts to recommend the `fix` operation when tests fail.
+
+Implement `_create_synthetic_run_report_for_agentic_success(test_file, basename, language, *, atomic_state=None)` that:
+- Creates a RunReport with exit_code=0, tests_passed=1, tests_failed=0
+- Uses actual file hash if test_file exists, otherwise uses sentinel value "agentic_test_success"
+- Saves the report using AtomicStateUpdate if provided
+- **Note**: In the current implementation, post-crash and post-fix synthetic reports for non-Python languages inline-construct `RunReport` objects and do not call this helper. `_create_synthetic_run_report_for_agentic_success()` is provided as a utility for those synthetic-report paths if they are refactored to use it, and it MUST NOT be used for test/test_extend operations.
+
+## Constants
+
+```python
+# Module level
+MAX_CONSECUTIVE_TESTS = 3  # Break after this many consecutive test operations
+MAX_TEST_EXTEND_ATTEMPTS = 2  # Accept coverage after this many test_extend attempts (Python only; non-Python skips test_extend entirely)
+MAX_CONSECUTIVE_CRASHES = 3  # Break after this many consecutive crash operations
+
+# Inside sync_worker_logic()
+MAX_CYCLE_REPEATS = 2  # Break crash-verify and test-fix cycles after this many repetitions
+```

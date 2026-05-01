@@ -11,9 +11,11 @@ import pytest
 from pdd.agentic_checkup import (
     _extract_json_from_text,
     _fetch_comments,
+    _fetch_pr_context,
     _load_pddrc_content,
     _post_checkup_comment,
     _post_error_comment,
+    _truncate_issue_context,
     run_agentic_checkup,
 )
 
@@ -174,13 +176,18 @@ class TestFetchComments:
     @patch("pdd.agentic_checkup._run_gh_command")
     def test_fetches_and_formats_comments(self, mock_gh):
         comments = [
-            {"user": {"login": "alice"}, "body": "Comment 1"},
+            {
+                "user": {"login": "alice"},
+                "created_at": "2026-04-29T00:00:00Z",
+                "body": "Comment 1",
+            },
             {"user": {"login": "bob"}, "body": "Comment 2"},
         ]
         mock_gh.return_value = (True, json.dumps(comments))
 
         result = _fetch_comments("https://api.github.com/repos/o/r/issues/1/comments")
         assert "alice" in result
+        assert "2026-04-29T00:00:00Z" in result
         assert "Comment 1" in result
         assert "bob" in result
 
@@ -189,6 +196,92 @@ class TestFetchComments:
         mock_gh.return_value = (False, "404")
         result = _fetch_comments("https://api.github.com/repos/o/r/issues/1/comments")
         assert result == ""
+
+
+class TestIssueContextTruncation:
+    def test_preserves_latest_comments_when_issue_context_is_long(self):
+        old_body = "OLD PRD/Tier2 requirement.\n" * 200
+        old_comments = "--- Comment by bot ---\nold bot log\n" * 200
+        latest = (
+            "--- Comment by maintainer at 2026-04-29T00:00:00Z ---\n"
+            "Implementation scope lock: Tier 1 only. PRD/Tier2 is out of scope.\n"
+        )
+        text = f"Title: T\nDescription:\n{old_body}\nComments:\n{old_comments}{latest}"
+
+        result = _truncate_issue_context(text, 3000)
+
+        assert len(result) <= 3000
+        assert "Title: T" in result
+        assert "Implementation scope lock" in result
+        assert "PRD/Tier2 is out of scope" in result
+        assert "latest comments preserved" in result
+
+
+class TestFetchPrContext:
+    @patch("pdd.agentic_checkup._run_gh_command")
+    def test_fetches_pr_body_files_comments_and_reviews(self, mock_gh):
+        mock_gh.side_effect = [
+            (
+                True,
+                json.dumps(
+                    {
+                        "title": "Improve catalog",
+                        "body": "Uses reviewed manifest instead of live fetch.",
+                        "state": "open",
+                        "mergeable_state": "clean",
+                        "head": {"label": "o:feature"},
+                        "base": {"label": "o:main"},
+                    }
+                ),
+            ),
+            (
+                True,
+                json.dumps(
+                    [
+                        {
+                            "filename": "pdd/data/arena_elo_manifest.json",
+                            "status": "modified",
+                            "additions": 5,
+                            "deletions": 1,
+                            "patch": "@@ source data provenance",
+                        }
+                    ]
+                ),
+            ),
+            (
+                True,
+                json.dumps(
+                    [
+                        {
+                            "user": {"login": "maintainer"},
+                            "created_at": "2026-04-29T00:00:00Z",
+                            "body": "Direction changed for safety.",
+                        }
+                    ]
+                ),
+            ),
+            (
+                True,
+                json.dumps(
+                    [
+                        {
+                            "user": {"login": "reviewer"},
+                            "submitted_at": "2026-04-29T01:00:00Z",
+                            "state": "COMMENTED",
+                            "body": "Check variant provenance.",
+                        }
+                    ]
+                ),
+            ),
+        ]
+
+        context = _fetch_pr_context("o", "r", 1309)
+
+        assert "Title: Improve catalog" in context
+        assert "Uses reviewed manifest" in context
+        assert "pdd/data/arena_elo_manifest.json" in context
+        assert "Direction changed for safety." in context
+        assert "Check variant provenance." in context
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +451,53 @@ class TestRunAgenticCheckup:
         mock_orchestrator.assert_called_once()
         call_kwargs = mock_orchestrator.call_args[1]
         assert call_kwargs["no_fix"] is True
+
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch("pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}')
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_review_only_mode_passed_to_review_loop_config(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_fetch_pr_context,
+        mock_review_loop,
+    ):
+        issue_data = {
+            "title": "Check {workflow}",
+            "body": "check {value}",
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_review_loop.return_value = (True, "review report", 0.10, "codex")
+
+        run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            pr_url="https://github.com/owner/repo/pull/2",
+            review_loop=True,
+            review_only=True,
+        )
+
+        config = mock_review_loop.call_args.kwargs["config"]
+        context = mock_review_loop.call_args.kwargs["context"]
+        assert config.review_only is True
+        assert context.issue_title == "Check {workflow}"
+        assert "check {value}" in context.issue_content
+        assert context.pr_content == 'PR context {"ok": true}'
+        assert context.pddrc_content == "setting: {raw}"
+        assert '"name": "{module}"' in context.architecture_json
+        assert "{{" not in context.issue_content
+        assert "{{" not in context.pr_content
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")

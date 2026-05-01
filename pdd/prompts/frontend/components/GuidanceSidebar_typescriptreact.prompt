@@ -1,0 +1,34 @@
+Create a React component named `GuidanceSidebar` that serves as a documentation and help panel for a prompt engineering environment. This component should provide users with a reference for PDD directives and best practices, featuring an interactive, collapsible UI.
+
+### Requirements
+1. **UI Structure**: The component must be a sidebar (`aside`) that can be toggled open/closed via an `isOpen` prop. It should include a header with a title and close button, and a scrollable content area.
+2. **Directive Display**: 
+    - Group directives by category (e.g., include, dynamic, grounding, meta).
+    - Display categories in a specific order with color-coded indicators.
+    - Each directive should be rendered as a `DirectiveCard` with a collapsible section showing description, syntax, and examples.
+3. **Best Practices**: Render a list of best practices using cards that include an icon, title, and description.
+4. **Interactivity**: Implement local state for expanding/collapsing individual directive cards.
+5. **Styling**: Use Tailwind CSS for styling, adhering to a dark-themed "surface" palette (e.g., `bg-surface-800`, `text-text-secondary`, `accent-400`). Include a slide-in animation for the sidebar.
+6. **Accessibility**: Include appropriate `aria-label` attributes for interactive elements.
+
+### Dependencies
+<pdd_directives_lib>
+    <include>../lib/pddDirectives</include>
+</pdd_directives_lib>
+<icon_component>
+    <include>./Icon</include>
+</icon_component>
+
+### Instructions
+1. **Data Processing**: Use the `PDD_DIRECTIVES` constant and group them by their `category` property. Use `CATEGORY_LABELS` for display names.
+2. **Component Logic**:
+    - If `isOpen` is false, return `null`.
+    - Implement a `DirectiveCard` sub-component to manage the toggle state of individual directive details.
+    - Use the `categoryOrder` array `['include', 'dynamic', 'grounding', 'meta']` to ensure consistent section ordering.
+3. **Visual Cues**: 
+    - Use a color mapping for category dots: `include` (blue), `dynamic` (amber), `grounding` (purple), others (gray).
+    - Use `SparklesIcon` for the Best Practices section.
+    - Include a "Quick Tip" callout at the bottom of the sidebar with a distinct background (`accent-500/10`).
+
+### Deliverables
+- A single TypeScript file containing the `GuidanceSidebar` component and the `DirectiveCard` sub-component, exported as default.

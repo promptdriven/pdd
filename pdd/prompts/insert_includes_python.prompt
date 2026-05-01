@@ -1,0 +1,78 @@
+<pdd-reason>Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "insert_includes", "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)", "returns": "Tuple[str, str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/insert_includes.py` module.
+
+% Role & Scope
+PDD prompt files contain `<include>file.py</include>` tags to bring in dependency files as context for code generation. This module takes a prompt and automatically adds or updates those `<include>` tags based on what dependencies the prompt needs.
+
+It calls `auto_include` to analyze the prompt and get back a string of directives — `<update>` blocks (which modify existing `<include>` tags already in the prompt, e.g. adding `select` or `query` attributes) and `<new>` blocks (which are new `<include>` tags to add). Updates are applied deterministically by matching file paths. New includes are placed into the prompt by an LLM that understands where they should go.
+
+% Requirements
+1. Function: `insert_includes(input_prompt, directory_path, csv_filename, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, dedup=True) -> Tuple[str, str, float, str]`
+   - Returns `(output_prompt, csv_output, total_cost, model_name)`
+2. Load prompt template `insert_includes_LLM` via `load_prompt_template`; raise `ValueError` if not found
+3. Preprocess the template to escape curly braces, but keep `{actual_prompt_to_update}` and `{actual_dependencies_to_insert}` unescaped — these are the two placeholders the template expects to be filled later
+4. Read the CSV file from `csv_filename`; if it doesn't exist, create it with header row `full_path,file_summary,key_exports,dependencies,content_hash`
+5. Call `auto_include` to get `(include_directives, csv_output, total_cost, model_name)`
+   - Pass `csv_filename` as the `csv_path` argument so summarize_directory writes incremental results to disk
+   - Pass through `prompt_filename`, `progress_callback`, `include_docs`, `max_workers`, and LLM params
+
+% Applying Updates (deterministic, no LLM call)
+6. `<update>` blocks modify existing `<include>` tags already in the prompt (e.g., adding `select` or `query` attributes)
+7. For each `<update>` block, extract the `<include>` tag from the block content (ignore surrounding comments or extra lines)
+8. Match against existing `<include>` tags in the prompt by file path (the tag body content)
+9. If full path doesn't match (e.g., prompt has `file.py` but update has `dir/file.py`), fall back to matching by basename — but only when the basename uniquely matches a single `<include>` tag in the prompt
+10. If basename matches multiple includes (ambiguous), skip the update and warn if verbose
+
+% Inserting New Includes (LLM call)
+11. If `<new>` blocks exist after separating out `<update>` blocks, invoke the LLM with `insert_includes_LLM` to place them in the prompt
+    - Pass `actual_prompt_to_update` (prompt after updates applied) and `actual_dependencies_to_insert` (only the `<new>` blocks)
+    - Use Pydantic structured output to get back the updated prompt
+12. If no `<new>` blocks exist (only updates), skip the LLM call and use the updated prompt directly
+
+% Deduplication (when dedup=True)
+13. After the LLM inserts new includes, remove inline content that duplicates what the included files provide
+    - Extract the list of newly inserted include file paths from the `include_directives` string
+    - Resolve file paths against the project root (via `find_project_root_from_path`) instead of relying on CWD, so that project-root-relative paths are found regardless of working directory
+    - For each included file, find the longest contiguous run of identical lines between the prompt and the file using `difflib.SequenceMatcher` with `autojunk=False`, operating on `splitlines(keepends=True)` (line-based exact equality, one match per file). Use `find_longest_match(0, len(prompt_lines), 0, len(content_lines))` — do not nest scans across window sizes
+    - Remove the matched run only when it covers a substantial fraction of the file:
+      * Small files (size <= `ceil(min_block / coverage)`): require the entire file to appear contiguously
+      * Larger files: require the matched run to cover at least `coverage` of the file's lines, rounded up via `math.ceil`
+    - Defaults: `coverage=0.75`, `min_block=4`. `min_block` plays two roles — the absolute minimum match size and the derivation basis for the small-file cutoff. This coupling is intentional: at sizes where `coverage * file_size <= min_block`, a generic `min_block`-line overlap would otherwise trigger removal (e.g. without the small-file branch a 5-line file would allow a 4-of-5 generic overlap to delete content)
+    - Must not over-remove on coincidental short overlaps: a 3+ line block that constitutes a small fraction of an included file (e.g. generic JSON wrapper lines that appear inside an example string within the file) must be preserved. The real-world case this guards against is the agentic_change_orchestrator prompt's `<pdd-interface>` header overlapping with example strings inside `architecture_sync_example.py`
+    - Must run in O(n*m) per included file (n = prompt lines, m = file lines). Do not implement a descending-window scan that calls `SequenceMatcher.ratio()` per window — that prior approach was O(n^2) windows × O(k*m) per ratio call and hung `pdd sync` on real prompts
+
+% Error Handling
+- Raise on LLM failure (invalid or missing response)
+- Log errors via Rich and re-raise
+
+% Dependencies
+<internal_modules>
+    <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
+    <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
+    <auto_include_example><include>context/auto_include_example.py</include></auto_include_example>
+    <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+</internal_modules>
+
+% Deliverables
+- Code: `pdd/insert_includes.py`

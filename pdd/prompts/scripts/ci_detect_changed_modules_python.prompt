@@ -1,0 +1,44 @@
+# Role and Scope
+You are a DevOps and Automation Engineer. Your responsibility is to create a CI/CD utility script (`scripts/ci_detect_changed_modules.py`) that identifies PDD (Prompt-Driven Development) module basenames affected by changes in a Git diff. The script must support workflows on both GitHub Actions and Google Cloud Build by determining which modules need to be re-processed or "healed" based on modifications to their prompts, logic, context, or tests.
+
+# Requirements
+1. **Module Detection**: Identify module basenames from changed files within specific prefixes: `pdd/`, `prompts/`, `context/`, and `tests/`.
+2. **Path Mapping**:
+    - **Prompts**: `prompts/[subdir/...]/{basename}_{language}.prompt` maps to `{subdir/...}/{basename}`.
+    - **Context**: `context/[subdir/...]/{basename}_example.{ext}` maps to `{subdir/...}/{basename}`.
+    - **Logic**: `pdd/{path/to/module}.py` maps to `{path/to/module}`, excluding root-level `__init__.py`.
+    - **Tests**: `tests/[subdir/...]/test_{basename}.py` maps to `{subdir/...}/{basename}`.
+3. **Dependency Tracking (Reverse Lookup)**: Scan all `.prompt` files for `<include>` or `<include-many>` tags. If a changed file is referenced in a prompt's include block, the basename of that prompt must also be included in the output.
+4. **Git Integration**: Execute `git diff --name-only` using a provided `--diff-base` argument.
+5. **Output Format**: Print a single line of comma-separated, alphabetically sorted module basenames. Print an empty line if no relevant files changed.
+6. **Error Handling**: The script should exit with a non-zero code only if the `git` command fails; otherwise, it should exit with 0.
+7. **Portability**: Must use only Python 3 standard libraries to ensure compatibility across different CI environments.
+
+# Dependencies & Context
+The script interacts with the repository structure and PDD conventions. While it does not import external libraries, it relies on the following file patterns:
+<pdd_structure>
+    <include-many>
+        pdd/*.py,
+        prompts/**/*.prompt,
+        context/**/*_example.*,
+        tests/**/test_*.py
+    </include-many>
+</pdd_structure>
+
+# Instructions
+1. **Argument Parsing**: Use `argparse` to accept a `--diff-base` string (e.g., 'origin/main...HEAD').
+2. **Path Normalization**: Implement a helper to normalize repository paths (strip `./`, handle backslashes, etc.) for consistent matching between Git output and include-tag content.
+3. **Extraction Logic**:
+    - Implement `_basename_from_path` to handle the specific regex and string slicing logic for the four primary file categories.
+    - Implement `_extract_include_paths` using regex to parse `<include>` and `<include-many>` tags from prompt files.
+4. **Reverse Dependency Resolution**:
+    - For every prompt file in the repo, check if its internal `<include>` paths match any of the files identified in the Git diff.
+    - Match using three strategies: full path match, path suffix match, or filename match.
+5. **Execution Flow**:
+    - Fetch changed files from Git.
+    - Convert file paths to basenames.
+    - Identify additional basenames via reverse dependency lookups.
+    - Sort and join the resulting unique set of basenames.
+
+# Deliverables
+A standalone Python 3 script located at `scripts/ci_detect_changed_modules.py`. The script must be executable (`#!/usr/bin/env python3`) and include a clear docstring explaining its usage and purpose.

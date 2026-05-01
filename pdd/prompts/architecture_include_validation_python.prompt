@@ -1,0 +1,166 @@
+% Module: validate_arch_includes
+% Purpose: Cross-validate architecture.json dependency entries against <include> tags in prompts.
+% Phase 5: surface drift between declarative architecture dependencies and the module
+% prompts the LLM actually pulls in via <include>.
+
+% Dependencies (imported from sibling modules):
+%   - .architecture_registry: extract_modules, find_architecture_for_project, find_project_root
+%   - .sync_order: extract_includes_from_file, extract_module_from_include
+%   - .architecture_sync: parse_prompt_tags
+
+<pdd.architecture_sync>
+    <include select="def:example_parse_tags,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+</pdd.architecture_sync>
+
+% ============================================================
+% Responsibilities
+% ============================================================
+% This module provides cross-validation between architecture.json dependency
+% declarations and the actual <include> / <pdd-dependency> tags found in prompt files.
+% It detects two kinds of drift:
+%   1. Forward mismatch: architecture.json lists a dependency on module X, but the
+%      prompt file has no <include> or <pdd-dependency> referencing that module's prompt.
+%   2. Reverse mismatch: a prompt <include>s another module's prompt, but
+%      architecture.json dependencies do not list that module.
+
+% ============================================================
+% Internal helpers
+% ============================================================
+
+% _module_prompt_include_target(include_path: str) -> Optional[str]
+%   - Map an <include> path to a module basename ONLY when it names another module prompt
+%     (i.e. path ends with ".prompt").
+%   - Context/example files (e.g. context/foo_example.py) are ignored so validation
+%     matches architecture.json, which lists dependencies between module prompts,
+%     not every referenced artifact.
+%   - Uses extract_module_from_include from sync_order.
+
+% _BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str]
+%   - Top-level directories in the PDD repo that ship sample architecture (not app code).
+%   - Value: frozenset({"examples", "example_project", "example_workspace", "staging"})
+
+% _arch_path_under_skipped_sample_tree(arch_path, project_root, skip_roots) -> bool
+%   - Returns True if arch_path is under one of the skip_roots directories
+%     (at least 2 parts in relative path, first part in skip_roots).
+%   - Returns False if skip_roots is empty or arch_path is not relative to project_root.
+
+% _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
+%   - Resolve architecture filename to an on-disk path under the project.
+%   - If filename starts with "prompts/", resolve directly under project_root.
+%   - Otherwise, resolve under project_root / "prompts".
+%   - Normalize backslashes to forward slashes and strip leading slashes.
+
+% resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
+%   - Public API wrapper around _resolve_architecture_prompt_path.
+
+% _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]
+%   - Return module basenames declared via <pdd-dependency> tags in the prompt header.
+%   - Per docs/prompting_guide.md, <pdd-dependency> is the authoritative architectural
+%     declaration and <include> is purely for LLM context.
+%   - Uses parse_prompt_tags from .architecture_sync to extract "dependencies" tags.
+%   - Filters out self_mod and uses extract_module_from_include for each dependency.
+%   - Returns empty set on OSError or empty content.
+
+% ============================================================
+% Core validation function
+% ============================================================
+
+% cross_validate_architecture_with_prompt_includes(
+%     arch_data: List[Dict[str, Any]],
+%     project_root: Path,
+% ) -> List[str]
+%
+% Compare each architecture entry's "dependencies" (as module basenames) with
+% module targets of <include> tags in the corresponding prompt file.
+%
+% A declared dependency is satisfied if the prompt either <include>s the
+% dependency's prompt OR declares it via <pdd-dependency> (the metadata
+% tag the prompting guide calls the authoritative architectural declaration).
+%
+% The reverse direction (<include> of a module prompt without a matching
+% arch dep) still warns; drift between <pdd-dependency> tags and
+% architecture.json is handled by architecture_sync, not this check.
+%
+% Non-module includes (docs, preambles, etc.) are ignored via
+% extract_module_from_include.
+%
+% Algorithm:
+%   1. Build filename_to_basename mapping for all entries using extract_module_from_include.
+%   2. For each entry with a valid filename and module basename:
+%      a. Resolve prompt path; if file not found, emit a skip warning and continue.
+%      b. Extract <include> targets from the prompt file, filter to module prompt targets
+%         (via _module_prompt_include_target), excluding self.
+%      c. Extract <pdd-dependency> modules (via _pdd_dependency_modules), excluding self.
+%      d. forward_declared = include_modules | tag_modules
+%      e. Extract arch_modules from entry's "dependencies" list using filename_to_basename.
+%      f. For each module in (arch_modules - forward_declared): emit forward mismatch warning
+%         including the dependency filename proof if available.
+%         Warning format: "architecture.json / <include> mismatch: {fn!r} declares dependency
+%         on module {d!r}{extra} but the prompt has no <include> or <pdd-dependency> of that
+%         module's prompt"
+%      g. For each module in (include_modules - arch_modules): emit reverse mismatch warning
+%         including the include path proof.
+%         Warning format: "architecture.json / <include> mismatch: {fn!r} <include>s module
+%         {i!r} ({inc_s!r}) but architecture.json dependencies do not list that module"
+%   3. Return list of warning strings (empty if no mismatches).
+
+% ============================================================
+% Collection / aggregation functions
+% ============================================================
+
+% collect_architecture_include_validation_warnings(
+%     project_root: Path,
+%     *,
+%     skip_bundled_sample_arch: bool = True,
+% ) -> List[str]
+%   - Run cross-validation for every architecture.json under project_root.
+%   - Uses find_architecture_for_project to discover architecture files.
+%   - Each file is validated with its parent directory as the project root for
+%     resolving prompts/… paths, so nested packages work.
+%   - When skip_bundled_sample_arch is True (default), skips trees like examples/
+%     used in the PDD repository.
+%   - Loads each architecture.json, extracts modules, calls
+%     cross_validate_architecture_with_prompt_includes with base = arch_path.parent.
+%   - Prefixes each warning with the arch_path.
+%   - Silently skips files with OSError or JSONDecodeError.
+
+% ============================================================
+% CLI integration functions
+% ============================================================
+
+% list_validate_arch_include_warnings(project_root: Path, *, strict: bool) -> List[str]
+%   - Return cross-validation issues for project_root.
+%   - When strict is False (default CLI), skip bundled sample trees.
+%   - When True, validate those too (useful for maintainer / CI runs).
+%   - Delegates to collect_architecture_include_validation_warnings with
+%     skip_bundled_sample_arch=not strict.
+
+% run_validate_arch_includes_cli(
+%     project_root: Path,
+%     *,
+%     strict: bool,
+%     quiet: bool,
+% ) -> None
+%   - Print validation messages and exit with code 1 if there are issues.
+%   - Used by ``pdd checkup --validate-arch-includes``.
+%   - Uses click for output: green "No … mismatches found." when clean,
+%     yellow "Warning: …" on stderr for each issue.
+%   - Raises click.exceptions.Exit(1) if any warnings found.
+
+% print_architecture_include_validation_warnings(*, quiet: bool, verbose: bool = False) -> None
+%   - Print yellow warnings for the current project only when verbose=True and quiet=False.
+%   - Uses rich.print with [yellow] markup.
+%   - Uses find_project_root() to locate the project.
+
+% ============================================================
+% Deliverables
+% ============================================================
+% Generate a single Python module with:
+%   - Module docstring describing Phase 5 cross-validation purpose.
+%   - from __future__ import annotations
+%   - Imports: json, pathlib.Path, typing (Any, Dict, FrozenSet, List, Optional)
+%   - Relative imports from .architecture_registry and .sync_order at top level.
+%   - Lazy imports of click, rich, .architecture_sync, .architecture_registry inside
+%     functions that need them (to avoid circular imports).
+%   - All functions and constants described above with their exact signatures,
+%     return types, and behavior.

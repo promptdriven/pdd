@@ -1,0 +1,69 @@
+% You are an expert Python engineer. Your goal is to write `pdd/commands/auth.py`.
+
+% Role & Scope
+  This module contains the `pdd auth` command group and its subcommands for PDD Cloud authentication management.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. **auth_group**:
+     - Click group named "auth" with help text: "Manage PDD Cloud authentication."
+
+  2. **login**:
+     - Launches device flow authentication with GitHub via Firebase.
+     - Logic: Call get_jwt_token() from pdd.get_jwt_token with appropriate parameters.
+     - On success: Print "Successfully authenticated to PDD Cloud."
+     - On failure: Print error and exit with code 1.
+
+  3. **status**:
+     - Displays current authentication state.
+     - Use get_auth_status() from pdd.auth_service to check auth state.
+     - Options:
+       - --verify (flag): When set, actually attempt token refresh to validate credentials.
+     - Exit code 0 if authenticated (valid JWT exists), 1 otherwise.
+     - Output: "Authenticated as: <github_username>" or "Not authenticated."
+     - If get_auth_status() returns refresh_token_error, report that authentication status could not be confirmed due to the keyring error, then exit code 1.
+     - If authenticated, decode JWT from cache to extract user info (email or sub claim).
+     - Show token expiration time in minutes.
+     - If token expired but refresh token exists (and not --verify):
+       - Show warning: "Session for: <user> (token expired, will refresh on next use)"
+       - Exit code 0 (still considered authenticated).
+     - If --verify flag:
+       - Call verify_auth() from pdd.auth_service to attempt actual token refresh.
+       - Show success/failure based on result.
+
+  4. **logout**:
+     - Use logout() from pdd.auth_service to clear both JWT cache and keyring token.
+     - Before printing "Not authenticated.", inspect get_auth_status(); if it includes refresh_token_error, call logout() anyway so keyring cleanup gets a bounded best-effort delete. Print "Logged out of PDD Cloud." if that cleanup succeeds, or print the delete timeout/error if it fails.
+     - Print "Logged out of PDD Cloud." on success.
+     - Handle errors and print error message on failure.
+
+  5. **token**:
+     - Outputs the current JWT token for scripting/programmatic access.
+     - Options:
+       - --format (choice: "raw", "json"): Output format (default: "raw").
+     - Exit code 1 if no valid token available.
+     - With --format=json, output: {"token": "...", "expires_at": "..."}
+
+% Dependencies
+  <auth_service><include select="def:get_auth_status,def:logout,def:verify_auth,def:get_jwt_cache_info,def:has_refresh_token,def:get_cached_jwt">context/auth_service_example.py</include></auth_service>
+  <get_jwt_token><include select="def:get_jwt_token,class:AuthError">context/get_jwt_token_example.py</include></get_jwt_token>
+  <cloud_config><include>context/core/cloud_example.py</include></cloud_config>
+  <commands_init><include select="def:main_cli">context/commands/__init___example.py</include></commands_init>
+  <pdd.commands.register_commands><include select="def:main_cli">context/commands/__init___example.py</include></pdd.commands.register_commands>
+  <pdd.keyring_timeout>
+      <include>context/_keyring_timeout_example.py</include>
+  </pdd.keyring_timeout>
+
+% Instructions
+  - Use @click.group("auth") for the command group.
+  - NO @track_cost decorator (no LLM calls in these commands).
+  - Use click.echo() for output, click.style() for colored output.
+  - Handle asyncio.run() for calling async get_jwt_token.
+  - Import logout(), get_auth_status(), and verify_auth() from pdd.auth_service for status/logout commands.
+  - Use pathlib.Path for file operations.
+  - Import error classes from pdd.get_jwt_token.
+
+% Deliverables
+  - Code: `pdd/commands/auth.py`
+  - Export: `auth_group` command group

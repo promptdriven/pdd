@@ -1,0 +1,36 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/components/JobDashboard.tsx` as the floating jobs dashboard panel.
+
+% Requirements
+1) Imports/exports:
+   - Import `React`, `useState`, `JobInfo` from `../hooks/useJobs`, and sibling `JobCard` + `JobOutputPanel`.
+   - Export `BatchOperation` with `id`, `name`, `current`, `total`, `currentItem`, `startedAt: Date`, and `status: 'running' | 'completed' | 'failed'`.
+   - Define `JobDashboardProps` with required props:
+     `activeJobs`, `completedJobs`, `selectedJob`, `onSelectJob(jobId|null)`, `onCancelJob`, `onRemoveJob`, `onClearCompleted`, `isVisible`, `onClose`;
+     optional `onMarkSpawnedDone(jobId, success)`, `onMarkJobStatus(jobId, status)`, `batchOperation?: BatchOperation | null`, `onCancelBatchOperation`.
+2) Component behavior:
+   - Default-export `JobDashboard: React.FC<JobDashboardProps>`.
+   - Keep local `isCollapsed` state (default `false`).
+   - Derive `hasBatchOp = batchOperation && batchOperation.status === 'running'`.
+   - Return `null` when `isVisible` is false.
+3) Layout:
+   - Fixed bottom wrapper with `data-job-dashboard`, outer `pointer-events-none`, inner `pointer-events-auto`.
+   - Inner panel is centered dark-surface UI with `max-w-[60rem]`, width `calc(100% - 2rem)`, and collapse animation `max-h-14` (collapsed) vs `max-h-[65vh]` (expanded).
+4) Header:
+   - Entire header toggles collapse.
+   - Left icon rotates when expanded; color logic:
+     active jobs => gold `#FDCE49`; no active + collapsed => accent; no active + expanded => surface/white.
+   - Title: `Jobs`.
+   - Optional badges: running batch (`spinner + batchOperation.name`), active count (`<n> running` with pulsing gold dot), completed count (`<n> completed`).
+   - Right controls must stop propagation: conditional `Clear completed` (`onClearCompleted`) and close (`onClose`).
+5) Expanded body (`max-h-[calc(65vh-3.5rem)]`, scrollable):
+   - Batch section when `hasBatchOp && batchOperation`: heading `Batch Operation`, name, optional `Cancel` (`onCancelBatchOperation`), progress text (`current / total` + `currentItem`), and progress bar width `(current / total) * 100`.
+   - Active section (`Active Jobs`) when jobs exist: map `JobCard`s with select-toggle (`selected => null`), wire `onCancel`, `onRemove`, optional `onMarkDone`/`onMarkStatus`.
+     Selected active card renders inline `JobOutputPanel` below in container `marginLeft: '15%'`, with `onCancel={() => onCancelJob(job.id)}` and close-to-deselect.
+   - Completed section (`Recent Jobs`) when jobs exist: render only `completedJobs.slice(0, 10)`, same select-toggle, `onRemove`, no-op cancel.
+     Selected completed card renders inline `JobOutputPanel` in the same indented container, no-op cancel, close-to-deselect.
+   - Empty state when both lists are empty: archive-style icon + text `No jobs yet` and `Run a command to see it here`.
+
+% Constraints
+- Keep dark Tailwind surface styling consistent with existing jobs UI.
+- Keep icons inline as SVG.
+- Output only `pdd/frontend/components/JobDashboard.tsx`.

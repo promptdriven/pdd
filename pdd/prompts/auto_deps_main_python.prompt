@@ -1,0 +1,102 @@
+<pdd-reason>CLI entry point for auto-deps with doc discovery, dedup, and parallelization support.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1)", "returns": "Tuple[str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>insert_includes_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
+
+<include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - `ctx` (`click.Context`): The Click context object (see ctx_obj_params.prompt for available keys).
+    - `prompt_file` (`str`): Path to the input prompt file.
+    - `directory_path` (`str`): Path to the directory containing potential dependency files (can include glob patterns, e.g., "context/*_example.py").
+    - `auto_deps_csv_path` (`Optional[str]`): Preferred CSV file path for auto-dependency information (passed into path construction; may be overridden by resolved paths).
+    - `output` (`Optional[str]`): File path (or directory) to save the modified prompt file with auto-dependencies.
+    - `force_scan` (`Optional[bool]`): Flag to force a rescan of the directory. This is done by deleting the resolved CSV file if it exists (see Behavior below).
+    - `progress_callback` (`Optional[Callable[[int, int], None]]`): Optional callback for progress updates (current, total) for each file processed. Defaults to None.
+    - `include_docs` (`bool`): Flag to include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Default False.
+    - `no_dedup` (`bool`): Flag to disable redundant inline content removal. Default False.
+    - `concurrency` (`int`): Number of parallel workers for file summarization. Default 1.
+
+    Outputs:
+    - Returns a tuple containing (`str`, `float`, `str`):
+      - `str`: The modified prompt with auto-dependencies added.
+      - `float`: The total cost of the operation.
+      - `str`: The name of the model used.
+
+% Behavior (aligns with current implementation):
+    - Use `construct_paths` with:
+        • `input_file_paths = {"prompt_file": prompt_file}`
+        • `command = "auto-deps"`
+        • `command_options = {"output": output, "csv": auto_deps_csv_path}`
+        • `force = ctx.obj.get('force', False)` and `quiet = ctx.obj.get('quiet', False)`
+        • `context_override = ctx.obj.get('context')` to honor a global `--context`
+        • `confirm_callback = ctx.obj.get('confirm_callback')` for interactive confirmation handling
+    - Unpack the four return values from `construct_paths`:
+        • `(resolved_config, input_strings, output_file_paths, _)` where `_` is the unused language value.
+    - Resolve `csv_path` from `output_file_paths.get("csv", "project_dependencies.csv")`.
+      Note: If the path constructor does not produce a `csv` entry, default to "project_dependencies.csv".
+    - If `force_scan` is True and `Path(csv_path).exists()`:
+        • Print a yellow message (unless quiet): "Removing existing CSV file due to --force-scan option: {csv_path}"
+        • Delete the CSV file before continuing.
+    - Read LLM parameters from context with defaults:
+        • `strength = ctx.obj.get('strength', DEFAULT_STRENGTH)`
+        • `temperature = ctx.obj.get('temperature', 0)`
+        • `time_budget = ctx.obj.get('time', DEFAULT_TIME)`
+      Compute verbosity as `verbose = not ctx.obj.get('quiet', False)` and pass to downstream calls.
+    - Call `insert_includes` as:
+        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, prompt_filename=prompt_file, strength=strength, temperature=temperature, time=time_budget, verbose=verbose, progress_callback=progress_callback, include_docs=include_docs, dedup=(not no_dedup), max_workers=concurrency)`
+      Capture `(modified_prompt, csv_output, total_cost, model_name)`.
+    - Save outputs:
+        • Write `modified_prompt` to `output_file_paths["output"]` (UTF-8).
+        • If `csv_output` is truthy (non-empty), write it to `csv_path` (UTF-8).
+    - Console output (unless `quiet` is set), print using Rich formatting:
+        • "[bold green]Successfully analyzed and inserted dependencies![/bold green]"
+        • "[bold]Model used:[/bold] {model_name}"
+        • "[bold]Total cost:[/bold] ${total_cost:.6f}"
+        • "[bold]Modified prompt saved to:[/bold] {output_path}"
+        • "[bold]Dependency information saved to:[/bold] {csv_path}"
+    - Concurrency: Acquire an exclusive file lock (using the CSV path as the lock identifier)
+      before beginning any work. This ensures only one auto-deps process runs at a time,
+      preventing redundant LLM calls when multiple processes target the same CSV cache.
+      The lock should be held for the entire operation (from CSV read through CSV write).
+      Use a `.lock` suffix file (e.g., `{csv_path}.lock`) for the lock.
+    - Error handling:
+        • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
+        • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
+
+<examples>
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      - Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      - The `auto_deps_main` function should retrieve global options from `ctx.obj` (not `ctx.params`), including `force`, `quiet`, `strength`, `temperature`, and `time` (use `DEFAULT_TIME` when missing). Compute `verbose = not ctx.obj.get('quiet', False)` and pass `strength`, `temperature`, `time`, and `verbose` to `insert_includes`.
+      - Resolve `csv_path` from the constructed paths as `output_file_paths.get('csv', 'project_dependencies.csv')`. If `force_scan` is True and `csv_path` exists, delete it before proceeding.
+      - Here is an example of how the `insert_includes` function is generally used (note: it accepts and uses the `time` parameter):
+      <insert_includes_example>
+      <include>context/insert_includes_example.py</include>
+      </insert_includes_example>
+   </internal_example_modules>
+</examples>
+
+% Here is the README for the cli command that has details of how the 'auto-deps' command works:
+   <cli_command_readme>
+   <include>./README.md</include>
+   </cli_command_readme>

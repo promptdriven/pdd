@@ -1,0 +1,133 @@
+% You are an expert Python software engineer. Your goal is to write a Python function, "construct_paths", that resolves configuration, validates input files, determines output paths, and handles overwrite confirmation.
+
+<include>context/python_preamble.prompt</include>
+
+% Inputs:
+    - 'input_file_paths' (dict) - Dictionary mapping keys (prompt_file, code_file, error_file, etc.) to file paths.
+    - 'force' (boolean) - If True, overwrite output files without confirmation.
+    - 'quiet' (boolean) - If True, suppress informational output.
+    - 'command' (string) - PDD command: 'generate', 'example', 'test', 'preprocess', 'fix', 'split', 'change', 'update', 'detect', 'conflicts', 'crash', 'trace', 'bug', 'auto-deps', 'verify', 'sync'.
+    - 'command_options' (dict) - Command-specific options (language, output locations, basename, etc.).
+    - 'create_error_file' (boolean, default: True) - Create error file if missing.
+    - 'context_override' (string, optional) - Override automatic context detection; raise ValueError if unknown.
+    - 'confirm_callback' (Callable[[str, str], bool], optional) - Callback for TUI confirmation; when None, use click.confirm.
+    - 'path_resolution_mode' (string, optional) - "cwd" or "config_base"; defaults to "cwd" for sync, "config_base" otherwise.
+
+% Outputs: Tuple of (resolved_config, input_strings, output_file_paths, language)
+    - 'resolved_config' (Dict[str, Any]) - Fully resolved configuration including prompts_dir (final resolved after precedence rules), code_dir, tests_dir, examples_dir.
+    - 'input_strings' (dict) - Loaded file contents keyed by input_file_paths keys.
+    - 'output_file_paths' (dict[str, str]) - Output paths from generate_output_paths.
+    - 'language' (string) - Detected language.
+
+% Program description: <include>README.md</include>
+
+% Internal module examples:
+<internal_example_modules>
+    <get_extension_example><include>context/get_extension_example.py</include></get_extension_example>
+    <get_language_example><include>context/get_language_example.py</include></get_language_example>
+    <generate_output_paths_example><include>context/generate_output_paths_example.py</include></generate_output_paths_example>
+</internal_example_modules>
+
+% Requirements:
+
+1. Configuration Hierarchy: CLI options > .pddrc context > environment variables > defaults.
+   - Environment variables: PDD_PROMPT_PATH takes precedence over PDD_PROMPTS_DIR.
+   - .pddrc supports 'prompt_path' as an alias for the prompt directory.
+   - CLI 'prompts_dir' overrides CLI 'prompt_path' if both are provided.
+   - Implement helpers: _find_pddrc_file, _load_pddrc_config, _detect_context, _get_context_config.
+   - Provide utilities: list_available_contexts, detect_context_for_file, get_tests_dir_from_config.
+   - Pass 'outputs' config through for template-based path generation.
+   - `_resolve_config_hierarchy(cli_options, context_config, env_vars)` resolves keys:
+     generate_output_path, test_output_path, example_output_path, prompts_dir,
+     default_language, target_coverage, strength, temperature, budget, max_attempts.
+     Also passes through 'outputs' dict from context_config if present.
+   - Track matched context in resolved_config['_matched_context'] for debugging.
+
+2. Context Detection and Pattern Matching:
+   - `_match_path_to_contexts(path_str, contexts, use_specificity, is_absolute)`:
+     Core matching logic. Skips 'default' context. For absolute paths uses "*/" prefix matching.
+     For relative paths uses startswith matching. When use_specificity=True, returns most specific
+     (longest pattern_base) match; otherwise returns first match. Falls back to 'default' if present.
+   - `_detect_context_from_basename(basename, config, pddrc_path=None)`: Matches basename against
+     context prompts_dir prefixes and paths patterns. Returns most specific match.
+     For prompts_dir values, extract the prefix after the 'prompts/' segment wherever it appears
+     in the path (e.g., 'prompts/frontend' → 'frontend', 'extensions/app/prompts/frontend' → 'frontend').
+     If prompts_dir is exactly 'prompts' or ends at a 'prompts' segment with no suffix, use empty prefix.
+     When no syntactic match succeeds and one or more contexts have a nested prompts_dir
+     (e.g. 'extensions/app/prompts') that produced an empty prefix, fall back to checking the
+     filesystem: a context matches when its prompts_dir contains a prompt file whose directory
+     structure agrees with the basename (Issue #1165). `pddrc_path` is used to resolve the
+     relative prompts_dir during this filesystem check; when omitted, `_find_pddrc_file()`
+     (cwd-based search) is used. Basenames with glob metacharacters (e.g. `app/routes/[id]`)
+     are escaped via `glob.escape()` before the filesystem check.
+     Example — nested prompts_dir discovery:
+       .pddrc contexts: { ext-app: { defaults: { prompts_dir: "extensions/app/prompts" } } }
+       File on disk: extensions/app/prompts/src/services/solver_Python.prompt
+       _detect_context_from_basename("src/services/solver", config) → "ext-app"
+       (prefix is empty because prompts_dir ends at 'prompts'; falls back to filesystem glob).
+   - `_get_relative_basename(input_path, pattern)`: Computes basename relative to matched pattern base.
+     E.g., 'frontend/components/marketplace/AssetCard' with pattern 'frontend/components/**'
+     returns 'marketplace/AssetCard'. Falls back to returning input_path as-is.
+   - `_find_nearest_pddrc_for_file(file_path, stop_at)`: Searches upward from file's directory for
+     .pddrc, returns (pddrc_path, effective_root) tuple. Stops at stop_at directory if given.
+   - `detect_context_for_file(file_path, repo_root)`: First tries matching against each context's
+     prompts_dir (most specific match wins), then falls back to path pattern matching with specificity.
+     Returns (context_name, context_config_defaults) tuple.
+   - `resolve_effective_config(*, cli_options, context_override, cwd, prompt_file, basename_hint, quiet)`:
+     Mirrors construct_paths resolution for commands like `pdd which`. Returns
+     (context, pddrc_path, context_config, resolved_config, original_context_config).
+     Detection priority: context_override > prompt_file-based > basename_hint-based > cwd-based.
+
+3. Sync Discovery Mode: When command='sync' and input_file_paths is empty:
+   - Require basename in command_options (raise ValueError if missing).
+   - Use generate_output_paths to infer directory paths (prompts_dir, code_dir, tests_dir, examples_dir).
+   - Prompt discovery must respect PDD_PROMPT_PATH / prompt_path resolution rules before falling back to other context-aware logic.
+   - Check CWD for matching prompt files first; otherwise use context-aware logic.
+   - Return early with empty input_strings and output_file_paths.
+
+4. Input Resolution: Resolve input paths strictly (except error_file and sync command).
+   - Create error_file if missing and create_error_file=True.
+   - Load file contents into input_strings; skip directories with warning.
+
+5. Basename Extraction: Extract from primary prompt file, stripping known language suffixes.
+   - `_candidate_prompt_path(input_files)`: Returns the most likely prompt path by checking keys in
+     priority order: prompt_file, input_prompt, input_prompt_file, prompt1, change_prompt_file.
+     Falls back to first .prompt file, then first file overall.
+   - `_strip_language_suffix(path)`: Removes trailing '_<language>' from stem if _is_known_language
+     returns True. Special case: does NOT strip '_prompt' from non-.prompt files.
+   - Command-specific rules: 'detect' uses change_file, 'conflicts' combines prompt1/prompt2 (sorted),
+     'fix' combines prompt+test basenames, 'change' uses change_prompt_file stem if present.
+   - For sync/example/test, prefer basename from command_options to preserve subdirectory paths.
+
+6. Language Determination (priority): explicit command_options > code file extension > prompt filename suffix > command defaults.
+   - 'detect' defaults to 'prompt'; 'bug'/'change' default to 'python' if unresolved.
+   - Use get_extension with fallback to built-in extension map (BUILTIN_EXT_MAP) if PDD_PATH unavailable.
+   - When get_language raises ValueError (PDD_PATH unset), fall back to reading language_format.csv
+     directly from the script's data/ directory.
+   - `_is_known_language(name)` validates against a comprehensive set of known languages including:
+     core (python, javascript, typescript, typescriptreact, javascriptreact, java, go, etc.),
+     scripting (haskell, dart, elixir, clojure, julia, etc.),
+     frontend/templating (svelte, vue, scss, sass, jinja, handlebars, etc.),
+     modern/systems (zig, mojo, solidity),
+     config/query/infra (graphql, protobuf, terraform, hcl, nix, dockerfile, etc.),
+     and data formats (json, yaml, toml, ini).
+   - `get_language_outputs(name)` returns the set of expected output types for a language:
+     executable languages return {'code', 'test', 'example'}, config/data/markup languages
+     (json, yaml, css, html, sql, makefile, dockerfile, etc.) return {'code'} only.
+     Uses the `outputs` column from language_format.csv when available, with a built-in
+     `_CODE_ONLY_LANGUAGES` set as fallback. Unknown languages default to all three outputs.
+
+7. Output Path Generation: Call generate_output_paths with resolved parameters.
+   - For test/bug commands without --force, create numbered files instead of overwriting.
+   - Pass path_resolution_mode and context_config for proper path resolution.
+   - For fix/crash/verify commands, resolve per-output input_file_dirs mapping output keys to
+     their corresponding input file directories (e.g., output_code→code_file, output_test→unit_test_file).
+   - Handle --format option for example command: 'md' forces .md extension, 'code' keeps language extension.
+
+8. Overwrite Confirmation: If output files exist and not force:
+   - Use confirm_callback if provided, else click.confirm.
+   - Default to True (Enter = overwrite); raise click.Abort on 'n' or EOF.
+
+9. Finalize: Add output paths and inferred directories to resolved_config.
+   - Determine examples_dir: use ROOT directory (first path component) from raw context config's
+     example_output_path, defaulting to "context". Do NOT use resolved absolute paths.
