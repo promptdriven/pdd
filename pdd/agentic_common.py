@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import sys
@@ -13,6 +14,7 @@ import re
 import random
 from datetime import datetime
 from pathlib import Path
+from contextvars import ContextVar
 from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
 
@@ -428,67 +430,6 @@ console = Console()
 # Agentic Debug Logging
 # ---------------------------------------------------------------------------
 
-AGENTIC_LOG_DIR = ".pdd/agentic-logs"
-_AGENTIC_SESSION_ID: Optional[str] = None
-
-
-def _log_agentic_interaction(
-    label: str,
-    prompt: str,
-    response: str,
-    cost: float,
-    provider: str,
-    success: bool,
-    duration: float,
-    cwd: Path
-) -> None:
-    """
-    Log full prompt and response to JSONL file in .pdd/agentic-logs/.
-
-    Each workflow run generates a single session file with all step interactions.
-    Logs are only written when --verbose flag is enabled.
-
-    Args:
-        label: Step identifier (e.g., "step1", "step5_5")
-        prompt: Full prompt text sent to the agent
-        response: Full response text from the agent
-        cost: Cost in USD for this interaction
-        provider: Provider name (anthropic, google, openai)
-        success: Whether the interaction succeeded
-        duration: Duration in seconds
-        cwd: Working directory for the task
-    """
-    global _AGENTIC_SESSION_ID
-
-    try:
-        # Ensure log directory exists
-        log_dir = Path(cwd) / AGENTIC_LOG_DIR
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # Initialize session ID on first call (one file per workflow run)
-        if _AGENTIC_SESSION_ID is None:
-            _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
-
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "label": label,
-            "cwd": str(cwd),
-            "provider": provider,
-            "success": success,
-            "cost_usd": cost,
-            "duration_seconds": round(duration, 2),
-            "prompt_length": len(prompt),
-            "response_length": len(response),
-            "prompt": prompt,
-            "response": response,
-        }
-
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass  # Don't break workflow for logging errors
 
 
 # ---------------------------------------------------------------------------
@@ -881,7 +822,7 @@ def run_agentic_task(
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-                success, output, cost = _run_with_provider(
+                success, output, cost, _trace = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
@@ -944,18 +885,6 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success — only log when verbose (success is not diagnostic)
-                        if verbose:
-                            _log_agentic_interaction(
-                                label=label,
-                                prompt=full_instruction,
-                                response=output,
-                                cost=cost,
-                                provider=provider,
-                                success=True,
-                                duration=time.time() - task_start_time,
-                                cwd=cwd
-                            )
                         return True, output, cost, provider
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
@@ -980,17 +909,6 @@ def run_agentic_task(
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
-            # Issue #1072: Always log failures (not just when verbose)
-            _log_agentic_interaction(
-                label=label,
-                prompt=full_instruction,
-                response=last_output,
-                cost=0.0,
-                provider=provider,
-                success=False,
-                duration=time.time() - task_start_time,
-                cwd=cwd
-            )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
@@ -1006,8 +924,7 @@ def run_agentic_task(
                 pass
 
 
-import logging as _logging
-_scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
+_scope_guard_logger = logging.getLogger(__name__ + ".scope_guard")
 
 
 def _revert_out_of_scope_changes(
@@ -1112,6 +1029,167 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
     return result
 
 
+_session_logger = logging.getLogger(__name__ + ".session_discovery")
+
+# Module-level storage for the last agentic trace (set by _run_with_provider,
+# read by sync_orchestration after each operation). Uses ContextVar so
+# concurrent threads/async tasks don't cross-contaminate traces.
+_last_agentic_trace: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    "pdd_last_agentic_trace", default=None
+)
+
+
+def get_last_agentic_trace() -> Optional[Dict[str, Any]]:
+    """Return and clear the last agentic trace captured by _run_with_provider."""
+    trace = _last_agentic_trace.get()
+    _last_agentic_trace.set(None)
+    return trace
+
+
+def _discover_claude_session(session_id: str, cwd: Path) -> Optional[Dict[str, Any]]:
+    """Discover Claude session file by session_id."""
+    try:
+        if not session_id:
+            _session_logger.debug("No session_id in CLI output")
+            return None
+        claude_home = Path.home() / ".claude"
+        if not claude_home.exists():
+            _session_logger.debug("Provider home dir not found: %s", claude_home)
+            return None
+        slug = str(cwd).replace("/", "-")
+        session_path = claude_home / "projects" / slug / f"{session_id}.jsonl"
+        if not session_path.exists():
+            _session_logger.debug("Session file not found: %s", session_path)
+            return None
+        if session_path.stat().st_size == 0:
+            _session_logger.debug("Skipping empty session file: %s", session_path)
+            return None
+        return {
+            "session_file": str(session_path),
+            "provider": "anthropic",
+            "format": "jsonl",
+        }
+    except PermissionError:
+        _session_logger.debug("Permission denied: %s", cwd)
+        return None
+    except Exception as e:
+        _session_logger.debug("Failed to find provider session: %s", e)
+        return None
+
+
+def _discover_gemini_session(session_id: str, cwd: Path) -> Optional[Dict[str, Any]]:
+    """Discover Gemini session file by session_id prefix."""
+    try:
+        if not session_id:
+            _session_logger.debug("No session_id in CLI output")
+            return None
+        gemini_home = Path.home() / ".gemini"
+        if not gemini_home.exists():
+            _session_logger.debug("Provider home dir not found: %s", gemini_home)
+            return None
+        # Read projects.json for slug
+        projects_json = gemini_home / "projects.json"
+        if not projects_json.exists():
+            _session_logger.debug("Could not read projects.json: %s", projects_json)
+            return None
+        try:
+            projects_data = json.loads(projects_json.read_text(encoding="utf-8"))
+        except Exception:
+            _session_logger.debug("Could not read projects.json: %s", projects_json)
+            return None
+        projects_map = projects_data.get("projects")
+        if not isinstance(projects_map, dict):
+            _session_logger.debug("Could not read projects.json: %s", projects_json)
+            return None
+        slug = projects_map.get(str(cwd))
+        if not slug:
+            _session_logger.debug("Could not read projects.json: %s", projects_json)
+            return None
+        id_prefix = session_id[:8]
+        chats_dir = gemini_home / "tmp" / slug / "chats"
+        if not chats_dir.exists():
+            _session_logger.debug("Session file not found: %s", chats_dir)
+            return None
+        # Try .json first, fall back to .jsonl
+        json_matches = sorted(chats_dir.glob(f"*{id_prefix}*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        jsonl_matches = sorted(chats_dir.glob(f"*{id_prefix}*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # Filter out .jsonl from .json matches (glob *.json also matches *.jsonl on some systems)
+        json_matches = [p for p in json_matches if p.suffix == ".json"]
+        if json_matches:
+            n = len(json_matches)
+            if n > 1:
+                _session_logger.debug("Found %d session files matching %s, picking newest", n, id_prefix)
+            match = json_matches[0]
+            fmt = "json"
+        elif jsonl_matches:
+            n = len(jsonl_matches)
+            if n > 1:
+                _session_logger.debug("Found %d session files matching %s, picking newest", n, id_prefix)
+            match = jsonl_matches[0]
+            fmt = "jsonl"
+        else:
+            _session_logger.debug("Session file not found: %s", chats_dir)
+            return None
+        if match.stat().st_size == 0:
+            _session_logger.debug("Skipping empty session file: %s", match)
+            return None
+        return {
+            "session_file": str(match),
+            "provider": "google",
+            "format": fmt,
+        }
+    except PermissionError:
+        _session_logger.debug("Permission denied: %s", cwd)
+        return None
+    except Exception as e:
+        _session_logger.debug("Failed to find provider session: %s", e)
+        return None
+
+
+def _discover_codex_session(pre_snapshot: set, cwd: Path) -> Optional[Dict[str, Any]]:
+    """Discover Codex session file by filesystem diff."""
+    try:
+        codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        sessions_dir = codex_home / "sessions"
+        if not sessions_dir.exists():
+            _session_logger.debug("Provider home dir not found: %s", sessions_dir)
+            return None
+        post_snapshot = set(sessions_dir.rglob("rollout-*.jsonl"))
+        new_files = post_snapshot - pre_snapshot
+        if not new_files:
+            _session_logger.debug("No new rollout files found")
+            return None
+        if len(new_files) > 1:
+            _session_logger.debug("Found %d new rollout files, picking newest", len(new_files))
+        newest = max(new_files, key=lambda p: p.stat().st_mtime)
+        if newest.stat().st_size == 0:
+            _session_logger.debug("Skipping empty session file: %s", newest)
+            return None
+        return {
+            "session_file": str(newest),
+            "provider": "openai",
+            "format": "jsonl",
+        }
+    except PermissionError:
+        _session_logger.debug("Permission denied: %s", cwd)
+        return None
+    except Exception as e:
+        _session_logger.debug("Failed to find provider session: %s", e)
+        return None
+
+
+def _snapshot_codex_rollouts() -> set:
+    """Snapshot existing Codex rollout files before launch."""
+    try:
+        codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+        sessions_dir = codex_home / "sessions"
+        if not sessions_dir.exists():
+            return set()
+        return set(sessions_dir.rglob("rollout-*.jsonl"))
+    except Exception:
+        return set()
+
+
 def _run_with_provider(
     provider: str,
     prompt_path: Path,
@@ -1123,10 +1201,10 @@ def _run_with_provider(
     label: str = "",
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
-) -> Tuple[bool, str, float]:
+) -> Tuple[bool, str, float, Optional[Dict[str, Any]]]:
     """
     Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost).
+    Returns (success, output_or_error, cost, agentic_trace_or_none).
 
     Args:
         provider: Provider name (anthropic, google, openai)
@@ -1158,13 +1236,13 @@ def _run_with_provider(
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
     if not cli_name:
-        return False, f"Unknown provider {provider}", 0.0
+        return False, f"Unknown provider {provider}", 0.0, None
 
     # Find CLI binary path (use explicit path if provided)
     if cli_path is None:
         cli_path = _find_cli_binary(cli_name)
     if not cli_path:
-        return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0
+        return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0, None
 
     cmd: List[str] = []
 
@@ -1285,10 +1363,15 @@ def _run_with_provider(
         if codex_model:
             cmd.extend(["--model", codex_model])
     else:
-        return False, f"Unknown provider {provider}", 0.0
+        return False, f"Unknown provider {provider}", 0.0, None
 
     # For anthropic, pipe prompt content via stdin; others use file path in cmd
     stdin_content = prompt_content if provider == "anthropic" else None
+
+    # Snapshot Codex rollout files before launch (for filesystem diff discovery)
+    codex_pre_snapshot: set = set()
+    if provider == "openai":
+        codex_pre_snapshot = _snapshot_codex_rollouts()
 
     try:
         result = _subprocess_run(
@@ -1302,13 +1385,13 @@ def _run_with_provider(
             start_new_session=True,
         )
     except subprocess.TimeoutExpired:
-        return False, "Timeout expired", 0.0
+        return False, "Timeout expired", 0.0, None
     except Exception as e:
-        return False, str(e), 0.0
+        return False, str(e), 0.0, None
 
     if result.returncode != 0:
         error_detail = result.stderr or result.stdout[:500]
-        return False, f"Exit code {result.returncode}: {error_detail}", 0.0
+        return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
 
     # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
     # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
@@ -1387,10 +1470,28 @@ def _run_with_provider(
                 f"[dim]Warning: {provider} returned $0 cost. "
                 f"JSON keys: {sorted(data.keys())}[/dim]"
             )
-        return success, text, cost
+
+        # Session discovery (best-effort, never raises)
+        agentic_trace: Optional[Dict[str, Any]] = None
+        try:
+            if provider == "anthropic":
+                session_id = data.get("session_id") if isinstance(data, dict) else None
+                if session_id:
+                    agentic_trace = _discover_claude_session(str(session_id), cwd)
+            elif provider == "google":
+                session_id = data.get("session_id") if isinstance(data, dict) else None
+                if session_id:
+                    agentic_trace = _discover_gemini_session(str(session_id), cwd)
+            elif provider == "openai":
+                agentic_trace = _discover_codex_session(codex_pre_snapshot, cwd)
+        except Exception:
+            pass
+
+        _last_agentic_trace.set(agentic_trace)
+        return success, text, cost, agentic_trace
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
+        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0, None
 
 
 def _extract_json_from_output(output_str: str) -> dict:

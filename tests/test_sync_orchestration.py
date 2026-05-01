@@ -2,6 +2,7 @@
 
 import pytest
 import json
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -1837,14 +1838,14 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
     def capture_append(_b, _l, entry):
         seen_entries.append(entry)
 
-    # Pretend llm trace was recorded for this op (without calling real llm).
-    fake_trace = {"prompt": "P", "response": "R", "model": "m"}
+    # Pretend llm traces were recorded for this op (without calling real llm).
+    fake_traces = [{"prompt": "P", "response": "R", "model": "m", "thinking": None}]
 
     with patch("pdd.sync_orchestration.get_pdd_file_paths", return_value=fake_paths), \
          patch("pdd.sync_orchestration.SyncLock") as mock_lock, \
          patch("pdd.sync_orchestration.sync_determine_operation", side_effect=decisions), \
          patch("pdd.sync_orchestration.code_generator_main", return_value=(None, False, 0.01, "m")), \
-         patch("pdd.sync_orchestration.pop_last_pair", return_value=fake_trace), \
+         patch("pdd.sync_orchestration.pop_all_pairs", return_value=fake_traces), \
          patch("pdd.sync_orchestration.append_log_entry", side_effect=capture_append), \
          patch("pdd.sync_orchestration.log_event"):
 
@@ -1855,8 +1856,7 @@ def test_sync_orchestration_attaches_llm_trace_on_failed_operation(tmp_path, mon
     assert res["success"] is False
     gen_entries = [e for e in seen_entries if e.get("operation") == "generate"]
     assert gen_entries, f"No generate entry: {seen_entries}"
-    details = gen_entries[0].get("details") or {}
-    assert details.get("llm_trace") == fake_trace
+    assert gen_entries[0].get("llm_traces") == fake_traces
 
 # --- Coverage Target Selection Regression Tests ---
 
@@ -7828,3 +7828,167 @@ def test_sync_extracts_error_from_crash_fix_result_tuple(orchestration_fixture):
         f"got only: {result.get('errors', [])}. "
         f"sync_orchestration never extracts error messages from crash/fix result[1]."
     )
+
+
+# ---------------------------------------------------------------------------
+# E2E tests: LLM traces in sync log (Issue #752)
+#
+# These run real `pdd sync` as a subprocess with real LLM API calls.
+# Gated by PDD_RUN_REAL_LLM_TESTS=1. Requires `pip install -e .` first
+# so the subprocess gets the current code.
+# ---------------------------------------------------------------------------
+
+def _skip_unless_real_llm():
+    if not os.environ.get("PDD_RUN_REAL_LLM_TESTS"):
+        pytest.skip("Set PDD_RUN_REAL_LLM_TESTS=1 to run real LLM tests")
+
+
+def _create_minimal_pdd_project(tmp_path, module="greeter", language="python"):
+    project = tmp_path / "project"
+    project.mkdir()
+    prompts_dir = project / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / f"{module}_{language}.prompt"
+    prompt_file.write_text(
+        "Create a Python module called greeter.py with a single function greet(name) "
+        "that returns f'Hello, {name}!'.\n",
+        encoding="utf-8",
+    )
+    meta_dir = project / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    return project
+
+
+def _read_sync_log_from_project(project, module="greeter", language="python"):
+    for parent in [project / ".pdd" / "logs", project / ".pdd" / "meta"]:
+        log_path = parent / f"{module}_{language}_sync.log"
+        if log_path.exists():
+            entries = []
+            for line in log_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            return entries
+    return []
+
+
+def _run_pdd_sync_subprocess(project, extra_args=None):
+    cmd = ["pdd", "sync", "greeter"]
+    if extra_args:
+        cmd.extend(extra_args)
+    return subprocess.run(
+        cmd, cwd=project, capture_output=True, text=True, timeout=300,
+    )
+
+
+def test_e2e_litellm_sync_traces(tmp_path):
+    """Real pdd sync: verify llm_traces structure, log location, model field,
+    no orphaned calls, fingerprint intact. One sync run, all assertions."""
+    _skip_unless_real_llm()
+    project = _create_minimal_pdd_project(tmp_path)
+    result = _run_pdd_sync_subprocess(project)
+
+    # Sync log in .pdd/logs/, not .pdd/meta/
+    log_path = project / ".pdd" / "logs" / "greeter_python_sync.log"
+    assert log_path.exists(), (
+        f"Expected log at {log_path}. stdout: {result.stdout[:500]}"
+    )
+    meta_dir = project / ".pdd" / "meta"
+    assert not list(meta_dir.glob("*_sync.log")), "Sync log should not be in .pdd/meta/"
+
+    entries = _read_sync_log_from_project(project)
+
+    # generate entry has llm_traces with valid structure
+    gen_entries = [e for e in entries if e.get("operation") == "generate"]
+    assert len(gen_entries) >= 1
+    gen = gen_entries[0]
+    assert "llm_traces" in gen
+    assert len(gen["llm_traces"]) >= 2
+    for item in gen["llm_traces"]:
+        assert isinstance(item["prompt"], str) and item["prompt"]
+        assert isinstance(item["response"], str) and item["response"]
+        assert isinstance(item["model"], str) and item["model"]
+        assert item["thinking"] is None or isinstance(item["thinking"], str)
+
+    # example entry has llm_traces (if generated)
+    ex_entries = [e for e in entries if e.get("operation") == "example"]
+    if ex_entries:
+        assert "llm_traces" in ex_entries[0]
+        assert len(ex_entries[0]["llm_traces"]) >= 1
+
+    # model field contains a recognizable model name
+    for entry in entries:
+        if "llm_traces" in entry:
+            for item in entry["llm_traces"]:
+                model = item["model"]
+                assert isinstance(model, str) and model
+                assert any(k in model.lower() for k in (
+                    "gemini", "gpt", "claude", "o1", "o3", "o4",
+                )), f"Unrecognized model: {model}"
+
+    # every entry with llm_traces has >= 2 items (no orphaned calls)
+    for entry in entries:
+        if "llm_traces" in entry:
+            assert len(entry["llm_traces"]) >= 2, (
+                f"Operation {entry.get('operation')} has only "
+                f"{len(entry['llm_traces'])} trace(s) — expected >= 2."
+            )
+
+    # fingerprint still valid
+    fp_files = list(meta_dir.glob("greeter_python.json"))
+    assert len(fp_files) == 1
+    assert isinstance(json.loads(fp_files[0].read_text(encoding="utf-8")), dict)
+
+
+def test_e2e_skip_dryrun_coredump(tmp_path):
+    """Sync twice (second skips), then dry-run and core-dump. One project."""
+    _skip_unless_real_llm()
+    project = _create_minimal_pdd_project(tmp_path)
+    _run_pdd_sync_subprocess(project)
+    _run_pdd_sync_subprocess(project)
+    entries = _read_sync_log_from_project(project)
+
+    # Skip entries have no traces
+    for entry in entries:
+        if str(entry.get("operation", "")).startswith("skip"):
+            assert "llm_traces" not in entry
+            assert "agentic_trace" not in entry
+
+    # Dry-run shows history
+    result = subprocess.run(
+        ["pdd", "sync", "greeter", "--dry-run"],
+        cwd=project, capture_output=True, text=True, timeout=60,
+    )
+    assert "generate" in result.stdout.lower() or "test" in result.stdout.lower()
+
+    # Core dump has sync_log_refs pointing to .pdd/logs/
+    subprocess.run(
+        ["pdd", "sync", "greeter", "--core-dump"],
+        cwd=project, capture_output=True, text=True, timeout=300,
+    )
+    core_dumps = list((project / ".pdd" / "core_dumps").glob("*.json"))
+    if core_dumps:
+        dump = json.loads(core_dumps[-1].read_text(encoding="utf-8"))
+        if "sync_log_refs" in dump:
+            for ref in dump["sync_log_refs"]:
+                assert ref["path"].startswith(".pdd/logs/")
+
+
+def test_e2e_legacy_sync_log_migrates(tmp_path):
+    """Plant a legacy sync log in .pdd/meta/, sync, verify migration."""
+    _skip_unless_real_llm()
+    project = _create_minimal_pdd_project(tmp_path)
+    meta_dir = project / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    old_entry = {"operation": "old_generate", "success": True, "timestamp": "2025-01-01T00:00:00"}
+    (meta_dir / "greeter_python_sync.log").write_text(
+        json.dumps(old_entry) + "\n", encoding="utf-8",
+    )
+    _run_pdd_sync_subprocess(project)
+    assert not (meta_dir / "greeter_python_sync.log").exists()
+    new_log = project / ".pdd" / "logs" / "greeter_python_sync.log"
+    assert new_log.exists()
+    entries = _read_sync_log_from_project(project)
+    assert "old_generate" in [e.get("operation") for e in entries]
