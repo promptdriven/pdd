@@ -1,0 +1,151 @@
+<pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
+
+% You are an expert Python developer with a lot of Firebase experience. Create a Python module that implements GitHub authentication for a CLI application using Firebase Auth and GitHub's Device Flow. The implementation should provide a simple get_jwt_token() function that handles the complete authentication flow with no browser interaction required.
+
+<include>context/python_preamble.prompt</include>
+
+% Function Signature:
+```python
+    async def get_jwt_token(
+        firebase_api_key: str,
+        github_client_id: str,
+        app_name: str = "my-cli-app"
+    ) -> str:
+        """
+        Get a Firebase ID token using GitHub's Device Flow authentication.
+        
+        Args:
+            firebase_api_key: Firebase Web API key
+            github_client_id: OAuth client ID for GitHub app
+            app_name: Unique name for your CLI application (default: "my-cli-app")
+            
+        Returns:
+            str: A valid Firebase ID token
+            
+        Raises:
+            AuthError: If authentication fails
+            NetworkError: If there are connectivity issues
+            TokenError: If token exchange fails
+        """
+```
+
+% Here is documentation for GitHub's Device Flow:
+<device_flow>
+    <include>context/device_flow.txt</include>
+</device_flow>
+
+% Core Requirements:
+
+    - Use GitHub's Device Flow (device authorization grant RFC 8628)
+    - Zero configuration needed from end users
+    - No browser or local server required
+    - Automatic token storage in system keyring
+    - Clear user instructions in terminal
+    - Automatic token refresh through Firebase
+
+% Token Storage Architecture:
+    - REFRESH TOKEN: Stored in system keyring (long-lived, ~months)
+    - ID TOKEN (JWT): Cached in ~/.pdd/jwt_cache file (short-lived, ~1 hour)
+    - This two-tier approach minimizes keyring access to avoid password prompts
+
+% JWT File Cache (Required - Issue #273):
+    - Path: ~/.pdd/jwt_cache (use pathlib Path.home() / ".pdd" / "jwt_cache")
+    - Define module-level constant: JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
+    - Format: JSON with fields: jwt, expires_at (unix timestamp), cached_at (unix timestamp)
+    - Check cache FIRST before any keyring access
+    - Return cached JWT immediately if valid (not expired, with 5-min buffer before expiration)
+    - Cache new JWT after obtaining it (from refresh or device flow)
+    - File permissions: 0600 (user read/write only) using os.chmod()
+    - Handle corruption gracefully: delete cache file and fall back to keyring
+    - Implement helper functions: _get_cached_jwt() -> Optional[str], _cache_jwt(jwt: str, expires_in: int = 3600)
+
+% Authentication Flow:
+    1. Check ~/.pdd/jwt_cache for valid cached JWT → return immediately if valid (NO keyring access)
+    2. If cache miss or expired:
+        a. Check keyring for refresh token
+        b. If refresh token exists: call Firebase to get new JWT, cache it, return it
+        c. If no refresh token or refresh fails:
+            i. Request device code from GitHub's OAuth device endpoint
+            ii. Display user code and verification URL in terminal
+            iii. Poll GitHub's OAuth endpoint for completion
+            iv. Exchange device code for GitHub token
+            v. Exchange GitHub token for Firebase token
+            vi. Store refresh token in keyring
+            vii. Cache JWT in file
+            viii. Return JWT
+
+% Technical Details:
+
+    - GitHub Device Flow Endpoints:
+        POST https://github.com/login/device/code
+        POST https://github.com/login/oauth/access_token
+    - Poll with interval specified in response
+
+% User Experience in Terminal:
+    - To authenticate, visit: https://github.com/login/device
+    - Enter code: ABCD-EFGH
+    - Auto-open browser to verification URL when device flow starts
+    - Flush stdout immediately after displaying auth prompts (ensures visibility in piped contexts)
+    - Waiting for authentication...
+    - Authentication successful!
+
+% Token Storage:
+    - Store refresh token in system keyring
+    - Wrap all keyring.get_password, keyring.set_password, and keyring.delete_password calls with `_keyring_op_with_timeout`
+    - If a keyring operation times out, log or warn and continue without blocking the user workflow
+    - Preserve the existing duplicate-item retry behavior for macOS errSecDuplicateItem (-25299)
+    - Handle token refresh automatically
+    - Clear storage on authentication errors
+
+% Implementation Requirements:
+    - Use asyncio for async/await and polling
+    - Use requests for HTTP calls
+    - Use keyring for secure token storage
+    - Handle all error cases gracefully
+    - Clear user feedback during authentication
+    - Proper typing and docstrings
+    - Simplified Firebase token verification: Only check if the token exists
+    - Do not use Firebase Admin SDK for token verification
+
+% Example Usage in CLI App:
+```python
+    from auth import get_jwt_token
+
+    # These constants would be built into the CLI app
+    FIREBASE_API_KEY = "your-firebase-api-key"
+    GITHUB_CLIENT_ID = "your-github-client-id"
+
+    async def main():
+        try:
+            token = await get_jwt_token(
+                firebase_api_key=FIREBASE_API_KEY,
+                github_client_id=GITHUB_CLIENT_ID
+            )
+            # Use token for API calls...
+            
+        except AuthError as e:
+            print(f"Authentication failed: {e}")
+        except NetworkError as e:
+            print(f"Network error: {e}")
+        except TokenError as e:
+            print(f"Token error: {e}")
+``` 
+
+% End User Experience:
+    - User runs CLI command
+    - If not authenticated:
+        - See verification URL and code in terminal
+        - Visit URL on any device
+        - Enter code
+        - CLI continues automatically
+    - Subsequent commands work automatically
+
+% The implementation should provide a seamless authentication experience using GitHub's Device Flow, requiring no browser interaction and working in any terminal environment including SSH sessions.
+
+% Error Handling:
+    - Network connectivity issues
+    - Authentication timeouts
+    - Invalid/expired tokens
+    - User cancellation
+    - Rate limiting
+    - Locked or unavailable keyring backends in headless CI/SSH sessions

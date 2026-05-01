@@ -1,0 +1,79 @@
+% You are an expert Python software engineer.
+
+% Role & Scope
+  Implement `generate_output_paths`, a function that determines absolute output file paths
+  for PDD commands. It centralizes path resolution logic following the precedence order
+  documented in the README. This module is the single source of truth for how output
+  paths are constructed across all PDD commands.
+
+% Reference Documentation
+  The README contains authoritative documentation for:
+  - All supported commands and their output options
+  - Default filename patterns per command
+  - Environment variables (PDD_*_OUTPUT_PATH)
+  - Configuration priority and .pddrc context settings
+  <program_description><include>README.md</include></program_description>
+
+% Function Signature
+  def generate_output_paths(
+      command: str,
+      output_locations: Dict[str, Optional[str]],
+      basename: str,
+      language: str,
+      file_extension: str,
+      context_config: Optional[Dict[str, str]] = None,
+      input_file_dir: Optional[str] = None,
+      input_file_dirs: Optional[Dict[str, str]] = None,
+      config_base_dir: Optional[str] = None,
+      path_resolution_mode: Literal["config_base", "cwd"] = "config_base",
+  ) -> Dict[str, str]
+
+% Parameter Details (beyond README)
+  - output_locations: Keys use underscores (e.g., 'output_test'); values can be None
+  - input_file_dirs: Per-output-key directory mapping (e.g., {'output_code': 'src/'})
+  - config_base_dir: Base directory for resolving relative .pddrc and env var paths;
+      takes precedence over input_file_dir for config/env resolution
+  - path_resolution_mode: Controls relative path resolution for .pddrc and env vars
+      "config_base" (default): resolve relative to config_base_dir
+      "cwd": resolve relative to current working directory (used by sync command)
+
+% Output Keys per Command
+  - generate, example, test, preprocess, change, update, detect, conflicts, trace, bug, auto-deps: ['output']
+  - fix: ['output_test', 'output_code', 'output_results']
+  - split: ['output_sub', 'output_modified']
+  - crash: ['output', 'output_program']
+  - verify: ['output_results', 'output_code', 'output_program']
+  - sync: ['generate_output_path', 'test_output_path', 'example_output_path']
+
+% Context Config Key Mapping (implementation detail)
+  Maps command/output_key to context_config lookup key:
+  - generate/output, fix/output_code, most others -> 'generate_output_path'
+  - example/output -> 'example_output_path'
+  - test/output, bug/output, fix/output_test -> 'test_output_path'
+  - crash/* -> None (always use CWD-based defaults, not context paths)
+
+% Special Behaviors
+  - example command: Defaults to 'examples/' directory when no config (create if needed)
+  - crash command: Ignores context_config; uses CWD-based defaults only
+  - Directory detection: Paths ending in os.path.sep or existing directories get
+      default filename appended
+  - Relative path resolution: config_base_dir takes precedence over input_file_dir
+      for resolving relative paths from context_config and env vars
+  - Subdirectory basenames: When basename contains '/' (e.g., 'core/cloud'), preserve
+      directory structure; apply filename pattern only to name part (e.g., 'core/test_cloud.py')
+  - Explicit directory paths: Context paths ending with '/' are complete directories;
+      do NOT add basename's dir_prefix (e.g., 'pdd/' + 'core/cloud' -> 'pdd/cloud.py')
+
+% Error Handling
+  - Unknown command or missing basename: log error, return empty dict
+  - Path resolution failures: log warning, use relative path as fallback
+  - Directory check failures: log warning, continue with best-effort detection
+
+% Deliverables
+  Single file with:
+  - Module-level constants: EXAMPLES_DIR = "examples"
+  - Module-level configuration dictionaries: COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES,
+    ENV_VAR_MAP, CONTEXT_CONFIG_MAP
+  - Helper: _get_default_filename(command, output_key, basename, language, file_extension)
+  - Main function: generate_output_paths()
+  - Logging: DEBUG for intermediate decisions, INFO for final determined paths, ERROR for failures

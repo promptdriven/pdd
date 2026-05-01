@@ -1,0 +1,101 @@
+<pdd-reason>Provides bidirectional sync between architecture.json and prompt files using PDD metadata tags.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "parse_prompt_tags",
+        "signature": "(prompt_content: str) -> Dict[str, Any]",
+        "returns": "Dict with keys: reason, interface, dependencies, has_dependency_tags"
+      },
+      {
+        "name": "update_architecture_from_prompt",
+        "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "returns": "Dict with keys: success, updated, changes, error, warnings"
+      },
+      {
+        "name": "sync_all_prompts_to_architecture",
+        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "returns": "Dict with keys: success, updated_count, skipped_count, results, errors, registered"
+      },
+      {
+        "name": "validate_dependencies",
+        "signature": "(dependencies: List[str], prompts_dir: Path) -> Dict[str, Any]",
+        "returns": "Dict with keys: valid, missing, duplicates"
+      },
+      {
+        "name": "validate_interface_structure",
+        "signature": "(interface: Dict[str, Any]) -> Dict[str, Any]",
+        "returns": "Dict with keys: valid, errors"
+      },
+      {
+        "name": "get_architecture_entry_for_prompt",
+        "signature": "(prompt_filename: str, architecture_path: Path) -> Optional[Dict[str, Any]]",
+        "returns": "Architecture entry dict or None"
+      },
+      {
+        "name": "has_pdd_tags",
+        "signature": "(prompt_content: str) -> bool",
+        "returns": "True if prompt contains PDD metadata tags"
+      },
+      {
+        "name": "generate_tags_from_architecture",
+        "signature": "(arch_entry: Dict[str, Any]) -> str",
+        "returns": "XML tags string ready to prepend to prompt"
+      },
+      {
+        "name": "normalize_architecture_filenames",
+        "signature": "(arch_data: List[Dict[str, Any]]) -> None",
+        "returns": "None (mutates arch_data in place)"
+      },
+      {
+        "name": "register_untracked_prompts",
+        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool, only_files: Optional[set] = None) -> Dict[str, Any]",
+        "returns": "Dict with keys: registered, skipped, errors"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write the `architecture_sync` module that provides bidirectional synchronization between architecture.json and prompt files using PDD metadata tags.
+
+<include>./context/python_preamble.prompt</include>
+
+% Role & Scope
+This module handles the synchronization of architecture metadata between `architecture.json` and prompt files using XML-style PDD metadata tags (`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`). Prompts are the source of truth; architecture.json is derived from prompts.
+
+% Requirements
+1. Parse PDD metadata tags from prompt content using lxml with lenient recovery. If a prompt starts with YAML front matter delimited by `---` lines, skip that front matter before parsing PDD metadata. Only parse the header section (before the first line starting with `%`) so that example tags in body code fences or prose are never extracted as real metadata.
+2. Extract `<pdd-reason>` (single line description), `<pdd-interface>` (JSON), `<pdd-dependency>` (multiple allowed). Support double-brace escaped JSON (`{{`/`}}`) as a fallback for Python `.format()` style prompts.
+3. Sanitize dependency values: reject entries that don't end in `.prompt`, contain newlines, or exceed 100 characters.
+4. Update architecture.json entries from prompt file tags (only update fields with tags present — lenient). **Dependencies field (`dependencies` in architecture):** update **only** when the prompt expresses dependency intent: `has_dependency_tags` is True (the prompt contains `<pdd-dependency>` tags, including an **empty** `<pdd-dependency></pdd-dependency>` which means **explicit clear**), **or** parsed dependency tags yield a non-empty list after sanitization. If the prompt change is **reason- or interface-only** and there are **no** `<pdd-dependency>` tags, **preserve** the existing `dependencies` array in architecture.json unchanged (do not wipe edges that may still be valid from prior sync or manual curation).
+5. When updating an interface, merge function signatures rather than replacing them: the new signature must be a superset of the old one (all existing parameters preserved, new parameters added). If the new signature would remove a parameter, emit a warning but preserve it. Guard against cross-class contamination: if two signatures share no parameter names beyond `self`/`cls`, reject the merge and keep the old signature.
+6. Use `ast` module to parse Python signatures into structured parameter metadata for reliable merge/rebuild.
+7. Support dry_run mode to preview changes without writing
+8. Track `has_dependency_tags` flag to distinguish "no `<pdd-dependency>` in prompt" from "tags present (possibly empty — explicit clear)". Use it together with parsed dependency lists to implement requirement 4’s preservation vs update rules.
+9. Validate dependencies (check file existence, detect duplicates) and validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
+10. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
+11. Auto-rename: when a prompt file is not found, search for a step-number variant (e.g., step4 -> step5) and auto-update the architecture.json entry if exactly one unambiguous match exists. Use `rglob` to support subdirectory layouts.
+12. Auto-register: `register_untracked_prompts()` discovers prompt files with PDD tags that have no architecture.json entry and creates minimal entries (infer filepath and tags from filename conventions). `sync_all_prompts_to_architecture()` calls this as a pre-pass. Accepts an optional `only_files: Optional[set] = None` parameter: when provided, the function only considers prompt filenames (relative to `prompts_dir`, as POSIX paths) that are members of this set — prompts outside the set are skipped even if they have valid PDD tags and no arch entry. This scope filter is for in-workflow callers (e.g., `agentic_change_orchestrator` Step 10 post-processing) that need a narrow safety net and must not silently sweep repo-wide drift into an unrelated PR. When `only_files` is `None` (default), the full-scan behavior is preserved for standalone cleanup runs and the `sync_all_prompts_to_architecture` pre-pass.
+13. Filename normalization (Issue #617): `normalize_architecture_filenames()` rewrites each module's `filename` from its `filepath` so prompt filenames mirror the source directory structure (e.g., `app/api/route.ts` -> `app/api/route_TypeScript.prompt`). Import `filepath_to_prompt_filename` from `.architecture_sync_helper`. Also rewrite dependency references to use the new filenames. Skip extensionless files (e.g., Makefile).
+14. `get_architecture_entry_for_prompt` supports both exact path match and basename fallback for callers that pass just the filename without subdirectory prefix.
+15. Use Path.cwd() for default paths to work with user's project directory, not package installation
+
+% Dependencies
+- `lxml.etree` for XML parsing with recovery mode
+- `ast` module for Python signature parsing during interface merge
+- `.architecture_sync_helper.filepath_to_prompt_filename` for Issue #617 filename normalization
+
+% Constants
+- ARCHITECTURE_JSON_PATH: Path.cwd() / "architecture.json"
+- PROMPTS_DIR: Path.cwd() / "prompts"
+- _EXT_TO_LANGUAGE: Dict mapping file extensions to PascalCase language names (`.py` -> `"Python"`, `.ts` -> `"TypeScript"`, etc.)
+
+% Deliverables
+- Single file: pdd/architecture_sync.py
+- All functions documented with docstrings
+- Type hints for all function signatures
+- Comprehensive error handling (never crash on malformed input)

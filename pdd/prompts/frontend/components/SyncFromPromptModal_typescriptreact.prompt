@@ -1,0 +1,44 @@
+**Role and Scope**
+The `SyncFromPromptModal` is a React UI component designed for an architecture management dashboard. Its primary responsibility is to provide an interface for triggering and reviewing the "Sync from Prompts" process. This process scans prompt files for Prompt-Driven Development (PDD) metadata tags—specifically `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`—and synchronizes them with the system's `architecture.json` file. The component must handle the transition from a pre-sync explanation state to a post-sync results summary, including detailed diff-like views of changes.
+
+**Requirements**
+1. **Visibility Control**: The modal must respond to an `isOpen` prop. When closed, it should return `null`. It should include a backdrop that closes the modal on click, unless a sync is currently in progress.
+2. **Pre-Sync State**: Before a sync result is available, display an educational view explaining that prompts are the "Source of Truth" and listing the specific PDD tags being scanned.
+3. **Sync Execution**: Provide a "Sync Now" button that triggers the `onSync` callback. Show a loading spinner and disable interaction while `isSyncing` is true.
+4. **Post-Sync Summary**: 
+    - Display a success or error banner based on `result.success` and `result.validation.valid`.
+    - Show a count of updated vs. skipped modules.
+    - List validation errors (e.g., circular dependencies) and general sync warnings.
+5. **Detailed Results**: 
+    - Implement a toggleable "Detailed Changes" section.
+    - For each module, show its filename and status (success/error/no changes).
+    - Provide a nested "Show changes" toggle for each module that displays a diff-style view (Old vs. New) for modified fields.
+6. **Styling**: Use Tailwind CSS with a "glass-morphism" aesthetic (dark theme, blurred backdrops, `surface` and `accent` color scales).
+7. **Error Handling**: Gracefully handle null results and empty error arrays.
+
+**Dependencies**
+<api_types>
+    <include>../api</include>
+</api_types>
+<ui_icons>
+    <include>lucide-react (or inline SVGs)</include>
+</ui_icons>
+
+**Instructions**
+1. **Component Structure**: Create a main `SyncFromPromptModal` component and a helper `ModuleResultCard` component for individual module entries.
+2. **State Management**: Use React `useState` to manage the visibility of the main details list and the individual module diffs.
+3. **Input Props**:
+    - `isOpen`: boolean
+    - `isSyncing`: boolean
+    - `result`: `ArchitectureSyncResult | null`
+    - `onSync`: function
+    - `onClose`: function
+4. **Logic**:
+    - Determine `hasValidationErrors` by checking `result.validation.valid`.
+    - Determine `hasResults` by checking if `result` is not null.
+    - In the diff view, stringify JSON values and truncate long strings to ensure the UI remains clean.
+5. **Accessibility**: Ensure the close button is hidden or disabled during active syncing to prevent state inconsistency.
+
+**Deliverables**
+- A single TypeScript React file: `SyncFromPromptModal.tsx`.
+- The file should export `SyncFromPromptModal` as the default export.

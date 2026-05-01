@@ -1,0 +1,53 @@
+<pdd-reason>Shared worktree setup, git-scope guards, and agentic output parsing helpers for orchestrators.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_git_root", "signature": "(cwd: Path)", "returns": "Optional[Path]"},
+      {"name": "worktree_exists", "signature": "(cwd: Path, worktree_path: Path)", "returns": "bool"},
+      {"name": "branch_exists", "signature": "(cwd: Path, branch: str)", "returns": "bool"},
+      {"name": "remove_worktree", "signature": "(cwd: Path, worktree_path: Path)", "returns": "Tuple[bool, str]"},
+      {"name": "delete_branch", "signature": "(cwd: Path, branch: str)", "returns": "Tuple[bool, str]"},
+      {"name": "resolve_main_ref", "signature": "(git_root: Path)", "returns": "str"},
+      {"name": "setup_worktree", "signature": "(cwd, issue_number, quiet, *, resume_existing, branch_prefix, worktree_prefix)", "returns": "Tuple[Optional[Path], Optional[str]]"},
+      {"name": "get_modified_and_untracked", "signature": "(cwd: Path)", "returns": "List[str]"},
+      {"name": "check_target_file_unchanged", "signature": "(cwd, target_file, baseline_sha)", "returns": "Tuple[bool, Optional[str]]"},
+      {"name": "revert_out_of_scope_changes_with_dirs", "signature": "(cwd, allowed_dirs, allowed_files)", "returns": "List[Path]"},
+      {"name": "extract_block_marker", "signature": "(output, name)", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_common_worktree.py` module — shared worktree setup, git-scope guards, and agentic output parsing helpers used by multiple orchestrators.
+
+% Role & Scope
+Reusable git-worktree and scope-guard utilities extracted from `agentic_bug_orchestrator`. Any orchestrator (bug, split, change, etc.) that needs to create worktrees, detect concurrent edits, enforce scope boundaries, or parse multi-line marker blocks from agent output should import from this module instead of reimplementing inline.
+
+All functions are public (no leading underscore) so orchestrators can import them directly.
+
+% Requirements
+1. **`get_git_root(cwd: Path) -> Optional[Path]`**: Return repo root via `git rev-parse --show-toplevel`, or `None` on failure.
+2. **`worktree_exists(cwd: Path, worktree_path: Path) -> bool`**: Check if `worktree_path` appears in `git worktree list --porcelain` output (run from repo root).
+3. **`branch_exists(cwd: Path, branch: str) -> bool`**: Check via `git show-ref --verify refs/heads/{branch}`.
+4. **`remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]`**: Remove via `git worktree remove --force`. Return `(success, error_msg)`.
+5. **`delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]`**: Delete via `git branch -D`. Return `(success, error_msg)`.
+6. **`resolve_main_ref(git_root: Path) -> str`**: Try `origin/main`, `origin/master`, `main`, `master` in order via `git rev-parse --verify`. Return commit hash of first found, or `"HEAD"` as last resort.
+7. **`setup_worktree(cwd, issue_number, quiet, *, resume_existing=False, branch_prefix="fix", worktree_prefix="fix") -> Tuple[Optional[Path], Optional[str]]`**: Create an isolated git worktree at `.pdd/worktrees/{worktree_prefix}-issue-{issue_number}/` on branch `{branch_prefix}/issue-{issue_number}`. Clean up existing worktree/directory and branch before creating. If `resume_existing` is True and branch exists, reuse it (attach with `--force`). Otherwise delete the old branch first. When reusing an undeletable branch, reset to main ref after attaching. Print worktree path unless `quiet`. The `branch_prefix` and `worktree_prefix` kwargs let callers customize naming (e.g. `change` prefix for change workflows, `fix` for bug workflows). Return `(worktree_path, None)` on success, `(None, error_msg)` on failure.
+8. **`get_modified_and_untracked(cwd: Path) -> List[str]`**: Return modified tracked files (`git diff --name-only HEAD`) plus untracked files (`git ls-files --others --exclude-standard`).
+9. **`check_target_file_unchanged(cwd: Path, target_file: str, baseline_sha: Optional[str] = None) -> Tuple[bool, Optional[str]]`**: Detect concurrent edits. Run `git fetch origin` then `git rev-parse origin/main:{target_file}`. If `baseline_sha` is provided, compare current SHA against it — return `(True, current_sha)` if unchanged, `(False, current_sha)` if changed. If `baseline_sha` is None, just return `(True, current_sha)` to establish the baseline. Return `(True, None)` on git failures (fail-open to avoid blocking workflows).
+10. **`revert_out_of_scope_changes_with_dirs(cwd: Path, allowed_dirs: set[str], allowed_files: set[Path]) -> List[Path]`**: Scope guard that detects both tracked changes AND new untracked files via `git status --porcelain -u`. For each changed/new file, check if its path starts with any prefix in `allowed_dirs` OR its resolved absolute path is in `allowed_files`. Revert tracked out-of-scope changes via `git checkout HEAD --`. Remove untracked out-of-scope files via `os.remove`. Return list of reverted/removed paths. Log actions via module logger. Handle timeout and OS errors gracefully.
+11. **`extract_block_marker(output: str, name: str) -> str`**: Parse a multi-line block delimited by `BEGIN_{name}` and `END_{name}` markers from agent output. Return the content between markers (stripped), or empty string if markers not found. Case-insensitive marker matching.
+
+% Dependencies
+<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+
+% Deliverables
+- Code: `pdd/agentic_common_worktree.py`

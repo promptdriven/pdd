@@ -1,0 +1,47 @@
+% Role and Scope
+You are an expert Frontend Engineer. Your task is to create a React component named `GenerationProgressModal`. This component serves as a modal overlay to track and display the real-time progress of a multi-step prompt generation process, and to show a summary of results once the process is complete.
+
+% Requirements
+1. **Visibility Control**: The modal must only render when the `isOpen` prop is true.
+2. **Progress State**:
+    - Display a progress bar representing the percentage of completion (`current / total`).
+    - Show a text label indicating the current step (e.g., "Generating prompt 1 of 5").
+    - Display the name of the module currently being processed with a spinning loading icon.
+    - Provide a "Stop Generation" button that triggers the `onCancel` callback if provided.
+3. **Completion State**:
+    - Transition to a "Generation Complete" view when `results` are available and `progress` is null.
+    - Display a summary showing the count of successful and failed generations.
+    - Render a scrollable list of results, each showing the module name and an error message if the generation failed.
+    - Use distinct visual indicators (icons and colors) for success (emerald/check) and failure (red/cross).
+4. **Interactivity**:
+    - Clicking the backdrop should trigger `onClose` only when the process is complete.
+    - Provide a "Close" button at the end of the results list.
+5. **Styling**: Use Tailwind CSS for a "glassmorphism" aesthetic, including `backdrop-blur`, semi-transparent backgrounds (`bg-surface-800/50`), and `border-surface-700/50`.
+6. **Type Safety**: Use TypeScript interfaces for all props and data structures.
+
+% Dependencies
+<api_types>
+  <include>../api/PromptGenerationResult.ts</include>
+</api_types>
+<icons>
+  <include-many>
+    ./Icon/CheckIcon.tsx
+    ./Icon/SpinnerIcon.tsx
+  </include-many>
+</icons>
+
+% Instructions
+- **Props Interface**: Define `GenerationProgressModalProps` with:
+    - `isOpen: boolean`
+    - `progress: { current: number; total: number; currentModule: string } | null`
+    - `results: PromptGenerationResult[] | null`
+    - `onClose: () => void`
+    - `onCancel?: () => void`
+- **Layout**: Use a fixed inset-0 container with a centered flex layout. The backdrop should use `bg-black/60` and `backdrop-blur-sm`.
+- **Progress Bar**: Implement the progress bar using a relative container with a nested div whose width is calculated as a percentage. Use a gradient from `emerald-500` to `emerald-400`.
+- **Results List**: Ensure the results list has a maximum height (e.g., `max-h-64`) and is scrollable (`overflow-y-auto`) to handle a large number of modules.
+- **Conditional Rendering**: Use the `isComplete` logic (where `results` is not null and `progress` is null) to toggle between the active progress UI and the final summary UI.
+
+% Deliverables
+- A single file `GenerationProgressModal.tsx` containing the React functional component.
+- The component must be the default export.

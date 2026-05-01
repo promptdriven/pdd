@@ -1,0 +1,138 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/routes/files.py`.
+
+% Role & Scope
+  This module provides REST API endpoints for file operations.
+  It enables the web frontend to browse, read, and write files
+  in the project directory with proper security validation.
+
+<context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
+
+% Documentation References
+  - FastAPI Routers:
+    <web>https://fastapi.tiangolo.com/tutorial/bigger-applications/</web>
+  - FastAPI Query Parameters:
+    <web>https://fastapi.tiangolo.com/tutorial/query-params/</web>
+  - Python pathlib: https://docs.python.org/3/library/pathlib.html
+
+% Requirements
+  1. **GET /files/tree**:
+     - Query param: path (optional, defaults to project root)
+     - Query param: depth (optional, max recursion depth, default 3)
+     - Returns: FileTreeNode with directory structure
+     - Does NOT include file contents (metadata only)
+     - Respects path validation (no traversal outside project)
+
+  2. **GET /files/content**:
+     - Query param: path (required)
+     - Query param: encoding (optional, default "utf-8")
+     - Query param: chunk (optional, for large file chunking)
+     - Query param: chunk_size (optional, default 100000 bytes)
+     - Returns: FileContent with actual file content
+     - Binary files returned as base64
+     - Large files (>100KB) support chunked responses
+     - Include checksum (SHA-256) for chunked transfers
+
+  3. **POST /files/write**:
+     - Body: WriteFileRequest (path, content, encoding)
+     - Creates parent directories if needed
+     - Returns: WriteResult with success status and mtime
+     - Validates path before writing
+
+  4. **GET /files/metadata**:
+     - Query param: paths (list of paths)
+     - Returns: List of FileMetadata
+     - Batch endpoint for checking multiple files
+
+  5. **GET /files/prompts**:
+     - List all .prompt files in the project
+     - Returns list of dev-unit objects with:
+       - prompt: path to .prompt file
+       - sync_basename: basename for sync command (without language suffix)
+       - language: detected language (python, typescript, etc.)
+       - context: matched .pddrc context name (for --context flag in pdd sync)
+       - expected_outputs: sorted list of output types the language produces (e.g., ["code"] for JSON/YAML/CSS, ["code", "example", "test"] for Python/TypeScript). Uses `get_language_outputs()` from construct_paths.
+       - code, test, example: paths to related files if they exist
+     - Uses .pddrc configuration for context-specific paths
+     - Supports helper functions:
+       - `load_pddrc(project_root)`: Load .pddrc YAML config
+       - `match_context(prompt_path, pddrc) -> tuple[str, dict]`: Return (context_name, defaults) for path
+       - `parse_prompt_stem(stem)`: Extract sync_basename and language
+
+  6. **GET /files/prompts/changed**:
+     - Query param: base_branch (optional, defaults to "main")
+     - Returns: { changed_prompts: list[str], base_branch: str }
+     - Lists .prompt files changed on current branch compared to base branch
+     - Implementation:
+       - Use `git merge-base HEAD <base_branch>` to find common ancestor
+       - Use `git diff --name-only --diff-filter=ACMR <merge_base> HEAD` for committed changes
+       - Use `git status --porcelain` to include uncommitted changes (staged and unstaged)
+       - Filter for files ending in ".prompt"
+       - Handle renamed files (format: "old -> new" in git status)
+     - Error handling:
+       - Return 500 if git is not installed
+       - If merge-base fails, compare directly against base_branch
+
+  7. **Language detection**:
+     - KNOWN_LANGUAGES: comprehensive list covering core languages (python, typescriptreact, javascriptreact, typescript, javascript, java, go, rust, cpp, c, csharp, ruby, swift, kotlin), scripting (php, scala, perl, bash, shell, haskell, dart, elixir, etc.), frontend/templating (svelte, vue, scss, sass, jinja, handlebars, etc.), modern/systems (zig, mojo, solidity), and config/query (sql, graphql, protobuf, terraform, etc.)
+     - IMPORTANT: KNOWN_LANGUAGES must be sorted by length (longest first) so "typescriptreact" matches before "typescript", and "javascript" before "java"
+     - LANGUAGE_EXTENSIONS: map language to file extensions (comprehensive, including e.g. elixir: [".ex", ".exs"], jinja: [".jinja2", ".jinja", ".j2"])
+     - Parse prompt stem: "calculator_python" -> ("calculator", "python"), "ui_components_TypeScriptReact" -> ("ui_components", "typescriptreact")
+     - `parse_prompt_stem` also has a fallback that checks `_is_known_language()` from construct_paths for custom languages not in the hardcoded list
+
+  8. **Dev-unit file discovery**:
+     - Extract subdirectory structure from prompt path (e.g., "prompts/server/foo.prompt" -> "server")
+     - Code files:
+       - Priority 0: Check new `outputs.code.path` format in .pddrc context defaults (Issue #237)
+         - Format: `outputs: { code: { path: "app/layout.tsx" } }`
+       - Priority 1: Check legacy `generate_output_path` from .pddrc
+       - Priority 2: Default locations (src/, then root)
+       - Try with subdirectory first (e.g., src/server/foo.py), then without (e.g., src/foo.py)
+     - Test files:
+       - Priority 0: Check `outputs.test.path` format in .pddrc (Issue #237)
+       - Priority 1: Check legacy `test_output_path`
+       - Priority 2: Default locations (tests/, test/, root)
+       - Include `.test` and `.spec` suffixes common in Jest/TypeScript projects
+         - e.g., `test_prisma_schema.test.ts`, `foo.spec.tsx`
+       - Prefixes: `test_`, empty; Suffixes: `.test`, `.spec`, empty, `_test`
+       - Try with subdirectory first, then without
+     - Example files:
+       - Priority 0: Check `outputs.example.path` format in .pddrc (Issue #237)
+       - Priority 1: Check legacy `example_output_path`
+       - Priority 2: Default locations (examples/, root with _example suffix)
+       - Try with subdirectory first, then without
+
+  9. **Error handling**:
+     - 403 for path traversal attempts
+     - 404 for non-existent files
+     - 400 for directories when file expected
+
+  10. **Security**:
+     - All paths validated through PathValidator dependency
+     - No access outside project root
+     - Blacklisted files return 403
+
+% Dependencies
+  <fastapi_example>
+  <server.main><include>context/fastapi_example.py</include></server.main>
+  </fastapi_example>
+   Use models from pdd/server/models.py: FileMetadata, FileTreeNode, FileContent, WriteFileRequest, WriteResult
+  <models_note>
+  <server.models><include>context/server/models_example.py</include></server.models>
+  </models_note>
+  <security_note>
+  Use PathValidator from pdd/server/security.py via dependency injection
+   <server.security><include>context/server/security_example.py</include></server.security>
+  </security_note>
+
+% Instructions
+  - Create router with prefix="/api/v1/files", tags=["files"]
+  - Use Depends() for PathValidator injection
+  - Detect binary files by extension and content inspection
+  - Use hashlib for SHA-256 checksums
+  - Recursive directory traversal with depth limit
+  - Sort directory listings (directories first, then files)
+  - Use subprocess module for git commands in /files/prompts/changed endpoint
+
+% Deliverables
+  - Code: `pdd/server/routes/files.py`
+  - Export: `files_router`

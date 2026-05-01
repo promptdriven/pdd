@@ -1,0 +1,86 @@
+<pdd-reason>Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str], file_path: str = None, mode: str = \"full\")", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/content_selector.py` module.
+
+% Role & Scope
+Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal. Used by the PDD preprocessor to handle selective includes (`<include select="...">`).
+
+% Requirements
+1. Class: `ContentSelector` with a static `select(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = "full") -> str` method
+2. Exception: `SelectorError(Exception)` — all user-facing errors must raise `SelectorError` with a descriptive message
+3. Selectors are `kind:value` strings where `kind` is one of: `lines`, `def`, `class`, `section`, `pattern`, `path`
+   - Accept `selectors` as a `list[str]` or a single comma-separated string
+   - Skip empty/whitespace-only strings silently
+   - Raise `SelectorError` for non-empty strings that don't match `kind:value` format
+4. When selectors is empty, return full content — unless `mode="interface"`, which produces a full-file interface
+5. Infer file type from `file_path` extension:
+   - `.py` → Python, `.md`/`.markdown` → Markdown, `.json` → JSON, `.yaml`/`.yml` → YAML
+   - Default to Python when `file_path` is `None`
+   - Raise `SelectorError` when a selector requires a file type that doesn't match (e.g., `def:` on a `.md` file, `section:` on a `.py` file)
+
+% Selector Types
+6. `lines:` — 1-based line numbers
+   - Forms: `lines:N` (single), `lines:N-M` (inclusive range), `lines:N-` (to end), `lines:-M` (from start)
+   - Comma-separated sub-ranges within a single value (e.g., `lines:1,3,5`)
+   - Raise `SelectorError` for out-of-range line numbers, inverted ranges, or invalid syntax (e.g., `lines:-`)
+7. `def:name` — Python function/async function extraction
+   - Walk the entire AST (finds top-level and nested functions)
+   - Include decorators (start from first decorator's line)
+   - Return all matches if multiple functions share the same name
+   - Raise `SelectorError` if not found
+   - Catch Python `SyntaxError` and re-raise as `SelectorError`
+8. `class:Name` — full class definition including decorators and all members
+   - `class:Name.method` — extract only the specified method from the class's direct body (split on first `.` only)
+   - Raise `SelectorError` if class or method not found
+9. `section:Heading` — Markdown section extraction
+   - Case-sensitive, whitespace-trimmed match against ATX headings (`#` through `######`)
+   - Extract from the heading line through to (not including) the next same-or-higher-level heading
+   - Last section in the document extracts to EOF
+   - If multiple sections share the same heading, return all of them
+   - Raise `SelectorError` if heading not found
+10. `pattern:/regex/` — regex line matching
+    - Return all lines matching the regex
+    - Surrounding slashes are optional (stripped if present)
+    - Raise `SelectorError` for empty pattern, invalid regex, or no matches
+    - Timeout long-running patterns after 5 seconds to prevent ReDoS
+11. `path:` — JSON/YAML path traversal
+    - Supported syntax: `key`, `key.nested.child`, `key[0]` (0-based), `key[0].name`, `[0]` (root array)
+    - Re-serialize extracted value as pretty-printed output in the source format (JSON or YAML matching input)
+    - Raise `SelectorError` for missing keys, index out of range, type mismatches (e.g., array index on a dict), empty path, or parse failures
+    - YAML support is optional — raise `SelectorError` with a clear message if PyYAML is not installed
+
+% Combining Results
+12. Multiple selectors: merge overlapping line spans to preserve file order. Path results collected separately and appended after span-based content, joined with `\n`.
+13. Any unexpected exception during selector processing should be caught and re-raised as `SelectorError` with context about which selector failed.
+14. Preserve original indentation and whitespace in all extracted content.
+
+% Interface Mode (Python only)
+- Full-file interface (no selectors): include imports, module-level constants, annotated assignments, module docstring, and all public classes/functions. Skip private top-level names (starting with `_`). Insert blank lines between top-level definitions for readability.
+- For each function/async function: keep decorators, the full signature (may span multiple lines), and docstring. Replace body with `...` at the body's indentation level.
+- Within classes: keep decorators, class header, class docstring, class-level annotated assignments. Include public methods (processed as above). Exclude private methods (starting with `_`) except `__init__`.
+- With selectors + `mode="interface"`: apply interface transformation only to AST nodes overlapping the selected spans. If no AST nodes overlap, fall back to returning the raw span content.
+
+% Error Reporting
+- Use `rich.console.Console` with a custom theme for formatted error messages. Print error context (including file path when available) before raising `SelectorError`.
+
+% Dependencies
+<rich_example>
+  <include>context/core/errors_example.py</include>
+</rich_example>
+
+% Deliverables
+- Code: `pdd/content_selector.py`

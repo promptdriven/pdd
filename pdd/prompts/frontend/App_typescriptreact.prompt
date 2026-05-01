@@ -1,0 +1,88 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/App.tsx`, the root app shell for the PDD web client.
+
+<core_dependencies>
+  <include-many>pdd/frontend/types.ts, pdd/frontend/constants.ts, pdd/frontend/lib/commandBuilder.ts, pdd/frontend/api.ts, pdd/frontend/hooks/useJobs.ts, pdd/frontend/hooks/useTaskQueue.ts, pdd/frontend/hooks/useAudioNotification.ts</include-many>
+</core_dependencies>
+
+<ui_dependencies>
+  <include-many>pdd/frontend/components/PromptSelector.tsx, pdd/frontend/components/PromptSpace.tsx, pdd/frontend/components/ArchitectureView.tsx, pdd/frontend/components/ProjectSettings.tsx, pdd/frontend/components/JobDashboard.tsx, pdd/frontend/components/TaskQueuePanel.tsx, pdd/frontend/components/AddToQueueModal.tsx, pdd/frontend/components/AuthStatusIndicator.tsx, pdd/frontend/components/ReauthModal.tsx, pdd/frontend/components/ErrorBoundary.tsx, pdd/frontend/components/RemoteSessionSelector.tsx, pdd/frontend/components/ExecutionModeToggle.tsx, pdd/frontend/components/Icon.tsx, pdd/frontend/components/Toast.tsx, pdd/frontend/components/DeviceIndicator.tsx</include-many>
+</ui_dependencies>
+
+Requirements
+1. Export a default `App` React functional component and keep a local `parseHash()` helper.
+2. Keep view unions:
+   - `View = 'devunits' | 'bug' | 'fix' | 'change' | 'settings'`
+   - `DevUnitsSubView = 'graph' | 'list'`
+3. `parseHash()` must:
+   - default to `{ view: 'devunits', subView: 'graph' }` on empty hash.
+   - parse `#<view>/<promptPath...>` and return `promptPath` when present.
+   - map legacy `#architecture` -> `devunits/graph` and `#prompts` -> `devunits/list`.
+   - fallback invalid views to `devunits`.
+4. Initialize app state from `parseHash()` and keep state for:
+   - view/sub-view, selected/editing prompt, pending prompt deep-link.
+   - command execution (`isExecuting`, status, last command, last run result).
+   - server connectivity and remote execution controls (`executionMode`, sessions, selected session, errors, panel visibility).
+   - queue/jobs UI, add-to-queue modal, batch operation progress, auth modal.
+   - bug/fix/change URL inputs and `syncCompletedCounter`.
+5. Use `useToast()` and `useAudioNotification()`:
+   - support audio toggle and play a confirmation sound when audio is enabled.
+6. Configure `useTaskQueue()` callbacks to:
+   - toast on task start/complete and queue completion.
+   - play audio on task completion and queue completion.
+   - increment `syncCompletedCounter` only when task succeeds and command type is `SYNC`.
+7. Configure `useJobs({ onJobComplete })` to:
+   - toast and play audio on completion.
+   - reconcile queue state via `taskQueue.handleJobComplete`.
+   - increment `syncCompletedCounter` only for successful `sync` jobs.
+8. Implement queued execution with `executeQueuedTask(task)`:
+   - rebuild command with `buildCommandRequest(task.commandType, task.prompt, task.rawOptions)`.
+   - in remote mode with selected session, call `api.submitRemoteCommand(...)`, then add a remote spawned job with `[Remote]` display prefix.
+   - otherwise call `api.spawnTerminal(...)` and add a local spawned job.
+   - return command/job id string on success, otherwise `null`.
+9. Bind the queue submitter using `taskQueue.setSubmitJob(executeQueuedTask)` in `useEffect`, and keep shared queue helpers:
+   - `handleAddToQueue(commandType, prompt, rawOptions, displayCommand)` to enqueue and toast.
+   - add-to-queue modal opener that stores the selected prompt and opens the modal.
+10. On mount, call `api.getStatus()` to set `serverConnected`.
+11. Keep URL hash and navigation state in sync:
+   - editing prompt -> `#prompts/<promptPath>`
+   - devunits graph/list -> `#architecture` / `#prompts`
+   - other views -> `#<view>`
+   - on `hashchange`, restore view/sub-view and pending prompt path; clear `editingPrompt` if hash has no prompt path.
+12. When connected and `pendingPromptPath` exists, load prompts via `api.listPrompts()`, open matching prompt in `PromptSpace`, and clear pending path on success or failure.
+13. When connected, fetch remote sessions immediately and every 30s via `api.listRemoteSessions()`:
+   - store sessions, clear prior error on success, auto-select first session if none selected.
+   - on failure, set remote-session error and show network/general error toasts (avoid auth-error toast spam).
+14. Implement command execution flows:
+   - `handleRunCommand(command, prompt, commandOptions)`:
+     - block with alert if disconnected.
+     - build args/options/display command via `buildCommandRequest`.
+     - remote mode: if selected session is stale, require confirmation before submit; submit with `api.submitRemoteCommand`; track remote job.
+     - local mode: launch with `api.spawnTerminal`; track local job.
+     - update execution status, toasts, and clear status shortly after completion.
+     - on unexpected error, set `lastRunResult`, toast failure, and clear status later.
+   - dedicated bug/fix/change handlers:
+     - require connected server and non-empty URL input.
+     - set display command as `pdd bug|fix|change <url>`.
+     - use the same remote/local execution pattern and stale-session confirmation.
+     - remote payload uses `{ args: { args: [url] }, options: {} }`.
+15. Prompt-space and architecture interactions:
+   - prompt-space adapters to run commands, add current prompt command to queue using `buildDisplayCommand`, and cancel via `api.cancelCommand`.
+   - ArchitectureView batch callbacks for start/progress/complete/cancel; clear completed batch state after a short delay.
+   - preserve PromptSpace back-navigation context by saving `window.scrollY` and prior devunits sub-view before opening; restore both on back (with multiple timed scroll restores).
+16. Render structure:
+   - root `ErrorBoundary`.
+   - sticky glass header with branding, centered workflow tabs (`devunits`, `bug`, `fix`, `change`, `settings`), and right-side status controls.
+   - right-side controls include jobs toggle + active count, remote/local panel toggle, connection status pill, audio toggle, and `AuthStatusIndicator`.
+   - remote settings dropdown/backdrop includes `ExecutionModeToggle` and, in remote mode, `RemoteSessionSelector` with refresh callback.
+   - execution status bar for running/success/failed states; running state includes spinner, current command, and Stop button calling `api.cancelCommand`.
+   - sub-navigation: editing mode shows back button + selected prompt metadata; non-editing mode shows view title/description and devunits graph/list toggle.
+   - main content: embedded `PromptSpace` when editing; otherwise offline banner when disconnected and the current view content:
+     - `devunits`: `ArchitectureView` (graph) or `PromptSelector` (list)
+     - `settings`: `ProjectSettings`
+     - `bug` / `fix` / `change`: responsive two-column card layouts with URL input, action button, prerequisites, post-action guidance, and workflow step list
+   - always render `JobDashboard`, `TaskQueuePanel`, and `AddToQueueModal` near the root.
+   - render fixed footer status strip, conditional `ReauthModal`, and `DeviceIndicator`.
+17. Keep responsive Tailwind dark/glass styling consistent with the app shell.
+
+Deliverable
+- Output only `pdd/frontend/App.tsx`.

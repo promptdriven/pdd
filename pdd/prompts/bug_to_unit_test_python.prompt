@@ -1,0 +1,50 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "bug_to_unit_test", that will create a unit test from a code file.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'current_output' - A string that is the current output of the code.
+        'desired_output' - A string that is the desired output of the code.
+        'prompt_used_to_generate_the_code' #create a function that adds two numbers in python
+        'code_under_test' - A string that is the code to be tested.
+        'program_used_to_run_code_under_test' - A string that is the program used to run the code under test.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float that is the temperature of the LLM model to use.
+        'language' - A string that is the language of the unit test to be generated.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
+    Outputs: 
+        'unit_test'- A string that is the generated unit test code.
+        'total_cost' - A float that is the total cost to generate the unit test code.
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here are examples of how to use internal modules:
+<internal_example_modules>
+    % For loading prompt templates: <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
+
+    % For running prompts with llm_invoke: <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
+
+    % Example usage of the unfinished_prompt function, the return from unfinished_prompt is the following four parameters (reasoning, is_finished, total_cost, model_name): <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
+    % Here is an example how to continue the generation of a model output: <continue_generation_example><include>context/continue_generation_example.py</include></continue_generation_example>
+
+    % Here is an example how to postprocess the model output result: <postprocess_example><include>context/postprocess_example.py</include></postprocess_example>
+</internal_example_modules>
+
+% This program will use llm_invoke to do the following:
+    Step 1. Load the 'bug_to_unit_test_LLM' prompt template using load_prompt_template.
+    Step 2. Run the inputs through the model using llm_invoke, ensuring the `time` parameter is passed. 
+        2a. Pass the following string parameters to the prompt during invoke:
+            - 'prompt_that_generated_code': preprocess the prompt using the preprocess function without recursion or doubling of the curly brackets.
+            - 'current_output'
+            - 'desired_output'
+            - 'code_under_test'
+            - 'program_used_to_run_code_under_test'
+            - 'language'
+        2b. Pretty print a message letting the user know it is running and the cost information from llm_invoke.
+    Step 3. Pretty print the markdown formatting that is present in the result via the rich Markdown function.
+    Step 4. Detect if the generation is incomplete using the unfinished_prompt function (strength .89) by passing in the last 600 characters of the output of Step 2.
+        - a. If incomplete, call the continue_generation function to complete the generation.
+        - b. Else, if complete, postprocess the model output result using the postprocess function from the postprocess module with the EXTRACTION_STRENGTH constant.    
+    Step 5. Print out the total_cost including all the costs.
+
+% Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.

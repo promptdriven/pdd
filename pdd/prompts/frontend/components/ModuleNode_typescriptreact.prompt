@@ -1,0 +1,45 @@
+% You are an expert TypeScript React engineer. Implement `pdd/frontend/components/ModuleNode.tsx`, a ReactFlow node card that displays module metadata, prompt status, and edit/sync controls.
+
+% Dependencies
+<module_node_dependencies>
+  <include-many>pdd/frontend/api.ts, pdd/frontend/components/Tooltip.tsx</include-many>
+</module_node_dependencies>
+
+Requirements
+1. Import `React` and `memo`, `Handle`/`Position`/`NodeProps` from `reactflow`, `ArchitectureModule` + `PromptInfo` from `../api`, and `Tooltip` from `./Tooltip`.
+2. Export `ModuleNodeData` with:
+   - `label: string`, `module: ArchitectureModule`, optional `promptInfo?: PromptInfo`, `hasPrompt: boolean`
+   - `colors: { bg: string; border: string; hover: string; text: string }`
+   - optional callbacks `onClick(module)`, `onRunSync(module)`, `onEdit(module)`, `onDelete(filename)`
+   - optional flags `editMode?: boolean`, `isHighlighted?: boolean`
+   - optional batch metadata `batchId?: number`, `batchColor?: string`, `batchName?: string`
+3. Export `ModuleNode` as `React.FC<NodeProps<ModuleNodeData>>`, destructuring `{ data, selected, xPos, yPos }`.
+4. Derive `hasCode`, `hasTest`, and `hasExample` from `promptInfo?.code/test/example`.
+5. Implement click handlers:
+   - node click calls `onClick(module)` if provided
+   - edit/sync button clicks call `e.stopPropagation()` then `onEdit(module)` / `onRunSync(module)` when available
+6. Render a fragment with top `target` and bottom `source` handles, both using `!bg-blue-400 !w-2 !h-2`.
+7. Wrap the node card in `Tooltip`. Tooltip content must show filename, filepath, and `description?.substring(0, 100)` plus ellipsis. When `hasPrompt` is true, include:
+   - a "Prompt exists" row with check icon
+   - check/cross statuses for Code/Test/Example with green/yellow/blue coloring for present items and muted styling when absent
+8. Main card is clickable and uses:
+   - base classes for rounded bordered glass card, hover scale, `group`, and transitions
+   - category classes from `colors.bg`, `colors.border`, `colors.hover`
+   - conditional rings: prompt (`ring-2 ring-emerald-500/50`), selected (`ring-2 ring-accent-500`), highlighted (`ring-2 ring-red-500 animate-pulse`)
+   - inline style `{ width: 200, minHeight: 85, opacity: 0.95 }`
+9. If `batchColor` exists, render a small vertical stripe on the left with `style={{ backgroundColor: data.batchColor }}` and title `batchName || \`Batch ${batchId}\``.
+10. If `editMode`, render an absolute top-left circular edit button (shown via `opacity-0 group-hover:opacity-100`) titled `Edit module`.
+11. If `hasPrompt && onRunSync && !editMode`, render an absolute top-right sync button with a gold gradient, hover scale, and title `Run pdd sync (prompt -> code)`.
+12. If `hasPrompt`, render:
+   - top-right green check badge; move it to `right-5` when sync button is present, otherwise keep near the right edge
+   - bottom-right C/T/E circular indicators with active colors (`green/yellow/blue`) and muted fallback, each with exists/missing titles
+13. Render text rows inside the card:
+   - label (`text-sm`, white, truncated)
+   - development-only coordinate row when `process.env.NODE_ENV === 'development'`, showing rounded `x`/`y` and a detailed `title`
+   - module type row from `module.interface?.type || 'module'` using `colors.text`
+   - priority row `Priority: {module.priority}`
+14. Keep inline SVG icons for prompt check, edit, and sync controls as in-component markup.
+15. Export default `memo(ModuleNode)`.
+
+Deliverable
+- Output only `pdd/frontend/components/ModuleNode.tsx`.

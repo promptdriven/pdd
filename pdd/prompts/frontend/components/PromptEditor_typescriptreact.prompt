@@ -1,0 +1,56 @@
+Create a React component named `PromptEditor` that provides a code editing interface for markdown files using CodeMirror 6. This component is responsible for fetching file content from an API, allowing users to edit it with syntax highlighting and dark mode styling, and saving the changes back to the server.
+
+### Requirements:
+1. **Functionality**:
+    - Fetch file content based on a `promptPath` prop on mount.
+    - Integrate CodeMirror 6 with Markdown support, line numbers, and the One Dark theme.
+    - Track document changes and display an "Unsaved changes" indicator.
+    - Provide "Save" and "Cancel" actions.
+    - Implement a "Retry" mechanism if the initial file load fails.
+2. **State Management**:
+    - Handle loading, error, saving, and success states.
+    - Use `useRef` to maintain the `EditorView` instance and the original content for comparison.
+3. **UI/UX**:
+    - Use Tailwind CSS for styling.
+    - Display a header with the file path and a footer with action buttons.
+    - Show a loading spinner during fetch/save operations.
+    - Implement a confirmation dialog when canceling with unsaved changes.
+    - Show a temporary "Saved!" success message after a successful write.
+4. **Error Handling**:
+    - Catch and display API errors during both loading and saving phases.
+5. **Performance**:
+    - Ensure the CodeMirror instance is properly destroyed on component unmount or when the path changes to prevent memory leaks.
+
+### Dependencies:
+<api_service>
+  <include>src/api.ts</include>
+</api_service>
+<codemirror_state>
+  <include>@codemirror/state</include>
+</codemirror_state>
+<codemirror_view>
+  <include>@codemirror/view</include>
+</codemirror_view>
+<codemirror_lang_markdown>
+  <include>@codemirror/lang-markdown</include>
+</codemirror_lang_markdown>
+<codemirror_theme_one_dark>
+  <include>@codemirror/theme-one-dark</include>
+</codemirror_theme_one_dark>
+
+### Instructions:
+1. **Props**: Define `PromptEditorProps` with `promptPath: string`, `onSave?: () => void`, and `onCancel?: () => void`.
+2. **Editor Configuration**:
+    - Extensions should include: `lineNumbers()`, `highlightActiveLine()`, `history()`, `keymap.of([...defaultKeymap, ...historyKeymap])`, `markdown()`, and `oneDark`.
+    - Add an `EditorView.updateListener` to detect changes and update the `hasChanges` state by comparing current doc string to `originalContentRef.current`.
+    - Apply custom theme styles via `EditorView.theme` to set the height to `350px` and match the dark UI (background `rgb(17 24 39)`).
+3. **API Integration**:
+    - Use `api.getFileContent(path)` to load data.
+    - Use `api.writeFile(path, content)` to save data.
+4. **Lifecycle**:
+    - Use a `useEffect` to load content when `promptPath` changes. Include a `cancelled` flag to prevent state updates on unmounted components.
+    - Use a second `useEffect` to initialize the CodeMirror `EditorView` once the content is available.
+5. **Styling**: Use a dark theme consistent with `gray-900` and `gray-800` Tailwind colors. Ensure the editor container has the class `codemirror-container`.
+
+### Deliverables:
+- A single TypeScript file `PromptEditor.tsx` exporting the `PromptEditor` functional component as the default export.

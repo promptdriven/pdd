@@ -1,0 +1,79 @@
+<pdd-reason>Registers maintenance CLI commands: sync, auto-deps, and setup with all options.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "sync", "description": "Synchronize a prompt with its code, tests, and examples"},
+      {"name": "auto-deps", "description": "Analyze and insert dependencies into a prompt file"},
+      {"name": "setup", "description": "Install shell completion and run setup utility"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
+
+% Role & Scope
+  This module contains maintenance and setup commands: `sync`, `auto-deps`, and `setup`.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include select="section:sync,section:auto-deps,section:setup">./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **sync**:
+     - Interface: Match the `sync` command specification in `README.md`.
+     - Logic: Call `sync_main` with `@track_cost` decorator.
+     - BASENAME is optional. If omitted, dispatch to `run_global_sync()` from `agentic_sync.py` for project-wide Tier 1 architecture sync. Do not treat `architecture.json` or paths ending in `/architecture.json` as global-sync aliases; with a positional value they remain normal single-module basenames. Resolve `budget` from the CLI option, then `.pddrc` default context `defaults.budget`, then the hardcoded `$20.0` default. Resolve `target_coverage` from the CLI option, then `.pddrc` default context `defaults.target_coverage`, then leave it unset so downstream defaults apply. Forward the resolved budget, resolved target coverage, `skip_verify`, `skip_tests`, `dry_run`, `agentic`, `no_steer`, `max_attempts`, `one_session`, and the top-level `local` flag from `ctx.obj`.
+     - URL detection: If BASENAME matches `github\.com/.+/issues/\d+`, dispatch to `run_agentic_sync()` from `agentic_sync.py` instead of `sync_main()`.
+     - Additional options for agentic sync mode: `--timeout-adder` (float, default 0.0) and `--no-github-state` (flag).
+     - `--one-session` flag (bool, default False): Run example/crash/verify/test/fix in a single agentic session. Forward to both `sync_main()` and `_run_agentic_sync_dispatch()`.
+     - Helper: `_run_agentic_sync_dispatch(ctx, issue_url, ..., one_session)` handles the dispatch, displays results, raises `click.exceptions.Exit(1)` on failure. Forwards `one_session` to `run_agentic_sync()`.
+     - Import `_is_github_issue_url`, `run_agentic_sync`, and `run_global_sync` from `..agentic_sync`.
+  2. **auto-deps**:
+     - Interface: Match the `auto-deps` command specification in `README.md`.
+     - Logic: Call `auto_deps_main` with `@track_cost` decorator.
+     - Additional options:
+       - `--include-docs` (bool flag, default False): Include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Pass as `include_docs` to `auto_deps_main`.
+       - `--no-dedup` (bool flag, default False): Disable redundant inline content removal after inserting includes. Pass as `no_dedup` to `auto_deps_main`.
+       - `--concurrency` (int, default 1): Number of parallel workers for file summarization LLM calls. Pass as `concurrency` to `auto_deps_main`.
+  3. **setup**:
+     - Interface: Match the `setup` command specification in `README.md`.
+     - Logic: Install shell completion, then run setup utility.
+     - No `@track_cost` (no LLM calls).
+
+% Dependencies
+  <sync_main_example>
+  <include select="def:sync_main,def:_run_agentic_sync_dispatch">context/sync_main_example.py</include>
+  </sync_main_example>
+  <auto_deps_main_example>
+  <include select="def:auto_deps_main">context/auto_deps_main_example.py</include>
+  </auto_deps_main_example>
+  <track_cost_example>
+  <include>context/track_cost_example.py</include>
+  </track_cost_example>
+  <agentic_sync_example>
+  <include select="def:run_agentic_sync,def:run_global_sync,def:_is_github_issue_url">context/agentic_sync_example.py</include>
+  </agentic_sync_example>
+  <pdd.cli>
+  <include select="def:install_completion">context/change/15/initial_cli.py</include>
+  </pdd.cli>
+  <pdd.cli>
+    <include>context/__init__example.py</include>
+  </pdd.cli>
+
+% Instructions
+  - Use `handle_error` for exceptions (re-raise `click.Abort` and `click.exceptions.Exit`).
+  - Support deprecated flags with warnings.
+  - Backward compatible: `pdd sync my_module` still calls `sync_main` as before.
+  - Backward compatible: `pdd sync <github issue url>` still calls agentic issue sync as before.
+
+% Deliverables
+  - Code: `pdd/commands/maintenance.py`

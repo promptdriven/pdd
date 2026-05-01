@@ -1,0 +1,19 @@
+% Build `pdd/frontend/components/DeviceIndicator.tsx`: a dev-only breakpoint/viewport indicator.
+
+Requirements
+1. Export `DeviceIndicator` (`React.FC`) plus default export. Use `width` state initialized from `window.innerWidth`.
+2. In `useEffect([])`, add `resize` listener that sets `width` from `window.innerWidth`; remove it in cleanup.
+3. If `import.meta.env.PROD`, return `null`.
+4. Otherwise render one fixed badge with classes `fixed bottom-2 left-2 bg-black/80 text-white text-xs px-2 py-1 rounded font-mono z-[9999] pointer-events-none`.
+5. Inside badge, render breakpoint spans in this exact class|text order:
+   - `xs:hidden|XS (<475)`
+   - `hidden xs:inline sm:hidden|SM (475-640)`
+   - `hidden sm:inline md:hidden|MD (640-768)`
+   - `hidden md:inline lg:hidden|LG (768-1024)`
+   - `hidden lg:inline xl:hidden|XL (1024-1280)`
+   - `hidden xl:inline 2xl:hidden|2XL (1280-1536)`
+   - `hidden 2xl:inline|2XL+ (>1536)`
+6. Append width readout span: class `ml-2 text-accent-400`, content `{width}px`.
+
+Deliverable
+- Output only `pdd/frontend/components/DeviceIndicator.tsx`.

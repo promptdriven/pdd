@@ -1,0 +1,42 @@
+% You are an expert LLM Prompt Engineer. Your goal is to generate a high-quality PDD prompt for the `fix_code_loop` module.
+
+% Role and Scope:
+The `fix_code_loop` module is a core component of the PDD orchestration layer. Its responsibility is to manage an iterative "test-fix" cycle. It executes a verification program against a target code file, captures errors, and uses an LLM (local or cloud-based) to suggest fixes until the code passes verification, the budget is exhausted, or the maximum number of attempts is reached. It also provides an agentic fallback for complex or non-Python scenarios.
+
+% Requirements:
+1. **Iterative Fixing**: Implement a loop that runs up to `max_attempts`. In each iteration, run the `verification_program` using `run_process_with_output`.
+2. **Hybrid Cloud Support**: If `use_cloud` is True, route LLM fix requests to the `cloud_crash_fix` endpoint. Otherwise, use the local `fix_code_module_errors`.
+3. **Cost & Budget Management**: Track `total_cost` starting from `prior_cost`. Terminate the loop if `total_cost` exceeds `budget`.
+4. **File Handling & Backups**: 
+    - Validate existence of `code_file` and `verification_program`.
+    - Create initial backups in `.pdd/backups/<code_stem>/<timestamp>/`.
+    - Create per-attempt backups of both the code and the verification program.
+    - Restore original files on failure.
+5. **Non-Python Support**: Detect non-Python files by extension. Use `get_language` and `default_verify_cmd_for` to determine the verification command.
+6. **Agentic Fallback**: If the primary loop fails and `agentic_fallback` is True, invoke `_safe_run_agentic_crash`.
+7. **Logging**: Maintain a detailed XML-formatted `history_log` containing verification status, stdout/stderr (in CDATA), LLM analysis, decisions, and costs. Write this log to `error_log_file` after every attempt.
+8. **Process Execution**: Use `subprocess.Popen` with `start_new_session=True`. Implement a threaded byte-by-byte stream capture for stdout/stderr to prevent pipe clogging. Ensure process groups are killed on timeout (300s).
+
+% Dependencies:
+<module_dependencies>
+  <pdd.agentic_crash><include>context/agentic_crash_example.py</include></pdd.agentic_crash>
+  <pdd.agentic_langtest><include>context/agentic_langtest_example.py</include></pdd.agentic_langtest>
+  <pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
+  <pdd.fix_code_module_errors><include>context/fix_code_module_errors_example.py</include></pdd.fix_code_module_errors>
+  <pdd.python_preamble><include>context/python_preamble.prompt</include></pdd.python_preamble>
+</module_dependencies>
+
+% Instructions:
+1. **Signature**: Implement `fix_code_loop(code_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file, verbose=False, time=DEFAULT_TIME, prompt_file="", agentic_fallback=True, use_cloud=False, prior_cost=0.0)`.
+2. **Normalization**: Implement `_normalize_agentic_result` to handle 2, 3, 4, or 5-tuple returns from the agentic crash handler, ensuring a consistent 5-tuple output.
+3. **Process Management**: Implement `run_process_with_output` to handle subprocess execution. Use `os.killpg` with `signal.SIGKILL` for timeouts. Ensure threads are joined with a timeout and pipes are closed to prevent hanging.
+4. **Cloud Integration**: Implement `cloud_crash_fix` using the `requests` library to call the `crashCode` endpoint. Handle JWT authentication via `CloudConfig`. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`) so the `PDD_CLOUD_TIMEOUT` env var is honored end-to-end — do NOT hardcode a literal (e.g. `timeout=400` or a module-level `CLOUD_REQUEST_TIMEOUT` constant), which silently ignores the env var and was one of the non-compliant sites that contributed to #1272. The function's `if not CLOUD_AVAILABLE or CloudConfig is None: raise RuntimeError(...)` early-exit already guarantees the helper is available before the POST executes, so no additional None-guard is needed at the call site.
+5. **Verification Logic**: 
+    - For Python: Run using `sys.executable`.
+    - For Non-Python: Use `default_verify_cmd_for`. If no command exists or verification fails, trigger agentic fallback immediately.
+6. **XML History**: The `<history>` root must contain `<attempt>` blocks. Each attempt must include `<verification>` (with `<status>`, `<output>`, `<error>`), `<current_error>`, and `<fixing>` (with `<llm_analysis>`, `<decision>`, `<cost>`, `<model>`).
+7. **Return Values**: Return `(success, final_program, final_code, total_attempts, total_cost, model_name)`. On failure, `final_program` and `final_code` must be empty strings.
+
+% Deliverables:
+- A standalone Python module containing the `fix_code_loop` function and all necessary helper functions (`_normalize_agentic_result`, `_safe_run_agentic_crash`, `run_process_with_output`, `cloud_crash_fix`).
+- Include a `if __name__ == "__main__":` block that demonstrates the loop using dummy files and a monkeypatched `fix_code_module_errors`.

@@ -1,0 +1,129 @@
+% Module: auto_deps_architecture_sync
+% Purpose: Update architecture.json dependencies after auto-deps inserts new module <include> tags.
+
+% When ``pdd auto-deps`` adds includes that reference other module prompts (or example
+% paths that map to a module basename), append the corresponding architecture
+% ``filename`` values to the current module's ``dependencies`` list.
+
+% Dependencies
+<pdd.architecture_include_validation>
+  <include>context/architecture_include_validation_example.py</include>
+</pdd.architecture_include_validation>
+
+<pdd.architecture_registry>
+  <include>context/architecture_registry_example.py</include>
+</pdd.architecture_registry>
+
+<pdd.sync_order>
+  <include select="def:extract_module_from_include">context/sync_order_example.py</include>
+</pdd.sync_order>
+
+<pdd.architecture_sync>
+    <include select="def:example_get_entry,def:example_update_single_prompt">context/architecture_sync_example.py</include>
+</pdd.architecture_sync>
+
+% Imports:
+%   from __future__ import annotations
+%   import json, logging, re
+%   from pathlib import Path
+%   from typing import Any, Dict, List, Optional, Set, Tuple
+%   logger = logging.getLogger(__name__)
+%   from .architecture_include_validation import resolve_architecture_prompt_path
+%   from .architecture_registry import extract_modules, find_architecture_for_project, find_project_root
+%   from .sync_order import extract_module_from_include
+
+% ── Responsibilities ──
+
+% 1. Extract include paths from prompt text
+%    - Function: extract_include_paths_from_prompt_text(text: str) -> Set[str]
+%    - Parse ``<include>...</include>`` tags (supports attributes on the tag like ``<include foo="bar">path</include>``)
+%    - Pattern: r"<include[^>]*>(.*?)</include>" with re.DOTALL
+%    - Return set of stripped, non-empty paths
+
+% 2. Find architecture record for a prompt file
+%    - Function: _find_architecture_record_for_prompt_file(project_root: Path, prompt_file_resolved: Path) -> Optional[Tuple[Path, List[Dict[str, Any]], int]]
+%    - Iterate over architecture files from find_architecture_for_project(project_root)
+%    - For each, parse JSON, extract_modules, and compare each entry's filename (resolved via resolve_architecture_prompt_path) against the target prompt path
+%    - Return (arch_path, modules_list, entry_index) or None
+
+% 3. Locate modules array start in raw JSON text
+%    - Function: _find_modules_array_start(text: str) -> int
+%    - Handle two on-disk shapes:
+%      a. Bare array: ``[{...}, {...}]`` → offset of first ``[``
+%      b. Dict wrapper: ``{"prd_files": [...], "modules": [{...}]}`` → offset of ``[`` after ``"modules":``
+%    - Return -1 when no recognizable shape is found
+
+% 4. Find array element span
+%    - Function: _find_array_element_span(text: str, array_start: int, element_index: int) -> Tuple[int, int]
+%    - Use json.JSONDecoder().raw_decode to skip elements until reaching element_index
+%    - Handle commas and whitespace between elements
+%    - Raise ValueError for out-of-range or malformed input
+
+% 5. Find top-level array element span (convenience wrapper)
+%    - Function: _find_top_level_array_element_span(text: str, element_index: int) -> Tuple[int, int]
+%    - Skip leading whitespace, expect ``[``, delegate to _find_array_element_span
+
+% 6. Find dependencies value span within an object
+%    - Function: _find_dependencies_value_span_in_object(text: str, obj_start: int, obj_end: int) -> Optional[Tuple[int, int]]
+%    - Search for ``"dependencies"\s*:`` in the object fragment
+%    - Use json.JSONDecoder().raw_decode to find the value span
+%    - Return absolute (start, end) or None
+
+% 7. Serialize deps array matching style
+%    - Function: _serialize_deps_array_like(old_fragment: str, deps: List[str]) -> str
+%    - Detect compact vs multiline from old_fragment (check for newlines in inner body)
+%    - Use json.dumps with appropriate separators/indent
+
+% 8. Minimal dependencies array patch (suffix-append only)
+%    - Function: _minimal_dependencies_array_patch(old_text: str, new_list: List[str]) -> Optional[str]
+%    - Parse old_text as JSON list; verify new_list is old_list + appended suffix
+%    - If empty old list, dump entire new_list
+%    - Otherwise insert only appended items before closing ``]``
+%    - Detect compact vs multiline style; match element indentation from existing lines
+%    - Return None if not a simple suffix-append (caller falls back to full serialize)
+
+% 9. Replace dependencies in architecture text (surgical patch)
+%    - Function: _replace_dependencies_in_architecture_text(raw: str, entry_index: int, new_dependencies: List[str]) -> Optional[str]
+%    - Use _find_modules_array_start, _find_array_element_span, _find_dependencies_value_span_in_object
+%    - Try _minimal_dependencies_array_patch first, fall back to _serialize_deps_array_like
+%    - Validate result with json.loads; return None if invalid
+
+% 10. Map include path to architecture filename
+%    - Function: _architecture_filename_for_module_include(include_path: str, same_file_arch_entries: List[Dict[str, Any]]) -> Optional[str]
+%    - Use extract_module_from_include to get module basename from include_path
+%    - Find matching entry in same_file_arch_entries by comparing module basenames
+%    - Return the entry's ``filename`` or None
+
+% 11. Main merge function
+%    - Function: merge_auto_deps_includes_into_architecture(project_root, written_prompt_path, old_prompt_text, new_prompt_text, *, dry_run=False) -> Dict[str, Any]
+%    - Return dict with keys: ``updated`` (bool), ``architecture_path`` (Optional[Path]), ``added_dependencies`` (list[str]), ``messages`` (list[str])
+%    - Steps:
+%      a. Find architecture record for written_prompt_path
+%      b. Extract current module's filename and basename
+%      c. Diff old vs new include paths to find fresh includes
+%      d. For each fresh include, map to architecture filename via _architecture_filename_for_module_include
+%      e. Skip self-references (same basename or same filename as current entry)
+%      f. Skip already-existing dependencies
+%      g. If no additions needed, return updated=False with appropriate message
+%      h. If not dry_run:
+%         - Read arch file, attempt surgical patch via _replace_dependencies_in_architecture_text
+%         - Preserve trailing newline convention (if original ends with \n, patched should too; otherwise strip)
+%         - Write patched text back
+%         - Handle OSError at each I/O step: log warning, restore deps_before_snapshot, return updated=False with descriptive message
+%         - If surgical patch returns None: log warning, restore snapshot, return updated=False (no full-file fallback)
+%      i. Return updated=True with message listing added dependencies
+
+% 12. Convenience wrapper from CWD
+%    - Function: merge_auto_deps_includes_from_cwd(written_prompt_path, old_prompt_text, new_prompt_text, *, dry_run=False) -> Dict[str, Any]
+%    - Resolve project root via find_project_root(written_prompt_path.parent)
+%    - Delegate to merge_auto_deps_includes_into_architecture
+
+% ── Edge Cases & Error Handling ──
+% - If no architecture.json entry matches the prompt file, return early with message "No architecture.json entry matches this prompt; skipping arch update."
+% - If no new includes require dependency updates, return message "No new module includes required architecture.json dependency updates."
+% - All file I/O errors (read/write) are caught as OSError, logged via logger.warning, and result in updated=False with descriptive messages including the would-have-added deps
+% - If surgical patching fails (returns None), do NOT fall back to full-file rewrite; return updated=False
+% - The deps_before_snapshot is always restored on any failure path so the in-memory entry is not left in a dirty state
+
+% ── Deliverable ──
+% A single Python module file with the module docstring, all imports, and all functions described above.

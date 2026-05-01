@@ -1,0 +1,45 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>CLI entry point for the agentic split workflow, accepting a target file and invoking the orchestrator.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_split", "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+
+% Goal
+Write the `pdd/agentic_split.py` module.
+
+% Role & Scope
+CLI entry point for the agentic split workflow. Accepts a target file path, validates it exists and has a corresponding PDD dev unit (prompt + code), then invokes the orchestrator to run the 9-step split process. Supports dual-mode: agentic (default) runs the full diagnosis-to-extraction pipeline; legacy mode delegates to the existing `pdd/split.py:split()` function.
+
+% Requirements
+1. Function: `run_agentic_split(target_file: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, diagnose_only: bool = False, propose_only: bool = False, delete_dead: bool = False, force_split: bool = False, no_verify: bool = False, skip_regen_gate: bool = False, experimental_language: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
+3. Validate target_file exists on disk
+4. Detect language from file extension (`.py` -> python, `.ts` -> typescript, etc.)
+5. Verify target has a corresponding prompt file in the prompts directory (check `prompts/<basename>_<language>.prompt`)
+6. Verify target has a corresponding test file (check `tests/test_<basename>.py` or equivalent)
+7. Call orchestrator: `run_agentic_split_orchestrator(target_file, cwd=Path.cwd(), verbose=verbose, quiet=quiet, timeout_adder=timeout_adder, use_github_state=use_github_state, diagnose_only=diagnose_only, propose_only=propose_only, delete_dead=delete_dead, force_split=force_split, no_verify=no_verify, skip_regen_gate=skip_regen_gate, experimental_language=experimental_language)`
+8. Return aggregated results from orchestrator
+
+% Dependencies
+<pdd.agentic_split_orchestrator><include optional>context/agentic_split_orchestrator_example.py</include></pdd.agentic_split_orchestrator>
+
+% Error Handling
+All error paths return `(False, error_message, 0.0, "", [])`:
+- Target file does not exist
+- No corresponding prompt file found
+- No corresponding test file found (warning only, not fatal)
+- Orchestrator exception
+
+% Deliverables
+- Code: `pdd/agentic_split.py`

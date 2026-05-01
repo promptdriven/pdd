@@ -1,0 +1,55 @@
+<pdd-reason>Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_firecrawl_cache", "signature": "() -> FirecrawlCache", "returns": "FirecrawlCache"},
+      {"name": "clear_firecrawl_cache", "signature": "() -> int", "returns": "int"},
+      {"name": "get_firecrawl_cache_stats", "signature": "() -> dict", "returns": "dict"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  Implement `pdd/firecrawl_cache.py` as a transparent, persistent Firecrawl scrape cache.
+  Expose `FirecrawlCache` plus module-level singleton helpers.
+
+% Requirements
+  1) Export `FirecrawlCache`, `get_firecrawl_cache()`, `clear_firecrawl_cache()`, and `get_firecrawl_cache_stats()`.
+  2) `FirecrawlCache` must provide `get`, `set`, `_cleanup_expired`, `clear`, and `get_stats`; load config from:
+     - `FIRECRAWL_CACHE_ENABLE` (default `true`)
+     - `FIRECRAWL_CACHE_AUTO_CLEANUP` (default `true`)
+     - `FIRECRAWL_CACHE_TTL_HOURS` (default `24`)
+     - `FIRECRAWL_CACHE_MAX_SIZE_MB` (default `100`)
+     - `FIRECRAWL_CACHE_MAX_ENTRIES` (default `1000`)
+     Invalid numeric env values must fall back to defaults without raising.
+  3) The global cache instance uses SQLite at
+     `$PROJECT_ROOT/.pdd/cache/firecrawl.db`, where project root comes from
+     `pdd.path_resolution.get_default_resolver().resolve_project_root()`.
+     Initialize directories/database only when caching is enabled.
+  4) Normalize URLs before hashing: trim, drop trailing slash, lowercase scheme/netloc,
+     remove only tracking params (`utm_source`, `utm_medium`, `utm_campaign`,
+     `utm_term`, `utm_content`, `fbclid`, `gclid`, `_ga`, `_gid`), and preserve other params.
+  5) Persist URL/content hashes, URL, content, timestamps, expiry, JSON metadata,
+     `access_count`, and `last_accessed`; index expiry and LRU fields for efficient cleanup.
+  6) `get(url)` returns content only for unexpired entries, updates access stats on hit,
+     and deletes expired rows encountered during reads.
+  7) `set(url, content, ttl_hours=None, metadata=None)` computes hashes/expiry, stores metadata as JSON,
+     upserts by URL hash while preserving existing `access_count`, and runs cleanup when auto-cleanup is enabled.
+  8) `_cleanup_expired()` removes expired rows, then enforces max entries and max size via LRU
+     (`last_accessed` ascending).
+  9) `clear()` returns deleted row count. `get_stats()` returns enabled status, counts, size MB,
+     access metrics, efficiency, cache path, and active config; when disabled, return a minimal disabled payload.
+
+% Instructions
+  - Keep `get_default_resolver` import inside `get_firecrawl_cache()` to avoid circular imports.
+  - Fail soft on cache storage errors:
+    - `get()` returns `None`
+    - `set()` returns `False`
+    - `clear()` returns `0`
+    - `get_stats()` returns an error payload.

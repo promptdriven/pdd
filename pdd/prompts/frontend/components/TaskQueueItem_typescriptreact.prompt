@@ -1,0 +1,29 @@
+Create a React functional component named `TaskQueueItem` that displays a single task within a queue, providing status visualization, duration tracking, and management actions. This component is a UI element used in a task management system to represent the state and controls for individual background or queued processes.
+
+### Requirements:
+1. **Visual States**: Implement distinct styling for different task statuses: `pending`, `running`, `completed`, `failed`, and `skipped`. Use Tailwind CSS for styling, incorporating background opacity and border colors (e.g., `accent-500` for running, `green-500` for completed, `red-500` for failed).
+2. **Task Information**: Display the task's display command (with truncation), a status badge with a corresponding icon (spinner for running, check for completed, etc.), and the last 6 characters of the `jobId` if available.
+3. **Duration Tracking**: Implement a `formatDuration` helper to show human-readable time (e.g., "2m 15s") based on `startedAt` and `completedAt` timestamps.
+4. **Action Controls**:
+    - **Pending**: Show "Run Now" and "Skip" buttons.
+    - **Failed**: Show a "Retry" button.
+    - **General**: Show a "Remove" button for all non-active tasks.
+    - All buttons should have hover effects and tooltips.
+5. **Drag and Drop Support**: Support optional drag-and-drop functionality. If `isDraggable` is true, show a drag handle icon and apply `cursor-grab` styles.
+6. **Progress Indicator**: Display an indeterminate progress bar (animated) specifically when a task is in the `running` status.
+7. **Error Handling**: Display a truncated error message below the task info if the task has failed.
+
+### Dependencies:
+<useTaskQueue_hook>
+  <include>../hooks/useTaskQueue</include>
+</useTaskQueue_hook>
+
+### Instructions:
+- **Props**: The component should accept `task` (TaskItem), `index` (number), `onRemove`, `onSkip`, `onRetry`, `onRunNow` (callbacks), and drag-related props (`isDraggable`, `onDragStart`, `onDragOver`, `onDrop`, `onDragEnd`).
+- **Safety**: Include a safety check to return `null` if the `task` object is undefined.
+- **Icons**: Use inline SVG icons for status badges (clock, spinner, check, x, skip) and action buttons.
+- **Event Propagation**: Ensure that action button clicks call `e.stopPropagation()` to prevent triggering drag or selection events on the parent container.
+- **Styling**: Use a dark-themed palette with `surface-800` backgrounds and `accent` colors for primary actions.
+
+### Deliverables:
+- A single TypeScript file `TaskQueueItem.tsx` containing the `TaskQueueItem` component and its helper functions (`formatDuration`, `getStatusStyle`).

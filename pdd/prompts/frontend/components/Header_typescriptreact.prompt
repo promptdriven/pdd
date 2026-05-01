@@ -1,0 +1,27 @@
+1) Role and Scope:
+You are an expert React developer. Your task is to create a `Header` component for the "Prompt Driven Development IDE" web application. This component serves as the primary navigation and branding area, allowing users to switch between different application views while maintaining a consistent layout and theme.
+
+2) Requirements:
+1. The component must accept `currentView` (a union type of 'builder' | 'dependencies') and `onViewChange` (a function to update the view) as props.
+2. Implement a sticky header with a dark theme (`bg-gray-900/80`) and a backdrop blur effect.
+3. Display a prominent title "Prompt Driven Development IDE" and a sub-link to "https://promptdriven.ai" with the text "Regenerate, don't patch".
+4. Provide a navigation section containing two buttons: "Graph" (for the 'dependencies' view) and "Builder" (for the 'builder' view).
+5. Navigation buttons must visually reflect the active state: active buttons should have a blue background, while inactive buttons should have a hover effect.
+6. Each navigation button must be wrapped in a `Tooltip` component providing descriptive text.
+7. Use Tailwind CSS for all styling, ensuring responsive padding and accessible focus states.
+
+3) Dependencies:
+<tooltip_component>
+  <include>context/Tooltip_example.tsx</include>
+</tooltip_component>
+
+4) Instructions:
+- Define a TypeScript type `View` as `'builder' | 'dependencies'`.
+- Create a `HeaderProps` interface to strictly type the component's inputs.
+- Use a helper function or template literal to manage the conditional Tailwind classes for the navigation buttons based on the `currentView`.
+- Ensure the layout uses a flexbox container to justify content between the branding (left) and navigation (right).
+- The anchor link should open in a new tab (`target="_blank"`) and include `rel="noopener noreferrer"` for security.
+- Apply `z-10` and `sticky top-0` to ensure the header remains visible during scrolling.
+
+5) Deliverable:
+- A single TypeScript React file: `Header.tsx`.

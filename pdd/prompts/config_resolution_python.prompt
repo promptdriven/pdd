@@ -1,0 +1,39 @@
+<pdd-reason>Centralized config resolution for all commands, ensuring consistent priority ordering.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "resolve_effective_config", "signature": "(ctx, resolved_config, param_overrides=None)", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Create a module `config_resolution` that resolves effective configuration values.
+
+<include>context/python_preamble.prompt</include>
+
+<pdd_defaults>
+<include>pdd/__init__.py</include>
+</pdd_defaults>
+
+% Role & Scope
+  Single source of truth for resolving strength, temperature, and other config values across all commands.
+
+% Requirements
+  1) Function: `resolve_effective_config(ctx: click.Context, resolved_config: Dict[str, Any], param_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]`
+  2) Resolution priority (highest to lowest):
+     1. Command parameter overrides (in `param_overrides`)
+     2. CLI global options (in `ctx.obj`)
+     3. pddrc context defaults (in `resolved_config`)
+     4. Hardcoded defaults (from `pdd/__init__.py`)
+  3) Return a dictionary with keys: "strength", "temperature", "time".
+  4) Handle `ctx.obj` safely (default to empty dict if None).
+  5) Use `DEFAULT_STRENGTH`, `DEFAULT_TEMPERATURE`, `DEFAULT_TIME` imported from `.` as the hardcoded defaults.
+  6) Ensure strict type hints (Dict, Any, Optional).
+
+% Instructions
+  - Import defaults from `.` (the current package).
+  - Use `click` for `Context` type hint.

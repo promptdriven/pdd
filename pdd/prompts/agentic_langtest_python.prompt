@@ -1,0 +1,43 @@
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the pdd/agentic_langtest.py module.
+
+% Role & Scope
+A minimal utility module that provides language-specific test command utilities.
+For Python, it returns a pytest command. For all non-Python languages, it returns
+None to signal that agentic mode should handle test discovery and execution.
+
+This module is intentionally simple because non-Python languages use agentic mode
+for test running, where agents can explore the project structure and determine the
+appropriate test framework (Jest, JUnit, Go test, Cargo test, etc.) dynamically.
+
+% Requirements
+1. All functions must be fully type-hinted.
+2. Use `pathlib.Path` for path manipulations.
+3. The file must start with `from __future__ import annotations`.
+
+% Core Functions
+
+### `default_verify_cmd_for(lang: str, unit_test_file: str) -> str | None`
+
+Returns a test command for the given language and test file.
+
+- **Python**: Returns a pytest command: `{sys.executable} -m pytest "{unit_test_file}" -q`
+- **All other languages**: Returns `None` to trigger agentic fallback mode
+
+The function normalizes language to lowercase before comparison.
+
+### `missing_tool_hints(lang: str, verify_cmd: str | None, project_root: Path) -> str | None`
+
+Returns guidance if required tools are missing.
+
+- Currently returns `None` for all cases since non-Python languages are handled
+  by agentic mode which can install dependencies dynamically.
+- Kept for API compatibility.
+
+% Dependencies
+<pdd>This module is standalone and has no internal PDD dependencies.</pdd>
+
+% Deliverables
+- Code: `pdd/agentic_langtest.py`

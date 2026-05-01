@@ -1,0 +1,31 @@
+Create a React component named `CommandOutput` that serves as a real-time terminal emulator and job monitor. This component is responsible for displaying live command output (stdout/stderr), tracking job status, calculating duration, and managing job cancellation via WebSockets and API calls.
+
+### Requirements
+1.  **Real-time Streaming**: Connect to a WebSocket stream using a provided `jobId` to receive and display `stdout`, `stderr`, and progress updates.
+2.  **Status Management**: Track and display the job status: `running`, `completed`, `failed`, or `cancelled`.
+3.  **Terminal UI**: 
+    - Implement an auto-scrolling terminal window with a dark theme (Tailwind `bg-slate-900` and `bg-black`).
+    - Use color-coding for different output types: `stderr` (red), `info` (gray), `success` (green), and `stdout` (light gray).
+    - Display a blinking cursor while the job is running.
+4.  **Metrics Tracking**: Display a live timer showing job duration in seconds and the total cost of the job once available.
+5.  **Job Control**: Provide a "Cancel" button that triggers both a WebSocket-level cancel request and a REST API cancel call.
+6.  **Lifecycle Handling**: 
+    - On completion, fetch the final job status and trigger an `onComplete` callback.
+    - Handle unexpected WebSocket closures by polling the API for the final state.
+    - Ensure the WebSocket connection is cleaned up on component unmount.
+7.  **Modal Overlay**: The component should be rendered as a fixed-position modal overlaying the UI.
+
+### Dependencies
+<api_service>
+  <include>../api</include>
+</api_service>
+
+### Instructions
+- **Props**: The component must accept `jobId` (string | null), `command` (string), `onClose` (function), and an optional `onComplete` (function).
+- **State Management**: Use `useState` for output lines, status, cost, and duration. Use `useRef` for the WebSocket instance and the start timestamp to avoid unnecessary re-renders.
+- **Auto-scroll**: Implement a `useEffect` hook that scrolls the terminal container to the bottom whenever the `output` state updates.
+- **WebSocket Integration**: Use `api.connectToJobStream` with callbacks for `onStdout`, `onStderr`, `onProgress`, `onComplete`, `onError`, and `onClose`.
+- **Styling**: Use Tailwind CSS for layout and styling. Ensure the command text in the header is truncated if it's too long.
+
+### Deliverables
+- A single TypeScript file `CommandOutput.tsx` containing the `CommandOutput` functional component and its associated interfaces (`CommandOutputProps`, `OutputLine`).

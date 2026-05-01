@@ -1,0 +1,63 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/components/AddModuleModal.tsx`, a modal used by `ArchitectureView` to create an `ArchitectureModule`.
+
+Requirements
+1. Export default `AddModuleModal` as `React.FC<AddModuleModalProps>`.
+2. Define `AddModuleModalProps` with:
+   - `isOpen: boolean`
+   - `existingModules: ArchitectureModule[]`
+   - `onAdd: (newModule: ArchitectureModule) => void`
+   - `onClose: () => void`
+3. Import `React`, `useMemo`, `useState`, `ArchitectureModule` from `../api`, and `FilePickerInput` from `./FilePickerInput`.
+4. Keep constant option arrays:
+   - `LANGUAGES = ['Python', 'TypeScript', 'JavaScript', 'Java', 'Go', 'Rust', 'Ruby', 'C++'] as const`
+   - `INTERFACE_TYPES = ['module', 'component', 'page', 'api', 'graphql', 'cli', 'job', 'message', 'config'] as const`
+5. Manage local state with defaults:
+   - `moduleName=''`, `language='Python'`, `filepath=''`, `description=''`, `reason=''`, `priority=5`, `tags=''`, `interfaceType='module'`, `dependencies=[] as string[]`.
+6. Derive `filename` with `useMemo`:
+   - if trimmed `moduleName` is empty, return `''`
+   - sanitize with `trim().toLowerCase().replace(/\s+/g, '_')`
+   - format `${sanitized}_${language}.prompt`
+7. Derive `suggestedFilepath` with `useMemo`:
+   - return `''` when module name is blank
+   - extension mapping: `Python -> py`, `TypeScript|JavaScript -> ts`, otherwise `language.toLowerCase()`
+   - prefix mapping: `api -> src/api/`, `component -> src/components/`, `page -> src/pages/`, otherwise `src/`
+   - format `${prefix}${sanitized}.${ext}`
+   - set `effectiveFilepath = filepath || suggestedFilepath`
+8. Keep validation errors in a `useMemo` array:
+   - `"Module name is required"` when `moduleName` is blank
+   - `"Description is required"` when `description` is blank
+   - `"A module with this name and language already exists"` when any `existingModules` item has matching `filename`
+9. `handleAdd()` must:
+   - return early when `errors.length > 0`
+   - create `newModule: ArchitectureModule` with:
+     - `filename`, `filepath: effectiveFilepath`, `description`, `priority`, `dependencies`
+     - `reason: reason || \`Module for ${moduleName}\``
+     - `tags` from comma-splitting `tags`, trimming, and dropping empties
+     - `interface: { type: interfaceType }`
+   - call `onAdd(newModule)`, then `resetForm()`, then `onClose()`
+10. `resetForm()` resets every field to defaults from requirement 5.
+11. `handleClose()` calls `resetForm()` and then `onClose()`.
+12. `toggleDependency(dep)` toggles the filename in `dependencies`.
+13. Return `null` when `!isOpen`.
+14. Render a full-screen dark overlay with a centered responsive modal (`full screen on mobile`, constrained rounded/bordered panel on `sm+`) and these sections:
+   - Header with title `Add New Module` and X close button wired to `handleClose`.
+   - Content area (scrollable) containing:
+     - 2-column row: required module-name input (`autoFocus`) and language select from `LANGUAGES`
+     - generated filename banner shown only when `filename` exists
+     - `FilePickerInput` for filepath with:
+       - `placeholder={suggestedFilepath || 'e.g., src/api/user.py'}`
+       - `description="Target path for the generated code (auto-suggested based on name and type)"`
+       - `title="Select Output Path"`
+       - helper text `Will use: {suggestedFilepath}` when filepath is empty
+     - required description textarea (`rows={3}`)
+     - 2-column row: priority number input (`min=1`, `max=10`, `onChange` uses `parseInt(value) || 1`) and interface-type select from `INTERFACE_TYPES`
+     - tags text input labeled comma-separated
+     - dependencies section only when `existingModules.length > 0`, with checkbox list keyed by `m.filename`, selected count in label, and display names normalized with `m.filename.replace(/_[A-Za-z]+\.prompt$/, '').replace(/\.prompt$/, '')`
+     - validation error panel shown only when there are errors, listing each error with a warning icon
+   - Footer with:
+     - `Cancel` button calling `handleClose`
+     - `Add Module` button calling `handleAdd`, disabled when errors exist
+15. Keep dark Tailwind styling consistent with this frontend (`surface-*`, `accent-*`, red/emerald accents) and keep modal content scrollable.
+
+Deliverable
+- Output only `pdd/frontend/components/AddModuleModal.tsx`.

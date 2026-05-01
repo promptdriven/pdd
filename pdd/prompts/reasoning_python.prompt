@@ -1,0 +1,23 @@
+% Module: shared reasoning effort helper
+% File: effort_level.py
+
+% Responsibilities:
+- Provide a single shared helper that maps a `--time` float (in [0.0, 1.0]) to a reasoning-effort level string ("low", "medium", or "high").
+- This module exists so that both the top-level CLI (which sets `PDD_REASONING_EFFORT` for provider subprocesses) and `llm_invoke` (which forwards an effort string to LiteLLM) use the same thresholds, preventing silent drift between the two call sites.
+
+% Requirements:
+- Define a type alias `EffortLevel = Literal["low", "medium", "high"]`.
+- Implement a function `time_to_effort_level(time: float) -> EffortLevel` with the following threshold logic using strict `>` comparisons:
+  - If `time > 0.7`, return `"high"`.
+  - Else if `time > 0.3`, return `"medium"`.
+  - Else return `"low"`.
+- This means exactly 0.3 maps to `"low"` and exactly 0.7 maps to `"medium"`.
+
+% Module docstring:
+- The module docstring should explain that both the top-level CLI (which sets `PDD_REASONING_EFFORT` for provider subprocesses) and `llm_invoke` (which forwards an effort string to LiteLLM) need the same `time -> {low, medium, high}` mapping, and keeping the thresholds in a single helper prevents silent drift between the two call sites.
+
+% Dependencies:
+- `typing.Literal` (standard library only; no external dependencies).
+
+% Deliverables:
+- A single Python module containing the `EffortLevel` type alias and the `time_to_effort_level` function, with appropriate docstrings documenting the threshold behavior and its relationship to the pre-existing behavior in `llm_invoke`.

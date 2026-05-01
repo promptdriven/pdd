@@ -1,0 +1,74 @@
+<pdd-reason>Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed Arena scores, pricing overrides, and provider-scoped filtering.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "build_rows", "signature": "(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None) -> List[dict]", "returns": "List[dict]"},
+      {"name": "main", "signature": "() -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Write `pdd/generate_model_catalog.py`.
+
+% Role
+Create a deterministic CLI that rebuilds `pdd/data/llm_model.csv` from local
+`litellm.model_cost` metadata and a checked-in, agent-reviewed Arena score
+manifest. Python must validate and apply reviewed score data; it must not make
+leaderboard policy decisions, scrape the web, download parquet files, or fuzzy
+match model identities at runtime.
+
+% Requirements
+1. Use stdlib + `litellm` only as hard dependencies. Define:
+   - `ELO_CUTOFF = 1300`
+   - `MAX_COST_PER_MTOK = 100.0`
+   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location"]`
+   - `AGENTIC_ELO_MANIFEST_PATH = Path(__file__).parent / "data" / "arena_elo_manifest.json"`
+   - `AGENTIC_ELO_MANIFEST_SCHEMA_VERSION = 2`
+   - `ARENA_LEADERBOARD_POLICY` describing the reviewed-manifest policy.
+2. Keep curated constants:
+   - `STATIC_ELO_FALLBACK` as an offline/local/niche fallback, not the primary score source.
+   - `PRICE_OVERRIDES` for exact model-id pricing fixes in $/M tokens.
+   - `PROVIDERS` for supported LiteLLM provider display names and API key env specs.
+   - Do not add ChatGPT subscription rows or ChatGPT auth behavior in this module; ChatGPT support is intentionally split out until the supported LiteLLM range can resolve `chatgpt/*` model IDs.
+3. Agentic score manifest:
+   - The manifest schema is a JSON object with `schema_version`, `policy`, and `scores`.
+   - Each score entry must include auditable provenance: `model: str`, `elo: int|float`, `source: str`, `source_url: str`, `raw_model_name: str`, `leaderboard: str`, `category: str`, `leaderboard_publish_date: str|null`, `retrieved_at: str`, `rank: int|null`, `rating: int|float`, `rating_lower: int|float|null`, `rating_upper: int|float|null`, `vote_count: int|float`, and `match_reason: str`; optional `aliases: list[str]` and `reviewed_by` may be present.
+   - `_parse_agentic_elo_manifest(payload) -> dict[str, dict]` validates the manifest and returns `{normalized_alias: {"elo": float, "votes": int, "raw_name": str, "source": str, ...}}`; conflicting normalized aliases from different source rows invalidate the manifest.
+   - `_fetch_arena_elo(refresh: bool = False, manifest_path: Optional[Path] = None) -> dict[str, dict]` is retained for compatibility but loads only the manifest. `refresh=True` must raise with an agentic-refresh instruction instead of pretending to refresh.
+   - Missing/malformed manifests return `{}` and generation must continue with `STATIC_ELO_FALLBACK`.
+   - Runtime fuzzy matching is disabled; all non-exact Arena/LiteLLM identity decisions must be recorded as explicit aliases by the agent in the manifest.
+4. ELO resolution helpers:
+   - `_normalize_model_name(name: str) -> str`: lowercase, strip known provider/org/region path prefixes, strip vendor dot prefixes, strip dates and non-identity lifecycle suffixes (`-preview`, `-latest`, `-experimental`), remove harness-only parentheticals such as `(codex-harness)`, preserve semantic parentheticals such as `(thinking-minimal)`, preserve reasoning-effort suffixes (`-high/-medium/-low/-minimal`), normalize compact aliases like `glm-4p7` to `glm-4-7`, and collapse separators.
+   - `_extract_base_model(model_id)`: conservative canonicalization by stripping provider/region/vendor/org/version routing noise, then longest-prefix match against `STATIC_ELO_FALLBACK` keys with safe remainders only.
+   - `_get_elo(model_id, arena_index)`: resolution chain, returning the first non-zero hit: exact reviewed manifest alias, `STATIC_ELO_FALLBACK` exact, `STATIC_ELO_FALLBACK` canonical-prefix, legacy exact alias hook, then 0.
+   - `_get_provider_root`, `_has_region`.
+   - `_infer_reasoning_type`: `"none"` if no reasoning support; `"budget"` for roots `anthropic`/`azure_ai`; otherwise `"effort"`.
+   - `_infer_max_reasoning_tokens`: `128000` only for reasoning-capable `anthropic`/`azure_ai`, else `0`.
+   - `_is_deprecated`, `_is_placeholder`, and `_is_superseded_preview`.
+5. `build_rows(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None)`:
+   - Lazy-import `litellm`; on ImportError print install hint to stderr and exit 1.
+   - Load the agentic manifest once through `_fetch_arena_elo(refresh=refresh_elo, manifest_path=score_manifest)`.
+   - Iterate `litellm.model_cost.items()`; keep only `mode in ("chat", "responses")`.
+   - Skip deprecated, placeholders, fast/us routing variants, superseded dated previews, non-text output modalities, and providers in `_SKIP_PROVIDER_ROOTS` (currently `chatgpt`).
+   - Drop rows with ELO below cutoff.
+   - Convert token costs to per-million (round 6), then apply exact `PRICE_OVERRIDES`.
+   - Resolve provider display/api key via `PROVIDERS`; fallback to root provider; final fallback `(litellm_provider.replace("_"," ").title(), f"{ROOT}_API_KEY")`.
+   - Infer `structured_output`, `reasoning_type`, `max_reasoning_tokens`, `location`, and `base_url`.
+   - Seed canonical local-runner rows from `_DEFAULT_LOCAL_RUNNER_ROWS` and preserve additional user local-runner rows from an existing catalog, re-resolving ELO and applying the same cutoff.
+6. Post-processing (exact order):
+   - Fix C: remove dated/versioned variants when an undated equivalent exists.
+   - Fix A: dedupe by `(provider_display, canonical_base_model)`, falling back to `_normalize_model_name(row["model"])` for manifest-only models.
+   - Remove rows where input or output exceeds `MAX_COST_PER_MTOK`.
+   - Fix D: per-provider Pareto filter; skip all-zero-cost providers.
+   - Final sort: provider asc, ELO desc, model asc.
+7. Logging/output:
+   - Print concise diagnostics for manifest load/fallback, skipped previews, Fix C/A/D removals, sanity removals, ELO source breakdown, and overall post-processing reduction.
+   - `main()` exposes `--output/-o`, `--refresh-elo`, and `--score-manifest PATH`. `--refresh-elo` must exit non-zero with the agentic-refresh instruction, because Python live fetching is intentionally unsupported.
+   - Write CSV with LF line endings via `csv.DictWriter(..., lineterminator="\n")`, then print output path and provider counts.
+
+% Deliverables
+- Single file: `pdd/generate_model_catalog.py`.

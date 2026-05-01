@@ -1,0 +1,30 @@
+Create a React functional component named `TaskQueueControls` that serves as the control interface for a task execution queue. This component is part of the UI layer and is responsible for managing execution modes, displaying progress, and triggering queue actions.
+
+### Requirements:
+1. **Execution Mode Toggle**: Provide a toggle between 'Auto' and 'Manual' modes using a styled button group.
+2. **Progress Visualization**: 
+    - Display a text summary of progress (e.g., "5 / 10 completed").
+    - Implement a visual progress bar using a gradient (accent-600 to green-500) that reflects the percentage of completed tasks.
+3. **Conditional Action Buttons**:
+    - **Auto Mode**: Show "Start Queue" if not running and tasks are pending. Show "Pause" if running and not paused. Show "Resume" if running and paused.
+    - **Manual Mode**: Show "Run Next" if tasks are pending and no task is currently running.
+    - **General**: Show "Clear Completed" if completed tasks exist. Show "Clear All" if any tasks exist.
+4. **Styling**: Use Tailwind CSS for a dark-themed UI (surface-800/700 backgrounds, accent-600 for primary actions, and red-500 for destructive actions).
+5. **Icons**: Use inline SVG icons for all action buttons (Play, Pause, Step, Check, Trash).
+
+### Dependencies:
+<useTaskQueue_hook>
+  <include>../hooks/useTaskQueue</include>
+</useTaskQueue_hook>
+
+### Instructions:
+- **Props Interface**: Define `TaskQueueControlsProps` including:
+    - `executionMode`: 'auto' | 'manual'
+    - `isQueueRunning`, `isPaused`, `hasPendingTasks`, `hasCompletedTasks`, `hasAnyTasks`: booleans for UI state logic.
+    - `progress`: object containing `total`, `completed`, `pending`, and `running` counts.
+    - Callback functions: `onSetExecutionMode`, `onStartQueue`, `onPauseQueue`, `onResumeQueue`, `onRunNextTask`, `onClearCompleted`, and `onClearAll`.
+- **Layout**: Use a vertical stack (`space-y-3`) containing the mode toggle, progress section, and a wrapping flex container for action buttons.
+- **Transitions**: Apply `transition-colors` and `duration-300` to buttons and the progress bar for a smooth user experience.
+
+### Deliverables:
+- A single TypeScript file `TaskQueueControls.tsx` exporting the component as default.

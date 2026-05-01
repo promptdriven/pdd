@@ -1,0 +1,94 @@
+<pdd-reason>Analyzes prompt changes and incrementally patches existing code or triggers full regeneration.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "incremental_code_generator", "signature": "(original_prompt, new_prompt, existing_code, language, strength, temperature, time, force_incremental, verbose, preprocess_prompt)", "returns": "Tuple[Optional[str], bool, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+<pdd-dependency>postprocess_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write a python function, "incremental_code_generator", that will analyze changes to a prompt and either incrementally patch existing code or regenerate code from scratch.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'original_prompt' - A string containing the original prompt that was used to generate the existing code.
+        'new_prompt' - A string containing the updated prompt that needs to be processed.
+        'existing_code' - A string containing the existing code that was generated from the original prompt.
+        'language' - A string that is the language type (e.g. python, bash) of file that will be outputed by the LLM.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use. Default is DEFAULT_STRENGTH.
+        'temperature' - A float between 0 and 2 that is the temperature of the LLM model to use. Default is 0.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME. This value influences how llm_invoke interprets reasoning effort based on model capabilities (e.g., 'budget' or 'effort' reasoning_types).
+        'force_incremental' - A boolean that forces the use of incremental patching even if the diff analyzer suggests full regeneration. Default is False.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
+    Outputs:
+        'updated_code' - A string that is the updated runnable code or None if a full regeneration is needed
+        'is_incremental' - A boolean indicating whether the update was incremental (True) or if full regeneration is needed (False)
+        'total_cost' - A float that is the total cost of the model run
+        'model_name' - A string that is the name of the selected LLM model
+
+% Here is how to use the internal modules:
+    <internal_modules>
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+
+        For preprocessing prompts:
+        <preprocess_example>
+            <include>context/preprocess_example.py</include>
+        </preprocess_example>
+
+        For postprocessing results:
+        <postprocess_example>
+            <include>context/postprocess_example.py</include>
+        </postprocess_example>
+
+    </internal_modules>
+
+% This program will use Langchain to do the following:
+    Step 1. Load the 'diff_analyzer_LLM' prompt template using load_prompt_template with preprocess double_curly_brackets=True but be sure to exclude the input parameters from getting double curly brackets.
+    
+    Step 2. Run the diff_analyzer_LLM prompt through llm_invoke:
+        - a. Pass the following parameters to llm_invoke:
+            * 'ORIGINAL_PROMPT': The original prompt
+            * 'NEW_PROMPT': The new prompt
+            * 'EXISTING_CODE': The existing code
+            * Use the provided strength and temperature
+            * Pass the provided time parameter
+        - b. Extract 'is_big_change', 'change_description', and 'analysis' from the Pydantic output
+        - c. If verbose is True, print the analysis and whether the change is considered big or small
+    
+    Step 3. Determine whether to use incremental patching or full regeneration:
+        - a. If force_incremental is True, set should_regenerate to False, regardless of the diff analyzer's result
+        - b. Otherwise, set should_regenerate to the value of is_big_change from the diff analyzer
+        - c. If verbose is True and force_incremental is True, print a message indicating that incremental patching is being forced
+    
+    Step 4. Based on the should_regenerate decision:
+        - a. If should_regenerate is True (major change detected and not overridden):
+            * Return None for updated_code, False for is_incremental, the cost incurred so far, and the model name used
+            * The calling function should handle the full regeneration
+        
+        - b. If should_regenerate is False (minor change detected or force_incremental is True):
+            * Load the 'code_patcher_LLM' prompt template using load_prompt_template
+            * Run the code_patcher_LLM prompt through llm_invoke:
+                * Pass 'ORIGINAL_PROMPT', 'NEW_PROMPT', 'EXISTING_CODE', and 'CHANGE_DESCRIPTION' parameters
+                * Use the provided strength and temperature
+                * Pass the provided time parameter
+            * Extract 'patched_code', 'analysis', and 'planned_modifications' from the Pydantic output
+                * NOTE: The `patched_code` field on the `CodePatchResult` Pydantic model MUST be declared as `patched_code: Optional[str] = Field(default=None, description="The updated code with incremental patches applied, or None/omitted when no code changes are needed (treated as a no-op, falls back to full regeneration)")`. The LLM may legitimately omit `patched_code` (or emit an explicit JSON null) when no code changes are needed; treating a missing field as a validation error would incorrectly reject a valid no-op response. The field description must spell out the None/omitted no-op contract so downstream generators/reviewers do not silently re-tighten the field to a required string.
+            * If verbose is True, print the analysis and planned modifications
+            * If patched_code is None or patched_code equals existing_code (no-op), return None, False, total_cost, model_name (fall back to full regen)
+            * Return patched_code, True for is_incremental, total cost (sum of all LLM invocations), and the model_name
+
+    Step 5. Return the updated_code, is_incremental flag, total cost (sum of all LLM invocations), and the model_name used for the main operation.

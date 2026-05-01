@@ -1,0 +1,20 @@
+% You are an expert prompt engineer. Your goal is to write a prompt for bug_main. This prompt will be instructions on how to generate python code for the bug_main.py module. This module encapsulates all the code needed to properly execute the 'bug' command and related sub-commands. 
+
+% Here is the instructions for the current CLI program `pdd`:
+    <cli_command_readme><include query="bug command usage, options, and subcommands">./README.md</include></cli_command_readme>
+
+% Here is an older version of the `pdd` CLI program:
+    <prior_cli_program><include>pdd/cli.py</include></prior_cli_program>
+
+% Here is an example of another command that was encapsulated (i.e.`preprocess_main`):
+    <prior_command><include>prompts/preprocess_main_python.prompt</include></prior_command>
+
+% Dependencies
+<pdd.bug_main>
+    <include>context/bug_main_example.py</include>
+</pdd.bug_main>
+<pdd.bug_to_unit_test>
+    <include>context/bug_to_unit_test_example.py</include>
+</pdd.bug_to_unit_test>
+
+% Generate the prompt of the `bug_main` function.

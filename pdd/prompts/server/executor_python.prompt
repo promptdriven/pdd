@@ -1,0 +1,80 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/executor.py`.
+
+% Role & Scope
+  This module provides programmatic execution of PDD Click commands.
+  It creates isolated Click contexts, captures output, handles errors,
+  and integrates with the streaming system for real-time output.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - Click: https://click.palletsprojects.com/en/8.1.x/
+  - Click Testing: https://click.palletsprojects.com/en/8.1.x/testing/
+  - Click Context: https://click.palletsprojects.com/en/8.1.x/api/#click.Context
+  - io.StringIO: https://docs.python.org/3/library/io.html#io.StringIO
+
+% Requirements
+  1. **CapturedOutput dataclass**:
+     - stdout: str
+     - stderr: str
+     - exit_code: int
+     - exception: Optional[Exception]
+     - result: Optional[Any] (command return value)
+     - cost: float (from track_cost decorator)
+
+  2. **OutputCapture context manager**:
+     - Captures stdout and stderr
+     - Optional callback for real-time streaming
+     - Restores original streams on exit
+     - Strip ANSI codes option
+
+  3. **StreamingWriter class**:
+     - Wraps StringIO buffer
+     - Calls callback on each write
+     - Used by OutputCapture for streaming
+
+  4. **create_isolated_context(command, obj, color) -> click.Context**:
+     - Creates Click context for programmatic invocation
+     - Sets up ctx.obj with PDD global options:
+       - strength, temperature, time
+       - verbose, force, quiet
+       - output_cost, review_examples
+       - local, context
+     - Mocks get_parameter_source to return DEFAULT
+
+  5. **ClickCommandExecutor class**:
+     - __init__(base_context_obj, output_callback)
+     - execute(command, params, context_obj) -> CapturedOutput
+     - Handles click.Abort, click.ClickException, general Exception
+     - Extracts cost from result if available
+
+  6. **get_pdd_command(command_name) -> click.Command**:
+     - Maps command name to Click command object
+     - Imports from pdd.commands module
+     - Supported: sync, update, bug, generate, test, fix
+     - Returns None for unknown commands
+
+  7. **execute_pdd_command(command_name, args, options, callback) -> CapturedOutput**:
+     - High-level function for job execution
+     - Creates executor with callback
+     - Gets command, executes, returns result
+
+% Dependencies
+  <click_executor_example>
+  <server.executor><include>context/click_executor_example.py</include></server.executor>
+  </click_executor_example>
+  Reference pdd/core/cli.py for OutputCapture pattern and ctx.obj structure
+  <cli_reference>
+  <core.cli><include>context/core/cli_example.py</include></core.cli>
+  </cli_reference>
+
+% Instructions
+  - Use sys.stdout/stderr redirection for capture
+  - Thread-safe output capture
+  - Lazy import of pdd.commands to avoid circular imports
+  - Handle both sync and async commands
+  - Return cost from track_cost decorator result
+
+% Deliverables
+  - Code: `pdd/server/executor.py`
+  - Export: CapturedOutput, OutputCapture, ClickCommandExecutor, execute_pdd_command

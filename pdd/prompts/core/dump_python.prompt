@@ -1,0 +1,86 @@
+# prompts/core/dump_python.prompt
+% You are an expert Python engineer. Your goal is to write the core dump generation and replay logic for PDD in `pdd/core/dump.py`.
+
+% Role & Scope
+  This module handles the creation of JSON core dump files when `--core-dump` is enabled, and provides utilities for building GitHub issue bodies and replay scripts from these core dumps.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include>./README.md</include>
+    </README.md>
+
+% Requirements
+  User-facing behavior (authentication order, gist creation, truncation modes, default repo) is defined in the README "Core Dump Debug Bundles" section. This prompt specifies implementation internals only.
+
+  1. **`_write_core_dump` function**:
+     - Signature: `_write_core_dump(ctx: click.Context, normalized_results: List[Any], invoked_subcommands: List[str], total_cost: float, terminal_output: Optional[str] = None) -> None`
+     - Payload structure: `schema_version` (integer, currently 1), `pdd_version`, `timestamp_utc`, `argv` (without binary name), `cwd`, `platform` dict, `global_options` dict, `invoked_subcommands`, `total_cost`, `steps` list, `errors`, `environment`, `file_contents`, `terminal_output`.
+     - File collection: reads from `ctx.obj["core_dump_files"]` set; 50KB size limit per file; marks binary as `<binary>`, oversized as `<too large>`, errors as `<error reading file: ...>`.
+     - Auto-includes: meta files from `.pdd/meta/` matching invoked commands; config files (`.pdd/config.json`, `.pddconfig`, `pdd.json`).
+     - Environment filtering: only `PDD_*` vars and `VIRTUAL_ENV`, `PYTHONPATH`, `PATH`; redacts vars containing KEY, TOKEN, SECRET, PASSWORD.
+
+  2. **`_get_github_token` function**:
+     - Signature: `_get_github_token() -> Optional[str]`
+     - Runs `gh auth token` with 5s timeout; falls back to env vars per README.
+
+  3. **`_github_config` function**:
+     - Signature: `_github_config(repo: Optional[str] = None) -> Optional[Tuple[str, str]]`
+     - Delegates to `_get_github_token()`; repo defaults per README.
+
+  4. **`_create_gist_with_files` function**:
+     - Signature: `_create_gist_with_files(token: str, payload: Dict[str, Any], core_path: Path) -> Optional[str]`
+     - Sanitizes filenames: replaces `/` and `\` with `_`.
+     - Creates private gist with 30s timeout.
+
+  5. **`_post_issue_to_github` function**:
+     - Signature: `_post_issue_to_github(token: str, repo: str, title: str, body: str) -> Optional[str]`
+     - 10s timeout on API call.
+
+  6. **`_write_replay_script` function**:
+     - Signature: `_write_replay_script(core_path: Path, payload: Dict[str, Any]) -> Optional[Path]`
+     - Output path: `core_path.with_suffix(".replay.sh")`
+     - Uses `shlex.quote()` for safe shell escaping.
+     - Sets executable bit (`0o111`).
+
+  7. **`_build_issue_markdown` function**:
+     - Signature: `_build_issue_markdown(payload: Dict[str, Any], description: str, core_path: Path, replay_path: Optional[Path], attachments: List[str], truncate_files: bool = False, gist_url: Optional[str] = None) -> Tuple[str, str]`
+     - Title format: `[core-dump] {commands} failed on {system}`
+     - Truncation limits (when `truncate_files=True`): 500 chars for terminal output, 300 chars per file, raw JSON omitted.
+     - Full mode limits: 8000 chars for raw JSON.
+     - When `gist_url` provided, links to gist instead of embedding contents.
+
+  8. **Console Output Behavior**:
+     - Terminology: Use "Debug snapshot" (not "Core dump") in all user-facing messages.
+     - Default mode (no flags): Single summary line only:
+       `📦 Debug snapshot saved to {path} (attach when reporting bugs)`
+     - Verbose mode (`ctx.obj.get("verbose")`): Show per-file details:
+       - "Debug snapshot: Found {n} tracked files"
+       - "Debug snapshot: Checking file {path}" for each file
+       - "Debug snapshot: Added content for {key}" for each file added
+       - Warnings for binary/large/missing files
+       - Final summary line
+     - Quiet mode (`ctx.obj.get("quiet")`): No output at all.
+     - All output via `console.print()` from `.errors` module.
+
+  9. **`garbage_collect_core_dumps` function**:
+     - Signature: `garbage_collect_core_dumps(keep: int = 10) -> int`
+     - Deletes old core dumps from `.pdd/core_dumps/`, keeping only the `keep` most recent files (sorted by mtime).
+     - Returns the number of deleted files.
+     - Called automatically after each dump write in `_write_core_dump`.
+
+% Dependencies
+  - Imports `__version__` from `..` (the top-level package).
+  - Imports `console`, `get_core_dump_errors` from `.errors`.
+  - Imports `requests` for GitHub API calls (issues and gists).
+  - Imports `subprocess` for GitHub CLI integration.
+
+% Instructions
+  - Use `pathlib` for file system operations.
+  - Handle potential `TypeError` during JSON serialization gracefully by making objects JSON-safe.
+  - Ensure sensitive data (like API keys in environment variables) is redacted in the core dump.
+  - The `_write_replay_script` function should generate a bash script.
+
+% Deliverables
+  - Code: `pdd/core/dump.py`

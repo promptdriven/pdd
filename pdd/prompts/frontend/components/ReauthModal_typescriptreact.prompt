@@ -1,0 +1,48 @@
+Based on the provided `modified_code`, here is the updated prompt that would generate this specific React component.
+
+***
+
+**Role and Scope**
+The `ReauthModal` is a React functional component responsible for managing the GitHub Device Flow authentication process within the PDD Cloud ecosystem. It serves as a user interface for checking current authentication status, initiating a new login session, displaying verification codes, and polling for completion. It must provide a seamless, accessible, and responsive modal experience that handles various authentication states (idle, starting, waiting, success, and error).
+
+**Requirements**
+1.  **Authentication Status**: On mount, the component must fetch the current `AuthStatus` from the API and display the connection state (Authenticated vs. Not Authenticated) and token type (Cached vs. Refresh).
+2.  **Device Flow Initiation**: Provide a "Login with GitHub" action that calls the `startLogin` API. It must support a `no_browser` option via a checkbox to allow users to manually navigate to the verification URI.
+3.  **Verification Display**: When in the `waiting` phase, display the `user_code` prominently. Include a "Click to copy" feature with a temporary visual confirmation ("Copied!").
+4.  **Polling Logic**: Once a login is started, the component must poll the `pollLoginStatus` endpoint every 3 seconds. It must handle `completed`, `expired`, and `error` statuses appropriately, updating the UI and stopping the poll.
+5.  **State Management**: Implement a robust state machine (`LoginState`) to handle transitions between `idle`, `starting`, `waiting`, `success`, and `error`.
+6.  **Error Handling**: Display user-friendly error messages if the API calls fail or if the authentication session expires. Provide a "Try Again" mechanism to reset the flow.
+7.  **UI/UX**: 
+    *   Use Tailwind CSS for styling, featuring a dark-themed, backdrop-blurred modal.
+    *   Ensure the modal is responsive (full-screen on mobile, centered on desktop).
+    *   Include loading spinners for "starting" and "waiting" phases.
+    *   Implement an "animate-fade-in" effect for the modal overlay.
+8.  **Cleanup**: Ensure all intervals (polling) are cleared when the component unmounts or when the authentication process reaches a terminal state.
+
+**Dependencies**
+<api_service>
+  <include>../api</include>
+</api_service>
+<types>
+  <include-many>
+    AuthStatus, LoginResponse, LoginPollResponse
+  </include-many>
+</types>
+
+**Instructions**
+1.  **Setup**: Define the `LoginState` union type to strictly manage the component's internal phases.
+2.  **Hooks**:
+    *   Use `useEffect` for the initial status fetch.
+    *   Use `useRef` to store the `pollIntervalRef` to ensure the interval can be cleared across renders without triggering re-renders itself.
+    *   Use `useCallback` for the `startPolling` function to maintain referential identity.
+3.  **API Interaction**:
+    *   `api.getAuthStatus()`: To check current login state.
+    *   `api.startLogin({ no_browser: boolean })`: To get the `user_code` and `poll_id`.
+    *   `api.pollLoginStatus(pollId)`: To check if the user has authorized the app on GitHub.
+4.  **Accessibility**: Include `role="dialog"`, `aria-modal="true"`, and appropriate `aria-labelledby` attributes. Ensure the close button and copy button are keyboard accessible.
+5.  **Styling**: Use a dark color palette (`bg-gray-800`, `bg-gray-900`) with blue accents for primary actions and green/red for status feedback.
+
+**Deliverables**
+1.  A standalone TypeScript React component file: `ReauthModal.tsx`.
+2.  The component should export `ReauthModal` as the default export.
+3.  The file must include all necessary interface definitions for props and internal state.

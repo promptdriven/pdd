@@ -1,0 +1,50 @@
+% You are an expert TypeScript React engineer. Implement `pdd/frontend/hooks/useArchitectureHistory.ts` as an immutable architecture edit/history hook.
+
+% Requirements
+1. Import `useState`, `useCallback`, `useMemo` from `react` and `ArchitectureModule` from `../api`.
+2. Export `useArchitectureHistory(initialModules: ArchitectureModule[] = [])` and default-export the same function.
+3. Define typed interfaces:
+   - `HistoryState` with `past`, `present`, `future` as `ArchitectureModule[][]`, `ArchitectureModule[]`, `ArchitectureModule[][]`.
+   - `UseArchitectureHistoryReturn` exposing:
+     - state: `architecture`, `hasUnsavedChanges`
+     - module ops: `addModule`, `updateModule`, `deleteModule`
+     - dependency ops: `addDependency`, `removeDependency`
+     - position op: `updatePositions(positions: Map<string, { x: number; y: number }>)`
+     - history ops: `undo`, `redo`, `canUndo`, `canRedo`
+     - persistence ops: `setOriginal`, `reset`, `discardChanges`
+4. Keep local state:
+   - history state initialized with `past: []`, `present: initialModules`, `future: []`
+   - `originalModules` initialized to `initialModules`
+5. Compute `hasUnsavedChanges` with deep comparison:
+   - `JSON.stringify(state.present) !== JSON.stringify(originalModules)`.
+6. Keep `MAX_HISTORY = 50` and a shared `pushState(newPresent)` helper that:
+   - appends previous `present` to `past`
+   - truncates `past` to max 50 entries
+   - sets `present = newPresent`
+   - clears `future`.
+7. Module operations:
+   - `addModule`: append module via `pushState`.
+   - `updateModule(originalFilename, updatedModule)`:
+     - replace the module matching `originalFilename`
+     - if filename changed, rewrite dependencies in all other modules from old filename to new filename.
+   - `deleteModule(filename)`: remove that module and remove it from every dependency list.
+8. Dependency operations:
+   - `addDependency(targetFilename, sourceFilename)` adds only to target module and avoids duplicates.
+   - `removeDependency(targetFilename, sourceFilename)` removes that dependency from target module.
+9. `updatePositions` must update `position` for filenames present in the provided map, using `setState` directly, and must NOT create undo/redo history entries.
+10. History behavior:
+    - `undo`: no-op when `past` is empty; otherwise move last `past` state into `present` and prepend old `present` to `future`.
+    - `redo`: no-op when `future` is empty; otherwise move first `future` state into `present` and append old `present` to `past`.
+11. Persistence helpers:
+    - `setOriginal(modules)` updates `originalModules` and resets history to that array.
+    - `reset()` restores `present` from `originalModules` and clears history.
+    - `discardChanges()` delegates to `reset()`.
+12. Return `architecture: state.present`, all handlers, and booleans `canUndo = state.past.length > 0`, `canRedo = state.future.length > 0`.
+
+% Instructions
+- Keep all updates immutable.
+- Use `useCallback`/`useMemo` with correct dependencies.
+- Keep behavior deterministic and side-effect free (no I/O).
+
+% Deliverable
+- Code: `pdd/frontend/hooks/useArchitectureHistory.ts`

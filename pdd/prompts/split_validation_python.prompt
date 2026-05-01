@@ -1,0 +1,69 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Post-extraction validation for the agentic split orchestrator (byte-equivalence, completeness, metadata).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "validate_extraction", "signature": "(plan, worktree: Path) -> ValidationResult", "returns": "ValidationResult"},
+      {"name": "get_test_command", "signature": "(file: Path) -> Optional[TestCommand]", "returns": "Optional[TestCommand]"},
+      {"name": "get_lint_commands", "signature": "(file: Path) -> list[LintCommand]", "returns": "list[LintCommand]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>get_test_command_python.prompt</pdd-dependency>
+<pdd-dependency>get_lint_commands_python.prompt</pdd-dependency>
+
+% You are an expert Python software engineer. Your task is to create a module `split_validation` that provides post-extraction validation for the agentic split orchestrator.
+
+% Role & Scope
+  All post-extraction validation as free functions. No class hierarchy, no strategy plugins. Used by the agentic split orchestrator after each child extraction (step 6) and in validation steps (7a, 7b).
+
+% Requirements
+  1) Dataclass `ValidationFailure`:
+     - `check: str` — name of the check that failed (e.g., "byte_equivalence", "completeness").
+     - `message: str` — human-readable failure description.
+     - `severity: str` — one of "error", "warning". Default "error".
+
+  2) Dataclass `ValidationResult`:
+     - `passed: bool` — True if no error-severity failures.
+     - `failures: list[ValidationFailure]` — all failures found.
+     - `failure_type: str` — summary category: "none", "extraction", "metadata", "completeness", or "multiple".
+
+  3) Function `validate_extraction(plan, worktree: Path) -> ValidationResult`:
+     - Accepts a plan object (duck-typed with `children: list` where each child has `prompt_file: str` and `code_file: str` attributes) and a worktree path.
+     - Runs these checks in order:
+       a) **Moved-code byte-equivalence**: run `git diff --stat` in the worktree; if any tracked file shows unexpected changes, add an error failure.
+       b) **Children completeness**: assert `len(children_extracted)` matches `len(plan.children)` where `children_extracted` is determined by checking which child prompt files exist in the worktree.
+       c) **Prompt metadata tag presence**: for every new/modified `.prompt` file in the worktree, verify presence of `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` tags. Missing tags produce warning-severity failures.
+       d) **Example file existence**: for each child, verify the corresponding example file exists.
+       e) **Test ownership classification**: verify each child's test file references only that child's module (basic grep check).
+     - Return a `ValidationResult` summarizing all failures.
+
+  4) Function `get_test_command(file: Path) -> Optional[TestCommand]`:
+     - Delegates to `pdd.get_test_command.get_test_command_for_file(str(file))`.
+     - Returns the `TestCommand` or `None`.
+
+  5) Function `get_lint_commands(file: Path) -> list[LintCommand]`:
+     - Delegates to `pdd.get_lint_commands.get_lint_commands(file)`.
+     - Returns the list of `LintCommand` instances.
+
+  6) All functions are module-level free functions. No classes beyond the dataclasses.
+
+  7) Use `subprocess.run` for git operations with `capture_output=True, text=True`.
+
+% Dependencies
+  <get_test_command>
+    <include>context/get_test_command_example.py</include>
+  </get_test_command>
+
+  <get_lint_commands>
+    <include>pdd/prompts/get_lint_commands_python.prompt</include>
+  </get_lint_commands>
+
+% Deliverables
+  - Code: `pdd/split_validation.py`

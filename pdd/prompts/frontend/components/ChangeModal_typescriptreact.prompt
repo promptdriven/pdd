@@ -1,0 +1,58 @@
+You are a senior frontend developer. Create a new `ChangeModal` React component in a file named `ChangeModal.tsx`.
+
+This component will be a modal dialog that allows users to propose a change. The modal will have several states to handle the user interaction flow: 'input', 'loading', 'confirm', and 'error'.
+
+**Component Definition:**
+- The component should be a functional component using TypeScript.
+- It should accept three props:
+  - `onClose`: A function to be called when the modal should be closed.
+  - `onSubmit`: A function that takes the user's change request string and is called when the user confirms the change.
+  - `onDetect`: An async function that takes the user's change request string and returns a promise that resolves with a suggested file path string.
+
+**State Management:**
+- Use the `useState` hook to manage the following:
+  - `changeRequest`: A string for the user's input.
+  - `modalState`: A string that can be one of 'input', 'loading', 'confirm', or 'error'.
+  - `errorMessage`: A string to hold any error messages.
+  - `suggestedFile`: A string to store the file path suggested by `onDetect`.
+
+**Interaction Flow & UI States:**
+
+1.  **'input' State (Default):**
+    - This is the initial state.
+    - Display a form with a `<textarea>` for the user to enter their change description.
+    - Include a "Cancel" button that calls `onClose`.
+    - Include a "Find Prompt" button to submit the form. This button should be disabled if the textarea is empty.
+    - When the form is submitted, call a `handleDetectSubmit` function.
+
+2.  **'loading' State:**
+    - Triggered when `handleDetectSubmit` is called.
+    - Display a loading indicator (e.g., a spinner icon) and text indicating that the request is being analyzed.
+    - In `handleDetectSubmit`, call the `onDetect` prop with the change request.
+    - If `onDetect` is successful, set the `suggestedFile` state with the result and change the modal state to 'confirm'.
+    - If `onDetect` fails, catch the error, set the `errorMessage` state, and change the modal state to 'error'.
+
+3.  **'confirm' State:**
+    - Display the `suggestedFile` to the user.
+    - Include text explaining that this is the AI's suggested file to modify.
+    - Provide a "Back" button that returns the modal to the 'input' state.
+    - Provide a "Confirm & Proceed" button that calls a `handleConfirmSubmit` function, which in turn calls the `onSubmit` prop with the original `changeRequest`.
+
+4.  **'error' State:**
+    - Display the `errorMessage`.
+    - Provide a "Try Again" button that returns the modal to the 'input' state.
+
+**Structure and Styling:**
+- The modal should overlay the entire screen with a semi-transparent background.
+- The modal content should be in a centered container.
+- Use Tailwind CSS for all styling. The design should be modern and fit a dark theme.
+- The modal should have a clear header with a title like "Propose a Change" and a close button (X icon).
+- The main content area should render the content for the current `modalState`.
+- The footer should contain the action buttons for the current state.
+- Make sure the modal is accessible, using appropriate ARIA attributes.
+- Import and use the `<SpinnerIcon />` component for the loading state.
+- The entire modal should have a subtle fade-in animation when it appears.
+- Clicking on the background overlay should close the modal, except when it's in the 'loading' state.
+
+**File and Component Name:**
+- The component should be named `ChangeModal` and be the default export from `ChangeModal.tsx`.

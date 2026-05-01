@@ -1,34 +1,104 @@
 <include>context/python_preamble.prompt</include>
 
+<pdd.agentic_e2e_fix_orchestrator>
+<include select="def:_check_e2e_environment,def:_verify_tests_independently,def:_extract_test_files,def:_get_modified_and_untracked,def:_detect_meaningful_changes,def:_is_noise_path,def:push_with_retry,def:_run_step11_code_cleanup">context/agentic_e2e_fix_orchestrator_example.py</include>
+</pdd.agentic_e2e_fix_orchestrator>
+<pdd.ci_validation>
+<include>context/ci_validation_example.py</include>
+</pdd.ci_validation>
+<pdd.agentic_common>
+    <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
+<pdd.agentic_test_orchestrator>
+    <include select="def:example_state_resumption,def:example_step_timeouts,def:example_hard_stop_duplicate">context/agentic_test_orchestrator_example.py</include>
+</pdd.agentic_test_orchestrator>
+
 % Goal
-Design the `agentic_e2e_fix_orchestrator` for the 9‑step E2E‑fix workflow.
+Design `agentic_e2e_fix_orchestrator` for the 11-step E2E-fix workflow:
+Steps 1-9 form the inner cycle (loop up to `max_cycles`); Step 10 is post-push
+CI validation/remediation; Step 11 is a code-cleanup pass that runs BEFORE
+Step 10 so cleanup is itself CI-validated.
 
 % Loop Control & Status Tokens
-The orchestrator must interpret special status markers in step outputs:
-- ALL_TESTS_PASS
-- CONTINUE_CYCLE
-- NOT_A_BUG
+Step outputs are scanned for these markers (priority order, fail-before-pass):
+- VERIFICATION_FAILED — overrides everything; LLM-claimed pass disagreed with independent pytest.
+- Step 3 root cause: CODE_BUG, TEST_BUG, BOTH (positive tokens checked first), then NOT_A_BUG (last resort, with semantic + tier-4 LLM fallback).
+- Steps 1/2/9: LOCAL_TESTS_PASS, ALL_TESTS_PASS (Step 9 maps ALL_TESTS_PASS → LOCAL_TESTS_PASS).
+- Step 9 loop control: MAX_CYCLES_REACHED, CONTINUE_CYCLE.
 
-The orchestrator must treat NOT_A_BUG as a first‑class loop‑control token, alongside ALL_TESTS_PASS and CONTINUE_CYCLE.
+NOT_A_BUG is a first-class loop-control token alongside ALL_TESTS_PASS / CONTINUE_CYCLE.
+
+% Independent Verification (Issues #953, #1010, #1031, #1155)
+- Whenever the LLM claims a pass token at Steps 2 or 9, re-run pytest via `_verify_tests_independently` on test files discovered by `_extract_test_files`. Only an independently-verified pass exits the loop.
+- `_verify_tests_independently` MUST enforce a wall-clock cap via module-level `VERIFY_TIMEOUT_SECONDS = 600`, checked before each file. Timeout MUST fail closed (`all_passed=False`).
+- `_extract_test_files` fallback directory scan MUST cap results at `MAX_FALLBACK_TEST_FILES = 20` (sorted by mtime descending). When the cap triggers, set module-level `_fallback_scan_was_capped = True` so callers downgrade verified passes to failures (a partial run cannot be authoritative).
+- `_get_modified_and_untracked` MUST iterate merge-base candidates `("main", "master", "origin/main", "origin/master")` so shallow clones still resolve. All `subprocess.run` git calls in it MUST set `timeout=30` and catch `subprocess.TimeoutExpired`.
+
+% Verification-Failure Classification & Retry
+On VERIFICATION_FAILED, classify via `_classify_verification_failure` (deterministic regex on pytest `^E ` traceback lines):
+- `import_error` → ImportError/ModuleNotFoundError/NameError/AttributeError/SyntaxError, JS "Cannot find module" / ReferenceError, or "no test runner available".
+- `test_failure` → anything else (default; conservative).
+
+A single global retry budget (`import_error_retries < 1`) allows one full restart from Step 1 when the failure is `import_error`. The Step 1 prompt is augmented with the captured failure context so the agent writes the missing code on the retry.
 
 % Environment Safety: _check_e2e_environment
-Before running any E2E workflow, the orchestrator must explicitly call the `_check_e2e_environment` helper function.
-This verifies that E2E tests can safely run in the current environment (CI or local), including:
-- required tools (Python, Node, browsers, etc.)
-- required environment variables and endpoints
-If the environment is unsafe, the orchestrator stops early with an informative message and does not run real E2E tests.
+Before Step 2, call `_check_e2e_environment` to confirm `npx` and a Playwright config exist. If unavailable, mark Step 2 as `E2E_SKIP`, record the reason in `skipped_steps`, and — if Step 1 already produced ALL_TESTS_PASS that verifies independently — exit early.
 
 % Skipped Steps & Memory: skipped_steps_memory
-The orchestrator tracks last_completed_step and, when resuming, may skip earlier steps.
-However, it must still preserve and reload previous step outputs so that later steps receive a coherent context.
-skipped_steps persists across cycles and is NOT cleared when step_outputs is cleared.
-This behavior is called `skipped_steps_memory`: even skipped steps contribute their prior stepN_output values into downstream prompts.
-The skipped_steps (or equivalent) state persists across cycles and is NOT cleared when step_outputs is cleared between cycles.
+Track `last_completed_step` and a `skipped_steps` map. On resume, skipped steps are not re-attempted; their prior `stepN_output` values are still injected into downstream prompt context (this is `skipped_steps_memory`). `skipped_steps` persists across cycles and is NOT cleared when `step_outputs` is cleared between cycles. Step 2 timeout failures (`"All agent providers failed"` plus `"Timeout"`/`"timed out"`) are converted to `skipped_steps` so they are not retried (Issue #791).
 
 % Convergence (Issue #903)
-Empty dev-units short-circuit: when Step 5 yields no dev-units, the orchestrator must short-circuit the cycle (skip dependent work) instead of continuing as if work remained.
+- Empty dev-units short-circuit: if Step 5's `DEV_UNITS_IDENTIFIED:` marker is absent-but-empty, `"0"`, or starts with `"0/"`, skip Steps 6-8 with `E2E_SKIP`.
+- Per-cycle file-hash comparison: snapshot `cycle_start_hashes` at the start of each cycle and compare against current hashes so unchanged files are never mistaken for fresh changes. Stop on CONTINUE_CYCLE if the cycle made no file changes (avoids infinite loops).
 
-Per-cycle file-hash comparison: compare file hashes each cycle so unchanged files are not mistaken for fresh changes; use per-cycle file-hash snapshots to decide whether dev-units or code actually moved.
+% NOT_A_BUG Guard — Direct Edits & Noise Filter (Issue #1206)
+The Step 3 NOT_A_BUG early-exit MUST NOT fire when a fix has already been applied via a direct edit to a non-PDD-managed module (no `.prompt` file). `dev_unit_states` is only populated at Step 8 for PDD-managed modules, so a direct edit would otherwise be invisible and cause a false "Issue determined to be not a bug." exit.
 
-This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory`
-so tests can assert the orchestrator prompt documents these behaviors.
+- Both inner-loop and outer-loop guards MUST consult `_detect_meaningful_changes(cwd, initial_file_hashes)` in addition to `dev_unit_states`. If either reports progress (`has_fixed_units or has_direct_edits`), NOT_A_BUG must be suppressed.
+- `_is_noise_path` and the `_detect_meaningful_changes` wrapper MUST filter build/cache/log artifacts so random cwd noise cannot silently suppress a legitimate NOT_A_BUG exit. At minimum exclude path components: `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `node_modules`, `.coverage`, `htmlcov`, `.DS_Store`, `.eggs`, `.next`, `.turbo`, `.parcel-cache`; suffixes `.pyc`, `.pyo`, `.log`, `.swp`, `.swo`; basenames `coverage.xml`; and parallel coverage / `*.egg-info` patterns.
+- Path matching MUST be platform-neutral (normalize `\\` → `/` before matching components).
+
+% Cycle-Waste Breaker for NOT_A_BUG (Issue #1206)
+If a prior cycle applied a direct edit but the current cycle makes no new meaningful progress, the inner-loop guard MUST exit with `success=True` and a terminal message referencing the prior direct-edit fix when ALL hold:
+- `has_direct_edits` is True (`_detect_meaningful_changes(cwd, initial_file_hashes)` non-empty)
+- `has_fixed_units` is False (no PDD dev unit reported FIXED)
+- `has_cycle_progress` is False (`_detect_meaningful_changes(cwd, cycle_start_hashes)` empty)
+- `current_cycle > 1` (cycle 1 direct edits do not trigger the breaker)
+
+% Step-Specific Retries
+- Step 1: on a single timeout failure, retry once with timeout × 1.5 before falling through.
+- Step 9: if the run succeeded but emitted no recognizable loop-control token, retry Step 9 once with the same prompt (and persist retry cost/output to state). Tier-4 `CLASSIFICATION_ERROR` is treated as CONTINUE_CYCLE (transient classifier).
+- Provider failures: track `consecutive_provider_failures`; abort the entire workflow after 3 in a row (`"All agent providers failed"` substring). Reset on any successful step.
+
+% Reuse pdd-bug Analysis (Issue #830)
+On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed.
+
+% Resume & State
+- `validate_cached_state` rewinds `last_completed_step` past any cached step output prefixed with `FAILED:`.
+- Persist `initial_file_hashes` and `initial_sha` in workflow state and restore them on resume so direct-edit detection and Step 11 full-diff still work after interruption.
+- `_check_staleness` warns if any tracked file's mtime is newer than `last_saved_at`.
+- If a prior run finished Step 9, advance `current_cycle += 1`, reset `last_completed_step = 0`, and clear `step_outputs` for the next cycle.
+
+% Commit / Push (push_with_retry)
+After a successful inner loop, `_commit_and_push` stages only files whose hashes differ from `initial_file_hashes` (filtered through `_is_intermediate_file` to drop `*_fixed.*`, `*.bak`, `error_output*.txt`, `.pdd/**` except `e2e-fix-state/`, `step*_output.md`, `test_issue_*_reproduction.py`, etc.), commits as `"fix: {issue_title}\n\nFixes #{issue_number}"`, and pushes via `push_with_retry`.
+
+`push_with_retry` MUST:
+- Retry non-fast-forward rejections (markers `"non-fast-forward"`, `"tip of your current branch is behind"`) with `--force-with-lease`. Other `[rejected]` reasons (protected branches, hooks) MUST NOT force-push.
+- On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), if `PDD_GH_TOKEN_FILE` points to a non-empty file, rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
+
+% Step 11: Code Cleanup
+`_run_step11_code_cleanup` runs only if files changed, builds the cleanup prompt with `git diff <initial_sha>` plus current contents of changed files, runs the cleanup agent, then:
+- `_revert_out_of_scope_changes` restricts edits to the cleanup-scoped files.
+- Re-run `_verify_tests_independently` (downgrade pass to fail when `_fallback_scan_was_capped`). On verified pass, commit as a separate `"chore: clean up code from fix for #{issue_number}"` and push. On failure, `git checkout .` to revert ALL cleanup changes.
+- Skipped entirely when `skip_cleanup` is True.
+
+% Step 10: CI Validation
+After Step 11, unless `skip_ci`, call `run_ci_validation_loop` with the Step 10 prompt template, `ci_retries`, and the per-step timeout. Update `final_message` only when CI returns a substantive message (not the no-PR / no-checks placeholders). Clear workflow state on success.
+
+% Final Message & Telemetry
+On non-success, `post_final_comment` posts steps_completed/total_steps=11 with the cumulative cost and remaining failing dev-units. KeyboardInterrupt and unexpected exceptions MUST save state before re-raising / logging.
+
+This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory` so tests can assert the orchestrator prompt documents these behaviors.

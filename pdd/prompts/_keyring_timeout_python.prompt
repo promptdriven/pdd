@@ -1,0 +1,24 @@
+<pdd-reason>Bounds keyring operations that can hang in headless CI/SSH or locked desktop keychains.</pdd-reason>
+<pdd-interface>{"type":"module","module":{"functions":[{"name":"_keyring_op_with_timeout","signature":"(op: Callable[..., Any], *args: Any, timeout: Optional[float] = None) -> Tuple[bool, Any, Optional[BaseException]]","returns":"Tuple[bool, Any, Optional[BaseException]]","sideEffects":["Starts a daemon worker thread for the keyring operation"]}]}}</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write `pdd/_keyring_timeout.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+  1. Provide `_keyring_op_with_timeout(op, *args, timeout=None)`.
+  2. Run the supplied callable in a daemon `threading.Thread`.
+  3. Return a tuple `(timed_out, value, exception)`.
+  4. If `timeout` is None, use 5 seconds on macOS (`sys.platform == "darwin"`) and 10 seconds elsewhere.
+  5. If the worker finishes before timeout, return `False`, the callable's return value, and any caught exception.
+  6. If the worker is still running at timeout, return `True, None, None`.
+  7. Catch ordinary `Exception` instances from the worker and preserve them in the return tuple.
+  8. Relay `BaseException` subclasses such as `KeyboardInterrupt` or `SystemExit` back to the caller by re-raising them after the worker finishes; never report them as a successful operation.
+  9. The worker thread must be daemonized so a blocked keyring backend cannot keep the process alive.
+
+% Motivation
+  Python's keyring library has no built-in timeout. On locked macOS keychains and in headless CI/SSH sessions, keyring operations can wait forever for GUI unlock input. Authentication flows must degrade gracefully instead of hanging.
+
+% Deliverables
+  - Code: `pdd/_keyring_timeout.py`
+  - Exports: `_keyring_op_with_timeout`

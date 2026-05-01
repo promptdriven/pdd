@@ -1,0 +1,99 @@
+% NOTE: This prompt lives in pdd/prompts/ and follows the *_python.prompt naming
+% convention, so discover_prompt_files() will pick it up as a normal PDD module.
+% This is intentional — ci_drift_heal IS a PDD-managed module.
+<pdd-reason>Standalone CI script for detecting and auto-healing prompt/example drift with budget-capped execution.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "main", "signature": "(modules: Optional[List[str]], budget_cap: Optional[float], skip_ci: bool, diff_base: Optional[str])", "returns": "int"},
+      {"name": "detect_drift", "signature": "(modules: Optional[List[str]], diff_base: Optional[str])", "returns": "Tuple[List[DriftInfo], List[DriftInfo]]"},
+      {"name": "heal_module", "signature": "(drift: DriftInfo, env: Dict[str, str])", "returns": "Optional[bool]"},
+      {"name": "commit_and_push", "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool)", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write a standalone CI script that detects prompt/example drift across all PDD modules and auto-heals drifted modules.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detection, healing, and git commit/push for use in CI pipelines (GitHub Actions or similar). It bridges existing PDD infrastructure for drift detection with targeted healing via subprocess calls, budget-capped execution, and automated git operations.
+
+% Requirements
+
+1. **Entry point:** `main(modules, budget_cap, skip_ci, diff_base) -> int` — returns 0 on success (including "no drift"), 1 on failure. Accepts `--diff-base` for git-based drift reclassification.
+
+2. **Detection phase (no LLM calls):** Iterate modules via `discover_prompt_files()` and `infer_module_identity()`. For each, call `sync_determine_operation(basename, language, target_coverage=90.0, log_mode=True)`. Collect modules where operation is `update` (prompt stale), `example` (example stale), or any other non-synced operation (`verify`, `generate`, `auto-deps`, `test`, `crash`). Exit 0 if no drift.
+
+3. **Git-based reclassification:** When `--diff-base` is provided, fetch git changed files once (not per-module). For non-`update` operations: if the code file changed but the prompt file didn't (relative to diff_base), reclassify the drift as `update` (prompt stale). This fixes detection in CI where fingerprints are absent and `sync_determine_operation` returns `auto-deps`/`generate` instead of `update`.
+
+4. **Code-without-prompt detection:** When `--modules` is specified, also scan for code files that have no corresponding prompt. These are collected as `update` drifts with `reason='Code exists without prompt'`.
+
+5. **Scope control:** `--modules` limits detection to specific basenames. Without it, scan all discovered modules. Accept both space-separated and comma-separated module lists.
+
+6. **Three-way heal dispatch:** Dispatch by `drift.operation`:
+   - `update`: run `pdd --force --strength 0.5 update <code_path>` then `pdd --force --strength 0.5 example <prompt_path> <code_path>`. If code_path is unresolved, fail closed (no repo-wide fallback). After update, run churn gate and structural invariants gate before the follow-up example step. If example fails, revert prompt and fail.
+   - `example`: run `pdd --force --strength 0.5 example <prompt_path> <code_path>` directly. Require both paths resolved; fail closed otherwise.
+   - `auto-deps`: run `pdd --force --strength 0.5 auto-deps <prompt_path> <dependency_dir> --output <prompt_path> --csv project_dependencies.csv` directly. Do not route this through full `pdd sync`, because sync can continue into generate/crash flows after dependency insertion.
+   - `verify`/`generate`/`test`/`crash`: run `pdd --force --strength 0.5 sync <basename>` to let sync_determine_operation dispatch correctly. Do NOT use `pdd example` for these — it would overwrite user edits (verify), skip code regeneration (generate), or save a stale fingerprint.
+
+7. **Noninteractive strength override:** All heal subprocess commands pass `--force --strength 0.5`. `--force` suppresses overwrite prompts in CI; `--strength 0.5` overrides `.pddrc` context strengths that would otherwise push model selection into expensive tiers.
+
+8. **Lazy prompt_path resolution:** For the code-without-prompt flow, `prompt_path` starts as None. After `pdd update` creates the prompt, resolve `prompt_path` via `get_pdd_file_paths()` before running the follow-up example step and gates. Fail closed if prompt_path remains unresolvable post-update.
+
+9. **Prompt churn gate:** After `pdd update`, compare prompt churn (lines added+deleted vs HEAD) against code churn (vs diff_base). If ratio exceeds `_HEAL_PROMPT_CHURN_MAX_RATIO` (default 5.0, env-overridable via `PDD_HEAL_PROMPT_CHURN_MAX_RATIO`), revert the prompt and fail. Permissive when inputs are missing or git fails — let structural invariants be the fallback guard.
+
+10. **Structural invariants gate:** After `pdd update`, compare on-disk prompt against `git show HEAD:<prompt_path>`. Enforce four invariants:
+    - `<include>`/`<include-many>` tag count must not decrease
+    - Every `<pdd.NAME>` open tag in original must still appear
+    - `%` section markers must retain at least `max(1, ceil(original/2))`
+    - Every fenced code block must appear byte-identical
+    Revert prompt on any violation. Individual invariants can be disabled via `PDD_HEAL_INVARIANTS_SKIP` (comma-separated: `include`, `pdd_tags`, `percent_markers`, `fenced_blocks`).
+
+11. **Prompt revert mechanism:** `_revert_prompt_file()` restores prompt to HEAD using `git checkout` with repo-relative paths (absolute paths must be converted first). Raises `PromptRevertError` if the path is unavailable, git checkout fails, or file still appears dirty after revert. When a PromptRevertError propagates to main, mark the entire run as unsafe-to-commit.
+
+12. **Protected paths rollback:** Before running `pdd sync`/`pdd update`, snapshot whether `.pdd/meta` and `project_dependencies.csv` are clean. Top-level pdd flags may be valueless (`--force`) or value-taking (`--strength 0.5`) before the subcommand, so command parsing must handle both. On subprocess failure or timeout, restore protected paths via `git restore --source=HEAD` (with `git checkout` fallback). Only applicable when `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`.
+
+13. **Budget cap:** `--budget-cap` (float, dollars). Track cumulative LLM cost via per-operation CSV. If cumulative cost exceeds budget, skip remaining modules as warnings. Skipped modules are not failures, but they do prevent PR-mode checkpoint commits when any other module was healed.
+
+14. **Commit phase:** `git add -A`, commit with `chore: auto-heal prompt/example drift for {modules}`. If `--skip-ci`, prepend `[skip ci]`. When `checkpoint=True` (successful PR heal with no failures or skips), append a second `-m` with `_AUTO_HEAL_SUCCESS_TRAILER` for incremental PR detection. Push to current branch.
+
+15. **PR vs push-to-main semantics:** In PR mode (no `--skip-ci`): any heal failure returns exit 1, and partial success (some healed, some failed or skipped) skips commit to avoid creating a bad checkpoint. In push-to-main mode (`--skip-ci`): heal failures are advisory (exit 0), partial success or skipped modules can commit without checkpoint.
+
+16. **Operational bypass:** `PDD_HEAL_SYNC_SKIP_MODULES` env var (comma-separated) skips `pdd sync`/`pdd example` steps for listed modules. For `update` drifts, the update itself still runs but the follow-up example is skipped; `main` records that module as both healed and skipped so PR mode cannot create a success checkpoint. For fully skipped non-update operations, `heal_module` returns `None` (distinct from True/False).
+
+17. **Environment:** Subprocess env sets `PDD_FORCE=1`, `CI=1`, `NO_COLOR=1`, `PDD_OUTPUT_COST_PATH`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`.
+
+18. **CLI interface:** `argparse` with `--modules` (space/comma-separated), `--budget-cap` (float), `--skip-ci` (flag), `--diff-base` (string). Invoked as `python -m pdd.ci_drift_heal`.
+
+19. **Error handling:** Subprocess failures are captured per-module (continue healing remaining). Subprocess timeout is 1200s. `PromptRevertError` blocks the commit phase entirely. Return exit code 1 if any module failed (except in skip-ci/push-to-main mode).
+
+20. **Output:** Rich console with drift summary table before healing. Per-module heal result and cost. Final summary of healed/failed/skipped counts.
+
+% Dependencies
+<pdd.sync_determine_operation>
+    <include>context/sync_determine_operation_example.py</include>
+</pdd.sync_determine_operation>
+<pdd.operation_log>
+    <include>context/operation_log_example.py</include>
+</pdd.operation_log>
+<pdd.agentic_sync_runner>
+    <include>context/agentic_sync_runner_example.py</include>
+</pdd.agentic_sync_runner>
+<pdd.agentic_common>
+    <include select="def:example_run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+
+% Deliverables
+- Code: `pdd/ci_drift_heal.py` — standalone CI script with `if __name__ == '__main__'` entry point

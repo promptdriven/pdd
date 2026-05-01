@@ -1,0 +1,36 @@
+You are an expert Frontend Engineer. Your role is to implement the `PromptSpace` component, the primary workspace for the Prompt-Driven Development (PDD) IDE. This component serves as a sophisticated Markdown and Code editor that manages the relationship between prompts, source code, tests, and examples, providing a seamless workflow for AI-assisted engineering.
+
+### Requirements
+1.  **Multi-Panel Editor Layout**: Implement a responsive, high-performance layout featuring a main prompt editor (CodeMirror 6) and optional side-by-side panels for Code, Tests, and Examples.
+2.  **Dual View Modes**: Support a "Raw" mode for editing prompt source and a "Processed" mode (read-only) that displays the prompt after PDD directive expansion and variable injection.
+3.  **Live Metrics & Analysis**: Integrate a metrics bar that displays token counts, context usage, and cost estimations for both raw and processed states, with real-time debounced analysis.
+4.  **Command Integration**: Provide a comprehensive command sidebar and a vertical action bar between panels to trigger system operations (Generate, Update, Fix, Verify, etc.) with support for custom option modals.
+5.  **Architecture Synchronization**: Implement a "Sync from JSON" feature that fetches PDD tags (`pdd-reason`, `pdd-interface`, `pdd-dependency`) from a central `architecture.json` and injects them into the prompt header.
+6.  **Intelligent Include Analysis**: Support a "Quick Action" (Cmd+.) to analyze the file referenced by the `<include>` or `<shell>` tag currently under the cursor, showing specific token metrics for that dependency.
+7.  **Model Orchestration**: Include sliders for "Strength" (model selection), "Time" (reasoning effort), and "Temperature," dynamically resolving the appropriate LLM based on the strength setting.
+8.  **State Management**: Track unsaved changes, execution status (idle/running/success/failed), and provide a markdown preview mode using `marked`.
+
+### Dependencies
+<api_client>
+    <include>src/api.ts</include>
+</api_client>
+<types_and_constants>
+    <include-many>src/types.ts, src/constants.ts</include-many>
+</types_and_constants>
+<ui_components>
+    <include-many>src/components/PromptMetricsBar.tsx, src/components/GuidanceSidebar.tsx, src/components/ModelSliders.tsx, src/components/FilePickerInput.tsx</include-many>
+</ui_components>
+<lib_utilities>
+    <include-many>src/lib/modelResolver.ts, src/lib/pddAutocomplete.ts, src/lib/includeAnalyzer.ts</include-many>
+</lib_utilities>
+
+### Instructions
+1.  **Editor Setup**: Initialize CodeMirror 6 with Markdown extensions, One Dark theme, and the custom `pddAutocompleteExtension`. Use `Compartments` to toggle the `editable` facet when switching between Raw and Processed modes.
+2.  **Side Panels**: Use a flexible flexbox layout for the right-hand panels. When multiple panels (Code/Test/Example) are open, stack them vertically with "Gen Test" or "Gen Example" action buttons acting as bridges between them.
+3.  **Command Modals**: Create a `CommandOptionsModal` that dynamically renders inputs based on the `CommandConfig`. Pre-fill file paths if the `PromptInfo` already contains detected associations.
+4.  **Include Analysis Logic**: Use the `findIncludeAtCursor` utility to detect tags. If a tag is found, fetch file metrics via the API and display them in a floating popup.
+5.  **Sync Logic**: When syncing from architecture, ensure you don't duplicate tags. If tags exist, prompt the user for replacement; otherwise, prepend them to the document.
+6.  **Performance**: Debounce the `api.analyzePrompt` call to prevent excessive API requests during active typing.
+
+### Deliverables
+A single React functional component file `src/components/PromptSpace.tsx` exporting the `PromptSpace` component and necessary internal sub-components (`OptionInput`, `CommandOptionsModal`, `FileLink`). The implementation must use Tailwind CSS for styling and Lucide-style SVG icons for the UI.

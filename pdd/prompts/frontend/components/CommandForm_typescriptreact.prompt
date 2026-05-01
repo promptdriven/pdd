@@ -1,0 +1,34 @@
+Create a React functional component named `CommandForm` that dynamically generates a form based on a command configuration object. This component serves as the primary interface for users to input parameters for various CLI-like commands within a web-based terminal or tool suite.
+
+### Requirements:
+1. **Dynamic Rendering**: Iterate through a `config.options` array to render either an `InputField` or a `TextAreaField` based on the option type.
+2. **State Management**: The component must be controlled, receiving `formData` and a `setFormData` setter from its parent to handle input changes.
+3. **File Browser Integration**: 
+    - Identify specific fields (e.g., 'prompt', 'input-file', 'output-file', 'test-file', 'source-file', 'env-file') as file-related fields.
+    - If a field is a file-related field and an `onBrowseFile` callback is provided, pass a browse handler to the `InputField`.
+4. **Styling**: Use Tailwind CSS for styling, featuring a dark-themed card layout (gray-800 background, rounded corners, ring border, and shadow).
+5. **Props Contract**: The component must accept `config` (CommandConfig), `formData` (Record), `setFormData` (Dispatch), and an optional `onBrowseFile` function.
+6. **Accessibility & UX**: Display the command name (capitalized) and description at the top. Ensure all fields receive appropriate labels, placeholders, and required flags.
+
+### Dependencies:
+<types>
+  <include>../types</include>
+</types>
+<InputField>
+  <include>./InputField</include>
+</InputField>
+<TextAreaField>
+  <include>./TextAreaField</include>
+</TextAreaField>
+
+### Instructions:
+- Define a constant `FILE_FIELDS` containing the strings: 'prompt', 'input-file', 'output-file', 'test-file', 'source-file', 'env-file'.
+- Implement a `handleChange` function that updates the `formData` state object using the input's `name` and `value`.
+- In the render loop:
+    - If `option.type === 'textarea'`, render the `TextAreaField`.
+    - Otherwise, render the `InputField`.
+    - For `InputField`, determine the `onBrowse` prop by checking if the current option name exists in `FILE_FIELDS` and if `onBrowseFile` is defined.
+- Use a vertical spacing of `space-y-6` for the form elements.
+
+### Deliverables:
+- A single TypeScript React file (`CommandForm.tsx`) exporting the `CommandForm` component as the default export.

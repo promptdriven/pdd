@@ -1,0 +1,45 @@
+You are an expert Frontend Engineer. Your role is to develop the `PromptCodeDiffModal.tsx` component, a sophisticated full-screen modal designed for the "Prompt-Driven Development" (PDD) ecosystem. This component provides bidirectional visualization of the alignment between a prompt and its generated code, as well as a semantic version history of the prompt itself.
+
+### Requirements:
+1.  **Dual-Mode Visualization**: Support two primary tabs: "Alignment" (comparing prompt vs. code) and "Version History" (comparing prompt versions via Git).
+2.  **Alignment View**:
+    *   Display a side-by-side unified view of prompt requirements and code implementation.
+    *   Highlight statuses: `matched` (green), `partial` (yellow), `missing` (red - prompt requirement not in code), and `extra` (red - code feature not in prompt).
+    *   Provide "Quick" and "Detailed" analysis modes and a "Strength" slider (0-1) for matching sensitivity.
+    *   Include a toggle to include/exclude test files in the analysis.
+    *   Display a "Regeneration Risk" badge (Low to Critical) and an overall alignment score.
+3.  **Version History View**:
+    *   Allow selection of two versions (Version A vs Version B) from a commit history list.
+    *   Display semantic "Linguistic Changes" categorized by impact (breaking, enhancement, clarification) and type (added, removed, modified).
+    *   Show a raw text diff (unified format) as a collapsible section.
+4.  **Interactivity**:
+    *   Sections must be expandable/collapsible to show full text snippets (pre-formatted).
+    *   Auto-expand mismatched or high-impact changes upon loading.
+    *   Provide "Action Buttons" within the diff: "Run pdd update" for extra code and "Run pdd sync" for missing implementation.
+5.  **UI/UX**:
+    *   Use a "glassmorphism" design with Tailwind CSS (dark theme).
+    *   Implement smooth transitions (animate-fade-in, animate-scale-in).
+    *   Show loading states (spinners) during API calls and display error banners if analysis fails.
+    *   Footer must summarize stats (critical gaps, hidden knowledge, cost, and model used).
+
+### Dependencies:
+<api_client>
+    <include>api/index.ts</include>
+</api_client>
+<types>
+    <include>types/index.ts</include>
+</types>
+
+### Instructions:
+1.  **State Management**: Use React hooks (`useState`, `useEffect`, `useCallback`) to manage analysis results, history data, and UI states (expanded sections, active tabs).
+2.  **API Integration**:
+    *   Call `api.analyzeDiff` for the alignment view.
+    *   Call `api.getPromptHistory` to populate the version selector.
+    *   Call `api.getPromptDiff` to compare specific commit hashes.
+3.  **Data Transformation**: Implement `getUnifiedSections` to merge prompt sections and "extra" code sections into a single chronological list based on line numbers.
+4.  **Styling**: Use Tailwind's arbitrary values for the glass effect (`bg-black/80`, `backdrop-blur-sm`) and status-specific color mappings (`STATUS_COLORS`).
+5.  **Edge Cases**: Handle scenarios where `promptPath` is missing, API returns errors, or no changes are detected between versions.
+
+### Deliverables:
+*   A standalone React functional component `PromptCodeDiffModal.tsx` using TypeScript.
+*   The component should export `PromptCodeDiffModal` as the primary entry point.

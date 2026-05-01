@@ -1,0 +1,66 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/components/ModuleEditModal.tsx`, a modal used by `ArchitectureView` to edit or delete an existing `ArchitectureModule`.
+
+Requirements
+1. Export default `ModuleEditModal` as `React.FC<ModuleEditModalProps>`.
+2. Define `ModuleEditModalProps` with:
+   - `isOpen: boolean`
+   - `module: ArchitectureModule | null`
+   - `allModules: ArchitectureModule[]`
+   - `onSave: (updatedModule: ArchitectureModule) => void`
+   - `onDelete: (filename: string) => void`
+   - `onClose: () => void`
+3. Import `React`, `useEffect`, `useMemo`, `useState`, `ArchitectureModule` from `../api`, and `FilePickerInput` from `./FilePickerInput`.
+4. Keep `INTERFACE_TYPES` exactly as:
+   - `['module', 'component', 'page', 'api', 'graphql', 'cli', 'job', 'message', 'config'] as const`
+5. Manage local state with defaults:
+   - `filename=''`, `filepath=''`, `description=''`, `reason=''`, `priority=5`, `tags=''`, `interfaceType='module'`, `dependencies=[] as string[]`, `showDeleteConfirm=false`.
+6. Memoize `availableModules` as `allModules` excluding the currently edited module (`m.filename !== module?.filename`).
+7. On `module` change (`useEffect`), initialize all fields from `module` and reset delete confirmation:
+   - `tags` as `module.tags?.join(', ') || ''`
+   - `interfaceType` as `module.interface?.type || 'module'`
+   - `dependencies` as `module.dependencies || []`
+   - `setShowDeleteConfirm(false)`
+8. Memoize `errors: string[]` with exact checks/messages:
+   - `"Filename is required"` when trimmed filename is empty
+   - `"Filepath is required"` when trimmed filepath is empty
+   - `"Description is required"` when trimmed description is empty
+   - `"Filename already exists"` when filename changed from original module filename and another module already has that filename
+9. `handleSave()` must:
+   - return when `errors.length > 0`
+   - build `updatedModule: ArchitectureModule` using current field values
+   - parse `tags` via comma split + trim + drop empties
+   - set `interface: { type: interfaceType }`
+   - call `onSave(updatedModule)` then `onClose()`
+10. `handleDelete()` must call `onDelete(module.filename)` then `onClose()` when `module` exists.
+11. Add `toggleDependency(dep)` that toggles a dependency filename in `dependencies`.
+12. Return `null` when `!isOpen || !module`.
+13. Render a dark full-screen overlay with a responsive modal (`full screen on mobile`, constrained rounded panel on `sm+`) containing:
+   - Header: title `Edit Module` and X button calling `onClose`
+   - Scrollable content fields:
+     - required filename input (`placeholder="e.g., user_api_Python.prompt"`)
+     - required `FilePickerInput` with:
+       - `label="Filepath"`
+       - `placeholder="e.g., src/api/user.py"`
+       - `description="Target path for the generated code"`
+       - `required`
+       - `title="Select Output Path"`
+     - required description textarea (`rows={3}`)
+     - optional reason input
+     - two-column row for priority number input (`min=1`, `max=10`, `parseInt(value) || 1`) and interface type select from `INTERFACE_TYPES`
+     - tags input with comma-separated hint
+     - dependencies box with selected count:
+       - if no `availableModules`, show `No other modules available`
+       - else checkbox list keyed by `m.filename`, checked by `dependencies.includes(m.filename)`, toggled by `toggleDependency`
+       - display dependency label as `m.filename.replace(/_[A-Za-z]+\.prompt$/, '').replace(/\.prompt$/, '')`
+   - Validation panel shown when errors exist, listing all messages with warning icon styling
+14. Footer layout:
+   - Left side delete controls:
+     - normal state: `Delete Module` button sets `showDeleteConfirm(true)`
+     - confirm state: text `Are you sure?`, `Yes, delete` calls `handleDelete`, `Cancel` sets `showDeleteConfirm(false)`
+   - Right side actions:
+     - `Cancel` button calls `onClose`
+     - `Save Changes` button calls `handleSave`, disabled when errors exist
+15. Keep Tailwind styling aligned with existing dark frontend tokens (`surface-*`, `accent-*`, red destructive states), including scrollable modal body.
+
+Deliverable
+- Output only `pdd/frontend/components/ModuleEditModal.tsx`.

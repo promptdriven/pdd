@@ -1,0 +1,93 @@
+<pdd-reason>Analyzes a prompt and its directory to automatically discover and generate dependency include tags with selective extraction attributes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "auto_include", "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)", "returns": "Tuple[str, str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
+<pdd-dependency>summarize_directory_python.prompt</pdd-dependency>
+<pdd-dependency>embed_retrieve_python.prompt</pdd-dependency>
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
+<include>./context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/auto_include.py` module.
+
+% Role & Scope
+PDD prompt files use `<include>file.py</include>` tags to pull in dependency files as context for code generation. This module automatically discovers which dependency files from a directory should be included in a given prompt. It summarizes all candidate files, asks an LLM which ones the prompt needs (and whether to extract specific parts via `select` or `query` attributes), then produces a list of `<new>` directives (files to add) and `<update>` directives (existing includes to annotate with selectors). The output is consumed by the downstream `insert_includes` module which places the directives into the prompt.
+
+% Requirements
+1. Function: `auto_include(input_prompt, directory_path, csv_file=None, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, csv_path=None) -> Tuple[str, str, float, str]`
+   - Returns `(include_directives, csv_output, total_cost, model_name)`
+2. Validate inputs: `strength` and `temperature` must be between 0 and 1; raise `ValueError` if not
+3. Load prompt template `auto_include_LLM` via `load_prompt_template`; raise `ValueError` if not found
+4. Run `summarize_directory` to scan files and produce `csv_output`
+   - Pass through `csv_file`, `csv_path`, `progress_callback`, `include_docs`, and `max_workers`
+5. Two-stage retrieval: if the number of candidate files exceeds 50, use `embed_and_retrieve` to pre-filter candidates by cosine similarity before passing to the LLM. When candidates <= 50, pass all directly. If embedding fails, fall back to passing all candidates.
+6. Format each CSV row as structured metadata for the LLM input:
+   - Template: `"File: {full_path}\nPurpose: {file_summary}\nKey Exports: {key_exports}\nDependencies: {dependencies}"`
+   - CSV paths are already project-root-relative (or absolute when no marker exists), so no path qualification is needed
+7. Invoke LLM with Pydantic structured output (`AutoIncludeResult`), passing `input_prompt` and `available_includes` (formatted rows joined with `\n`)
+8. When the LLM returns both `select` and `query` on the same entry: if the file type supports structural selectors (.py, .md, .json, .yaml, .yml), keep `select` and discard `query`
+9. On LLM failure, return empty `include_directives` with the cost/model from `summarize_directory`
+
+% Output Format
+`include_directives` is a single string containing a mix of `<new>` and `<update>` XML blocks, joined with newlines. Each block is one directive. Example of a complete `include_directives` string:
+
+    <new>
+    <core.api><include select="class:Handler">core/api.py</include></core.api>
+    </new>
+    <new>
+    <utils.validators><include>utils/validators.py</include></utils.validators>
+    </new>
+    <update>
+    <include select="def:require_admin">auth_helpers.py</include>
+    </update>
+
+- `<new>` blocks: files to add to the prompt, wrapped in a module-name tag with optional select/query attributes
+- `<update>` blocks: existing includes already in the prompt that should be replaced with a version that has select/query attributes added
+- Skip `<update>` blocks with neither `select` nor `query` (no useful annotation to add)
+
+% Filtering
+10. Filter duplicates: remove `<new>` blocks whose file path already appears in `input_prompt`
+    - Compare both full paths and basenames to handle qualified vs bare path mismatches
+11. Filter self-references: remove `<new>` blocks referencing the module's own example file
+    - Derive module name from `prompt_filename` (e.g., `prompts/agentic_fix_python.prompt` → `agentic_fix`)
+12. Filter circular dependencies: detect when module A includes module B's example and module B already includes module A's example
+    - Scan prompt files of dependent modules for cross-references
+    - Warn on filtered cycles via `console.print` in yellow
+13. Strip selectors from small files (under 100 lines):
+    - `<new>` blocks: remove select/query attributes but keep the include
+    - `<update>` blocks: remove the entire block
+    - Resolve relative paths against the project root (via `find_project_root_from_path`) so that repo-root-relative CSV paths are found regardless of CWD
+
+% Pydantic Models
+- `AutoIncludeResult`: `reasoning: str` (chain-of-thought, discarded), `new_includes: list[NewInclude]`, `existing_include_annotations: list[IncludeAnnotation]`
+- `NewInclude`: `file: str`, `module: str`, `select: Optional[str]`, `query: Optional[str]`
+- `IncludeAnnotation`: `file: str`, `select: Optional[str]`, `query: Optional[str]`
+
+% Include Tag Format
+The `<include>` tag puts the file path between the opening and closing tags. Optional `select` or `query` attributes go on the opening tag:
+  - `<include>path/to/file</include>` — include the full file
+  - `<include select="def:foo,class:Bar">path/to/file</include>` — include only specific parts
+  - `<include query="...">path/to/file</include>` — include LLM-extracted content
+
+% Dependencies
+<internal_modules>
+    <llm_invoke_example><include select="def:example_structured_output,def:example_reasoning">context/llm_invoke_example.py</include></llm_invoke_example>
+    <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
+    <summarize_directory_example><include>./context/summarize_directory_example.py</include></summarize_directory_example>
+    <embed_retrieve_example><include query="example of using embed_and_retrieve for pre-filtering candidates by cosine similarity when exceeding 50, with fallback to all candidates if embedding fails">context/embed_retrieve_example.py</include></embed_retrieve_example>
+</internal_modules>
+
+% Deliverables
+- Code: `pdd/auto_include.py`

@@ -1,0 +1,41 @@
+% Role and Scope
+You are an expert Frontend Engineer. Your task is to create the `SyncOptionsModal` component, a specialized React modal designed to configure execution parameters for a synchronization command (specifically `pdd sync`). This component serves as a configuration bridge between the UI (ModuleNode, PromptSelector, etc.) and the execution engine, allowing users to toggle agentic modes and other command-line options before running or queuing a task.
+
+% Requirements
+1. **Dynamic Configuration**: The modal must dynamically render input fields based on a `COMMANDS` configuration object for the `SYNC` command type.
+2. **State Management**: 
+    - Initialize state with default values from the command configuration when the modal opens.
+    - Handle different input types: `checkbox` (boolean), `number`, and `text`.
+3. **User Actions**:
+    - **Confirm**: Execute the `onConfirm` callback with the current option values and close the modal.
+    - **Queue**: Execute the optional `onAddToQueue` callback with the current option values and close the modal.
+    - **Cancel**: Close the modal without saving changes.
+4. **UI/UX**:
+    - Use a "glassmorphism" design style with backdrop blur and animated transitions (`animate-fade-in`, `animate-scale-in`).
+    - Implement a responsive layout that handles vertical overflow for long lists of options.
+    - Provide clear visual feedback for active/selected checkbox options using accent colors.
+5. **Formatting**: Include a helper function to transform kebab-case option names (e.g., "agentic-mode") into Title Case display names (e.g., "Agentic Mode").
+6. **Accessibility**: Ensure the modal is dismissible by clicking the backdrop and includes appropriate labels for all form inputs.
+
+% Dependencies
+<types>
+  <include>../types</include>
+</types>
+<constants>
+  <include>../constants</include>
+</constants>
+
+% Instructions
+1. **Component Structure**:
+    - Create a main `SyncOptionsModal` functional component.
+    - Create a sub-component `OptionInput` to handle the rendering logic for individual configuration rows.
+2. **Initialization Logic**: Use a `useEffect` hook triggered by the `isOpen` prop to reset the local state to the default values defined in `COMMANDS[CommandType.SYNC].options`.
+3. **Input Handling**:
+    - For `checkbox` types, render a custom-styled label container that changes background color when checked.
+    - For `number` and `text` types, render a standard styled input with a description and placeholder.
+4. **Styling**: Use Tailwind CSS classes. Follow the specific color palette: `surface` for backgrounds/borders, `accent` for highlights, and `emerald` for the "Add to Queue" action.
+5. **Icons**: Use inline SVGs for the header icon (Sync/Refresh), the "Add" icon, and the "Run" icon.
+
+% Deliverables
+- A single TypeScript file `SyncOptionsModal.tsx` exporting the `SyncOptionsModal` component as the default export.
+- The file must include the `SyncOptionsModalProps` interface and the `OptionInput` sub-component.

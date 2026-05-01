@@ -1,0 +1,26 @@
+% You are an expert Python engineer.
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+Write `pdd/git_update.py`. This module updates a prompt for a locally modified code file by temporarily restoring that file's Git `HEAD` version, choosing the agentic or legacy update flow, and then restoring the user's working copy.
+
+% Requirements
+1. Implement `git_update` with the following signature:
+   ```python
+   git_update(input_prompt: str, modified_code_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, simple: bool = False, quiet: bool = False, prompt_file: Optional[str] = None) -> Tuple[Optional[str], float, str]
+   ```
+   Return updated prompt content, total cost, and the model/provider string. Return `None` for prompt content on failure.
+2. Validate `input_prompt` and `modified_code_file`, read the modified file before any Git operation, locate the containing repo from `modified_code_file`, checkout only that file from local `HEAD` (do not fetch), and read the checked-in contents as `original_input_code`.
+3. Use the agentic path only when `not simple`, `prompt_file` is provided, and `get_available_agents()` is non-empty. Call `run_agentic_update(prompt_file=prompt_file, code_file=modified_code_file, verbose=verbose, quiet=quiet)`.
+4. If the agentic path succeeds, read and return the updated prompt text from `prompt_file`. Otherwise call `update_prompt(input_prompt=input_prompt, input_code=original_input_code, modified_code=modified_code, strength=strength, temperature=temperature, verbose=verbose, time=time)` and add any prior agentic cost to the legacy cost.
+5. Always restore the user's modified code in a best-effort `finally` block. Use `rich.console.Console` and `rich.panel.Panel` for success and error output. Never stage or commit repository changes.
+
+% Dependencies
+<module_dependencies>
+<pdd.update_prompt>
+    <include>context/update_prompt_example.py</include>
+</pdd.update_prompt>
+<pdd.agentic_update>
+    <include>context/agentic_update_example.py</include>
+</pdd.agentic_update>
+</module_dependencies>

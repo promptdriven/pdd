@@ -1,0 +1,110 @@
+% You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors and warnings in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
+
+<include>context/python_preamble.prompt</include>
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'unit_test' - A string containing the unit test code.
+        'code' - A string containing the code under test.
+        'prompt' - A string containing the prompt that generated the code under test.
+        'error' - A string that contains the errors and warnings that need to be fixed.
+        'error_file' - A string containing the path to the file where error logs will be appended. If the file does not exist, it should be created.
+        'strength' - A float between 0 and 1 that is the strength of the LLM model to use.
+        'temperature' - A float between 0 and 1 that controls the randomness of the LLM's output.
+        'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
+        'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'protect_tests' - A boolean that, when True, prevents the LLM from modifying the unit test. Only the code will be fixed. Default is False.
+        'language' - An optional string indicating the programming language of the code under test (e.g., "python", "typescript", "javascript"). If not provided, defaults to None. This is passed to llm_invoke to ensure language-appropriate post-processing validation (e.g., skipping Python ast.parse for non-Python code).
+    Outputs as a tuple:
+        'update_unit_test' - Boolean indicating whether the unit test needs to be updated.
+        'update_code' - Boolean indicating whether the code under test needs to be updated.
+        'fixed_unit_test' - A string that is the fixed unit test.
+        'fixed_code' - A string that is the fixed code under test.
+        'analysis_results' - A string containing the raw output of the LLM analysis.
+        'total_cost' - A float representing the total cost of the LLM invocations.
+        'model_name' - A string representing the name of the LLM model used.
+
+% Here is how to use the internal modules:
+
+% Here are examples of how to use internal modules:
+    <internal_modules>
+        % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+
+        For loading prompt templates:
+        <load_prompt_template_example>
+            <include>context/load_prompt_template_example.py</include>
+        </load_prompt_template_example>
+
+        For running prompts with llm_invoke:
+        <llm_invoke_example>
+            <include>context/llm_invoke_example.py</include>
+        </llm_invoke_example>
+
+        For using edit_file to make changes:
+        <edit_file_example>
+            <include>context/edit_file_example.py</include>
+        </edit_file_example>
+    </internal_modules>
+
+% This program will do the following:
+    Step 1. Load the 'fix_errors_from_unit_tests_LLM' prompt template.
+    
+    Step 2. Note: The 'error' input parameter contains the current error message and potentially relevant history (like previous test results or fix attempts from the current session) formatted by the calling function (e.g., fix_error_loop.py). This function uses the 'error_log_file' path *only* for writing its own analysis output (see Step 3e), not for reading input history. Handle file I/O errors gracefully when *writing* the log.
+    
+    Step 3. Run the LLM prompt from Step 1 through llm_invoke:
+        3a. Preprocess the input 'prompt' string using preprocess(recursive=False, double_curly_brackets=True).
+        3b. Preprocess the loaded 'fix_errors_from_unit_tests_LLM' template string using preprocess(recursive=False, double_curly_brackets=True, exclude_keys=['unit_test', 'code', 'errors', 'prompt']).
+        3c. Pass the following parameters to llm_invoke:
+            - 'prompt' (the preprocessed template from Step 3b)
+            - 'input_json' containing:
+                - 'unit_test'
+                - 'code'
+                - 'prompt' (the preprocessed input prompt from Step 3a)
+                - 'errors' (the input error string)
+                - 'protect_tests' (the input protect_tests boolean, converted to "true" or "false" string)
+            - 'strength' (the input strength)
+            - 'temperature' (the input temperature)
+            - 'time' (the input time)
+            - 'verbose' (the input verbose)
+            - 'language' (the input language, to ensure correct post-processing validation)
+        3d. Store the full LLM response as analysis_results
+        3e. Append the output to error_file with a clear separator and timestamp to distinguish it from previous content
+    
+    Step 4. Pretty print the analysis results with markdown formatting via the rich Markdown function to both:
+        - Console (when verbose is True)
+        - error_file (always)
+        Also print the number of output tokens and cost.
+    
+    Step 5. Run a second LLM prompt to extract the fixed code/test:
+        5a. Load the 'extract_unit_code_fix_LLM' prompt template.
+        5b. Preprocess this second prompt template.
+        5c. Run the second LLM prompt through llm_invoke:
+            - Pass the 'analysis_results' from Step 3d, the original 'unit_test', and 'code' as input_json.
+            - Use a fixed strength (e.g., 0.8), the input 'temperature', and the input 'time'.
+            - Specify 'output_pydantic=CodeFix' to get structured output.
+            - Pass the input 'verbose'.
+            - Pass the input 'language' to ensure correct post-processing validation.
+        5d. Store the resulting 'CodeFix' object which contains:
+            - 'update_unit_test' (boolean)
+            - 'update_code' (boolean)
+            - 'fixed_unit_test' (string)
+            - 'fixed_code' (string)
+        5e. Note: This function does *not* use the 'edit_file' tool or write the fixed code/test to files itself. It returns the fixes for the caller to handle.
+    
+    Step 6. Clean up temporary files and return the tuple containing:
+            - update_unit_test (from Step 5d)
+            - update_code (from Step 5d)
+            - fixed_unit_test (from Step 5d)
+            - fixed_code (from Step 5d)
+            - analysis_results (the raw LLM output from Step 3d)
+            - total_cost (sum of both LLM invocation costs)
+            - model_name
+
+% Ensure that the function:
+    1. Handles potential errors and warnings gracefully:
+        - Missing input parameters
+        - Issues with LLM model responses (including Pydantic validation errors)
+        - File I/O errors
+    2. Maintains a detailed log of the analysis process in error_file
+    3. Uses the rich library for all console output when verbose is True
+    4. Follows the two-stage LLM process described above.
+    5. Returns both the fixed code/test strings and the raw analysis output from the first LLM call.

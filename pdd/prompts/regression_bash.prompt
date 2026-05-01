@@ -1,0 +1,82 @@
+% You are an expert test engineer. Your goal is to write a Bash script, "regression.sh" that will create a comprehensive regression test for the pdd cli.
+
+% Here is the pdd README.md file: <pdd_readme><include>./README.md</include></pdd_readme>
+
+% Here is an example of a regression script that tests the 'cli' function: <regression_example><include>context/regression_example.sh</include></regression_example>
+
+% However, unlike in the above regression example, the pdd cli has to run in the current directory instead of cd "$STAGING_PATH/regression". All the output files should still be in the "$STAGING_PATH/regression" directory.
+
+% Make sure all the functionality of pdd is exercised in the regression script.
+
+% Additional requirements:
+    1. Define common path variables at the start of the script:
+        - STAGING_PATH for output files
+        - PROMPTS_PATH for prompt files
+        - CONTEXT_PATH for context files
+        - LOG_FILE for regression logging
+        - COST_FILE for tracking command costs
+    
+    2. Use consistent variables across different commands:
+        - EXTENSION_SCRIPT, EXTENSION_PROMPT, EXTENSION_TEST for extension-related files
+        - CHANGE_PROMPT, CHANGE_SCRIPT, CHANGE_CONTEXT_PROMPT for change-related files
+        - SPLIT_PROMPT, SPLIT_SCRIPT, SPLIT_EXAMPLE_SCRIPT for split-related files
+    
+    3. Implement a robust logging system:
+        - Create a log() function for verbose output (enabled by default)
+        - Create a log_timestamped() function for regression.log entries
+        - Create a run_pdd_command() function that:
+            - Executes pdd commands with consistent parameters
+            - Logs command execution and results
+            - Handles errors and exits on failure
+    
+    4. For each pdd command, implement the following:
+        - generate: Create extension script from prompt
+        - example: Generate verification program
+        - test: Generate test file
+        - preprocess: Create preprocessed and XML versions of prompts
+        - update: Handle script modifications and updates
+            - Backup original script
+            - Add a print statement using OS-specific sed
+            - Compare original and modified versions
+        - change: Process context-based changes
+        - crash: Handle program crashes and fixes
+        - fix: Implement both regular and loop-based fixes
+            - Regular fix with test and code outputs
+            - Loop fix with max attempts and budget constraints
+        - split: Handle prompt splitting operations
+        - detect: Analyze prompt similarities
+        - conflicts: Check for prompt conflicts
+        - trace: Analyze specific line execution (line 31)
+        - bug: Test specific output scenarios
+            - Compare Python extension outputs
+            - Generate bug-specific tests
+        - auto-deps: Handle dependency analysis
+    
+    5. Configuration settings:
+        - Set PDD_AUTO_UPDATE=false
+        - Use strength=0.85 and temperature=1.0
+        - Enable verbose output by default
+        - Track costs in regression_cost.csv
+    
+    6. Error handling and cleanup:
+        - Remove existing regression.log at start
+        - Check and handle command failures
+        - Verify file existence before operations
+        - Calculate and display total cost at completion
+    
+    7. OS compatibility:
+        - Handle sed differences between BSD (macOS) and GNU (Linux)
+        - Use appropriate path handling for different systems
+        - Ensure consistent line endings and file permissions
+
+% The script should be organized in a clear, logical flow:
+    1. Variable and function definitions
+    2. Setup and cleanup operations
+    3. Command executions in a logical sequence
+    4. Summary and cost reporting
+
+% Set PDD_AUTO_UPDATE to false for the regression script so pdd doesn't ask to update itself.
+
+% Remove the current regression.log file if it exists when starting.
+
+% Include a cost output file (regression_cost.csv) to track the cost of each command and calculate the total at the end.

@@ -1,0 +1,50 @@
+% You are an expert TypeScript React engineer. Build `pdd/frontend/components/CreatePromptModal.tsx`, a modal that creates a new prompt file from user input.
+
+% Dependencies
+<create_prompt_modal_dependencies>
+  <include-many>pdd/frontend/constants.ts, pdd/frontend/api.ts</include-many>
+</create_prompt_modal_dependencies>
+
+Requirements
+1. Export default `CreatePromptModal` and define `CreatePromptModalProps` with:
+   - `onClose: () => void`
+   - `onCreate: (promptInfo: { path: string; content: string; info: PromptInfo }) => Promise<void>`
+   - `isCreating: boolean`
+   - `existingPrompts: PromptInfo[]`
+2. Add local helper `validatePromptName(name: string): string | null` with exact checks:
+   - required (after trim): `'Name is required'`
+   - min length 2: `'Name must be at least 2 characters'`
+   - max length 50: `'Name must be 50 characters or less'`
+   - regex `^[a-z][a-z0-9_]*$` else `'Name must start with a letter and contain only lowercase letters, numbers, and underscores'`
+3. Use local state for `name` (''), `language` ('python'), `description` (''), and `error` (`string | null`).
+4. Memoize `filename` as `prompts/${name.trim()}_${language}.prompt` when `name.trim()` exists; otherwise `''`.
+5. Memoize duplicate detection: `isDuplicate = existingPrompts.some(p => p.prompt === filename)` (false when no filename).
+6. On submit:
+   - `preventDefault`, clear error.
+   - validate `name.trim()` with `validatePromptName`; set error and stop on failure.
+   - if duplicate, set `'A prompt with this name and language already exists'` and stop.
+   - generate content via `getPromptTemplate(name.trim(), language, description)`.
+   - build `promptInfo: PromptInfo` with `prompt: filename`, `sync_basename: name.trim()`, and `language`.
+   - call `onCreate({ path: filename, content, info: promptInfo })`.
+   - on error, set `err.message || 'Failed to create prompt'`.
+7. Render full-screen overlay modal with `role="dialog"`, `aria-modal="true"`, and `aria-labelledby="create-prompt-title"`:
+   - clicking overlay closes only when `!isCreating`.
+   - clicking dialog content stops propagation.
+8. Header contains title `Create New Prompt` and close button with `aria-label="Close modal"`; disable close button while creating.
+9. Render form fields:
+   - name input (`id="prompt-name"`, `autoFocus`) sanitizes on change with `toLowerCase().replace(/[^a-z0-9_]/g, '')`.
+   - language select (`id="prompt-language"`) from `SUPPORTED_LANGUAGES`.
+   - optional description textarea (`id="prompt-description"`).
+   - disable all inputs while creating.
+10. Show filename preview block only when `filename` exists:
+   - show destination path.
+   - apply duplicate error visual state and message (`A prompt with this name already exists`) when duplicate.
+11. Show error panel only when `error` is set.
+12. Footer actions:
+   - `Cancel` button calls `onClose`, disabled while creating.
+   - submit button text is `Create & Edit` normally and spinner + `Creating...` while creating.
+   - disable submit when creating, name is blank after trim, or duplicate exists.
+13. Preserve current dark Tailwind visual style, responsive behavior (mobile fullscreen modal, desktop centered dialog), and existing animation/transition classes.
+
+Deliverable
+- Output only `pdd/frontend/components/CreatePromptModal.tsx`.

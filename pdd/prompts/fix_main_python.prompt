@@ -1,0 +1,90 @@
+% You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
+
+<pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+<include>context/ctx_obj_params.prompt</include>
+
+% Inputs
+- `ctx` (`click.Context`)
+- `prompt_file`, `code_file`, `unit_test_file`, `error_file` (`str`)
+- `output_test`, `output_code`, `output_results` (`Optional[str]`)
+- `loop` (`bool`)
+- `verification_program` (`Optional[str]`)
+- `max_attempts` (`int`)
+- `budget` (`float`)
+- `auto_submit` (`bool`)
+- `agentic_fallback` (`bool`, default `True`)
+- `strength`, `temperature` (`Optional[float]`)
+- `protect_tests` (`bool`, default `False`)
+- `test_files` (`list[str] | None`)
+- `failure_aware_retries` (`bool`, default `True`)
+
+% Output
+Return `Tuple[bool, str, str, int, float, str]`:
+- success
+- fixed unit test content
+- fixed code content
+- attempt count
+- total cost
+- model name, or `f"Error: {e}"` on failure
+
+% Requirements
+1. Validate inputs before the main file-processing logic:
+   - `loop=True` requires `verification_program`, otherwise raise `click.UsageError`.
+   - In non-loop mode, verify `error_file` exists before calling `construct_paths`; raise `FileNotFoundError` if missing.
+   - Initialize `analysis_results = None` before the main `try`.
+
+2. Build paths through `construct_paths`:
+   - Always pass prompt/code/test in `input_file_paths`.
+   - Include `error_file` only in non-loop mode.
+   - Resolve the command as `fix` and feed through the requested output path overrides.
+   - Pass `force`, `quiet`, `context_override=ctx.obj.get("context")`, `confirm_callback=ctx.obj.get("confirm_callback")`, and `create_error_file=loop`.
+
+3. Resolve runtime options from direct arguments first, then `ctx.obj`:
+   - `strength` falls back to `ctx.obj.get("strength", DEFAULT_STRENGTH)`.
+   - `temperature` falls back to `ctx.obj.get("temperature", 0)`.
+   - Also read `time`, `verbose`, and `local` behavior from `ctx.obj`.
+
+4. Execution strategy:
+   - Loop mode always calls `fix_error_loop` with the original file paths plus `prompt=input_strings["prompt_file"]`, `verification_program`, `strength`, `temperature`, `time`, `max_attempts`, `budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose`, `agentic_fallback`, `protect_tests`, `test_files`, `failure_aware_retries`, and the computed `use_cloud` flag.
+   - Loop mode is hybrid by default: local test execution, but `use_cloud=True` for LLM calls unless local execution is explicitly forced. `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` still keep cloud LLM calls enabled in loop mode.
+   - Single-pass mode is cloud-first unless local execution is forced or `CloudConfig.is_running_in_cloud()` says the process is already running inside the cloud worker environment.
+   - Respect `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` so cloud failures do not silently fall back to local execution when fallback is disabled.
+
+5. Single-pass cloud mode:
+   - Authenticate with `CloudConfig.get_jwt_token(verbose=verbose)`.
+   - POST to `CloudConfig.get_endpoint_url("fixCode")` with timeout `get_cloud_timeout()`.
+   - Payload includes `unitTest`, `code`, `prompt`, `errors`, `language`, `strength`, `temperature`, `time` (defaulting to `0.25` when unset), and `verbose`.
+   - Parse `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, and `modelName`.
+   - If the cloud result contains candidate fixes, validate them locally with `run_pytest_on_file` before reporting success.
+   - Fall back to local fixing on recoverable auth/network/timeout/5xx/invalid-JSON/no-fixed-code cases.
+   - Raise `click.UsageError` instead of falling back for non-recoverable cases: 400, 401, 402, 403, or any cloud-only failure.
+
+6. Single-pass local mode:
+   - Call `fix_errors_from_unit_tests` with processed `input_strings` for `unit_test`, `code`, `prompt`, and `error`.
+   - Pass `error_file=output_file_paths.get("output_results")`, `strength`, `temperature`, `time`, `verbose`, and `protect_tests`.
+   - Set `attempts = 1`.
+   - Do not trust `updateUnitTest` / `updateCode` alone; if either file changed, validate with `run_pytest_on_file` using temp files. If nothing changed, `success=False`.
+
+7. Saving and reporting:
+   - Write only non-empty outputs.
+   - Never write the fixed test file when `protect_tests=True`; optionally log that skip in verbose mode.
+   - Create parent directories before writing.
+   - When not quiet, print success/failure, attempts, cost, model, and saved paths with Rich.
+   - Only print the test/code output path when that file was actually produced.
+   - In verbose mode, print only a short analysis preview and escape Rich markup safely when preview text is invalid.
+
+8. Auto-submit:
+   - Run only when `success` is true, `auto_submit` is true, and `PDD_FORCE_LOCAL` is not enabled.
+   - Get a JWT with `asyncio.run(get_jwt_token(...))`.
+   - Preprocess the prompt with `recursive=False` and `double_curly_brackets=True`.
+   - Submit to `https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample`. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`) — every other cloud POST in this package uses the same helper, and omitting `timeout=` is a sibling copy-paste variant of the `pdd sync` hang documented in #1272.
+   - Include original prompt/code/test, optional error/example inputs, fixed code/test outputs, and analysis from `output_results` if readable, otherwise from in-memory `analysis_results`.
+   - Metadata should include a title/description, language from `get_language(os.path.splitext(code_file)[1])`, empty framework, tags `["auto-fix", "example"]`, `isPublic=True`, and `price=0.0`.
+   - Submission failures should be reported but must not change the main fix result.
+
+9. Error handling:
+   - Re-raise `click.Abort` and `click.UsageError`.
+   - For all other exceptions, print Rich-safe error messages; handle `MarkupError` explicitly by escaping its message.
+   - Return `(False, "", "", 0, 0.0, f"Error: {e}")` instead of exiting the process.

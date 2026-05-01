@@ -1,0 +1,94 @@
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
+
+---
+name: pdd/code_generator_main
+language: Python
+---
+
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
+
+# Role and Scope
+You are an expert Python Backend Engineer responsible for the `code_generator_main` module. This module serves as the primary orchestration engine for the PDD CLI, coordinating the transition from a `.prompt` file to finalized source code. It must handle complex logic involving local/cloud LLM providers, incremental diff-based generation, Git-based version recovery, and extensible post-processing hooks.
+
+# Requirements
+1. **Path Orchestration**: Resolve input and output paths using `construct_paths`, ensuring that CLI flags, front-matter overrides, and `.pddrc` defaults are applied in the correct precedence (CLI > Front-matter > Config).
+2. **Incremental Generation**: 
+    - Detect if an output file already exists.
+    - Implement a Git-based "time travel" mechanism: if a file is unchanged in HEAD, search up to 10 previous commits to find a different version of the prompt to use as the "original" for a diff-based update.
+    - Automate Git staging (`git add`) of modified files before incremental attempts to allow for potential rollbacks.
+3. **Execution Strategy**:
+    - Support both Cloud execution (via `requests` to a PDD API) and Local execution (via a local generator function).
+    - Implement fallback logic: if Cloud fails (except for 402/401/403/400 errors), automatically retry using the local provider.
+    - Support `PDD_CLOUD_ONLY` and `PDD_NO_LOCAL_FALLBACK` environment flags.
+4. **Post-Processing**:
+    - Support a `post_process_python` hook defined in front-matter or environment variables.
+    - Handle both `stdin` and `argv` execution modes for post-processing scripts.
+    - Include "safety net" logic for specific templates (e.g., automatically running `render_mermaid.py` if the output is `architecture.json`).
+5. **Validation & Conformance**:
+    - Validate generated JSON against `output_schema` if provided.
+    - Perform "Architecture Conformance" checks: verify that the generated code's exported symbols (Functions/Classes) match the interface defined in `architecture.json`.
+    - Enforce language-specific naming conventions (e.g., snake_case for Python).
+6. **Integration & Wiring**:
+    - Implement "Auto-Wiring": detect public exports in generated Python files and automatically insert/update import statements in the parent `__init__.py`.
+    - Validate `<include>` tags in generated `.prompt` files to ensure they point to existing files.
+
+# Dependencies
+<construct_paths>
+    <include>pdd/construct_paths.py</include>
+</construct_paths>
+<preprocess>
+    <include>pdd/preprocess.py</include>
+</preprocess>
+<local_generator>
+    <include>pdd/code_generator.py</include>
+</local_generator>
+<incremental_generator>
+    <include>pdd/incremental_code_generator.py</include>
+</incremental_generator>
+<cloud_config>
+    <include>pdd/core/cloud.py</include>
+</cloud_config>
+<architecture_sync>
+    <include>pdd/architecture_sync.py</include>
+</architecture_sync>
+<env_detector>
+    <include>pdd/python_env_detector.py</include>
+</env_detector>
+<pdd.architecture_sync>
+    <include select="def:example_validate_interface,def:example_validate_dependencies,def:example_parse_tags,def:example_generate_tags,def:example_check_existing_tags,def:example_inject_tags_workflow,def:example_get_entry">context/architecture_sync_example.py</include>
+</pdd.architecture_sync>
+<pdd.auth_service>
+    <include select="def:get_cached_jwt,def:verify_auth,def:has_refresh_token,def:get_refresh_token">context/auth_service_example.py</include>
+</pdd.auth_service>
+<pdd.__init__>
+    <include>context/__init__example.py</include>
+</pdd.__init__>
+<pdd.auto_include>
+    <include select="def:main">context/auto_include_example.py</include>
+</pdd.auto_include>
+<pdd.api_key_scanner>
+    <include>context/api_key_scanner_example.py</include>
+</pdd.api_key_scanner>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
+<utils.keyring_timeout>
+    <include>context/_keyring_timeout_example.py</include>
+</utils.keyring_timeout>
+
+# Instructions
+- **Input Parsing**: Use `_parse_front_matter` to separate YAML metadata from the prompt body. `_parse_front_matter` MUST accept LF (`\n`) and CRLF (`\r\n`) line endings on the opening and closing `---` fences (tolerating trailing `[ \t]*` on fence lines), and MUST strip a leading UTF-8 BOM (`﻿`) if present, so prompts authored on Windows parse correctly (#1276). When BOTH fences are present but the YAML between them is malformed, log a single `logger.warning` naming the YAML error and fall back to `(None, text)`. Do NOT log a warning when the opener `---\r?\n` is present without a closing fence: that pattern is indistinguishable from a markdown horizontal rule at the start of a prompt and would produce false positives on valid content. Use `_expand_vars` to handle `$VAR` and `${VAR}` substitutions in paths and configurations.
+- **Git Helpers**: Implement `_run_git_command` using `subprocess` with robust error handling for environments where Git might not be installed.
+- **Architecture Logic**: In `_verify_architecture_conformance`, use the `ast` module to parse Python code and regex for TypeScript/JavaScript to identify exported symbols. Delegate Python symbol collection to a recursive helper (`_collect_python_symbols`) that yields top-level functions/classes/constants and, inside a class body, direct-child methods plus nested classes producing dotted names (e.g. `Outer.Inner.method`). Do NOT descend into `if`/`try`/`with` inside class bodies: conformance is a hard validator and must not accept methods whose existence depends on branch evaluation. The snake_case guard splits dotted symbols on `.` and inspects each segment so camelCase method names (e.g. `MyClass.processData`) still fail. Raise `click.UsageError` for mismatches.
+- **Discovery**: Implement a `_run_discovery` helper that scans the filesystem based on `discover` patterns in front-matter to populate template variables.
+- **Incremental Logic**: If `force_incremental_flag` is set, but no original prompt is found via Git or file arguments, warn the user and fallback to full generation.
+- **Context Handling**: Ensure all Rich console outputs honor the `quiet` and `verbose` flags to maintain a clean CLI experience.
+
+# Deliverables
+A single Python file containing:
+1. The primary `code_generator_main` function returning `(generated_code, was_incremental, total_cost, model_name)`.
+2. Private helper functions for Git operations (`_run_git_command`, `is_git_repository`).
+3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, `_wire_to_parent_init`).
+4. Logic for handling Cloud API requests, including JWT authentication and error code handling.

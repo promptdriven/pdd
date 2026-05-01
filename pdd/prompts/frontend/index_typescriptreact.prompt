@@ -1,0 +1,19 @@
+% You are an expert TypeScript React engineer. Generate `pdd/frontend/index.tsx` as the frontend entrypoint bootstrap.
+
+Requirements
+1. Import exactly:
+   - `React` from `'react'`
+   - `ReactDOM` from `'react-dom/client'`
+   - `App` from `'./App'`
+   - `{ ToastProvider }` from `'./components/Toast'`
+2. Read `const rootElement = document.getElementById('root')`.
+3. If `rootElement` is null, throw `new Error("Could not find root element to mount to")`.
+4. Create the root with `const root = ReactDOM.createRoot(rootElement)`.
+5. Render:
+   - `<React.StrictMode>`
+   - `<ToastProvider><App /></ToastProvider>`
+   - `</React.StrictMode>`
+6. Keep the file limited to this mount/bootstrap logic only (no exports or extra helpers).
+
+Deliverable
+- Output only `pdd/frontend/index.tsx`.

@@ -1,0 +1,54 @@
+# Role and Scope
+You are an expert software engineer implementing the `get_test_command.py` module for the `pdd` project. This module is responsible for resolving the appropriate test execution command for a given file. It acts as a bridge between static language configuration (CSV), project-specific configuration (like Jest or Playwright configs), and agentic fallback mechanisms.
+
+# Requirements
+1. **Resolution Order**: The module must resolve commands in the following priority:
+   - Smart runner detection for TypeScript/TSX (looking for configuration files).
+   - Static lookup via `language_format.csv`.
+   - Heuristic detection via `default_verify_cmd_for`.
+   - Fallback to `None` to trigger agentic logic.
+2. **TypeScript Smart Detection**:
+   - For `.ts` and `.tsx` files, search upwards (max 5 levels) for `playwright.config`, `jest.config`, or `vitest.config` (supporting `.js`, `.ts`, and `.mjs` extensions).
+   - If found, return the command with the specific directory containing the config as the `cwd`.
+   - Prioritize Playwright for files ending in `.spec.ts` or `.spec.tsx`.
+3. **Data Classes**: Define a `TestCommand` dataclass to bundle the `command` string and an optional `cwd` (Path). Use `__test__ = False` to avoid discovery by pytest.
+4. **CSV Integration**: Load language-specific test commands from `language_format.csv`, searching in both package-relative and project-root-relative `data/` directories.
+5. **Path Resolution**: Ensure all paths are handled using `pathlib` for cross-platform compatibility.
+6. **Error Handling**: Gracefully handle missing CSV files by returning an empty dictionary, allowing the resolution logic to proceed to the next step.
+
+# Dependencies
+<agentic_langtest>
+    <include>pdd/agentic_langtest.py</include>
+</agentic_langtest>
+<get_language>
+    <include>pdd/get_language.py</include>
+</get_language>
+<language_format_csv>
+    <include>pdd/data/language_format.csv</include>
+</language_format_csv>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
+
+# Instructions
+1. **Implement `_detect_ts_test_runner(test_path: Path)`**:
+   - Walk up the directory tree (limit: 5 parents).
+   - Check for `playwright.config.[ts|js|mjs]` only if the file is a `.spec` file.
+   - Check for `jest.config` and `vitest.config` variants.
+   - Return a tuple of `(command_prefix, config_directory)` if found.
+2. **Implement `_load_language_format()`**:
+   - Attempt to locate `language_format.csv` in `pdd/data/` or `../data/`.
+   - Return a dictionary mapping extensions to CSV rows using `csv.DictReader`.
+3. **Implement `get_test_command_for_file(test_file: str, language: Optional[str])`**:
+   - This is the main entry point.
+   - Use `get_language` if the language is not provided.
+   - Execute the resolution order defined in the Requirements.
+   - Ensure the command returned for TS runners uses the absolute path (`resolve()`) of the test file.
+   - For CSV commands, replace the `{file}` placeholder with the input file string.
+
+# Deliverables
+A single file `pdd/get_test_command.py` containing:
+- `TestCommand` dataclass.
+- `_detect_ts_test_runner` helper function.
+- `_load_language_format` helper function.
+- `get_test_command_for_file` public function.

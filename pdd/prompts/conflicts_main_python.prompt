@@ -1,0 +1,79 @@
+% You are an expert Python engineer. Your goal is to write the 'conflicts_main' function that will be part of the 'pdd' command-line program. This function will handle the core logic for the 'conflicts' command.
+
+<include>context/python_preamble.prompt</include>
+<include>./context/ctx_obj_params.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+    - 'ctx' (click.Context): The Click context object (see ctx_obj_params.prompt for available keys).
+    - 'prompt1' (str): Path to the first prompt file.
+    - 'prompt2' (str): Path to the second prompt file.
+    - 'output' (Optional[str]): Path to save the CSV file containing the conflict analysis results.
+    - 'verbose' (bool): Optional parameter to control verbosity of the conflict analysis (defaults to False).
+    Outputs:
+    - Returns a tuple containing (List[dict], float, str):
+      - List[dict]: A list of dictionaries containing conflict analysis results.
+      - float: The total cost of the operation.
+      - str: The name of the model used.
+
+<examples>
+   % Here are examples of how to use internal modules:
+   <internal_example_modules>
+      % Here is an example of how to use the `construct_paths` function:
+      <construct_paths_example>
+      <include>context/construct_paths_example.py</include>
+      </construct_paths_example>
+
+      % Here is an example of how to use the `conflicts_in_prompts` function:
+      % The call to `conflicts_in_prompts` within this example should be understood
+      % to include the 'time' parameter as shown below.
+      <conflicts_in_prompts_example>
+      <include>context/conflicts_in_prompts_example.py</include>
+      % Example of updated call:
+      % conflicts, total_cost, model_name = conflicts_in_prompts(
+      %     prompt1_content,
+      %     prompt2_content,
+      %     strength,
+      %     temperature,
+      %     time,
+      %     verbose_flag  # Assuming verbose_flag is passed if applicable
+      % )
+      </conflicts_in_prompts_example>
+   </internal_example_modules>
+</examples>
+
+% The function should perform the following steps:
+   1. **Retrieve Contextual Parameters**:
+      - Retrieve `time = ctx.obj.get('time', DEFAULT_TIME)`. (Ensure `DEFAULT_TIME` is appropriately defined or handled).
+
+   2. **Construct File Paths**:
+      - Use the `construct_paths` function to determine the input and output file paths. When calling `construct_paths`, pass `context_override=ctx.obj.get('context')` so a global `--context` is honored.
+      - Ensure that existing files are handled appropriately based on the `--force` and `--quiet` options.
+
+   3. **Load Input Files**:
+      - Read the contents of `prompt1` and `prompt2`.
+      - Use the `input_strings` returned by `construct_paths` to access file contents, for example: `prompt1_content = input_strings['prompt1']` and `prompt2_content = input_strings['prompt2']`.
+
+   4. **Analyze Conflicts**:
+      - Call the `conflicts_in_prompts` function with the contents of the prompt files, along with the necessary parameters (strength, temperature, time, verbose).
+      - Explicit call signature: `conflicts, total_cost, model_name = conflicts_in_prompts(prompt1_content, prompt2_content, strength, temperature, time, verbose)`.
+      - Capture the returned conflicts list, total cost, and model name.
+      - Important: Use `ctx.obj.get('strength', DEFAULT_STRENGTH)`, `ctx.obj.get('temperature', 0)`, and `ctx.obj.get('time', DEFAULT_TIME)` to get these values.
+      - Pass the `verbose` parameter provided to `conflicts_main` to control detailed output during analysis.
+
+   5. **Replace prompt1 and prompt2 with CLI paths**:
+      - Replace the `prompt_1` and `prompt_2` values with the CLI-supplied `prompt1` and `prompt2` paths in the conflicts list for the `prompt_name` field.
+
+   6. **Save Results**:
+      - Write the conflicts list to a CSV file using the `csv` module.
+      - Write to `output_file_paths['output']` returned by `construct_paths`.
+      - Include headers `['prompt_name', 'change_instructions']` and ensure proper formatting.
+
+   7. **Provide User Feedback**:
+      - Use `rprint` from Rich to display messages to the user, indicating success or failure.
+      - Gate success/status messages (completion, model used, total cost, results path) behind `not ctx.obj.get('quiet', False)`.
+      - Always print the final conflicts section (e.g., "Conflicts detected" and the list of conflicts), even when `--quiet` is enabled.
+
+   8. **Error Handling**:
+      - Wrap the main logic in a `try-except` block.
+      - Catch exceptions, display error messages (suppress the error text when `--quiet` is enabled), and exit gracefully using `sys.exit(1)` if necessary.

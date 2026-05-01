@@ -1,0 +1,33 @@
+Create a React functional component named `ModelSliders` that serves as a compact, interactive configuration panel for LLM parameters. This component is part of the UI layer, providing users with a way to visualize and adjust model-specific settings like strength, reasoning time, and temperature through a collapsible popover interface.
+
+### Requirements:
+1.  **UI/UX Design**:
+    *   Implement a collapsible "trigger bar" that displays a summary of the currently resolved model (Name, ELO, and current parameter values).
+    *   Use a popover panel (absolute positioned) that opens when the trigger bar is clicked and closes when clicking outside the component.
+    *   The panel should be styled with a dark theme using Tailwind CSS (e.g., `bg-surface-800`, `border-surface-600`).
+    *   Include smooth transitions for the chevron icon rotation and a scale-in animation for the popover.
+2.  **Parameter Controls**:
+    *   **Strength Slider**: Range 0 to 1. The step size should be dynamically calculated based on the number of available models (`1 / (models.length - 1)`).
+    *   **Time (Reasoning) Slider**: Range 0 to 1 with a step of 0.05.
+    *   **Temperature Slider**: Range 0 to 2 with a step of 0.1.
+3.  **Model Information**: Display the currently `resolvedModel` details inside the popover, including the model name, ELO, and formatted input cost.
+4.  **State Management**: The component should be controlled via props for all slider values and change handlers.
+5.  **Responsiveness**: Ensure the trigger bar and popover handle text truncation gracefully for long model names.
+
+### Dependencies:
+<api_types>
+  <include>../api/index.ts</include>
+</api_types>
+<format_utils>
+  <include>../lib/format.ts</include>
+</format_utils>
+
+### Instructions:
+1.  **Props Interface**: Define `ModelSlidersProps` including `models` (ModelInfo array), `strength`, `time`, `temperature`, their respective `onChange` handlers, and the `resolvedModel`.
+2.  **Outside Click Logic**: Use a `useRef` and `useEffect` hook to detect clicks outside the `panelRef` to automatically close the popover.
+3.  **Dynamic Stepping**: Calculate `strengthStep` logic: if `models.length > 1`, use `1 / (models.length - 1)`, otherwise default to `0.05`.
+4.  **Styling**: Use Tailwind CSS for layout. The popover should have a fixed width (e.g., `w-80`) and high z-index. Use `accent-color` classes (e.g., `accent-accent-500`, `accent-purple-500`, `accent-orange-500`) to differentiate the sliders.
+5.  **Formatting**: Use the `formatCost` utility to display the model's input cost.
+
+### Deliverables:
+*   A single TypeScript file `ModelSliders.tsx` exporting the `ModelSliders` component as the default export.

@@ -1,0 +1,49 @@
+You are a senior frontend developer. Implement `BatchFilterDropdown.tsx` (default export `BatchFilterDropdown`) as a React + TypeScript functional component.
+
+Imports:
+- `useState` from React
+- `Batch` from `../lib/batchUtils`
+
+Props:
+- `batches: Batch[]`
+- `selectedBatch: Batch | null`
+- `onSelectBatch: (batch: Batch | null) => void`
+- `onSyncBatch?: (batch: Batch) => void`
+- `remainingCountByBatch?: Map<number, number>` (default `new Map()`)
+- `disabled?: boolean` (default `false`)
+- `showModuleList?: boolean` (default `false`)
+
+Core behavior:
+- Keep `expandedBatchId: number | null` state.
+- If `batches.length <= 1`, return `null`.
+- `selectedRemaining = selectedBatch ? (remainingCountByBatch.get(selectedBatch.id) ?? selectedBatch.modules.length) : 0`.
+- `getDisplayName(filename)` must strip a trailing `_[A-Za-z]+.prompt`, then strip `.prompt`.
+
+Compact mode (`showModuleList === false`):
+- Render a horizontal row with:
+  - `<select>` value `selectedBatch?.id ?? 'all'`, disabled by `disabled`
+  - options: `All Batches ({batches.length})` and each `{batch.name} ({batch.modules.length} modules)`
+- Select change:
+  - `'all'` -> `onSelectBatch(null)`
+  - else parse selected id, find batch, call `onSelectBatch(foundBatch || null)`
+- If `selectedBatch`, show a color dot with inline `backgroundColor: selectedBatch.color` and title `{name}: {modules.length} modules`.
+- If `selectedBatch && onSyncBatch`, show button `Sync Batch ({selectedRemaining})`; on click call `onSyncBatch(selectedBatch)`; disable when `disabled || selectedRemaining === 0`.
+
+Expanded mode (`showModuleList === true`):
+- Render each batch as a card.
+- Per batch:
+  - `isExpanded = expandedBatchId === batch.id`
+  - `isSelected = selectedBatch?.id === batch.id`
+  - `remaining = remainingCountByBatch.get(batch.id) ?? batch.modules.length`
+- Header click toggles both selection and expansion:
+  - `onSelectBatch(isSelected ? null : batch)`
+  - `setExpandedBatchId(isExpanded ? null : batch.id)`
+- Header contains color dot, batch name/count, chevron icon rotated when expanded.
+- Expanded area:
+  - scrollable module rows showing: index (`idx + 1`), truncated display name from `getDisplayName(module.filename)` (full filename in `title`), and `P{module.priority}`
+  - if `onSyncBatch`, full-width button `Sync {batch.name} ({remaining} remaining)`; on click `stopPropagation()` then `onSyncBatch(batch)`; disabled when `disabled || remaining === 0`
+
+Styling:
+- Use Tailwind dark-theme classes.
+- Sync buttons use active gradient `#FDCE49 -> #DFA84A`, hover `#FFD966 -> #FDCE49`, and muted disabled state.
+- Include inline SVG refresh icons in both sync buttons.

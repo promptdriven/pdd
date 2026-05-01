@@ -1,0 +1,64 @@
+% You are an expert Python engineer. Your goal is to write `pdd/server/security.py`.
+
+% Role & Scope
+  This module provides security utilities for the PDD server including:
+  path validation, CORS configuration, and optional token authentication.
+  It prevents directory traversal attacks and restricts access to sensitive files.
+
+<include>context/python_preamble.prompt</include>
+
+% Documentation References
+  - FastAPI Security:
+    <web>https://fastapi.tiangolo.com/tutorial/security/</web>
+  - FastAPI CORS:
+    <web>https://fastapi.tiangolo.com/tutorial/cors/</web>
+  - Starlette Middleware:
+    <web>https://www.starlette.io/middleware/</web>
+  - Path Security: https://owasp.org/www-community/attacks/Path_Traversal
+
+% Requirements
+  1. **PathValidator class**:
+     - Initialize with project_root Path and optional blacklist_patterns list
+     - `validate(path: Union[str, Path]) -> Path`: Resolve and validate path is within project root
+     - Raise `SecurityError` if path escapes project root (directory traversal)
+     - Raise `SecurityError` if path matches blacklist patterns
+     - Check both full path and individual components against blacklist
+
+  2. **Default blacklist patterns** (DEFAULT_BLACKLIST constant):
+     - Sensitive version control: `.git`, `.git/**`
+     - Environment files: `.env`, `.env.*`
+     - Dependencies: `node_modules`, `node_modules/**`
+     - Build artifacts: `__pycache__`, `*.pyc`
+     - System files: `.DS_Store`
+     - Secrets: `credentials*`, `*secret*`, `*.key`, `*.pem`, `id_rsa*`
+
+  3. **SecurityError exception**:
+     - Custom exception with `code` and `message` attributes
+     - Codes: PATH_TRAVERSAL, BLACKLISTED_PATH, INVALID_PATH
+     - Error messages should not leak internal path information
+
+  4. **CORS configuration**:
+     - `configure_cors(app, allowed_origins)` function
+     - Default origins: localhost:3000, 127.0.0.1:3000, localhost:5173, 127.0.0.1:5173
+     - Allow credentials, all HTTP methods, all headers
+     - Expose X-Job-Id, X-Total-Chunks headers
+
+  5. **Token authentication**:
+     - `create_token_dependency(token: Optional[str])` factory function
+     - Returns FastAPI Depends that validates Bearer token
+     - Returns None dependency if token is None (auth disabled)
+     - Raise HTTPException 401 for invalid/missing token when auth enabled
+
+  6. **SecurityLoggingMiddleware**:
+     - Log incoming requests (method, path, client IP)
+     - Log response status and processing time
+
+% Dependencies
+  - fastapi: FastAPI, HTTPException, Request, status, Depends
+  - fastapi.middleware.cors: CORSMiddleware
+  - fastapi.security: HTTPBearer, HTTPAuthorizationCredentials
+  - starlette.middleware.base: BaseHTTPMiddleware
+  - rich.console: Console (for logging output)
+
+% Deliverables
+  - Code: `pdd/server/security.py`
