@@ -36,7 +36,9 @@ def test_sync_config_includes_public_ci_dependencies():
 
     config = module.load_sync_config(str(REPO_ROOT / ".sync-config.yml"))
 
+    assert ".sync-config.yml" in config["shared"]
     assert "scripts/ci_detect_changed_modules.py" in config["shared"]
+    assert "scripts/copy_package_data_to_public.py" in config["shared"]
     assert "utils/mcp/prompts/" in config["shared"]
 
 
@@ -49,6 +51,7 @@ def test_sync_deletions_remove_stale_gitlinks_under_directory_patterns(tmp_path)
     (source / "examples/hello/src/hello.py").write_text("print('hello')\n")
     (source / "scripts").mkdir()
     (source / "scripts/ci_detect_changed_modules.py").write_text("# helper\n")
+    (source / "scripts/copy_package_data_to_public.py").write_text("# sync\n")
     (source / "utils/mcp/prompts").mkdir(parents=True)
     (source / "utils/mcp/prompts/generate_prompt.prompt").write_text("prompt\n")
     (source / "utils/mcp/prompts/main_python.prompt").write_text("python\n")
@@ -74,6 +77,7 @@ def test_sync_deletions_remove_stale_gitlinks_under_directory_patterns(tmp_path)
             "shared": [
                 "examples/",
                 "scripts/ci_detect_changed_modules.py",
+                "scripts/copy_package_data_to_public.py",
                 "utils/mcp/prompts/",
             ],
             "exclude": [],
@@ -85,10 +89,11 @@ def test_sync_deletions_remove_stale_gitlinks_under_directory_patterns(tmp_path)
         sync_deletions=True,
     )
 
-    assert copied == 4
+    assert copied == 5
     assert deleted == 2
     assert (dest / "examples/hello/src/hello.py").is_file()
     assert (dest / "scripts/ci_detect_changed_modules.py").is_file()
+    assert (dest / "scripts/copy_package_data_to_public.py").is_file()
     assert (dest / "utils/mcp/prompts/generate_prompt.prompt").is_file()
     assert not (dest / "examples/hello/old.txt").exists()
     assert "examples/hello/repo_root" not in _git(dest, "ls-files", "-s").stdout
