@@ -1,0 +1,96 @@
+# Sync configuration for bidirectional sync between private and public repos
+# Used by:
+#   - .github/workflows/sync-from-public.yml (pulling FROM public)
+#   - Makefile publish-public targets (pushing TO public)
+#   - scripts/copy_package_data_to_public.py --config
+
+# Files synced for BOTH pdd and pdd_cap repos
+shared:
+  # Python source files
+  - pdd/*.py
+  - pdd/commands/*.py
+  - pdd/core/*.py
+  - pdd/server/*.py
+  - pdd/server/routes/*.py
+
+  # Package data
+  - pdd/data/
+
+  # Templates
+  - pdd/templates/
+
+  # Tests (unit tests — recursive to include subdirectories)
+  - tests/**/*.py
+  - tests/*regression*.sh
+  - tests/fixtures/
+
+  # Root config files
+  - README.md
+  - requirements.txt
+  - pyproject.toml
+  - pytest.ini
+  - .gitignore
+  - Makefile
+  - LICENSE
+  - CHANGELOG.md
+  - CONTRIBUTING.md
+  - .env.example
+  - SETUP_WITH_GEMINI.md
+  - pdd-local.sh
+  - .pddrc
+  - .sync-config.yml
+
+  # Documentation
+  - docs/*.md
+  - docs/goldilocks_prompt.jpeg
+  - docs/videos/*.gif
+  - docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md
+  - docs/whitepaper_with_benchmarks/analysis_report/*.png
+  - docs/whitepaper_with_benchmarks/creation_report/*.png
+
+  # Examples
+  - examples/
+
+  # Utils
+  - scripts/ci_detect_changed_modules.py
+  - scripts/copy_package_data_to_public.py
+  - utils/mcp/prompts/
+  - utils/vscode_prompt/
+
+  # Context examples
+  - context/**/*_example.py
+  - context/cloud_function_call.py
+  - context/python_preamble.prompt
+
+  # Frontend (pdd connect UI)
+  - pdd/frontend/
+
+  # All prompts (full directory)
+  - pdd/prompts/
+
+  # Architecture metadata
+  - architecture.json
+
+  # Context prompt files
+  - context/ctx_obj_params.prompt
+  - context/test.prompt
+  - context/example.prompt
+
+# Files synced ONLY for pdd_cap repo.
+# Keep this section for future repo-specific exceptions; currently public pdd
+# and pdd_cap receive the same file set.
+cap_only: []
+
+# Exclusion patterns (applied globally when copying)
+exclude:
+  # Test exclusions (regression output dirs in subdirectories, not .sh scripts)
+  - tests/**/regression*
+  - tests/**/*.ipynb
+  - tests/csv/**
+  # Context exclusions
+  - context/**/__pycache__
+  - context/**/*.log
+  - context/**/*.csv
+  # Frontend exclusions
+  - pdd/frontend/node_modules/*
+  - pdd/frontend/dist/*
