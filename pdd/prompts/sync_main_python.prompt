@@ -93,6 +93,8 @@
 
 9. **Auto-Submit Example** (`_auto_submit_example` helper):
     - Skip if `PDD_FORCE_LOCAL` env var is set
+    - Skip if `CloudConfig.is_running_in_cloud()` returns True (interactive Device Flow cannot complete in headless executors)
+    - Bound the JWT fetch with `asyncio.wait_for(get_jwt_token(...), timeout=auth_timeout_s)` where `auth_timeout_s` is `float(os.environ.get('PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S', '300'))` parsed defensively (`try/except (TypeError, ValueError)` falls back to `300.0`). On `asyncio.TimeoutError` / `TimeoutError`, emit a yellow warning and return.
     - Get JWT token via `get_jwt_token()` with Firebase API key and GitHub client ID from env
     - Preprocess prompt content via `preprocess()` with `recursive=False` and `double_curly_brackets=True`
     - Build payload with command="fix", prompt/code/example/test files, metadata (title, language, tags)
@@ -171,7 +173,8 @@
 
 11. **`_auto_submit_example(basename: str, language: str, pdd_files: Dict[str, Path], ctx: click.Context) -> None`**:
     - Skip if PDD_FORCE_LOCAL env var is truthy
-    - Get JWT token via `get_jwt_token()` (asyncio.run)
+    - Skip if `CloudConfig.is_running_in_cloud()` returns True
+    - Get JWT token via `asyncio.run(asyncio.wait_for(get_jwt_token(...), timeout=auth_timeout_s))`, with `auth_timeout_s` defensively parsed from `PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S` (default `300.0`); on `asyncio.TimeoutError` / `TimeoutError`, log a yellow warning and return.
     - Read and preprocess prompt file
     - Build payload with prompt, code, example, test (if exists)
     - POST to submitExample endpoint. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`) — this is the canonical pattern used by every other cloud POST site in the package; omitting `timeout=` lets `pdd sync` hang indefinitely when the upstream cloud stalls mid-response (bug #1272)
@@ -179,7 +182,7 @@
 
 <examples>
    <sync_main_example>
-   <include>context/sync_main_example.py</include>
+   <include select="def:sync_main">context/sync_main_example.py</include>
    </sync_main_example>
 
    <construct_paths_example>

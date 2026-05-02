@@ -1,13 +1,49 @@
+## v0.0.225 (2026-05-02)
+
+### Feat
+
+- implement automated PR review-fix loop with granular controls, improved agent discovery, and expanded test coverage
+- add durable agentic sync checkpoints
+
+### Fix
+
+- **ci**: include .sync-config.yml in cloud-batch source tarball (#1358)
+- **ci**: exclude public sync helper from auto-heal
+- **release**: sync public CI payload
+- **tests**: clear PDD_JWT_TOKEN env in test_get_jwt_token to prevent CI leak (#1356)
+- **sync, fix**: raise MODULE_TIMEOUT cap and skip cloud auto-submit in cloud executors (#1347)
+
 ## v0.0.224 (2026-04-30)
 
 ### Feat
 
-- **checkup**: add PR review/fix loop
-- implement global tier-1 sync mode, deterministic manifest-driven model catalog, and improved dependency-aware CLI architecture management
+- `pdd checkup --review-loop` now runs a primary-reviewer/fixer loop against an existing PR, using one isolated PR worktree, committing and pushing accepted fixes back to the PR head branch, and re-running the same reviewer until clean or the round/cost/time budgets are exhausted.
+- Added review-loop controls for `--review-only`, `--reviewer`, `--fixer`, legacy `--reviewers`, max rounds/cost/minutes, blocking severities, reviewer-limit degradation, and compatibility clean-state gates.
+- Review-loop prompts now receive bounded issue, architecture, `.pddrc`, PR metadata, changed-file, PR comment, and PR review context; verification rounds re-check prior findings and perform a fresh full PR review.
+- Agent discovery now handles stale Codex CLI auth with an actionable `codex login` message, treats Gemini CLI OAuth credentials as Google availability, and searches runtime-expanded common install paths for `claude`, `codex`, and `gemini`.
+- Implemented global tier-1 sync mode, deterministic manifest-driven model catalog, and improved dependency-aware CLI architecture management.
+- **sync**: opt-in durable issue-sync mode (`pdd sync --durable <issue-url>`) that isolates each module in `.pdd/worktrees/sync-issue-<N>-<module>/`, checkpoints successful module diffs to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/` with a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` commit trailer, and resumes by skipping checkpointed modules on rerun. New flags `--durable-branch`, `--no-resume`, and `--durable-max-parallel` control the durable branch name, fresh re-runs, and concurrency cap; durable mode refuses `main`/`master`/the repository default branch and excludes secrets, lock files, cost CSVs, `.pdd/worktrees/`, and `.pdd/agentic_sync_state.json` from checkpoints (#1328). Cloud wiring (`pdd_cloud` passing `--durable` for issue-sync jobs, Phase 5 of #1328) lands separately.
+
+### Fix
+
+- `pdd checkup --pr --review-loop` no longer inherits PR mode's forced `--no-fix`; invalid `--review-loop`/`--review-only` combinations and non-positive review budgets fail early.
+- `push_with_retry` is now reusable with custom remotes, refspecs, and upstream behavior, while preserving non-fast-forward retry, token-file auth retry, and remote URL restoration.
+- The e2e fix orchestrator now runs code cleanup before CI validation so cleanup changes are included in the final validation pass.
+- Codex "Not logged in" messages now use an ASCII hyphen for terminals that mishandle non-ASCII punctuation.
 
 ### Refactor
 
-- remove LLM prompt sync pattern and clear cap_only configuration in sync-config.yml
+- `.sync-config.yml` now syncs the full prompt/context set through the shared file list and leaves `cap_only` empty for future repo-specific exceptions.
+
+### Build
+
+- Added `pdd/checkup_review_loop.py` with prompt, context/example files, architecture metadata, and public review-loop API entries.
+- Added and expanded tests for review-loop orchestration, PR context collection, CLI flag forwarding, provider availability, stale Codex auth handling, and push retry behavior.
+- Refreshed shell completions, package metadata, PyPI description, architecture/dependency metadata, cloud image hash, and cloud-batch timing data for 0.0.224.
+
+### Docs
+
+- README documents PR verification mode, review-loop mode, the new flags, and examples for verify-only, reviewer/fixer, and review-only audit invocations.
 
 ## v0.0.223 (2026-04-29)
 

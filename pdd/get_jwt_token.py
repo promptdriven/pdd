@@ -55,6 +55,7 @@ class RateLimitError(AuthError):
 
 # JWT file cache path (Issue #273 - reduces keyring access to avoid password prompts)
 JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
+PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"
 
 
 def _decode_jwt_payload(token: str) -> Dict:
@@ -614,6 +615,10 @@ async def get_jwt_token(
         NetworkError: If there are connectivity issues
         TokenError: If token exchange fails
     """
+    injected_token = os.environ.get(PDD_JWT_TOKEN_ENV)
+    if injected_token:
+        return injected_token
+
     # Check JWT cache FIRST to avoid keyring access (Issue #273)
     cached_jwt = _get_cached_jwt()
     if cached_jwt:

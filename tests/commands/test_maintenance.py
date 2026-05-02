@@ -100,6 +100,27 @@ class TestSyncCommand:
             assert result.exit_code == 0
             assert mock_sm.call_args.kwargs["dry_run"] is True
 
+    def test_sync_without_basename_dispatches_global_sync_not_durable(
+        self,
+        runner,
+        base_ctx_obj,
+    ):
+        """No-argument sync uses global sync and leaves durable mode disabled."""
+        cli = _make_cli(sync, base_ctx_obj)
+        mock_result = ("global done", 0.0, "none")
+
+        with patch(
+            "pdd.commands.maintenance._run_global_sync_dispatch",
+            return_value=mock_result,
+        ) as mock_global, \
+             patch("pdd.commands.maintenance.run_agentic_sync") as mock_agentic:
+            result = runner.invoke(cli, ["sync"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        mock_global.assert_called_once()
+        mock_agentic.assert_not_called()
+        assert mock_global.call_args.kwargs["one_session"] is False
+
     def test_sync_deprecated_log_flag(self, runner, base_ctx_obj):
         """--log emits a deprecation warning and sets dry_run=True."""
         mock_result = ({"dry_run": True}, 0.0, "none")
@@ -133,6 +154,54 @@ class TestSyncCommand:
             assert kw["use_github_state"] is False
             # one_session defaults to True for agentic sync
             assert kw["one_session"] is True
+            assert kw["durable"] is False
+            assert kw["durable_branch"] is None
+            assert kw["no_resume"] is False
+            assert kw["durable_max_parallel"] is None
+
+    @pytest.mark.parametrize(
+        ("extra_args", "expected"),
+        [
+            (
+                [],
+                {
+                    "agentic_mode": False,
+                    "budget": None,
+                    "use_github_state": True,
+                    "one_session": True,
+                },
+            ),
+            (["--agentic"], {"agentic_mode": True}),
+            (["--no-github-state"], {"use_github_state": False}),
+            (["--one-session"], {"one_session": True}),
+            (["--no-one-session"], {"one_session": False}),
+            (["--budget", "20"], {"budget": 20.0}),
+        ],
+    )
+    def test_sync_github_url_without_durable_keeps_checkpointing_disabled(
+        self,
+        runner,
+        base_ctx_obj,
+        extra_args,
+        expected,
+    ):
+        """Non-durable issue sync variants never opt into durable checkpointing."""
+        cli = _make_cli(sync, base_ctx_obj)
+        mock_agentic = (True, "synced", 0.10, "gpt-4")
+        args = ["sync", "https://github.com/org/repo/issues/99", *extra_args]
+
+        with patch("pdd.commands.maintenance._is_github_issue_url", return_value=True), \
+             patch("pdd.commands.maintenance.run_agentic_sync", return_value=mock_agentic) as mock_ras:
+            result = runner.invoke(cli, args, catch_exceptions=False)
+
+        assert result.exit_code == 0
+        kw = mock_ras.call_args.kwargs
+        assert kw["durable"] is False
+        assert kw["durable_branch"] is None
+        assert kw["no_resume"] is False
+        assert kw["durable_max_parallel"] is None
+        for key, value in expected.items():
+            assert kw[key] == value
 
     def test_sync_github_url_failure_exits_1(self, runner, base_ctx_obj):
         """Agentic sync returning success=False raises Exit(1)."""
@@ -145,6 +214,55 @@ class TestSyncCommand:
                 "sync", "https://github.com/org/repo/issues/1",
             ])
             assert result.exit_code == 1
+
+    def test_sync_github_url_forwards_durable_flags(self, runner, base_ctx_obj):
+        """Durable issue-sync flags are forwarded to run_agentic_sync."""
+        cli = _make_cli(sync, base_ctx_obj)
+        mock_agentic = (True, "ok", 0.10, "gpt-4")
+
+        with patch("pdd.commands.maintenance._is_github_issue_url", return_value=True), \
+             patch("pdd.commands.maintenance.run_agentic_sync", return_value=mock_agentic) as mock_ras:
+            result = runner.invoke(cli, [
+                "sync",
+                "https://github.com/org/repo/issues/5",
+                "--durable",
+                "--durable-branch",
+                "sync/custom",
+                "--no-resume",
+                "--durable-max-parallel",
+                "2",
+            ], catch_exceptions=False)
+
+            assert result.exit_code == 0
+            kw = mock_ras.call_args.kwargs
+            assert kw["durable"] is True
+            assert kw["durable_branch"] == "sync/custom"
+            assert kw["no_resume"] is True
+            assert kw["durable_max_parallel"] == 2
+
+    def test_sync_durable_requires_github_issue_url(self, runner, base_ctx_obj):
+        """Durable flags are rejected for single-module sync."""
+        cli = _make_cli(sync, base_ctx_obj)
+
+        result = runner.invoke(cli, ["sync", "module", "--durable"])
+
+        assert result.exit_code != 0
+        assert "GitHub issue URL" in result.output
+
+    def test_sync_durable_branch_requires_durable_mode(self, runner, base_ctx_obj):
+        """Durable configuration flags are not silently ignored."""
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance._is_github_issue_url", return_value=True):
+            result = runner.invoke(cli, [
+                "sync",
+                "https://github.com/org/repo/issues/5",
+                "--durable-branch",
+                "sync/custom",
+            ])
+
+        assert result.exit_code != 0
+        assert "require --durable" in result.output
 
     def test_sync_one_session_explicit_true(self, runner, base_ctx_obj):
         """--one-session explicitly True is forwarded to sync_main."""

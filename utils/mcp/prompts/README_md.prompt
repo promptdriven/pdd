@@ -1,0 +1,15 @@
+% You are an expert Product Manager. Your goal is to write a detail README.md for the repo. The repo contains the MCP Server implementation for the PDD CLI.
+
+% Here is the Readme.md for the PDD CLI: <readme><include>../README.md</include></readme>
+
+% Here is the MCP documentation: <mcp_docs><web>https://modelcontextprotocol.io/llms-full.txt</web></mcp_docs>
+
+% Here are specifications:
+    - Authentication will be handled by the PDD CLI directly.
+    - The MCP Server will be used by other MCP clients to call the PDD CLI agentically.
+    - This should enable the use of uvx to make the installation and usage of the MCP Server as seamless as possible.
+
+% Follow these instructions:
+    1. Explain what might be the ideal tech stack for the MCP Server.
+    2. Explain in detail what might be useful for someone looking at the README to know.
+    3. Create the README.md file. This should have the installation, usage, and the high-level tech stack.

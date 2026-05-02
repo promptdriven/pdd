@@ -40,7 +40,7 @@ def main():
     print("-" * 60)
 
     with patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner_cls, \
-         patch("pdd.agentic_sync.build_dep_graph_from_architecture") as mock_graph, \
+         patch("pdd.agentic_sync.build_dep_graph_from_architecture_data") as mock_graph, \
          patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
          patch("pdd.agentic_sync._filter_already_synced") as mock_filter_synced, \
          patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]), \
@@ -153,6 +153,61 @@ def main():
     print("\n--- Global Sync Result ---")
     print(f"Success    : {success}")
     print(f"Model Used : {model}")
+    print(f"Total Cost : ${cost:.2f}")
+    print(f"Message    : {message}")
+
+    # --- Durable Issue Sync (--durable) ---
+    # When durable=True, run_agentic_sync dispatches to DurableSyncRunner
+    # instead of AsyncSyncRunner. Module identification, dependency-graph
+    # construction, dry-run validation, fingerprint filtering, and initial
+    # cost accounting are all unchanged.
+    print("\nRunning durable agentic sync (mocked, --durable)")
+    print("-" * 60)
+
+    with patch("pdd.agentic_sync.DurableSyncRunner") as mock_durable_cls, \
+         patch("pdd.agentic_sync.AsyncSyncRunner") as mock_async_cls, \
+         patch("pdd.agentic_sync.build_dep_graph_from_architecture_data") as mock_graph, \
+         patch("pdd.agentic_sync._run_dry_run_validation") as mock_dry_run, \
+         patch("pdd.agentic_sync._filter_already_synced") as mock_filter_synced, \
+         patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=["auth"]), \
+         patch("pdd.agentic_sync._load_architecture_json") as mock_arch, \
+         patch("pdd.agentic_sync._run_gh_command") as mock_gh, \
+         patch("pdd.agentic_sync._check_gh_cli", return_value=True):
+
+        import json
+        mock_gh.return_value = (True, json.dumps({
+            "title": "Durable rerun safety",
+            "body": "Cloud worker timed out; want resumable sync.",
+            "comments_url": "",
+        }))
+        mock_arch.return_value = (
+            [{"filename": "auth_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_graph.return_value = DepGraphFromArchitectureResult({"auth": []}, [])
+        mock_dry_run.return_value = (True, {"auth": Path.cwd()}, [], 0.0)
+        mock_filter_synced.return_value = ["auth"]
+        mock_durable = MagicMock()
+        mock_durable.run.return_value = (True, "1 module checkpointed", 0.20)
+        mock_durable_cls.return_value = mock_durable
+
+        success, message, cost, model = run_agentic_sync(
+            issue_url="https://github.com/example/repo/issues/1328",
+            verbose=False,
+            quiet=True,
+            budget=10.0,
+            durable=True,
+            durable_branch="sync/issue-1328",
+            no_resume=False,
+            durable_max_parallel=2,
+        )
+
+        # Durable mode dispatches to DurableSyncRunner, not AsyncSyncRunner.
+        assert mock_durable_cls.called, "Expected DurableSyncRunner dispatch"
+        assert not mock_async_cls.called, "AsyncSyncRunner must not run in durable mode"
+
+    print("\n--- Durable Sync Result ---")
+    print(f"Success    : {success}")
     print(f"Total Cost : ${cost:.2f}")
     print(f"Message    : {message}")
 

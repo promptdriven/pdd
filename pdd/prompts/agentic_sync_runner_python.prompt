@@ -1,6 +1,7 @@
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
@@ -12,7 +13,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
-   - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local
+   - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
    - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
    - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
@@ -26,7 +27,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append global `--local` before `sync` if `sync_options["local"]` is truthy; append `--target-coverage` if `sync_options["target_coverage"]` is not None; append `--one-session` if `sync_options["one_session"]` is truthy
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
-10. Per-module timeout: `MODULE_TIMEOUT = 1800` seconds (30 minutes)
+10. Per-module timeout: `MODULE_TIMEOUT = int(os.environ.get('PDD_MODULE_TIMEOUT_SECONDS', '2700'))` seconds (default 45 minutes); effective cap per module is `MODULE_TIMEOUT + max(0.0, float(sync_options.get('timeout_adder') or 0.0))` so `--timeout-adder` extends without ever shrinking it. Timeout-error message reports the effective seconds.
 11. State persistence: save state to `.pdd/agentic_sync_state.json` after each module completion; restore on init if issue_url matches
 12. Resumability: skip modules with status "success" in saved state; allow partial resumption when module lists differ
 13. Delete state file on full success; preserve on failure
@@ -37,7 +38,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 18. Per-module working directories: use `module_cwds[basename]` if present, else `project_root`
 19. Subprocess env: include `PYTHONUNBUFFERED=1` for real-time output
 20. Forward "Successfully submitted example" messages from child stdout to parent console
-21. Heartbeat logging: during long-running syncs, print progress updates every 60s with last non-box-drawing output line
+21. Heartbeat logging: during long-running syncs, print progress updates every 60s. Prefer parsed `PDD_PHASE` state — `f" — phase: {current_phase} ({len(completed_phases)} done)"` — so operators see real progress through the generate/test/fix phases instead of a stale `Preprocessing complete` line. Fall back to the last non-box-drawing stdout line only when no phase has been reported yet.
 
 % Dataclass: `ModuleState`
 - `status: str` — "pending", "running", "success", "failed"
@@ -50,7 +51,9 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 
 % GitHub Comment Updates
 - Create comment on first update (`gh api POST`), store `comment_id`
+- Before creating a new comment, search existing issue comments with `gh api .../issues/{issue_number}/comments --paginate --slurp` for the newest body beginning with `## PDD Agentic Sync Progress\nIssue: #{issue_number}`. Reuse that comment id with PATCH so resumed durable runs and fresh worker reruns do not spam duplicate progress comments.
 - Subsequent updates: PATCH existing comment
+- If PATCH fails, clear `comment_id` and continue without failing sync; GitHub comment failures must never break the sync run.
 - Markdown table format: Module | Status | Phase | Duration | Cost
 - Phase column: running modules show `current_phase (N done)`, completed modules show `N phases` or `-`
 - Status icons: pending (hourglass), running (sync), success (checkmark), failed (cross)
@@ -108,13 +111,16 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 % Dependencies
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
-<pdd.agentic_common><include select="def:example_github_state_helpers,def:example_post_step_comment">context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_common><include select="def:example_github_state_helpers,def:example_post_step_comment,def:example_run_agentic_task">context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.architecture_sync>
     <include select="def:example_validate_dependencies,def:example_get_entry">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
 </pdd.agentic_langtest>
+<pdd.agentic_test_orchestrator>
+    <include select="def:example_state_resumption">context/agentic_test_orchestrator_example.py</include>
+</pdd.agentic_test_orchestrator>
 
 % Instructions
 - Use `threading.Lock` for thread-safe state updates

@@ -1,0 +1,111 @@
+# PDD MCP Server - Core Server Module
+
+This will create the `server.py` module for the PDD MCP Server. This module will define and configure the core MCP server instance using the Python MCP SDK, setting up its identity and capabilities.
+
+## Purpose
+
+The `server.py` module should:
+1. Define a server factory function that creates and configures the MCP server
+2. Configure the server with the appropriate name, version, and capabilities
+3. Provide flexibility for main.py to register tools and connect to transports
+4. Implement proper logging support
+
+## Implementation
+
+Create the `server.py` file with the following specifications:
+
+- Import the necessary modules from the MCP SDK
+- Create a function to get the server version from package metadata if possible, or use a fallback version
+- Define a server factory function that configures and returns an MCP server instance
+- Configure the server with the 'tools' capability (to support PDD commands as tools)
+- Add logging capability for better diagnostics
+- Implement proper error handling
+- Add clear documentation and type hints
+
+## Code Structure
+
+```python
+"""
+Server module for PDD MCP Server.
+
+This module provides a factory function to create and configure the MCP server
+instance that will expose PDD commands as MCP tools.
+"""
+
+import importlib.metadata
+import logging
+from typing import Optional
+
+from mcp.server import Server
+import mcp.types as types
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Server identity constants
+SERVER_NAME = "pdd-mcp-server"
+FALLBACK_VERSION = "0.1.0"
+
+
+def get_version() -> str:
+    """
+    Get the server version from package metadata.
+    
+    Returns:
+        The package version as a string, or a fallback version if not available.
+    """
+    try:
+        return importlib.metadata.version("pdd-mcp-server")
+    except importlib.metadata.PackageNotFoundError:
+        logger.warning(
+            "Package metadata not found; using fallback version %s",
+            FALLBACK_VERSION
+        )
+        return FALLBACK_VERSION
+
+
+def create_server() -> Server:
+    """
+    Create and configure the MCP server instance.
+    
+    This factory function instantiates a new MCP server with the appropriate
+    capabilities for exposing PDD commands as tools.
+    
+    Returns:
+        A configured MCP server instance ready for tool registration.
+    """
+    # Get the server version
+    version = get_version()
+    
+    logger.info("Creating PDD MCP server (version %s)", version)
+    
+    # Configure server capabilities
+    capabilities = types.ServerCapabilities(
+        # Enable tools capability to expose PDD commands
+        tools=types.ServerCapabilities.Tools(
+            # We don't currently support dynamic tool list changes,
+            # but could enable this in the future if needed
+            listChanged=False
+        ),
+        # Enable logging capability for diagnostics
+        logging=types.ServerCapabilities.Logging()
+    )
+    
+    # Create and return the server instance
+    server = Server(
+        SERVER_NAME,
+        version=version,
+        capabilities=capabilities
+    )
+    
+    logger.debug("PDD MCP server created successfully")
+    return server
+    ```
+
+## Notes
+
+- The server supports the 'tools' capability to expose PDD commands as MCP tools
+- Version detection uses Python's importlib.metadata, with a fallback for development
+- Logging is enabled for better diagnostics
+- The server creation is separated into a factory function for better testability and reusability
+- The actual tool registration will happen in main.py, which will import this module

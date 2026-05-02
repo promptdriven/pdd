@@ -84,7 +84,8 @@ DEFAULT_SYNC_BUDGET = 20.0
     "--timeout-adder",
     type=float,
     default=0.0,
-    help="Additional timeout per step (agentic sync mode).",
+    help="Additional seconds added on top of the per-module wall-clock cap "
+    "(stacks with PDD_MODULE_TIMEOUT_SECONDS, default 2700s; agentic sync mode).",
 )
 @click.option(
     "--no-github-state",
@@ -96,6 +97,29 @@ DEFAULT_SYNC_BUDGET = 20.0
     "--one-session/--no-one-session",
     default=None,
     help="Run example/crash/verify/test/fix in a single agentic session. Default: enabled for agentic sync (issue URL), disabled for single-module sync.",
+)
+@click.option(
+    "--durable",
+    is_flag=True,
+    default=False,
+    help="Use isolated worktrees and checkpoint commits for GitHub issue sync.",
+)
+@click.option(
+    "--durable-branch",
+    default=None,
+    help="Branch to use for durable checkpoint commits. Default: sync/issue-<N>.",
+)
+@click.option(
+    "--no-resume",
+    is_flag=True,
+    default=False,
+    help="In durable mode, ignore existing checkpoint trailers and rerun modules.",
+)
+@click.option(
+    "--durable-max-parallel",
+    type=int,
+    default=None,
+    help="Maximum parallel module worktrees in durable mode. Default: current runner concurrency.",
 )
 @click.pass_context
 @track_cost
@@ -115,6 +139,10 @@ def sync(
     timeout_adder: float,
     no_github_state: bool,
     one_session: Optional[bool],
+    durable: bool,
+    durable_branch: Optional[str],
+    no_resume: bool,
+    durable_max_parallel: Optional[int],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -136,6 +164,8 @@ def sync(
 
     # No basename -> global Tier 1 sync
     if basename is None:
+        if durable or durable_branch or no_resume or durable_max_parallel is not None:
+            raise click.UsageError("Durable sync options require a GitHub issue URL.")
         effective_one_session = one_session if one_session is not None else False
         return _run_global_sync_dispatch(
             ctx=ctx,
@@ -148,10 +178,17 @@ def sync(
             no_steer=no_steer,
             max_attempts=max_attempts,
             one_session=effective_one_session,
+            timeout_adder=timeout_adder,
         )
 
     # Detect GitHub issue URL -> dispatch to agentic sync
     if _is_github_issue_url(basename):
+        if not durable and (
+            durable_branch is not None or no_resume or durable_max_parallel is not None
+        ):
+            raise click.UsageError(
+                "--durable-branch, --no-resume, and --durable-max-parallel require --durable."
+            )
         # Default to one-session for agentic sync unless explicitly disabled
         effective_one_session = one_session if one_session is not None else True
         return _run_agentic_sync_dispatch(
@@ -166,7 +203,14 @@ def sync(
             timeout_adder=timeout_adder,
             no_github_state=no_github_state,
             one_session=effective_one_session,
+            durable=durable,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
         )
+
+    if durable or durable_branch or no_resume or durable_max_parallel is not None:
+        raise click.UsageError("Durable sync options require a GitHub issue URL.")
 
     try:
         # Default to multi-step for single-module sync unless explicitly enabled
@@ -205,6 +249,10 @@ def _run_agentic_sync_dispatch(
     timeout_adder: float,
     no_github_state: bool,
     one_session: bool = False,
+    durable: bool = False,
+    durable_branch: Optional[str] = None,
+    no_resume: bool = False,
+    durable_max_parallel: Optional[int] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -226,6 +274,10 @@ def _run_agentic_sync_dispatch(
             use_github_state=not no_github_state,
             one_session=one_session,
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
+            durable=durable,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
         )
 
         if not quiet:
@@ -258,6 +310,7 @@ def _run_global_sync_dispatch(
     no_steer: bool,
     max_attempts: Optional[int],
     one_session: bool = False,
+    timeout_adder: float = 0.0,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to global sync runner for no-argument `pdd sync`."""
     ctx.ensure_object(dict)
@@ -280,6 +333,7 @@ def _run_global_sync_dispatch(
             target_coverage=effective_target_coverage,
             one_session=one_session,
             local=ctx.obj.get("local", False),
+            timeout_adder=timeout_adder,
         )
 
         if not quiet:

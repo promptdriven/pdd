@@ -1,0 +1,42 @@
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+
+% Goal
+Write the `pdd/durable_sync_runner.py` module.
+
+% Role & Scope
+Durable execution engine for `pdd sync <github issue url> --durable`. It must preserve the existing `AsyncSyncRunner` public behavior while making progress recoverable across process crashes, worker loss, checkout loss, and fresh clones. Durable state is stored in git, not in local JSON state.
+
+% Requirements
+1. Class: `DurableSyncRunner`, compatible with the runner contract used by `run_agentic_sync()`: `run() -> Tuple[bool, str, float]`.
+2. Prepare a durable branch named `sync/issue-<issue_number>` by default, unless a safe `durable_branch` override is supplied.
+3. Reject unsafe branches: `main`, `master`, the repository default branch, missing/broken `origin`, non-git directories, and durable branches checked out in another worktree.
+4. Use `.pdd/worktrees/durable-issue-<issue_number>` as the main durable worktree and `.pdd/worktrees/sync-issue-<issue_number>-<module>` for per-module worktrees.
+5. Resume by scanning pushed checkpoint commits on the durable branch for trailers formatted as `PDD-Sync-Checkpoint-V1: issue=<n> module=<basename>`. Ignore trailers for other issues.
+6. Do not rely on `.pdd/agentic_sync_state.json` for durable resume. Corrupt or missing local state must not prevent resuming from remote checkpoint trailers.
+7. For each successful module, create a checkpoint commit containing only safe, relevant project files and allowed `.pdd/meta/<module>_*.json` metadata. Push the checkpoint before printing `PDD_CHECKPOINT:`.
+8. If a module succeeds with no file diff, create an empty checkpoint commit so resume can still skip it later.
+9. Never checkpoint unsafe files: `.env`, `.env.local`, `cost.csv`, `crash.log`, `fix_errors.log`, `.pem`, `.key`, token/secret paths, `.pdd/worktrees`, `.pdd/agentic_sync_state.json`, or unrelated `.pdd` files.
+10. On patch conflict or failed module output, exit non-zero for the durable run, abort any in-progress `git am`, preserve prior checkpoints, and do not create later checkpoints.
+11. Push behavior must be conservative: retry transient push failures up to three attempts, halt immediately on non-fast-forward, and preserve local checkpoint commits for recovery.
+12. Remove successful module worktrees; retain failed module worktrees for inspection. Startup cleanup may remove only stale worktrees for the current issue.
+13. Honor dependency ordering and `durable_max_parallel`. Parallel execution must never let dependent modules run before all in-scope dependencies have checkpointed successfully.
+14. Durable runs still update the same GitHub progress comment path as standard `AsyncSyncRunner` runs; fresh reruns must patch the existing progress comment rather than posting duplicates.
+
+% Dependencies
+<pdd.agentic_sync_runner>
+    Use `AsyncSyncRunner`, `ModuleState`, `_find_pdd_executable`, and shared progress-comment behavior from `pdd/agentic_sync_runner.py` where appropriate.
+    <include select="class:AsyncSyncRunner,class:ModuleState,def:_find_pdd_executable">context/agentic_sync_runner_example.py</include>
+</pdd.agentic_sync_runner>
+<pdd.sync_order><include select="def:topological_sort">context/sync_order_example.py</include></pdd.sync_order>
+<pdd.agentic_sync>
+    <include query="URL detection and LLM response parsing for sync tasks">context/agentic_sync_example.py</include>
+</pdd.agentic_sync>
+
+% Error Handling
+- Fail clearly when git prerequisites are missing or unsafe.
+- Leave the repository recoverable after push failure, conflict, timeout, or interruption.
+- Preserve already-pushed checkpoints as the source of truth.
+
+% Deliverables
+- Code: `pdd/durable_sync_runner.py`

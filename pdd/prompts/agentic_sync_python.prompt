@@ -1,6 +1,8 @@
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>durable_sync_runner_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync.py` module.
@@ -11,7 +13,7 @@ Entry point for sync orchestration. Supports two public workflows:
 2. `run_global_sync(...)`: Tier 1 no-argument global sync. Triggered by the CLI when `pdd sync` is invoked with no BASENAME. Do not use PRD files, PRD fingerprinting, architecture schema migration, or agentic PRD analysis in v1.
 
 % Requirements
-1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str]`
+1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None, durable: bool = False, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None) -> Tuple[bool, str, float, str]`
 2. Return 4-tuple: (success, message, total_cost, model_used)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
 4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
@@ -24,16 +26,17 @@ Entry point for sync orchestration. Supports two public workflows:
 9. Strip language suffixes from basenames using `extract_module_from_include(m + ".prompt")` — LLM returns architecture.json filenames (e.g. "crm_models_Python") but pdd sync expects bare basenames (e.g. "crm_models"). After stripping, deduplicate again.
 10. Filter hallucinated basenames via `_filter_invalid_basenames(modules, architecture)`: validate each basename exists in architecture.json (using `extract_module_from_include` for standard filenames, fallback stripping for `_LLM.prompt` and other non-standard suffixes). Fail if all basenames are invalid.
 11. If LLM flags dependency corrections: update architecture.json in-place before building the graph
-12. Build dependency subgraph from architecture.json via `build_dep_graph_from_architecture`, which returns `DepGraphFromArchitectureResult(graph=..., warnings=...)`. Use **only** `result.graph` as `dep_graph` for `AsyncSyncRunner`. If `result.warnings` is non-empty and **`not quiet`**, print each warning as a **yellow** line prefixed with `Warning:` (Rich yellow styling) so operators see orphan deps and partial-sync omitted edges.
+12. Build dependency subgraph from the in-memory combined architecture data via `build_dep_graph_from_architecture_data(architecture, modules_to_sync, source_name=...)`, which returns `DepGraphFromArchitectureResult(graph=..., warnings=...)`. This must use the same builder as `run_global_sync` so issue sync and global sync produce consistent dependency ordering and preserve nested-architecture edges (Phase 0 of #1328). Use **only** `result.graph` as `dep_graph` for the runner. If `result.warnings` is non-empty and **`not quiet`**, print each warning as a **yellow** line prefixed with `Warning:` (Rich yellow styling) so operators see orphan deps and partial-sync omitted edges.
 13. Fallback: if no architecture.json, use `build_dependency_graph(prompts_dir)` from `sync_order.py` (no architecture warnings in that path)
 14. Run dry-run validation for each module (see Dry-Run Validation below); fail the workflow if any module cannot be validated
 15. Filter already-synced modules via fingerprint check (see Fingerprint Filtering below); skip workflow if all modules are synced
 16. Dispatch to `AsyncSyncRunner` with basenames, dep graph, sync options, GitHub info, `issue_url`, `module_cwds` map from dry-run validation, and `initial_cost` (the sum of LLM identification + dry-run LLM fallback costs) so the runner can display the full cost in its GitHub progress comment
-17. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
-18. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to `AsyncSyncRunner`
+17. If `durable=True`, dispatch to `DurableSyncRunner` instead of `AsyncSyncRunner`. Pass the issue URL, durable branch override, `no_resume` flag, and durable max-parallel setting through unchanged. Durable mode must still use the same module identification, dependency graph, dry-run validation, fingerprint filtering, sync options, and initial cost accounting as standard issue sync.
+18. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
+19. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to the selected runner
 
 % Global Sync (Tier 1)
-1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False) -> Tuple[bool, str, float, str]`
+1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str]`. Forward `timeout_adder` to the runner via `sync_options['timeout_adder']`.
 2. Load combined architecture data using existing `_load_architecture_json(project_root)` / `load_combined_architecture_data`. Fail clearly if no architecture data exists.
 3. Extract syncable basenames from architecture `filename` values. Preserve subdirectory prefixes, e.g. `commands/maintenance_python.prompt` becomes `commands/maintenance`; skip non-syncable filenames such as `_LLM.prompt`.
 4. For each architecture module, resolve cwd/context/prompts_dir with the same nearest-config behavior used by issue sync, then call `sync_determine_operation(..., log_mode=True, read_only=True, ...)` from the module's resolved cwd for each detected language. Suppress info-level logs from `pdd.sync_determine_operation` around the read-only calls so global dry-run output stays readable and metadata files are never changed during analysis.
@@ -79,12 +82,13 @@ After dry-run validation, check which modules are already fully synced:
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.agentic_common><include select="def:example_run_agentic_task,def:example_github_state_helpers,def:example_post_step_comment">context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.agentic_sync_runner><include select="class:AsyncSyncRunner,def:_find_pdd_executable">context/agentic_sync_runner_example.py</include></pdd.agentic_sync_runner>
+<pdd.durable_sync_runner>Durable runner is implemented in `pdd/durable_sync_runner.py` and exposes the same high-level run contract as `AsyncSyncRunner` while persisting git checkpoint commits.</pdd.durable_sync_runner>
 <pdd.sync_order><include select="def:build_dependency_graph,def:extract_module_from_include,def:topological_sort">context/sync_order_example.py</include></pdd.sync_order>
 <pdd.architecture_sync>
-    <include select="def:example_get_entry,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+    <include query="examples of build_dep_graph_from_architecture or build_dep_graph_from_architecture_data and architecture entry validation">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.auto_deps_main>
-    <include select="def:mock_construct_paths">context/auto_deps_main_example.py</include>
+    <include query="examples of _detect_context_from_basename, _load_pddrc_config, _find_pddrc_file, and nearest-config-wins .pddrc resolution patterns">context/auto_deps_main_example.py</include>
 </pdd.auto_deps_main>
 Also imports from `construct_paths`: `_detect_context_from_basename`, `_load_pddrc_config`, `_find_pddrc_file`
 Also imports from `agentic_sync_runner`: `_find_pdd_executable`

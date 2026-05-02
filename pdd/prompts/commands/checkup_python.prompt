@@ -48,13 +48,13 @@
 % Dependencies
 <include-many>context/agentic_checkup_example.py, context/agentic_sync_example.py, context/track_cost_example.py, context/core/errors_example.py</include-many>
 <pdd.agentic_common>
-    <include select="def:example_github_state_helpers,def:example_validate_cached_state,def:_parse_pr_url,def:_is_github_issue_url">context/agentic_common_example.py</include>
+    <include select="def:_parse_pr_url,def:_is_github_issue_url">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.architecture_sync>
-    <include select="def:example_validate_dependencies,def:example_validate_interface,def:run_validate_arch_includes_cli">context/architecture_sync_example.py</include>
+    <include select="def:run_validate_arch_includes_cli">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.agentic_checkup_orchestrator>
-    <include select="def:main">context/agentic_checkup_orchestrator_example.py</include>
+    <include select="def:run_agentic_checkup">context/agentic_checkup_orchestrator_example.py</include>
 </pdd.agentic_checkup_orchestrator>
 <pdd.agentic_sync>
     <include>context/agentic_sync_example.py</include>
