@@ -2360,9 +2360,9 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix command.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [],
+    "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -5125,8 +5125,8 @@
     }
   },
   {
-    "reason": "CLI entry point for the unified sync workflow.",
-    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users.",
+    "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
+    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
     "dependencies": [],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -6918,10 +6918,12 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner.",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
-      "auto_deps_main_python.prompt"
+      "auto_deps_main_python.prompt",
+      "agentic_sync_runner_python.prompt",
+      "durable_sync_runner_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
@@ -6937,7 +6939,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -6945,10 +6947,10 @@
           },
           {
             "name": "run_global_sync",
-            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool) -> Tuple[bool, str, float, str]",
+            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "Runs AsyncSyncRunner for stale modules unless dry_run=True"
+              "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder is forwarded via sync_options so --timeout-adder stretches the per-module wall-clock cap on the global-sync path the same way it does on run_agentic_sync"
             ]
           },
           {
@@ -6976,11 +6978,12 @@
     }
   },
   {
-    "reason": "Parallel sync engine with dependency-aware scheduling and live GitHub progress updates.",
+    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
     "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, and pauses on failure.",
     "dependencies": [
       "architecture_sync_python.prompt",
-      "agentic_langtest_python.prompt"
+      "agentic_langtest_python.prompt",
+      "agentic_test_orchestrator_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7031,6 +7034,48 @@
     },
     "position": {
       "x": 15600,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
+    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
+    "dependencies": [
+      "agentic_sync_runner_python.prompt"
+    ],
+    "priority": 216,
+    "filename": "durable_sync_runner_python.prompt",
+    "filepath": "pdd/durable_sync_runner.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "DurableSyncRunner",
+            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
+            "returns": "DurableSyncRunner",
+            "sideEffects": [
+              "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, otherwise durable_max_parallel caps concurrency"
+            ]
+          },
+          {
+            "name": "DurableSyncRunner.run",
+            "signature": "() -> Tuple[bool, str, float]",
+            "returns": "Tuple[bool, str, float]",
+            "sideEffects": [
+              "Validates git repository and origin remote, prepares the durable branch worktree, prunes orphan per-issue worktrees, optionally pushes any unpushed local checkpoints, marks already-checkpointed modules as resumed (unless no_resume), then delegates scheduling to AsyncSyncRunner.run"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 15800,
       "y": 2000
     }
   },

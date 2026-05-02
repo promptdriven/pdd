@@ -2574,6 +2574,12 @@ def test_fix_main_auto_submit_skipped_when_pdd_force_local(
     and hang in CI for ~15 minutes.
     """
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    # Defensive: clear ambient cloud-only env so this test does not fail in
+    # shells where PDD_CLOUD_ONLY=1 (or PDD_NO_LOCAL_FALLBACK) is set —
+    # those flags push fix_main into the cloud-only auth path and raise a
+    # UsageError before the auto-submit branch is reached.
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
+    monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
     mock_path.return_value.exists.return_value = True
     mock_ctx.obj['local'] = True  # PDD_FORCE_LOCAL implies local mode
 
@@ -2633,11 +2639,11 @@ def test_fix_main_auto_submit_skipped_when_pdd_force_local(
 @patch('pdd.fix_main.construct_paths')
 @patch('pdd.fix_main.fix_errors_from_unit_tests')
 @patch('pdd.fix_main.CloudConfig.get_jwt_token', return_value=None)
-@patch('pdd.fix_main.asyncio')
+@patch('pdd.fix_main.CloudConfig.is_running_in_cloud', return_value=False)
 @patch('pdd.fix_main.get_jwt_token')
 def test_fix_main_auto_submit_calls_auth_when_not_local(
     mock_get_jwt_token,
-    mock_asyncio,
+    mock_in_cloud,
     mock_cloud_jwt,
     mock_fix_errors,
     mock_construct_paths,
@@ -2647,10 +2653,28 @@ def test_fix_main_auto_submit_calls_auth_when_not_local(
     monkeypatch
 ):
     """
-    Complementary test: when PDD_FORCE_LOCAL is NOT set and auto_submit=True,
-    the auth flow SHOULD be triggered (verifying the guard is specific to local mode).
+    Complementary test: when PDD_FORCE_LOCAL is NOT set, the orchestrator is
+    not in a cloud executor, and auto_submit=True, the bounded asyncio JWT
+    request SHOULD be issued (verifying the guard is specific to local mode
+    / cloud executors).
+
+    Mocks only the leaf ``get_jwt_token`` async function — patching the
+    whole ``pdd.fix_main.asyncio`` module would replace ``asyncio.TimeoutError``
+    with a ``MagicMock`` and break the production
+    ``except (asyncio.TimeoutError, TimeoutError)`` clause as soon as a real
+    exception fires inside the auto-submit block.
     """
     monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
+    monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+    # Tight auth timeout keeps the test fast even though we drive the real
+    # asyncio.wait_for path; the async fake resolves immediately.
+    monkeypatch.setenv("PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S", "5")
+
+    async def _fake_jwt(*args, **kwargs):
+        return "fake_jwt_token"
+
+    mock_get_jwt_token.side_effect = _fake_jwt
     mock_path.return_value.exists.return_value = True
     mock_ctx.obj['local'] = False
 
@@ -2682,9 +2706,6 @@ def test_fix_main_auto_submit_calls_auth_when_not_local(
 
     mock_run_pytest.return_value = (0, 0, 0, "All tests passed")
 
-    # Mock asyncio.run to return a fake JWT so submission proceeds without real auth
-    mock_asyncio.run.return_value = "fake_jwt_token"
-
     m_open = mock_open()
     with patch('builtins.open', m_open), \
          patch('pdd.fix_main.preprocess', return_value="processed prompt"), \
@@ -2710,19 +2731,54 @@ def test_fix_main_auto_submit_calls_auth_when_not_local(
         )
 
     assert success is True
-    mock_asyncio.run.assert_called_once(), \
-        "asyncio.run(get_jwt_token(...)) should be called when not in local mode"
+    mock_get_jwt_token.assert_called_once(), (
+        "get_jwt_token must be invoked when not in local mode and not in a "
+        "cloud executor — the auto-submit branch should drive the real "
+        "bounded-asyncio path instead of being mocked away."
+    )
+    # Auth succeeded under the bounded path → cloud submit must be issued.
+    mock_requests.post.assert_called_once()
 
 
 def test_fix_main_auto_submit_guard_exists_in_source():
     """
     Source-level regression test: the auto_submit block in fix_main.py must
-    include a PDD_FORCE_LOCAL guard to prevent CI auth hangs.
+    keep both pre-existing and newly-added guards (PDD_FORCE_LOCAL +
+    cloud-executor short-circuit + bounded asyncio JWT call) to prevent CI
+    and headless auth hangs.
     """
     from pathlib import Path as RealPath
 
     fix_main_path = RealPath(__file__).parent.parent / "pdd" / "fix_main.py"
     source = fix_main_path.read_text()
 
-    assert 'auto_submit and not _env_flag_enabled("PDD_FORCE_LOCAL")' in source, \
-        "fix_main.py must guard auto_submit with _env_flag_enabled('PDD_FORCE_LOCAL') check"
+    # Pre-existing guard: skip auto-submit on dev machines that opt in via
+    # PDD_FORCE_LOCAL. The conditional is now spread across multiple lines,
+    # so check for both halves of the guard rather than one literal string.
+    assert "auto_submit" in source and '_env_flag_enabled("PDD_FORCE_LOCAL")' in source, \
+        "fix_main.py must keep the PDD_FORCE_LOCAL guard for auto_submit"
+    # New guard: short-circuit when running inside a Cloud Run / Cloud
+    # Functions executor, where the interactive Device Flow cannot complete.
+    assert "CloudConfig.is_running_in_cloud()" in source, \
+        "fix_main.py must short-circuit auto_submit when running in a cloud executor"
+    # New bound: JWT call must be wrapped in asyncio.wait_for so a stuck
+    # Device Flow on a dev machine cannot eat the rest of the fix budget.
+    assert "asyncio.wait_for(" in source and "PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S" in source, \
+        "fix_main.py must bound the asyncio JWT call via PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S"
+
+
+def test_fix_main_auto_submit_prompt_documents_cloud_skip():
+    """The pdd source-of-truth prompt must spec the cloud short-circuit and
+    bounded-asyncio contract so future regenerations preserve the fix."""
+    from pathlib import Path as RealPath
+
+    prompt_path = (
+        RealPath(__file__).parent.parent
+        / "pdd" / "prompts" / "fix_main_python.prompt"
+    )
+    prose = prompt_path.read_text()
+
+    assert "CloudConfig.is_running_in_cloud()" in prose, \
+        "fix_main_python.prompt must spec the cloud short-circuit for auto-submit"
+    assert "asyncio.wait_for" in prose and "PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S" in prose, \
+        "fix_main_python.prompt must spec the bounded asyncio JWT call"

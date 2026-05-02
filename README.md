@@ -864,6 +864,25 @@ Options:
 - `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
+- `--durable`: Issue-sync only. Run each module in an isolated git worktree under `.pdd/worktrees/sync-issue-<N>-<module>/` and checkpoint successful module output to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/`. Default issue-sync behavior (shared parallel worktree) is unchanged unless this flag is passed.
+- `--durable-branch TEXT`: Durable mode only. Override the durable checkpoint branch name. Default is `sync/issue-<N>` derived from the GitHub issue. Refused if it resolves to `main`, `master`, or the repository default branch.
+- `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
+- `--durable-max-parallel INT`: Durable mode only. Cap how many module worktrees run concurrently. Defaults to the standard runner concurrency. A total budget still forces sequential execution.
+
+**Durable Issue Sync** (`--durable`):
+
+Standard issue sync runs all modules in one shared worktree. If the worker exits before every module completes (timeout, crash, ephemeral cloud checkout deletion), the work that already succeeded is lost and a rerun starts over from the original branch state. Durable mode is the opt-in fix: each module runs in its own git worktree, and on success its diff is applied to a separate durable branch worktree as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Independent modules still run in parallel (capped by `--durable-max-parallel`); the serialization guarantee is narrower — a module is only marked successful, and its dependents only become eligible to schedule, after its checkpoint commit has been pushed. Any rerun then reads the trailers and skips modules already checkpointed for the same issue. Failed module worktrees are left in place for inspection; successful ones are cleaned up after their checkpoint pushes. Durable sync requires a git repository with an `origin` remote and refuses to operate on `main`, `master`, or the repository default branch. Module-scoped `.pdd/meta/<module>_*.json` is included in checkpoints; secrets, lock files, cost CSVs, `.pdd/worktrees/`, and `.pdd/agentic_sync_state.json` are not.
+
+```bash
+# Cloud-friendly issue sync: resumable across reruns
+pdd --force sync --durable https://github.com/myorg/myrepo/issues/1328
+
+# Rerun every module fresh on the same durable branch (ignores existing trailers)
+pdd --force sync --durable --no-resume \
+  https://github.com/myorg/myrepo/issues/1328
+```
+
+The dedicated durable-branch worktree path is keyed on the issue number (`.pdd/worktrees/durable-issue-<N>/`), not the branch name. A given issue's first durable run claims that path for whichever branch it picked (default `sync/issue-<N>` or an explicit `--durable-branch`). To switch a later run for the **same issue** to a different durable branch, remove the existing worktree first (`git worktree remove .pdd/worktrees/durable-issue-<N>`) before re-invoking with the new `--durable-branch`. Different issue numbers do not collide.
 
 **Real-time Progress Animation**:
 The sync command provides live visual feedback showing:
@@ -950,8 +969,9 @@ PDD uses a `.pdd` directory in your project root to store various metadata and c
 - `.pdd/meta/` - Contains fingerprint files, run reports, and sync logs
 - `.pdd/locks/` - Stores lock files to prevent concurrent operations
 - `.pdd/llm_model.csv` - Project-specific LLM model configuration (optional)
+- `.pdd/worktrees/` - Transient git worktrees used by `pdd sync --durable` (per-module execution sandboxes and the dedicated durable-branch worktree). Local scratch state, not project state.
 
-This directory should typically be added to version control (except for lock files), as it contains important project state information.
+This directory should typically be added to version control (except for `.pdd/locks/` and `.pdd/worktrees/`), as it contains important project state information.
 
 **Environment Variables**:
 All existing PDD output path environment variables are respected, allowing the sync command to save files in the appropriate locations for your project structure.
@@ -1022,12 +1042,12 @@ When a GitHub issue URL is passed instead of a basename, sync enters agentic mod
 # Sync modules identified from a GitHub issue (parallel, dependency-aware)
 pdd sync https://github.com/myorg/myrepo/issues/100
 
-# With additional timeout for large modules
-pdd sync --timeout-adder 60 https://github.com/myorg/myrepo/issues/100
+# Extend the per-module timeout for a very large module
+pdd sync --timeout-adder 600 https://github.com/myorg/myrepo/issues/100
 ```
 
 Options (agentic mode):
-- `--timeout-adder FLOAT`: Add additional seconds to each module's timeout (default: 0.0)
+- `--timeout-adder FLOAT`: Add seconds to the per-module timeout (default: 0.0).
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
@@ -3049,6 +3069,8 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_VERIFY_CODE_OUTPUT_PATH`**: Default path for the final code file generated by the `verify` command.
 - **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
 - **`PDD_CLOUD_TIMEOUT`**: Cloud request timeout in seconds. Default is 900 (15 minutes). Increase this value if you experience timeouts with long-running cloud operations.
+- **`PDD_MODULE_TIMEOUT_SECONDS`**: Per-module wall-clock cap for `pdd sync --agentic` runs in seconds. Default is 2700 (45 minutes).
+- **`PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S`**: Timeout in seconds for the JWT auth call used by `pdd sync` / `pdd fix --auto-submit` example submission. Default is 300 (5 minutes). Auto-submit is skipped automatically when running inside a Cloud Run / Cloud Functions executor.
 
 ### Configuration Priority
 

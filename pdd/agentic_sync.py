@@ -24,9 +24,9 @@ from .agentic_sync_runner import (
     AsyncSyncRunner,
     _basename_from_architecture_filename,
     _find_pdd_executable,
-    build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
 )
+from .durable_sync_runner import DurableSyncRunner
 from .architecture_include_validation import collect_architecture_include_validation_warnings
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .architecture_registry import extract_modules, find_project_root as _find_project_root
@@ -515,6 +515,7 @@ def run_global_sync(
     target_coverage: Optional[float] = None,
     one_session: bool = False,
     local: bool = False,
+    timeout_adder: float = 0.0,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
     project_root = _find_project_root(Path.cwd())
@@ -600,6 +601,7 @@ def run_global_sync(
             "one_session": one_session,
             "local": local,
             "target_coverage": target_coverage,
+            "timeout_adder": timeout_adder,
         },
         github_info=None,
         quiet=quiet,
@@ -1098,6 +1100,10 @@ def run_agentic_sync(
     use_github_state: bool = True,
     one_session: bool = False,
     reasoning_time: Optional[float] = None,
+    durable: bool = False,
+    durable_branch: Optional[str] = None,
+    no_resume: bool = False,
+    durable_max_parallel: Optional[int] = None,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -1112,8 +1118,17 @@ def run_agentic_sync(
         agentic_mode: Use agentic mode for individual syncs.
         no_steer: Disable interactive steering.
         max_attempts: Max fix attempts per module.
-        timeout_adder: Additional timeout per step.
+        timeout_adder: Additional seconds added on top of the per-module
+            wall-clock cap. Stacks with ``PDD_MODULE_TIMEOUT_SECONDS``
+            (default 2700s) and is forwarded to the runner via
+            ``sync_options['timeout_adder']``. Negative or non-numeric
+            values are clamped to 0 by the runner so an over-eager flag
+            never *shrinks* the cap.
         use_github_state: Enable GitHub comment updates.
+        durable: Use isolated worktrees and durable checkpoint commits.
+        durable_branch: Optional durable checkpoint branch name.
+        no_resume: Ignore existing durable checkpoint trailers.
+        durable_max_parallel: Optional durable-mode concurrency cap.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -1265,7 +1280,11 @@ def run_agentic_sync(
 
     # 11. Build dependency graph
     if architecture is not None:
-        dep_graph_result = build_dep_graph_from_architecture(arch_path, modules_to_sync)
+        dep_graph_result = build_dep_graph_from_architecture_data(
+            architecture,
+            modules_to_sync,
+            source_name=str(arch_path),
+        )
         dep_graph = dep_graph_result.graph
         if dep_graph_result.warnings and not quiet:
             for w in dep_graph_result.warnings:
@@ -1342,6 +1361,7 @@ def run_agentic_sync(
         "no_steer": no_steer,
         "max_attempts": max_attempts,
         "one_session": one_session,
+        "timeout_adder": timeout_adder,
     }
 
     github_info = {
@@ -1351,17 +1371,35 @@ def run_agentic_sync(
         "cwd": project_root,
     } if use_github_state else None
 
-    runner = AsyncSyncRunner(
-        basenames=modules_to_sync,
-        dep_graph=dep_graph,
-        sync_options=sync_options,
-        github_info=github_info,
-        quiet=quiet,
-        verbose=verbose,
-        issue_url=issue_url,
-        module_cwds=module_cwds,
-        initial_cost=llm_cost,
-    )
+    if durable:
+        runner = DurableSyncRunner(
+            basenames=modules_to_sync,
+            dep_graph=dep_graph,
+            sync_options=sync_options,
+            github_info=github_info,
+            issue_number=issue_number,
+            project_root=project_root,
+            durable_branch=durable_branch,
+            no_resume=no_resume,
+            durable_max_parallel=durable_max_parallel,
+            quiet=quiet,
+            verbose=verbose,
+            issue_url=issue_url,
+            module_cwds=module_cwds,
+            initial_cost=llm_cost,
+        )
+    else:
+        runner = AsyncSyncRunner(
+            basenames=modules_to_sync,
+            dep_graph=dep_graph,
+            sync_options=sync_options,
+            github_info=github_info,
+            quiet=quiet,
+            verbose=verbose,
+            issue_url=issue_url,
+            module_cwds=module_cwds,
+            initial_cost=llm_cost,
+        )
 
     runner_success, runner_msg, total_cost = runner.run()
 

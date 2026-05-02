@@ -615,7 +615,7 @@ class TestRunAgenticSync:
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch(
-        "pdd.agentic_sync.build_dep_graph_from_architecture",
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
         return_value=DepGraphFromArchitectureResult({"foo": []}, []),
     )
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
@@ -667,7 +667,7 @@ class TestRunAgenticSync:
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
-    @patch("pdd.agentic_sync.build_dep_graph_from_architecture")
+    @patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
     @patch("pdd.agentic_sync.run_agentic_task")
     @patch("pdd.agentic_sync._load_architecture_json")
@@ -716,7 +716,7 @@ class TestRunAgenticSync:
         )
 
         assert success
-        # Verify stripped basenames were passed to build_dep_graph_from_architecture
+        # Verify stripped basenames were passed to build_dep_graph_from_architecture_data
         call_args = mock_build_graph.call_args
         assert sorted(call_args[0][1]) == ["api_orders", "crm_models"]
         # Verify stripped basenames were passed to AsyncSyncRunner
@@ -727,7 +727,7 @@ class TestRunAgenticSync:
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch(
-        "pdd.agentic_sync.build_dep_graph_from_architecture",
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
         return_value=DepGraphFromArchitectureResult({"foo": []}, []),
     )
     @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
@@ -773,6 +773,70 @@ class TestRunAgenticSync:
         runner_kwargs = mock_runner_cls.call_args[1]
         assert "initial_cost" in runner_kwargs
         assert runner_kwargs["initial_cost"] == pytest.approx(0.07)
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.DurableSyncRunner")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_durable_mode_uses_durable_runner(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_durable_runner_cls,
+        mock_async_runner_cls,
+        tmp_path,
+    ):
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            tmp_path / "architecture.json",
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "durable done", 0.15)
+        mock_durable_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1328",
+            quiet=True,
+            durable=True,
+            durable_branch="sync/custom",
+            no_resume=True,
+            durable_max_parallel=2,
+        )
+
+        assert success is True
+        assert msg == "durable done"
+        assert cost == pytest.approx(0.15)
+        assert model == "anthropic"
+        mock_async_runner_cls.assert_not_called()
+        runner_kwargs = mock_durable_runner_cls.call_args.kwargs
+        assert runner_kwargs["issue_number"] == 1328
+        assert runner_kwargs["durable_branch"] == "sync/custom"
+        assert runner_kwargs["no_resume"] is True
+        assert runner_kwargs["durable_max_parallel"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1912,7 +1976,7 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch(
-        "pdd.agentic_sync.build_dep_graph_from_architecture",
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
         return_value=DepGraphFromArchitectureResult({"foo": []}, []),
     )
     @patch("pdd.agentic_sync.load_prompt_template",

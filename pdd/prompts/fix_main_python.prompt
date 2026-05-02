@@ -1,9 +1,28 @@
 % You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
 
 <pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>auth_service_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
+
+% Dependencies
+<pdd.core.fix_error_loop>
+    <include select="class:IterationResult,def:fix_error_loop,def:extract_test_results">context/change/16/fix_error_loop.py</include>
+</pdd.core.fix_error_loop>
+<pdd.core.fix_unit_tests>
+    <include select="def:fix_errors_from_unit_tests">context/change/10/initial_fix_errors_from_unit_tests.py</include>
+</pdd.core.fix_unit_tests>
+<pdd.core.auth>
+    <include select="def:get_cached_jwt,def:get_refresh_token,def:verify_auth,def:get_auth_status">context/auth_service_example.py</include>
+</pdd.core.auth>
+<pdd.utils.languages>
+    <include select="def:default_verify_cmd_for,path:missing_tool_hints">context/agentic_langtest_example.py</include>
+</pdd.utils.languages>
+<pdd.cli>
+    <include select="def:get_paths_for_shell,class:cli,def:log_cost">context/change/15/initial_cli.py</include>
+</pdd.cli>
 
 % Inputs
 - `ctx` (`click.Context`)
@@ -76,8 +95,8 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - In verbose mode, print only a short analysis preview and escape Rich markup safely when preview text is invalid.
 
 8. Auto-submit:
-   - Run only when `success` is true, `auto_submit` is true, and `PDD_FORCE_LOCAL` is not enabled.
-   - Get a JWT with `asyncio.run(get_jwt_token(...))`.
+   - Run only when `success` is true, `auto_submit` is true, `PDD_FORCE_LOCAL` is not enabled, and `CloudConfig.is_running_in_cloud()` is False. When skipped for the cloud reason, emit a yellow `Skipping example submission: cloud executor has no interactive auth path.` (subject to `quiet`).
+   - Get a JWT with `asyncio.run(asyncio.wait_for(get_jwt_token(...), timeout=auth_timeout_s))` where `auth_timeout_s` is `float(os.environ.get('PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S', '300'))` parsed defensively (`try/except (TypeError, ValueError)` falls back to `300.0`). On `asyncio.TimeoutError` / `TimeoutError`, emit a yellow warning (subject to `quiet`) and skip submission; do not propagate as a fix failure.
    - Preprocess the prompt with `recursive=False` and `double_curly_brackets=True`.
    - Submit to `https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample`. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`) — every other cloud POST in this package uses the same helper, and omitting `timeout=` is a sibling copy-paste variant of the `pdd sync` hang documented in #1272.
    - Include original prompt/code/test, optional error/example inputs, fixed code/test outputs, and analysis from `output_results` if readable, otherwise from in-memory `analysis_results`.

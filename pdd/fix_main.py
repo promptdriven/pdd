@@ -439,14 +439,48 @@ def fix_main(
                 if output_file_paths.get("output_results"):
                     rprint(f"  Results file: {output_file_paths['output_results']}")
 
-                # Auto-submit example if requested and successful
-                if auto_submit and not _env_flag_enabled("PDD_FORCE_LOCAL"):
+                # Auto-submit example if requested and successful.
+                # Headless Cloud Run / Cloud Functions executors cannot
+                # complete the interactive Device Flow JWT request, so the
+                # whole branch is skipped when running inside one — the
+                # asyncio call would otherwise block until the auth window
+                # expires (~5 min) and eat the rest of the fix budget.
+                _skip_cloud_auto_submit = CloudConfig.is_running_in_cloud()
+                if auto_submit and _skip_cloud_auto_submit and not ctx.obj.get("quiet", False):
+                    rprint("[yellow]Skipping example submission: cloud executor has no interactive auth path.[/yellow]")
+                if (
+                    auto_submit
+                    and not _env_flag_enabled("PDD_FORCE_LOCAL")
+                    and not _skip_cloud_auto_submit
+                ):
+                    # Bound the JWT auth call as a safety net only — cache
+                    # hits and refresh-token renewals return in under a
+                    # second, but honest first-time interactive Device Flow
+                    # needs minutes for the user to visit GitHub and
+                    # authorise. Default of 300s (5 min) keeps interactive
+                    # `pdd fix --auto-submit` users working while still
+                    # catching truly wedged auths. Defensive parse: a
+                    # malformed env value must not turn a successful fix
+                    # into a failure via the outer `except Exception`
+                    # handler. Mirrors the PDD_MODULE_TIMEOUT_SECONDS
+                    # pattern in agentic_sync_runner.
                     try:
-                        # Get JWT token for cloud authentication
-                        jwt_token = asyncio.run(get_jwt_token(
-                            firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
-                            github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
-                            app_name="PDD Code Generator"
+                        auth_timeout_s = float(
+                            os.environ.get("PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S", "300")
+                        )
+                    except (TypeError, ValueError):
+                        auth_timeout_s = 300.0
+                    try:
+                        # Get JWT token for cloud authentication; bound the
+                        # asyncio call so a stuck Device Flow on a dev machine
+                        # cannot eat the rest of the fix budget.
+                        jwt_token = asyncio.run(asyncio.wait_for(
+                            get_jwt_token(
+                                firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
+                                github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
+                                app_name="PDD Code Generator",
+                            ),
+                            timeout=auth_timeout_s,
                         ))
                         processed_prompt = preprocess(
                             input_strings["prompt_file"],
@@ -549,6 +583,12 @@ def fix_main(
                             if not ctx.obj.get('quiet', False):
                                 rprint(f"[bold red]Failed to submit example: {response.text}[/bold red]")
 
+                    except (asyncio.TimeoutError, TimeoutError):
+                        if not ctx.obj.get('quiet', False):
+                            rprint(
+                                "[yellow]Skipping example submission: auth did not complete "
+                                f"within {auth_timeout_s:.0f}s[/yellow]"
+                            )
                     except Exception as e:
                         if not ctx.obj.get('quiet', False):
                             rprint(f"[bold red]Error submitting example: {str(e)}[/bold red]")

@@ -4,6 +4,11 @@
 
 <include>context/python_preamble.prompt</include>
 
+% Dependencies
+<utils.keyring_timeout>
+    <include>context/_keyring_timeout_example.py</include>
+</utils.keyring_timeout>
+
 % Function Signature:
 ```python
     async def get_jwt_token(
@@ -51,6 +56,8 @@
 % JWT File Cache (Required - Issue #273):
     - Path: ~/.pdd/jwt_cache (use pathlib Path.home() / ".pdd" / "jwt_cache")
     - Define module-level constant: JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"
+    - Define module-level constant: PDD_JWT_TOKEN_ENV = "PDD_JWT_TOKEN"
+    - At the very start of get_jwt_token(), return os.environ[PDD_JWT_TOKEN_ENV] if it is set. This injected-token path is for CI/staging and must bypass JWT cache, keyring, refresh, and device-flow authentication completely.
     - Format: JSON with fields: jwt, expires_at (unix timestamp), cached_at (unix timestamp)
     - Check cache FIRST before any keyring access
     - Return cached JWT immediately if valid (not expired, with 5-min buffer before expiration)

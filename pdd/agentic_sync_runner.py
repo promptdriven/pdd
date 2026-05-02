@@ -24,6 +24,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
+from .agentic_change import _run_gh_command
 from .architecture_registry import extract_modules
 from .sync_order import extract_module_from_include
 
@@ -35,8 +36,14 @@ _BOX_CHARS_RE = re.compile(r'^[\s╭╮╰╯─│┌┐└┘├┤┬┴┼�
 
 # Maximum concurrent syncs
 MAX_WORKERS = 4
-# Per-module timeout in seconds (30 min — complex modules need generate+crash+verify+test)
-MODULE_TIMEOUT = 1800
+# Per-module timeout in seconds. Large modules (200KB+) routinely need the full
+# generate+crash+verify+test+fix loop and can land at ~30-35 min for legitimate
+# work. Default of 45 min keeps a ~10-min margin above observed real runtimes;
+# override via PDD_MODULE_TIMEOUT_SECONDS for environments with tighter caps.
+try:
+    MODULE_TIMEOUT = int(os.environ.get("PDD_MODULE_TIMEOUT_SECONDS", "2700"))
+except ValueError:
+    MODULE_TIMEOUT = 2700
 # State file for resumability (relative to project root)
 STATE_FILE_PATH = ".pdd/agentic_sync_state.json"
 
@@ -716,6 +723,17 @@ class AsyncSyncRunner:
         t_out.start()
         t_err.start()
 
+        # Per-module wall-clock cap = MODULE_TIMEOUT plus the optional
+        # `--timeout-adder` (forwarded via sync_options) so users can stretch
+        # the budget for individual very-large modules without redefining the
+        # global default. Negative or non-numeric values are treated as 0 so
+        # that an over-eager flag never *shrinks* the cap.
+        try:
+            module_timeout = MODULE_TIMEOUT + max(
+                0.0, float(self.sync_options.get("timeout_adder") or 0.0)
+            )
+        except (TypeError, ValueError):
+            module_timeout = MODULE_TIMEOUT
         try:
             # Poll with heartbeat so user sees progress in non-verbose mode
             heartbeat_interval = 60  # seconds
@@ -723,25 +741,42 @@ class AsyncSyncRunner:
             last_heartbeat = time.time()
             while True:
                 elapsed_total = time.time() - start_wall
-                remaining = max(MODULE_TIMEOUT - elapsed_total, 0)
+                remaining = max(module_timeout - elapsed_total, 0)
                 try:
                     exit_code = process.wait(timeout=min(heartbeat_interval, remaining))
                     break  # Process finished
                 except subprocess.TimeoutExpired:
                     elapsed_total = time.time() - start_wall
-                    if elapsed_total >= MODULE_TIMEOUT:
+                    if elapsed_total >= module_timeout:
                         raise  # Re-raise to hit the timeout handler below
                     now = time.time()
                     if not self.quiet and now - last_heartbeat >= heartbeat_interval:
                         mins = int(elapsed_total) // 60
                         secs = int(elapsed_total) % 60
-                        last_line = ""
-                        for line in reversed(stdout_lines):
-                            stripped = line.strip()
-                            if stripped and not _BOX_CHARS_RE.match(stripped):
-                                last_line = stripped
-                                break
-                        hint = f" — {last_line[:80]}" if last_line else ""
+                        # Prefer parsed PDD_PHASE state over the last raw
+                        # stdout line: heartbeats based on stdout were stuck
+                        # on "Preprocessing complete" for the whole run even
+                        # while test/fix phases were progressing, hiding real
+                        # work behind a stale hint. Fall back to last
+                        # non-box stdout line only when no phase has been
+                        # reported yet.
+                        with self.lock:
+                            state = self.module_states[basename]
+                            current_phase = state.current_phase
+                            completed_phase_count = len(state.completed_phases)
+                        if current_phase:
+                            hint = (
+                                f" — phase: {current_phase} "
+                                f"({completed_phase_count} done)"
+                            )
+                        else:
+                            last_line = ""
+                            for line in reversed(stdout_lines):
+                                stripped = line.strip()
+                                if stripped and not _BOX_CHARS_RE.match(stripped):
+                                    last_line = stripped
+                                    break
+                            hint = f" — {last_line[:80]}" if last_line else ""
                         console.print(
                             f"[dim]  {basename}: still running ({mins}m{secs}s){hint}[/dim]"
                         )
@@ -761,7 +796,7 @@ class AsyncSyncRunner:
                     process.kill()
                 process.wait()
             self._child_pgids.discard(process.pid)
-            return False, _parse_cost_from_csv(cost_file.name), f"Timeout after {MODULE_TIMEOUT}s"
+            return False, _parse_cost_from_csv(cost_file.name), f"Timeout after {int(module_timeout)}s"
         finally:
             self._child_pgids.discard(process.pid)
             t_out.join(timeout=5)
@@ -840,9 +875,11 @@ class AsyncSyncRunner:
 
         try:
             if self.comment_id is None:
-                # Create new comment
-                from .agentic_change import _run_gh_command
+                self.comment_id = self._find_existing_progress_comment_id(
+                    owner, repo, issue_number, timeout=gh_timeout
+                )
 
+            if self.comment_id is None:
                 ok, response = _run_gh_command([
                     "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
                     "-X", "POST", "-f", f"body={body}",
@@ -854,15 +891,57 @@ class AsyncSyncRunner:
                     except json.JSONDecodeError:
                         pass
             else:
-                # Update existing comment
-                from .agentic_change import _run_gh_command
-
-                _run_gh_command([
+                ok, _ = _run_gh_command([
                     "api", f"repos/{owner}/{repo}/issues/comments/{self.comment_id}",
                     "-X", "PATCH", "-f", f"body={body}",
                 ], timeout=gh_timeout)
+                if not ok:
+                    self.comment_id = None
         except Exception:
             pass  # Don't break sync for comment failures
+
+    def _find_existing_progress_comment_id(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        *,
+        timeout: int,
+    ) -> Optional[int]:
+        """Return the newest existing PDD sync progress comment id for this issue."""
+        ok, response = _run_gh_command([
+            "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+            "--paginate", "--slurp",
+        ], timeout=timeout)
+        if not ok:
+            return None
+
+        try:
+            payload = json.loads(response)
+        except json.JSONDecodeError:
+            return None
+
+        comments: List[Dict[str, Any]] = []
+        if isinstance(payload, list) and all(isinstance(page, list) for page in payload):
+            comments = [
+                comment
+                for page in payload
+                for comment in page
+                if isinstance(comment, dict)
+            ]
+        elif isinstance(payload, list):
+            comments = [comment for comment in payload if isinstance(comment, dict)]
+
+        marker = f"## PDD Agentic Sync Progress\nIssue: #{issue_number}"
+        for comment in reversed(comments):
+            body = comment.get("body")
+            comment_id = comment.get("id")
+            if isinstance(body, str) and body.startswith(marker) and comment_id:
+                try:
+                    return int(comment_id)
+                except (TypeError, ValueError):
+                    continue
+        return None
 
     def _build_comment_body(self, issue_number: int) -> str:
         """Build the markdown comment body showing sync progress."""

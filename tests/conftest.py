@@ -84,6 +84,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="Run the full suite including slow or integration tests.",
     )
+    parser.addoption(
+        "--durable-max-parallel",
+        action="store",
+        type=int,
+        default=None,
+        help="Override durable sync runner concurrency in durable verification tests.",
+    )
+
+
+@pytest.fixture
+def durable_max_parallel(request: pytest.FixtureRequest) -> int | None:
+    """Return the optional durable runner concurrency override."""
+
+    return request.config.getoption("--durable-max-parallel")
 
 
 def pytest_configure(config: pytest.Config) -> None:

@@ -487,7 +487,7 @@ def _auto_submit_example(
 
     import requests
 
-    from .core.cloud import get_cloud_request_timeout
+    from .core.cloud import CloudConfig, get_cloud_request_timeout
     from .get_jwt_token import get_jwt_token
     from .preprocess import preprocess
 
@@ -496,11 +496,42 @@ def _auto_submit_example(
     if os.environ.get("PDD_FORCE_LOCAL", "").strip().lower() in {"1", "true", "yes", "on"}:
         return
 
-    jwt_token = asyncio.run(get_jwt_token(
-        firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
-        github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
-        app_name="PDD Code Generator",
-    ))
+    # Skip auto-submit inside cloud executors. Interactive Device Flow auth
+    # cannot complete in a headless Cloud Run / Cloud Functions environment
+    # and the asyncio JWT call blocks for the full auth timeout (~5 min) before
+    # giving up — pure overhead that pushes successful syncs past their cap.
+    if CloudConfig.is_running_in_cloud():
+        return
+
+    # Bound the JWT auth call as a safety net so a wedged Device Flow cannot
+    # eat the rest of the sync indefinitely. Cache hits and refresh-token
+    # renewals (the common case) return in well under a second; only an
+    # honest first-time interactive Device Flow needs minutes for the user
+    # to visit GitHub and authorise. Defaulting to 5 min keeps interactive
+    # auth working while still catching truly hung cases. Defensive parse:
+    # a malformed env value (e.g. `PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S=abc`)
+    # falls back to the 300s default rather than crashing a successful
+    # sync via the outer warning path.
+    try:
+        auth_timeout_s = float(os.environ.get("PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S", "300"))
+    except (TypeError, ValueError):
+        auth_timeout_s = 300.0
+    try:
+        jwt_token = asyncio.run(asyncio.wait_for(
+            get_jwt_token(
+                firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
+                github_client_id=os.environ.get("GITHUB_CLIENT_ID"),
+                app_name="PDD Code Generator",
+            ),
+            timeout=auth_timeout_s,
+        ))
+    except (asyncio.TimeoutError, TimeoutError):
+        if not quiet:
+            rprint(
+                "[yellow]Skipping example submission: auth did not complete "
+                f"within {auth_timeout_s:.0f}s[/yellow]"
+            )
+        return
 
     prompt_content = pdd_files["prompt"].read_text(encoding="utf-8")
     processed_prompt = preprocess(prompt_content, recursive=False, double_curly_brackets=True)

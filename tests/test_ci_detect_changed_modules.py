@@ -47,6 +47,7 @@ def test_basename_excludes_ci_helper_script_tests():
     module = _load_module()
 
     assert module._basename_from_path("tests/test_ci_detect_changed_modules.py") is None
+    assert module._basename_from_path("tests/test_copy_package_data_to_public.py") is None
 
 
 def test_basename_excludes_agent_reviewed_model_catalog():

@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.sync_main import sync_main, _normalize_prompts_root, _find_prompt_in_contexts, _case_insensitive_prompt_lookup, SUPPORTED_SYNC_LANGUAGES
+from pdd.sync_main import _auto_submit_example as _real_auto_submit_example  # noqa: F401  — captured pre-monkeypatch
 from pdd import DEFAULT_STRENGTH
 
 # Test Plan
@@ -2065,3 +2066,123 @@ class TestIssue1165_SyncMainEndToEnd:
 # Recursive-resolution behaviour is covered by tests/test_find_prompt_file.py
 # and the sync_determine_operation tests for #1169.
 # ============================================================================
+
+
+# ============================================================================
+# pdd sync MODULE_TIMEOUT cap + _auto_submit_example cloud overhead.
+# ============================================================================
+class TestAutoSubmitSkipInCloud:
+    """In a Cloud Run / Functions executor the interactive Device Flow auth
+    cannot complete and the asyncio JWT call blocks for the full auth window
+    (~5 min) before giving up — pure overhead that pushes successful syncs
+    past their MODULE_TIMEOUT cap. _auto_submit_example must short-circuit
+    when CloudConfig.is_running_in_cloud() reports True."""
+
+    def _make_ctx(self) -> MagicMock:
+        ctx = MagicMock(spec=click.Context)
+        ctx.obj = {"quiet": True}
+        return ctx
+
+    @patch("pdd.get_jwt_token.get_jwt_token")
+    @patch("pdd.core.cloud.CloudConfig.is_running_in_cloud", return_value=True)
+    def test_skips_jwt_auth_when_running_in_cloud(
+        self, mock_in_cloud, mock_get_jwt, tmp_path, monkeypatch
+    ):
+        """When K_SERVICE / FUNCTIONS_EMULATOR is set, do not even start the
+        async JWT request — the auth would block for minutes and fail anyway."""
+        # The module-level autouse fixture sets PDD_FORCE_LOCAL=1 to short-
+        # circuit the function for every other test in this file. Clear it
+        # here so we exercise the cloud-detection branch under test.
+        monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+
+        # Use the pre-monkeypatch reference captured at import time; the
+        # file-wide autouse fixture replaces ``pdd.sync_main._auto_submit_example``
+        # with a no-op for unrelated tests, but we need the real function here.
+        _auto_submit_example = _real_auto_submit_example
+        pdd_files = {
+            "prompt": tmp_path / "x.prompt",
+            "code": tmp_path / "x.py",
+            "example": tmp_path / "x_example.py",
+            "test": tmp_path / "test_x.py",
+        }
+        for f in pdd_files.values():
+            f.write_text("placeholder")
+
+        _auto_submit_example("x", "python", pdd_files, self._make_ctx())
+
+        mock_get_jwt.assert_not_called()
+
+    @patch("requests.post")
+    @patch("pdd.get_jwt_token.get_jwt_token")
+    @patch("pdd.core.cloud.CloudConfig.is_running_in_cloud", return_value=False)
+    def test_jwt_auth_is_bounded_by_a_short_timeout(
+        self, mock_in_cloud, mock_get_jwt, mock_post, tmp_path, monkeypatch
+    ):
+        """Outside cloud, a stuck Device Flow must still fail fast — the auth
+        call is wrapped in asyncio.wait_for so it cannot eat the whole sync.
+
+        We exercise the real asyncio path with a tiny timeout and an
+        async fake that sleeps far longer; this avoids mocking ``asyncio.run``
+        directly (which leaves a half-built coroutine unawaited and emits
+        ``RuntimeWarning: coroutine ... was never awaited``)."""
+        # See note in the previous test: clear the file-wide PDD_FORCE_LOCAL
+        # so we reach the bounded-asyncio branch under test, and pin the
+        # auth timeout to something far below test wallclock.
+        monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+        monkeypatch.setenv("PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S", "0.05")
+
+        import asyncio as _asyncio
+
+        async def _hang_forever(*args, **kwargs):
+            await _asyncio.sleep(60.0)  # far longer than 0.05s timeout
+            return "should-never-resolve"
+
+        mock_get_jwt.side_effect = _hang_forever
+
+        # Use the pre-monkeypatch reference captured at import time; the
+        # file-wide autouse fixture replaces ``pdd.sync_main._auto_submit_example``
+        # with a no-op for unrelated tests, but we need the real function here.
+        _auto_submit_example = _real_auto_submit_example
+        pdd_files = {
+            "prompt": tmp_path / "x.prompt",
+            "code": tmp_path / "x.py",
+            "example": tmp_path / "x_example.py",
+            "test": tmp_path / "test_x.py",
+        }
+        for f in pdd_files.values():
+            f.write_text("placeholder")
+
+        _auto_submit_example("x", "python", pdd_files, self._make_ctx())
+
+        mock_get_jwt.assert_called_once()
+        # Caller bailed out before reaching the cloud HTTP submit.
+        mock_post.assert_not_called()
+
+
+class TestModuleTimeoutEnvOverride:
+    """MODULE_TIMEOUT must default to a generous cap for large modules and be
+    overridable via PDD_MODULE_TIMEOUT_SECONDS for environments that need a
+    different ceiling."""
+
+    def test_default_module_timeout_leaves_margin_above_observed_runtimes(self):
+        from pdd.agentic_sync_runner import MODULE_TIMEOUT
+        # Observed real runtime for a 218 KB module: ~2128s (~35 min).
+        # The default cap must clear that with a meaningful margin so the
+        # 30-min cap regression cannot recur silently.
+        assert MODULE_TIMEOUT >= 2700, (
+            f"MODULE_TIMEOUT={MODULE_TIMEOUT}s is too tight; large-module "
+            "syncs legitimately need ~30-35 min and the previous 30-min cap "
+            "killed successful work mid-flight."
+        )
+
+    def test_module_timeout_honors_env_override(self, monkeypatch):
+        import importlib
+        import pdd.agentic_sync_runner as runner_mod
+
+        monkeypatch.setenv("PDD_MODULE_TIMEOUT_SECONDS", "5400")
+        importlib.reload(runner_mod)
+        try:
+            assert runner_mod.MODULE_TIMEOUT == 5400
+        finally:
+            monkeypatch.delenv("PDD_MODULE_TIMEOUT_SECONDS", raising=False)
+            importlib.reload(runner_mod)

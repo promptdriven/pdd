@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -9,8 +11,53 @@ from pdd.get_jwt_token import (
     UserCancelledError,
     RateLimitError,
     FirebaseAuthenticator,
+    PDD_JWT_TOKEN_ENV,
 )
 import pdd._keyring_timeout as keyring_timeout
+
+
+@pytest.fixture(autouse=True)
+def _isolate_pdd_jwt_token_env(monkeypatch):
+    """Cloud Batch's entrypoint exports PDD_JWT_TOKEN globally for all tasks so
+    cloud-regression chunks can authenticate against staging. That same env var
+    short-circuits get_jwt_token() at the top of the function, which would bypass
+    every per-test mock in this file. Tests that exercise the injection path
+    explicitly call monkeypatch.setenv, which overrides this delenv."""
+    monkeypatch.delenv(PDD_JWT_TOKEN_ENV, raising=False)
+
+
+@pytest.mark.asyncio
+@patch("pdd.get_jwt_token.FirebaseAuthenticator")
+@patch("pdd.get_jwt_token._get_cached_jwt")
+async def test_get_jwt_token_prefers_injected_env_token(
+    mock_get_cached_jwt,
+    mock_firebase_auth,
+    monkeypatch,
+):
+    """Direct helper callers should honor PDD_JWT_TOKEN before cache/keyring auth."""
+    monkeypatch.setenv(PDD_JWT_TOKEN_ENV, "injected-token")
+
+    returned_token = await get_jwt_token("fake_firebase_key", "fake_github_client")
+
+    assert returned_token == "injected-token"
+    mock_get_cached_jwt.assert_not_called()
+    mock_firebase_auth.assert_not_called()
+
+
+def test_autouse_fixture_clears_pdd_jwt_token_env_leak():
+    """Regression for CI env leak (PR #1342 + ci/cloud-batch/entrypoint.sh).
+
+    Cloud Batch exports PDD_JWT_TOKEN at the top of entrypoint.sh for every task
+    in the matrix, including pytest unit-test chunks. The new env-var
+    short-circuit in get_jwt_token() (commit 20d8aea11) made every previously
+    mock-isolated test in this file return that leaked token instead of the
+    mocked value. The autouse fixture above guards against this; this test
+    pins the guarantee so a future refactor can't quietly remove it."""
+    assert PDD_JWT_TOKEN_ENV not in os.environ, (
+        f"Autouse fixture must clear {PDD_JWT_TOKEN_ENV} before each test in "
+        "this file; otherwise CI env leaks short-circuit get_jwt_token() and "
+        "bypass every mock."
+    )
 
 
 @pytest.mark.asyncio

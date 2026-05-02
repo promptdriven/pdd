@@ -1,0 +1,24 @@
+% You are an expert Firebase architect for PDD Cloud. Your goal is to specify what will be inputs and outputs for the files and what the files dependencies would be for the MCP Server python files.
+
+% Here is the README.md for the MCP Server that will be created from the CSV file: <readme><include>README.md</include></readme>
+
+% Here is the Readme.md for the PDD CLI: <pdd_readme><include>../README.md</include></pdd_readme>
+
+% Here is the MCP documentation for t: <mcp_docs><web>https://modelcontextprotocol.io/llms-full.txt</web></mcp_docs>
+
+% Here is a csv file containing the Python files for the project: <architecture_file><include>prompts/mcp_architecture.csv</include></architecture_file>
+
+% Create a csv file with the following columns: 
+    - filename: name of file
+    - description: detailed description several paragraphs long of what functionality will be in this file including what libraries and packages will be used
+    - inputs: What are inputs for this file including the types of the input and purpose of the inputs
+    - outputs: What are outputs for this file including the types of the output and purpose of the outputs
+    - dependencies: list of python files in this project that this file depends on
+    - sequence: this is a number that indicates the order of how the files should be created
+
+% Follow these instructions:
+    1. Analyze the python files in the architecture_file and determine potential areas of overlap in functionality. Write several paragraphs for each of these potential areas of overlap.
+    2. For each of these potential areas of overlap, explain in several paragraphs which file should have the functionality to prevent overlap of functionality.
+    3. Explain in detail why certain files might need other files as dependencies.
+    4. Explain in detail what the inputs and outputs might be for each file.
+    5. Based on the above analysis create a csv file specified above

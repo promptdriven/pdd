@@ -484,6 +484,82 @@ class TestUpdateGithubCommentThrottled:
 
 
 # ---------------------------------------------------------------------------
+# AsyncSyncRunner._update_github_comment
+# ---------------------------------------------------------------------------
+
+class TestUpdateGithubComment:
+    def _make_runner(self) -> AsyncSyncRunner:
+        return AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info={
+                "owner": "owner",
+                "repo": "repo",
+                "issue_number": 12,
+            },
+            quiet=True,
+        )
+
+    @patch("pdd.agentic_sync_runner._run_gh_command")
+    def test_reuses_newest_existing_progress_comment(self, mock_gh):
+        """A fresh runner should patch the existing progress comment, not post a duplicate."""
+        comments = [
+            {
+                "id": 100,
+                "body": "## PDD Agentic Sync Progress\nIssue: #11\nold issue",
+            },
+            {
+                "id": 101,
+                "body": "## PDD Agentic Sync Progress\nIssue: #12\nolder",
+            },
+            {
+                "id": 102,
+                "body": "## PDD Agentic Sync Progress\nIssue: #12\nnewer",
+            },
+        ]
+
+        def fake_gh(args, timeout=30):
+            if args == [
+                "api", "repos/owner/repo/issues/12/comments", "--paginate", "--slurp",
+            ]:
+                return True, json.dumps([comments])
+            if args[:3] == ["api", "repos/owner/repo/issues/comments/102", "-X"]:
+                assert "PATCH" in args
+                return True, "{}"
+            raise AssertionError(f"unexpected gh args: {args}")
+
+        mock_gh.side_effect = fake_gh
+        runner = self._make_runner()
+
+        runner._update_github_comment()
+
+        assert runner.comment_id == 102
+        calls = [call.args[0] for call in mock_gh.call_args_list]
+        assert all("POST" not in call for call in calls)
+
+    @patch("pdd.agentic_sync_runner._run_gh_command")
+    def test_posts_when_no_existing_progress_comment(self, mock_gh):
+        """No existing progress comment still creates one."""
+        def fake_gh(args, timeout=30):
+            if args == [
+                "api", "repos/owner/repo/issues/12/comments", "--paginate", "--slurp",
+            ]:
+                return True, json.dumps([[]])
+            if args[:3] == ["api", "repos/owner/repo/issues/12/comments", "-X"]:
+                assert "POST" in args
+                return True, json.dumps({"id": 555})
+            raise AssertionError(f"unexpected gh args: {args}")
+
+        mock_gh.side_effect = fake_gh
+        runner = self._make_runner()
+
+        runner._update_github_comment()
+
+        assert runner.comment_id == 555
+
+
+# ---------------------------------------------------------------------------
 # AsyncSyncRunner._record_result phase finalization
 # ---------------------------------------------------------------------------
 
@@ -905,6 +981,7 @@ class TestSyncOneModule:
 
         # Mock time so elapsed_total immediately exceeds MODULE_TIMEOUT
         # after the first heartbeat poll TimeoutExpired
+        from pdd.agentic_sync_runner import MODULE_TIMEOUT as _module_timeout
         call_count = [0]
         base_time = 1000.0
 
@@ -912,12 +989,107 @@ class TestSyncOneModule:
             call_count[0] += 1
             if call_count[0] <= 2:
                 return base_time
-            return base_time + 2000  # Well past MODULE_TIMEOUT
+            return base_time + _module_timeout + 100  # Well past MODULE_TIMEOUT
 
         with patch("pdd.agentic_sync_runner.time.time", side_effect=fake_time):
             success, cost, error = runner._sync_one_module("slow")
         assert not success
         assert "Timeout" in error
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_timeout_adder_extends_module_timeout(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """`sync_options['timeout_adder']` (forwarded from `--timeout-adder`)
+        must extend the per-module wall-clock cap so users can stretch the
+        budget for individual large modules without redefining
+        ``PDD_MODULE_TIMEOUT_SECONDS`` globally. Without this, the CLI flag is
+        a silent no-op for the agentic-sync workflow."""
+        from pdd.agentic_sync_runner import MODULE_TIMEOUT as _module_timeout
+
+        timeout_exc = __import__("subprocess").TimeoutExpired(cmd="pdd", timeout=900)
+        mock_proc = _make_mock_popen()
+        mock_proc.wait.side_effect = [timeout_exc, 0]
+        mock_popen.return_value = mock_proc
+
+        adder = 600.0
+        runner = AsyncSyncRunner(
+            basenames=["slow"],
+            dep_graph={"slow": []},
+            sync_options={"timeout_adder": adder},
+            github_info=None,
+            quiet=True,
+        )
+
+        # Tick the clock to between MODULE_TIMEOUT and MODULE_TIMEOUT+adder so
+        # we can prove the cap was extended (not exceeded) by the adder.
+        call_count = [0]
+        base_time = 1000.0
+
+        def fake_time():
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return base_time
+            # Just past MODULE_TIMEOUT but well within MODULE_TIMEOUT + adder.
+            return base_time + _module_timeout + (adder / 2)
+
+        with patch("pdd.agentic_sync_runner.time.time", side_effect=fake_time):
+            success, cost, error = runner._sync_one_module("slow")
+
+        # The runner did NOT abort at MODULE_TIMEOUT; either it kept polling
+        # (no error returned with a "Timeout" message) or, if the side_effect
+        # ran out, surfaced a different failure. Both prove the adder extended
+        # the cap above MODULE_TIMEOUT.
+        if error:
+            assert "Timeout after" not in error or str(int(_module_timeout)) not in error, (
+                f"timeout_adder=600s should have extended the cap above "
+                f"MODULE_TIMEOUT={_module_timeout}s, got error={error!r}"
+            )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_negative_timeout_adder_does_not_shrink_cap(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """A negative or non-numeric `timeout_adder` must clamp to 0 — an
+        over-eager flag must never *shrink* the per-module wall-clock cap."""
+        from pdd.agentic_sync_runner import MODULE_TIMEOUT as _module_timeout
+
+        timeout_exc = __import__("subprocess").TimeoutExpired(cmd="pdd", timeout=900)
+        mock_proc = _make_mock_popen()
+        mock_proc.wait.side_effect = [timeout_exc, 0]
+        mock_popen.return_value = mock_proc
+
+        runner = AsyncSyncRunner(
+            basenames=["slow"],
+            dep_graph={"slow": []},
+            sync_options={"timeout_adder": -100.0},
+            github_info=None,
+            quiet=True,
+        )
+
+        # Clock just past MODULE_TIMEOUT — the cap MUST still be MODULE_TIMEOUT
+        # (not MODULE_TIMEOUT - 100), so the timeout fires.
+        call_count = [0]
+        base_time = 1000.0
+
+        def fake_time():
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                return base_time
+            return base_time + _module_timeout + 5
+
+        with patch("pdd.agentic_sync_runner.time.time", side_effect=fake_time):
+            success, cost, error = runner._sync_one_module("slow")
+        assert not success
+        assert "Timeout" in error
+        # Effective cap should equal MODULE_TIMEOUT (not the truncated value).
+        assert str(int(_module_timeout)) in error
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.05)
@@ -962,6 +1134,81 @@ class TestSyncOneModule:
         assert "test" in state.completed_phases
         assert "verify" in state.completed_phases
         assert state.current_phase == "synced"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_heartbeat_prefers_phase_state_over_stale_stdout(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, capsys
+    ):
+        """Heartbeat must surface parsed `PDD_PHASE` state instead of the
+        last raw stdout line, otherwise the parent stays stuck on lines like
+        ``Preprocessing complete`` for the whole run while later phases
+        (test/fix) are quietly progressing — a recurring symptom that hid
+        real work behind the cap (#1344)."""
+        from pdd.agentic_sync_runner import MODULE_TIMEOUT as _module_timeout
+
+        # Pretend the child has reached the `test` phase (via _read_stream's
+        # PDD_PHASE markers) but the latest non-box stdout line is still
+        # ``Preprocessing complete``. The heartbeat must prefer the phase.
+        timeout_exc = __import__("subprocess").TimeoutExpired(cmd="pdd", timeout=900)
+        mock_proc = _make_mock_popen()
+        mock_proc.wait.side_effect = [timeout_exc, 0]
+        mock_popen.return_value = mock_proc
+
+        runner = AsyncSyncRunner(
+            basenames=["slow"],
+            dep_graph={"slow": []},
+            sync_options={},
+            github_info=None,
+            quiet=False,  # heartbeats only print when not quiet
+        )
+        # Pre-populate phase state (as _read_stream would) so the heartbeat
+        # block has something to find on the first poll.
+        runner.module_states["slow"].current_phase = "test"
+        runner.module_states["slow"].completed_phases = ["generate", "crash"]
+        runner.module_states["slow"].status = "running"
+
+        # Two _on_phase_change-style synthetic stdout lines that look stale.
+        # The heartbeat must NOT echo the box-drawing or the
+        # ``Preprocessing complete`` line — it must use the phase.
+        # We seed them indirectly by having Popen yield them, but the
+        # simplest path is to monkeypatch the heartbeat poll to return
+        # a single tick before completion.
+        call_count = [0]
+        base_time = 1000.0
+
+        def fake_time():
+            call_count[0] += 1
+            # Calls 1-2: start_wall + last_heartbeat captured at base_time.
+            # Calls 3-5: first poll iteration — elapsed=75s (past the 60s
+            # heartbeat threshold but well under MODULE_TIMEOUT) so the
+            # heartbeat block fires and prints the phase line.
+            # Call 6+: jump past MODULE_TIMEOUT to terminate the loop
+            # without spinning forever.
+            if call_count[0] <= 2:
+                return base_time
+            if call_count[0] <= 5:
+                return base_time + 75
+            return base_time + _module_timeout + 5
+
+        # Pre-set start_time so line 739's `or time.time()` does not consume
+        # one of our fake_time slots.
+        runner.module_states["slow"].start_time = base_time
+
+        with patch("pdd.agentic_sync_runner.time.time", side_effect=fake_time):
+            runner._sync_one_module("slow")
+
+        captured = capsys.readouterr()
+        out = captured.out + captured.err
+
+        assert "phase: test (2 done)" in out, (
+            f"heartbeat must surface PDD_PHASE state when present; got:\n{out!r}"
+        )
+        assert "Preprocessing complete" not in out, (
+            "heartbeat must not echo stale stdout lines once a phase is known"
+        )
 
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.05)
