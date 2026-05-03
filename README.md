@@ -170,6 +170,7 @@ For CLI enthusiasts, implement GitHub issues directly:
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **OpenCode**: `npm install -g opencode-ai` (manages its own provider auth; select with `PDD_AGENTIC_PROVIDER=opencode`)
 
 **Usage:**
 ```bash
@@ -2241,7 +2242,7 @@ Update prompts based on code changes. This command operates in two primary modes
 
 **Agentic Prompt Optimization (Default)**
 
-The `update` command uses an agentic AI (Claude Code, Gemini, or Codex) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+The `update` command uses an agentic AI (Claude Code, Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
 
 1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
 2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
@@ -2254,6 +2255,7 @@ This produces prompts that are more concise while remaining clear to developers 
 - `claude` (Anthropic Claude Code)
 - `gemini` (Google Gemini CLI)
 - `codex` (OpenAI Codex CLI)
+- `opencode` (OpenCode — select via `PDD_AGENTIC_PROVIDER=opencode`)
 
 If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
 

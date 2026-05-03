@@ -1,3 +1,9 @@
+## Unreleased
+
+### Feat
+
+- **agentic**: add OpenCode as a first-class agentic provider. `PDD_AGENTIC_PROVIDER=opencode` now routes agentic work to `opencode run --dir <cwd> --format json --dangerously-skip-permissions`. OpenCode JSON/JSONL events (`text`, `tool_use`, `step_start`, `step_finish`, `error`) are normalized into PDD's `(success, output, cost)` result shape, with cost summed from `step_finish.part.cost`. Documented alongside Claude Code, Gemini CLI, and Codex CLI in the README, onboarding, and tutorials install lists (#800).
+
 ## v0.0.226 (2026-05-02)
 
 ### Feat
