@@ -1,77 +1,123 @@
-# Examples
+# Customer Churn Prediction — PDD Example
 
-This directory contains examples that demonstrate comparisons between using Cursor and Prompt-Driven Development (PDD) for various programming tasks. These examples serve as practical illustrations of how PDD can be used to generate and modify code, via the pdd sync command, and how it compares to traditional development approaches.
+This example demonstrates a complete **Prompt-Driven Development** workflow for a real-world machine learning use case: **predicting customer churn** using logistic regression.
 
-## Getting Started
+It is a companion to the core `hello` and `factorial_calculator` examples, showing PDD applied to a **data science / ML context** — a domain not previously covered in the official examples.
 
-### Post-Installation Setup (Required first step after installation)
+---
 
-Before running any examples, make sure you've completed the PDD setup:
+## What This Example Covers
 
-```bash
-pdd setup
+| PDD Concept | Implementation |
+|---|---|
+| Prompt as source of truth | `prompts/customer_churn_python.prompt` |
+| Code generated from prompt | `customer_churn.py` |
+| Usage example | `example_customer_churn.py` |
+| Unit test suite | `test_customer_churn.py` |
+
+---
+
+## Files
+
+```
+examples/customer_churn/
+├── prompts/
+│   └── customer_churn_python.prompt   # PDD prompt (source of truth)
+├── customer_churn.py                  # Generated module
+├── example_customer_churn.py          # Runnable demo
+├── test_customer_churn.py             # Unit tests (pytest)
+└── README.md                          # This file
 ```
 
-This command will guide you through:
-- Installing shell tab completion
-- Capturing your API keys
-- Creating ~/.pdd configuration files
-- Writing the starter prompt
+---
 
-After setup, reload your shell:
+## Prerequisites
+
 ```bash
-source ~/.zshrc  # or source ~/.bashrc / fish equivalent
+pip install pandas numpy scikit-learn pytest
 ```
 
-## Available Examples
+---
 
-### Agentic Fallback
-The agentic fallback example demonstrates using agentic fallback to resolve cross-file dependencies during automated debugging.  
-The example has two files — `src/main.py` and `src/utils.py` — where `main.py` fails without reading `utils.py`.  
-With agentic fallback enabled, the CLI agent (Claude/Gemini/Codex) can read `utils.py`, understand the dependency, and fix `main.py`.
-Users may intentionally introduce errors in `src/utils.py` to test the agentic fix functionality.
+## Run the Example
 
-Additional examples demonstrating the use of agentic fallback are provided for Java, TypeScript, and JavaScript.
+```bash
+cd examples/customer_churn
+python example_customer_churn.py
+```
 
-### Edit File Tool
-The edit_file_tool_example walks through generating a complete Python tool using PDD's streamlined `pdd --force sync` workflow. This example shows:
-- How to drive end-to-end project generation (code, tests, docs) from component prompts (complete dev units)
-- Using the provided Makefile targets to orchestrate setup, prompt creation, and sync runs
-- Integrating automation features like command logging and optional cost tracking during sync
+**Expected output:**
+```
+=======================================================
+  PDD Example: Customer Churn Prediction
+=======================================================
 
-### Handpaint
-The handpaint example demonstrates how PDD can be used to create and modify a painting application. This example shows:
-- How PDD can be used to generate code for a graphical application
-- The process of iteratively refining code through PDD
-- A comparison between traditional development and PDD-assisted development
+📦 Generating synthetic customer dataset (100 rows)...
+   Dataset shape : (100, 8)
+   Churn rate    : 27.0%
 
-### Hello World
-The hello_world example demonstrates how PDD can be used to generate code for a simple Python function that prints "hello". This example shows:
-- How PDD can be used to generate code for a simple Python function via the sync command
+🔧 Training logistic regression pipeline...
 
-### Hello You
-The hello_you example expands on the Hello World flow by rendering a personalized greeting in large ASCII art. This example shows:
-- Capturing the current shell username (via `whoami`) and feeding it into the generated program
-- Building a reusable ASCII art alphabet map inside the generated Python file to spell arbitrary strings
-- Producing a self-contained script that prints a 10-row tall "Hello <username>" banner with no external dependencies
+📊 Model Evaluation (held-out 20% test set):
+   Accuracy  : 75.00%
+   Precision : 60.00%
+   Recall    : 50.00%
+   F1 Score  : 54.55%
 
-### Pi Calc
-The pi_calc example demonstrates how PDD can be used to generate code for a simple Python function that calculates the value of Pi. This example shows:
-- How PDD can be used to generate code for a simple Python function using the sync command
+🔍 Top 5 Feature Importances (by abs coefficient):
+   num_support_tickets              +0.5231  ↑ increases churn
+   tenure                           -0.4812  ↓ decreases churn
+   contract_type_Month-to-month     +0.3901  ↑ increases churn
+   ...
 
-### QR Code Sandwich
-The qrcode_sandwich example demonstrates how PDD can be used to generate code that produces scannable QR codes embedded within photorealistic images using ControlNet QR conditioning. This example shows:
-- Creating a QR code that blends into a realistic image while remaining scannable
-- Leveraging ControlNet QR conditioning in a generated Python script
-- Iterating with PDD to refine parameters and results
+🎯 Individual Customer Predictions:
 
-More examples will be added to this directory as they are developed.
+   High-risk customer (month-to-month, 2 months tenure):
+   → Churn probability: 68.42% 🔴
 
-## Purpose
-These examples are designed to help developers understand:
-1. The capabilities of PDD in different programming contexts
-2. How PDD compares to traditional development workflows
-3. Best practices for using PDD effectively
-4. Real-world applications of PDD in various domains
+   Low-risk customer (2-year contract, 58 months tenure):
+   → Churn probability: 18.75% 🟢
+```
 
-Each example includes documentation and code that can be used as a reference for your own PDD-based development projects.
+---
+
+## Run the Tests
+
+```bash
+cd examples/customer_churn
+pytest test_customer_churn.py -v
+```
+
+---
+
+## Run with PDD
+
+To regenerate the code from the prompt using PDD:
+
+```bash
+# From the repo root
+pdd --force sync customer_churn
+```
+
+To implement improvements from a GitHub issue:
+
+```bash
+pdd change https://github.com/promptdriven/pdd/issues/<issue-number>
+```
+
+---
+
+## About This Example
+
+This example was contributed as part of a pull request to expand PDD's example library into the **machine learning / data science** domain. The prompt covers:
+
+- **sklearn Pipeline** with `ColumnTransformer` for mixed-type preprocessing
+- **Logistic Regression** binary classification
+- **Evaluation metrics**: accuracy, precision, recall, F1
+- **Edge case handling**: missing values, empty inputs, None model
+
+It demonstrates that PDD's prompt-first approach scales naturally to ML workflows, where prompt clarity directly impacts the quality and reproducibility of generated model code.
+
+---
+
+*Contributed by [Darius Rowser](https://github.com/Drowser2430)*
