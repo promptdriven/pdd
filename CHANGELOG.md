@@ -1,17 +1,48 @@
+## v0.0.226 (2026-05-02)
+
+### Feat
+
+- add LLM call attribution logging
+- implement durable issue-sync mode, configurable module timeouts, and headless JWT authentication, while adding a dependency tracking manifest.
+
+### Fix
+
+- **release**: sync public release helper payload
+
 ## v0.0.225 (2026-05-02)
 
 ### Feat
 
-- implement automated PR review-fix loop with granular controls, improved agent discovery, and expanded test coverage
-- add durable agentic sync checkpoints
+- **sync**: opt-in durable issue-sync mode (`pdd sync --durable <issue-url>`) runs each module in `.pdd/worktrees/sync-issue-<N>-<module>/`, applies successful diffs to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/` with a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` commit trailer, and resumes by skipping checkpointed modules on rerun. New flags `--durable-branch`, `--no-resume`, and `--durable-max-parallel` control the durable branch name, fresh re-runs, and concurrency cap; durable mode requires an `origin` remote, refuses `main`/`master`/the repository default branch, and excludes secrets, lock files, cost CSVs, `.pdd/worktrees/`, and `.pdd/agentic_sync_state.json` from checkpoints.
+- **sync**: per-module wall-clock cap is now configurable via `PDD_MODULE_TIMEOUT_SECONDS` (default raised from 1800s to 2700s) and `--timeout-adder` stacks on top of it via `sync_options['timeout_adder']`, so individual very-large modules can extend the budget without redefining the global default. Negative or non-numeric adders are clamped to 0.
+- **sync**: heartbeat output during long module runs now reports parsed `PDD_PHASE` state (e.g. `phase: test (3 done)`) instead of the last raw stdout line, which was getting stuck on stale "Preprocessing complete" messages while later phases progressed.
+- **sync**: `pdd sync` reuses an existing GitHub progress comment for the issue when its in-memory `comment_id` is missing (e.g. cross-machine resume), and falls back to creating a new one only if the prior PATCH fails — eliminates duplicate progress comments on rerun.
+- **auth**: `get_jwt_token` honors a `PDD_JWT_TOKEN` env var that short-circuits the keyring/Device Flow path entirely, enabling headless CI and test injection.
 
 ### Fix
 
-- **ci**: include .sync-config.yml in cloud-batch source tarball (#1358)
-- **ci**: exclude public sync helper from auto-heal
-- **release**: sync public CI payload
-- **tests**: clear PDD_JWT_TOKEN env in test_get_jwt_token to prevent CI leak (#1356)
-- **sync, fix**: raise MODULE_TIMEOUT cap and skip cloud auto-submit in cloud executors (#1347)
+- **sync, fix**: skip example auto-submit inside Cloud Run / Cloud Functions executors (`CloudConfig.is_running_in_cloud()`) and bound the asyncio JWT call with `asyncio.wait_for` (`PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S`, default 300s) so a stuck Device Flow on a dev machine or a headless cloud worker can no longer block the rest of the sync/fix budget waiting for interactive auth (#1347).
+- **sync**: issue-sync now builds the dependency graph from in-memory combined architecture data (`build_dep_graph_from_architecture_data`) instead of re-reading `architecture.json`, preserving nested-architecture edges that the on-disk re-read dropped.
+- **release**: rewrite of `scripts/copy_package_data_to_public.py` so the public payload sync now walks directories (not just `glob` files), follows `git ls-files` for tracked deletions when the destination is a git work tree, normalizes path separators, removes stale symlinks/dirs as well as files, and uses `git rm` when available so deletions land in the public repo's index.
+- **ci**: include `.sync-config.yml` in the cloud-batch source tarball so cloud workers can run the public-release sync (#1358).
+- **ci**: exclude `copy_package_data_to_public` from the auto-heal drift workflow — it is an operational packaging helper, not a prompt-managed PDD module.
+- **release**: sync public CI payload (`utils/mcp/prompts/`, `scripts/ci_detect_changed_modules.py`) via `.sync-config.yml`.
+- **tests**: clear `PDD_JWT_TOKEN` env in `test_get_jwt_token` to prevent the new env-var short-circuit from leaking into and silently passing other JWT tests in CI (#1356).
+
+### Refactor
+
+- **sync**: `run_global_sync` now forwards `--timeout-adder` via `sync_options` so the same per-module wall-clock extension works on both the global-sync and issue-sync paths.
+- **sync**: removed unused import of `build_dep_graph_from_architecture` from `agentic_sync.py` after the switch to the in-memory data variant.
+
+### Build
+
+- New `pdd/durable_sync_runner.py` (DurableSyncRunner subclass of AsyncSyncRunner) plus prompt, architecture metadata, and 507-line `tests/test_durable_sync_runner.py`.
+- New tests for the cloud auto-submit short-circuit and bounded JWT auth in `tests/test_sync_main.py`, `tests/test_fix_main.py`, and `tests/test_agentic_sync_runner.py`; new `tests/test_copy_package_data_to_public.py` (94 lines) covering directory walks, stale symlink/dir cleanup, and `git rm` integration; new `tests/test_get_jwt_token.py` cases for `PDD_JWT_TOKEN` injection.
+- Refreshed shell completions, `pypi_description.rst`, `project_dependencies.csv`, architecture/dependency metadata, and version bump to 0.0.225.
+
+### Docs
+
+- README documents `--durable`, `--durable-branch`, `--no-resume`, `--durable-max-parallel`, the `.pdd/worktrees/` directory, the `PDD_MODULE_TIMEOUT_SECONDS` and `PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S` environment variables, and an example walkthrough of cloud-friendly resumable issue sync.
 
 ## v0.0.224 (2026-04-30)
 

@@ -5,6 +5,7 @@ import pytest
 import os
 import pandas as pd
 import json # Added for Pydantic parsing tests
+import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 from pydantic import BaseModel, ValidationError
@@ -16,6 +17,12 @@ from pdd.llm_invoke import (
     InsufficientCreditsError,
     _pydantic_to_json_schema,
     _validate_with_pydantic,
+    _build_llm_attribution_context,
+    _emit_llm_attribution,
+    _maybe_build_llm_attribution_context,
+    _safe_command_summary,
+    _safe_error_fields,
+    _summarize_litellm_kwargs,
 )
 import openai # Import openai for exception types used by LiteLLM
 import httpx # Import httpx for mocking request/response
@@ -199,6 +206,276 @@ def test_litellm_debug_suppression():
         f"litellm logger level should be at least INFO to suppress DEBUG messages, "
         f"got {logging.getLevelName(litellm_logger.level)}"
     )
+
+
+def test_llm_attribution_summarizes_without_prompt_or_secret_values():
+    summary = _summarize_litellm_kwargs({
+        "model": "vertex_ai/claude-opus-4-6",
+        "messages": [{"role": "user", "content": "secret prompt content"}],
+        "api_key": "sk-secret-value",
+        "temperature": 0.1,
+        "vertex_location": "us-central1",
+    })
+
+    encoded = json.dumps(summary)
+    assert summary["model"] == "vertex_ai/claude-opus-4-6"
+    assert summary["has_api_key"] is True
+    assert summary["message_count"] == 1
+    assert "messages" not in summary
+    assert "api_key" not in summary
+    assert "secret prompt content" not in encoded
+    assert "sk-secret-value" not in encoded
+
+
+def test_llm_attribution_command_summary_redacts_secret_like_argv():
+    summary = _safe_command_summary([
+        "/usr/local/bin/pdd",
+        "generate",
+        "--api-key",
+        "sk-secret-value",
+        "--env",
+        "OPENAI_API_KEY=sk-another-secret",
+        "--output",
+        "result.py",
+        "prompt text with private content",
+    ])
+
+    encoded = json.dumps(summary)
+    assert summary["executable"] == "pdd"
+    assert summary["subcommand"] == "generate"
+    assert "--api-key" in summary["option_names"]
+    assert "--env" in summary["option_names"]
+    assert "--output" in summary["option_names"]
+    assert "sk-secret-value" not in encoded
+    assert "sk-another-secret" not in encoded
+    assert "OPENAI_API_KEY" not in encoded
+    assert "prompt text with private content" not in encoded
+    assert "result.py" not in encoded
+
+    secret_positional = _safe_command_summary(["pdd", "sk-secret-value"])
+    assert secret_positional["subcommand"] is None
+    assert "sk-secret-value" not in json.dumps(secret_positional)
+
+
+def test_llm_attribution_error_fields_omit_provider_message_text():
+    class ProviderError(Exception):
+        status_code = 429
+        code = "rate_limit"
+        request_id = "req_123"
+
+    error = ProviderError("prompt text and sk-secret-value leaked by provider")
+    fields = _safe_error_fields(error)
+    encoded = json.dumps(fields)
+
+    assert fields["error_type"] == "ProviderError"
+    assert fields["status_code"] == 429
+    assert fields["code"] == "rate_limit"
+    assert fields["request_id"] == "req_123"
+    assert "error_message" not in fields
+    assert "prompt text" not in encoded
+    assert "sk-secret-value" not in encoded
+
+
+def test_llm_attribution_opt_out_skips_context_collection(monkeypatch):
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION", "0")
+    with patch(
+        "pdd.llm_invoke._build_llm_attribution_context",
+        side_effect=AssertionError("context collection should not run"),
+    ):
+        context = _maybe_build_llm_attribution_context(
+            strength=0.5,
+            temperature=0.1,
+            time_value=0.25,
+            use_batch_mode=False,
+            use_cloud=False,
+            output_pydantic=None,
+            output_schema=None,
+            language="python",
+        )
+    assert context is None
+
+
+def test_emit_llm_attribution_writes_safe_jsonl(monkeypatch, tmp_path):
+    log_path = tmp_path / "llm-attribution.jsonl"
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION", "1")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_LOG_PATH", str(log_path))
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_STDOUT", "0")
+
+    context = {
+        "request_id": "req-test",
+        "process": {"argv": ["pdd", "generate"]},
+        "credentials": {
+            "google_application_credentials": {
+                "client_email": "pdd-stg-tools@example.iam.gserviceaccount.com",
+                "private_key_id_prefix": "abcdef123456",
+            }
+        },
+    }
+    _emit_llm_attribution(
+        context,
+        "llm_invoke.litellm_request",
+        kwargs_summary=_summarize_litellm_kwargs({
+            "model": "vertex_ai/claude-opus-4-6",
+            "messages": [{"role": "user", "content": "do not log me"}],
+            "api_key": "sk-do-not-log",
+        }),
+    )
+
+    payload = log_path.read_text(encoding="utf-8").strip()
+    record = json.loads(payload)
+    assert record["schema"] == "pdd.llm_attribution.v1"
+    assert record["event"] == "llm_invoke.litellm_request"
+    assert record["request_id"] == "req-test"
+    assert "pdd-stg-tools@example.iam.gserviceaccount.com" in payload
+    assert "do not log me" not in payload
+    assert "sk-do-not-log" not in payload
+    if os.name != "nt":
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+
+def test_emit_llm_attribution_writes_sanitized_error_fields(monkeypatch, tmp_path):
+    class ProviderError(Exception):
+        status_code = 500
+
+    log_path = tmp_path / "llm-attribution.jsonl"
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION", "1")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_LOG_PATH", str(log_path))
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_STDOUT", "0")
+
+    error = ProviderError("raw prompt and sk-secret-value from provider")
+    _emit_llm_attribution(
+        {"request_id": "req-error"},
+        "llm_invoke.litellm_error",
+        **_safe_error_fields(error),
+    )
+
+    payload = log_path.read_text(encoding="utf-8").strip()
+    record = json.loads(payload)
+    assert record["event"] == "llm_invoke.litellm_error"
+    assert record["error_type"] == "ProviderError"
+    assert record["status_code"] == 500
+    assert "raw prompt" not in payload
+    assert "sk-secret-value" not in payload
+    assert "error_message" not in record
+
+
+def test_emit_llm_attribution_process_log_is_structured_json(monkeypatch, tmp_path, capsys):
+    log_path = tmp_path / "llm-attribution.jsonl"
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION", "1")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_LOG_PATH", str(log_path))
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_PROCESS_LOG", "1")
+
+    _emit_llm_attribution({"request_id": "req-stdout"}, "llm_invoke.start")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    stderr_payload = captured.err.strip()
+    record = json.loads(stderr_payload)
+    assert record["log_type"] == "pdd_llm_attribution"
+    assert record["severity"] == "INFO"
+    assert record["event"] == "llm_invoke.start"
+    assert record["request_id"] == "req-stdout"
+    assert not stderr_payload.startswith("PDD_LLM_ATTRIBUTION")
+
+
+def test_emit_llm_attribution_rotates_large_jsonl(monkeypatch, tmp_path):
+    log_path = tmp_path / "llm-attribution.jsonl"
+    log_path.write_text("x" * 20, encoding="utf-8")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION", "1")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_LOG_PATH", str(log_path))
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_STDOUT", "0")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_MAX_BYTES", "10")
+
+    _emit_llm_attribution({"request_id": "req-rotate"}, "llm_invoke.start")
+
+    assert (tmp_path / "llm-attribution.jsonl.1").read_text(encoding="utf-8") == "x" * 20
+    current_record = json.loads(log_path.read_text(encoding="utf-8").strip())
+    assert current_record["request_id"] == "req-rotate"
+
+
+def test_emit_llm_attribution_does_not_chmod_existing_custom_log_dir(monkeypatch, tmp_path):
+    custom_dir = tmp_path / "custom-logs"
+    custom_dir.mkdir()
+    if os.name != "nt":
+        os.chmod(custom_dir, 0o755)
+    log_path = custom_dir / "llm-attribution.jsonl"
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION", "1")
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_LOG_PATH", str(log_path))
+    monkeypatch.setenv("PDD_LLM_ATTRIBUTION_STDOUT", "0")
+
+    _emit_llm_attribution({"request_id": "req-custom-dir"}, "llm_invoke.start")
+
+    if os.name != "nt":
+        assert stat.S_IMODE(custom_dir.stat().st_mode) == 0o755
+        assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+
+def test_llm_attribution_context_records_cloud_metadata_service_account(monkeypatch):
+    class MetadataResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, size):
+            return b"pdd-cloud-run@prompt-driven-development-stg.iam.gserviceaccount.com"
+
+    monkeypatch.setenv("CLOUD_RUN_JOB", "pdd-cloud-job")
+    monkeypatch.setattr(
+        "pdd.llm_invoke.urllib.request.urlopen",
+        lambda request, timeout: MetadataResponse(),
+    )
+
+    context = _build_llm_attribution_context(
+        strength=0.5,
+        temperature=0.1,
+        time_value=0.25,
+        use_batch_mode=False,
+        use_cloud=True,
+        output_pydantic=None,
+        output_schema=None,
+        language="python",
+    )
+
+    metadata = context["credentials"]["metadata_server"]
+    assert metadata["service_account_email"] == (
+        "pdd-cloud-run@prompt-driven-development-stg.iam.gserviceaccount.com"
+    )
+    assert context["env"]["CLOUD_RUN_JOB"] == "pdd-cloud-job"
+
+
+def test_llm_attribution_context_records_safe_service_account_identity(monkeypatch, tmp_path):
+    sa_path = tmp_path / "service-account.json"
+    sa_path.write_text(
+        json.dumps({
+            "type": "service_account",
+            "project_id": "prompt-driven-development-stg",
+            "private_key_id": "abcdef1234567890",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n",
+            "client_email": "pdd-stg-tools@prompt-driven-development-stg.iam.gserviceaccount.com",
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(sa_path))
+
+    context = _build_llm_attribution_context(
+        strength=0.5,
+        temperature=0.1,
+        time_value=0.25,
+        use_batch_mode=False,
+        use_cloud=False,
+        output_pydantic=None,
+        output_schema=None,
+        language="python",
+    )
+
+    gac = context["credentials"]["google_application_credentials"]
+    encoded = json.dumps(context)
+    assert gac["client_email"] == "pdd-stg-tools@prompt-driven-development-stg.iam.gserviceaccount.com"
+    assert gac["private_key_id_prefix"] == "abcdef123456"
+    assert "-----BEGIN PRIVATE KEY-----" not in encoded
+    assert "\"private_key\"" not in encoded
 
 def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
     first_model_key_name = "OPENAI_API_KEY" 
