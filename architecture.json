@@ -1,7 +1,7 @@
 [
   {
-    "reason": "Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.",
-    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI stored OAuth credentials.",
+    "reason": "Shared infrastructure for agentic CLI invocations across Claude Code, Gemini, Codex, and OpenCode providers.",
+    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, OpenCode JSONL event parsing, and provider availability detection including Gemini CLI stored OAuth credentials.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt"
@@ -2362,7 +2362,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -6836,7 +6839,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
