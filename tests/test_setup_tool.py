@@ -128,7 +128,8 @@ _ENV_VARS_TO_CLEAN = [
     "DEEPSEEK_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
     "AWS_REGION_NAME", "GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT",
     "VERTEXAI_LOCATION", "AZURE_API_KEY", "AZURE_API_BASE",
-    "AZURE_API_VERSION",
+    "AZURE_API_VERSION", "OPENCODE_MODEL", "OPENCODE_AGENT",
+    "OPENCODE_VARIANT", "PDD_OPENCODE_MODE",
 ]
 
 
@@ -371,6 +372,26 @@ def test_multiple_cli_results_warning_only_for_missing(tmp_path, monkeypatch):
         input_sequence=["", "", ""],
     )
     assert "No API key configured" in output
+
+
+def test_opencode_warning_mentions_model_not_api_key(tmp_path, monkeypatch):
+    """OpenCode missing configuration warns about OPENCODE_MODEL, not API keys."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        cli_results=[
+            _make_cli_result(
+                cli_name="opencode",
+                provider="opencode",
+                api_key_configured=False,
+            )
+        ],
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    assert "OPENCODE_MODEL=provider/model" in output
+    assert "No API key configured for opencode" not in output
 
 
 # ===========================================================================
@@ -704,6 +725,33 @@ def test_exit_summary_quick_start_printed(tmp_path, monkeypatch):
     )
     assert "QUICK START" in output
     assert "pdd generate" in output
+
+
+def test_exit_summary_includes_opencode_guidance(tmp_path, monkeypatch):
+    """PDD-SETUP-SUMMARY.txt includes OpenCode auth/model guidance."""
+    _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={
+            "ANTHROPIC_API_KEY": "sk-test",
+            "OPENCODE_AGENT": "reviewer",
+        },
+        cli_results=[
+            _make_cli_result(
+                cli_name="opencode",
+                provider="opencode",
+                api_key_configured=False,
+            )
+        ],
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    summary = tmp_path / "project" / "PDD-SETUP-SUMMARY.txt"
+    content = summary.read_text()
+    assert "opencode auth login" in content
+    assert "opencode models" in content
+    assert "OPENCODE_MODEL=provider/model" in content
+    assert "OPENCODE_AGENT=reviewer" in content
 
 
 # ===========================================================================

@@ -25,7 +25,7 @@ except ImportError:
         return None
 
 # Constants
-_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
 
 # Default number of tail lines to scan for semantic regex patterns.
 # Semantic matching is restricted to the tail to prevent false positives
@@ -240,7 +240,7 @@ def get_agent_provider_preference() -> List[str]:
     Examples:
         PDD_AGENTIC_PROVIDER=google,anthropic,openai  ->  ["google", "anthropic", "openai"]
         PDD_AGENTIC_PROVIDER=google                    ->  ["google"]
-        (unset)                                        ->  ["anthropic", "google", "openai"]
+        (unset)                                        ->  ["anthropic", "google", "openai", "opencode"]
     """
     env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
     if env_val:
@@ -252,6 +252,7 @@ CLI_COMMANDS: Dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
+    "opencode": "opencode",
 }
 
 # Common installation paths for CLI tools (platform-specific)
@@ -284,6 +285,15 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
         Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
+        Path.home() / ".nvm" / "versions" / "node",
+    ],
+    "opencode": [
+        Path.home() / ".npm-global" / "bin" / "opencode",
+        Path.home() / ".local" / "bin" / "opencode",
+        Path.home() / "bin" / "opencode",
+        Path("/usr/local/bin/opencode"),
+        Path("/opt/homebrew/bin/opencode"),
+        Path("/home/linuxbrew/.linuxbrew/bin/opencode"),
         Path.home() / ".nvm" / "versions" / "node",
     ],
 }
@@ -483,7 +493,7 @@ def _log_agentic_interaction(
         prompt: Full prompt text sent to the agent
         response: Full response text from the agent
         cost: Cost in USD for this interaction
-        provider: Provider name (anthropic, google, openai)
+        provider: Provider name (anthropic, google, openai, opencode)
         success: Whether the interaction succeeded
         duration: Duration in seconds
         cwd: Working directory for the task
@@ -536,6 +546,7 @@ def _load_agentic_config() -> Dict[str, Any]:
           claude_path: /path/to/claude
           codex_path: /path/to/codex
           gemini_path: /path/to/gemini
+          opencode_path: /path/to/opencode
 
     Returns empty dict if no config found.
     """
@@ -589,7 +600,7 @@ def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Opti
         3. Search common installation directories
 
     Args:
-        name: CLI binary name (e.g., "claude", "codex", "gemini")
+        name: CLI binary name (e.g., "claude", "codex", "gemini", "opencode")
         config: Optional pre-loaded agentic config dict (avoids repeated file reads)
 
     Returns:
@@ -640,7 +651,7 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
     discovery still honors the current home directory.
     """
     paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini"}:
+    if name in {"claude", "codex", "gemini", "opencode"}:
         home = Path.home()
         paths.extend([
             home / ".npm-global" / "bin" / name,
@@ -729,7 +740,34 @@ def get_available_agents() -> List[str]:
     ):
         available.append("openai")
 
+    # 4. OpenCode
+    # Available if the CLI exists and responds to --version or --help. OpenCode
+    # manages provider auth itself, so PDD does not require an API key here.
+    opencode_path = _find_cli_binary("opencode")
+    if opencode_path and _opencode_cli_responsive(opencode_path):
+        available.append("opencode")
+
     return available
+
+
+def _opencode_cli_responsive(cli_path: str) -> bool:
+    """Return True if OpenCode responds to --version or --help quickly."""
+    for arg in ("--version", "--help"):
+        try:
+            result = subprocess.run(
+                [cli_path, arg],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+        output = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+        if result.returncode == 0 and (
+            Path(cli_path).name == "opencode" or "opencode" in output
+        ):
+            return True
+    return False
 
 
 def _has_gemini_oauth_credentials() -> bool:
@@ -1364,6 +1402,37 @@ def _run_with_provider(
         codex_model = env.get("CODEX_MODEL")
         if codex_model:
             cmd.extend(["--model", codex_model])
+    elif provider == "opencode":
+        opencode_mode = (env.get("PDD_OPENCODE_MODE") or "run").strip().lower()
+        if opencode_mode != "run":
+            if not quiet:
+                console.print(
+                    f"[yellow]Ignoring unsupported PDD_OPENCODE_MODE={opencode_mode!r}; "
+                    "using OpenCode run mode.[/yellow]"
+                )
+            opencode_mode = "run"
+        cmd = [
+            cli_path,
+            opencode_mode,
+            "--format", "json",
+            "--dangerously-skip-permissions",
+            "--file", str(prompt_path),
+        ]
+        opencode_model = env.get("OPENCODE_MODEL", "").strip()
+        if opencode_model:
+            cmd.extend(["--model", opencode_model])
+        elif not quiet:
+            console.print(
+                "[yellow]OPENCODE_MODEL is not set; set an explicit provider/model "
+                "to avoid OpenCode default-model resolution hangs/failures.[/yellow]"
+            )
+        opencode_agent = env.get("OPENCODE_AGENT", "").strip()
+        if opencode_agent:
+            cmd.extend(["--agent", opencode_agent])
+        opencode_variant = env.get("OPENCODE_VARIANT", "").strip()
+        if opencode_variant and verbose:
+            console.print(f"[dim]OPENCODE_VARIANT={opencode_variant} selected; using run mode.[/dim]")
+        cmd.append(f"Read the file {prompt_path.name} for your full instructions and execute them.")
     else:
         return False, f"Unknown provider {provider}", 0.0
 
@@ -1426,7 +1495,9 @@ def _run_with_provider(
         output_str = result.stdout.strip()
         data = {}
         
-        if provider == "openai" and "\n" in output_str:
+        if provider == "opencode":
+            data = _parse_opencode_output(output_str)
+        elif provider == "openai" and "\n" in output_str:
             # Parse NDJSON, collecting both the agent response and usage stats
             lines = output_str.splitlines()
             agent_message_data = None
@@ -1482,6 +1553,35 @@ def _run_with_provider(
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
         return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
+
+
+def _parse_opencode_output(output_str: str) -> Dict[str, Any]:
+    """Parse OpenCode JSON or JSONL output into a uniform event container."""
+    if not output_str.strip():
+        return {}
+
+    try:
+        parsed = json.loads(output_str)
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list):
+            return {"events": parsed}
+    except json.JSONDecodeError:
+        pass
+
+    events: List[Any] = []
+    for line in output_str.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    if events:
+        return {"events": events}
+
+    return _extract_json_from_output(output_str)
 
 
 def _extract_json_from_output(output_str: str) -> dict:
@@ -1542,6 +1642,45 @@ def _extract_json_from_output(output_str: str) -> dict:
     )
 
 
+def _collect_opencode_text(value: Any) -> List[str]:
+    """Collect plausible assistant text fields from OpenCode event payloads."""
+    texts: List[str] = []
+    if isinstance(value, dict):
+        for key in ("message", "agent_message", "output", "result", "text"):
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                texts.append(item.strip())
+            elif isinstance(item, (dict, list)):
+                texts.extend(_collect_opencode_text(item))
+        item = value.get("item")
+        if isinstance(item, (dict, list)):
+            texts.extend(_collect_opencode_text(item))
+        events = value.get("events")
+        if isinstance(events, (dict, list)):
+            texts.extend(_collect_opencode_text(events))
+    elif isinstance(value, list):
+        for item in value:
+            texts.extend(_collect_opencode_text(item))
+    return texts
+
+
+def _extract_numeric_value(value: Any, keys: set[str]) -> float:
+    """Find the first numeric value for any key in a nested structure."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys and isinstance(item, (int, float)):
+                return float(item)
+            nested = _extract_numeric_value(item, keys)
+            if nested:
+                return nested
+    elif isinstance(value, list):
+        for item in value:
+            nested = _extract_numeric_value(item, keys)
+            if nested:
+                return nested
+    return 0.0
+
+
 def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
     """
     Extracts (success, text_response, cost_usd) from provider JSON.
@@ -1577,6 +1716,11 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
                 output_text = item.get("text", "")
             else:
                 output_text = data.get("result") or data.get("output") or ""
+
+        elif provider == "opencode":
+            cost = _extract_numeric_value(data, {"cost", "cost_usd", "total_cost_usd"})
+            texts = _collect_opencode_text(data)
+            output_text = "\n".join(dict.fromkeys(texts))
 
         return True, str(output_text), cost
 

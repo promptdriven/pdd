@@ -15,6 +15,7 @@ _CLI_COMMANDS: dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
+    "opencode": "opencode",
 }
 
 # Maps provider name -> environment variable for API key
@@ -22,6 +23,7 @@ _API_KEY_ENV_VARS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "opencode": "OPENCODE_MODEL",
 }
 
 # Maps provider name -> npm install command for the CLI
@@ -29,6 +31,7 @@ _INSTALL_COMMANDS: dict[str, str] = {
     "anthropic": "npm install -g @anthropic-ai/claude-code",
     "google": "npm install -g @google/gemini-cli",
     "openai": "npm install -g @openai/codex",
+    "opencode": "npm install -g opencode-ai",
 }
 
 # Maps provider name -> human-readable CLI name
@@ -36,6 +39,7 @@ _CLI_DISPLAY_NAMES: dict[str, str] = {
     "anthropic": "Claude CLI",
     "google": "Gemini CLI",
     "openai": "Codex CLI",
+    "opencode": "OpenCode CLI",
 }
 
 # Provider -> primary key env var name (used when saving)
@@ -43,6 +47,7 @@ PROVIDER_PRIMARY_KEY: Dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "opencode": "OPENCODE_MODEL",
 }
 
 # Provider -> display name
@@ -50,16 +55,18 @@ PROVIDER_DISPLAY: Dict[str, str] = {
     "anthropic": "Anthropic",
     "google": "Google (Gemini)",
     "openai": "OpenAI",
+    "opencode": "OpenCode",
 }
 
-# CLI preference order (claude first because it supports subscription auth)
-CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex"]
+# CLI preference order for setup defaults and diagnostics.
+CLI_PREFERENCE: List[str] = ["claude", "gemini", "codex", "opencode"]
 
 # Ordered list for the numbered selection table: (provider, cli_name, display_name)
 _TABLE_ORDER: List[Tuple[str, str, str]] = [
     ("anthropic", "claude", "Claude CLI"),
     ("openai", "codex", "Codex CLI"),
     ("google", "gemini", "Gemini CLI"),
+    ("opencode", "opencode", "OpenCode CLI"),
 ]
 
 # Shell -> RC file path (relative to home)
@@ -85,6 +92,14 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path.home() / ".local" / "bin" / "gemini",
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
+    ],
+    "opencode": [
+        Path.home() / ".npm-global" / "bin" / "opencode",
+        Path.home() / ".local" / "bin" / "opencode",
+        Path.home() / "bin" / "opencode",
+        Path("/usr/local/bin/opencode"),
+        Path("/opt/homebrew/bin/opencode"),
+        Path("/home/linuxbrew/.linuxbrew/bin/opencode"),
     ],
 }
 
@@ -286,6 +301,41 @@ def _prompt_api_key(provider: str, shell: str) -> bool:
     return False
 
 
+def _prompt_opencode_model(shell: str) -> bool:
+    """Prompt for recommended OpenCode model configuration without asking for an API key."""
+    existing_model = os.environ.get("OPENCODE_MODEL", "").strip()
+    for key_name in ("OPENCODE_AGENT", "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
+        value = os.environ.get(key_name, "").strip()
+        if value:
+            console.print(f"  [dim]{key_name}={value}[/dim]")
+
+    if existing_model:
+        console.print(f"  [green]\u2713[/green] OPENCODE_MODEL is set to {existing_model}")
+        return True
+
+    console.print(
+        "  [yellow]OPENCODE_MODEL is recommended in provider/model form; "
+        "OpenCode default-model resolution can hang or fail without it.[/yellow]"
+    )
+    console.print("  Run `opencode auth login` to configure provider credentials.")
+    console.print("  Run `opencode models` to list available models.")
+    try:
+        model_value = _prompt_input(
+            "  Enter OPENCODE_MODEL (provider/model, or press Enter to skip): "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if not model_value:
+        return False
+
+    api_env_path = _get_api_env_file_path(shell)
+    if _save_api_key("OPENCODE_MODEL", model_value, shell):
+        console.print(f"  [green]\u2713[/green] OPENCODE_MODEL saved to {api_env_path}")
+        return True
+    return False
+
+
 def _test_cli(cli_name: str, cli_path: str) -> bool:
     """Run a quick sanity-check invocation of the CLI. Returns True on success."""
     console.print(f"\n  Testing {cli_name}...")
@@ -362,6 +412,10 @@ def _bootstrap_single_cli(
         if install_answer in ("y", "yes"):
             if not _npm_available():
                 console.print("  [red]\u2717[/red] npm is not installed. Please install Node.js/npm first.")
+                if sel_provider == "opencode":
+                    console.print("  Alternate OpenCode installs:")
+                    console.print("    curl -fsSL https://opencode.ai/install | bash")
+                    console.print("    brew install anomalyco/tap/opencode")
                 console.print(f"  Then run: {install_cmd}")
                 return _cli_skip("npm not available — cannot install CLI")
 
@@ -379,14 +433,24 @@ def _bootstrap_single_cli(
         else:
             return _cli_skip()
 
-    # API key step (if not set)
+    # Provider configuration step (if not set)
     if not sel_has_key:
-        sel_has_key = _prompt_api_key(sel_provider, shell)
-        if not sel_has_key and sel_provider != "anthropic":
+        if sel_provider == "opencode":
+            sel_has_key = _prompt_opencode_model(shell)
+        else:
+            sel_has_key = _prompt_api_key(sel_provider, shell)
+        if not sel_has_key and sel_provider not in ("anthropic", "opencode"):
             console.print(f"  [dim]No API key set. {display_name} may have limited functionality.[/dim]")
+        elif not sel_has_key and sel_provider == "opencode":
+            console.print(
+                "  [dim]OPENCODE_MODEL not set. OpenCode may still work after "
+                "`opencode auth login`, but explicit model configuration is recommended.[/dim]"
+            )
 
     # Force CLI test (no option to skip)
-    _test_cli(sel_cli_name, sel_path or sel_cli_name)
+    test_ok = _test_cli(sel_cli_name, sel_path or sel_cli_name)
+    if sel_provider == "opencode" and not test_ok:
+        return _cli_skip("OpenCode CLI is not responsive")
 
     return CliBootstrapResult(
         cli_name=sel_cli_name,
@@ -399,8 +463,8 @@ def _bootstrap_single_cli(
 def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
     """Phase 1 entry point for pdd setup.
 
-    Shows a numbered selection table of all three CLI options with their
-    install and API-key status, lets the user choose one or more via
+    Shows a numbered selection table of all supported CLI options with their
+    install and configuration status, lets the user choose one or more via
     comma-separated input, and walks through installation and key
     configuration for each.
 
@@ -508,7 +572,7 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
         seen: set[int] = set()
         parts = [p.strip() for p in raw.split(",")]
         for part in parts:
-            if part in ("1", "2", "3"):
+            if part in ("1", "2", "3", "4"):
                 idx = int(part) - 1
                 if idx not in seen:
                     seen.add(idx)
@@ -548,7 +612,7 @@ def detect_cli_tools() -> None:
     all_with_keys_installed = True
     
     # Use ordered providers
-    for provider in ["anthropic", "google", "openai"]:
+    for provider in ["anthropic", "google", "openai", "opencode"]:
         cli_cmd = _CLI_COMMANDS[provider]
         display_name = _CLI_DISPLAY_NAMES[provider]
         path = _which(cli_cmd)
@@ -558,7 +622,16 @@ def detect_cli_tools() -> None:
         if path:
             found_any = True
             console.print(f"  [green]\u2713[/green] {display_name} — Found at {path}")
-            if has_key:
+            if provider == "opencode":
+                if has_key:
+                    console.print(f"    [green]\u2713[/green] {key_env} is set")
+                else:
+                    console.print(
+                        f"    [yellow]\u2717[/yellow] {key_env} not set — "
+                        "recommended to avoid default-model resolution hangs/failures"
+                    )
+                console.print("    Run `opencode auth login`; use `opencode models` to choose a model.")
+            elif has_key:
                 console.print(f"    [green]\u2713[/green] {key_env} is set")
             else:
                 console.print(f"    [yellow]\u2717[/yellow] {key_env} not set — CLI won't be usable for API calls")
@@ -583,7 +656,12 @@ def detect_cli_tools() -> None:
                 else:
                     console.print("    npm is not installed.")
             else:
-                console.print(f"    API key ({key_env}): not set")
+                if provider == "opencode":
+                    console.print(f"    Recommended config ({key_env}): not set")
+                    console.print("    Install with: npm install -g opencode-ai")
+                    console.print("    Or: curl -fsSL https://opencode.ai/install | bash")
+                else:
+                    console.print(f"    API key ({key_env}): not set")
         console.print()
 
     if all_with_keys_installed and found_any:

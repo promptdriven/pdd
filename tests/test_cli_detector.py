@@ -12,7 +12,7 @@ Test plan
    1.2 Skipped result has skipped=True, rest defaults
 
 2. detect_and_bootstrap_cli — Selection table & input parsing
-   2.1 Table shows all three CLIs with install/key status
+   2.1 Table shows all supported CLIs with install/key status
    2.2 Selecting "1" picks Claude CLI
    2.3 Comma-separated input "1,3" selects multiple CLIs
    2.4 Spaces in input "1, 3" are tolerated
@@ -84,11 +84,12 @@ from pdd.cli_detector import (
 # Module-level constants — realistic scenarios for test fixtures
 # ---------------------------------------------------------------------------
 
-# Provider/CLI status: all three CLIs installed with keys
+# Provider/CLI status: all supported CLIs installed with configuration
 ALL_INSTALLED = {
     "claude": "/usr/local/bin/claude",
     "codex": "/usr/local/bin/codex",
     "gemini": "/usr/local/bin/gemini",
+    "opencode": "/usr/local/bin/opencode",
 }
 
 ALL_KEYS = {
@@ -96,6 +97,7 @@ ALL_KEYS = {
     "OPENAI_API_KEY": "sk-oai-test",
     "GEMINI_API_KEY": "gm-test",
     "GOOGLE_API_KEY": "gm-test",
+    "OPENCODE_MODEL": "anthropic/claude-sonnet-4-5",
 }
 
 # Only Claude installed with key
@@ -145,7 +147,8 @@ def _run_bootstrap_capture(
 
     # Clean environment
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY", "SHELL"):
+                "GEMINI_API_KEY", "OPENCODE_MODEL", "OPENCODE_AGENT",
+                "OPENCODE_VARIANT", "PDD_OPENCODE_MODE", "SHELL"):
         monkeypatch.delenv(var, raising=False)
     for k, v in env_keys.items():
         monkeypatch.setenv(k, v)
@@ -233,7 +236,8 @@ def _run_legacy_capture(
     env_keys = env_keys or {}
 
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY"):
+                "GEMINI_API_KEY", "OPENCODE_MODEL", "OPENCODE_AGENT",
+                "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
         monkeypatch.delenv(var, raising=False)
     for k, v in env_keys.items():
         monkeypatch.setenv(k, v)
@@ -296,7 +300,7 @@ class TestCliBootstrapResult:
 class TestBootstrapSelectionTable:
     """Tests for the numbered table display and user input parsing."""
 
-    def test_table_shows_all_three_clis(self, monkeypatch, tmp_path):
+    def test_table_shows_all_supported_clis(self, monkeypatch, tmp_path):
         output, _ = _run_bootstrap_capture(
             monkeypatch, tmp_path, ["1"],
             cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
@@ -304,6 +308,7 @@ class TestBootstrapSelectionTable:
         assert "Claude CLI" in output
         assert "Codex CLI" in output
         assert "Gemini CLI" in output
+        assert "OpenCode CLI" in output
 
     def test_table_shows_install_and_key_status(self, monkeypatch, tmp_path):
         output, _ = _run_bootstrap_capture(
@@ -352,6 +357,17 @@ class TestBootstrapSelectionTable:
         assert len(results) == 2
         assert results[0].cli_name == "claude"
         assert results[1].cli_name == "gemini"
+
+    def test_select_opencode_cli(self, monkeypatch, tmp_path):
+        _, results = _run_bootstrap_capture(
+            monkeypatch, tmp_path, ["4"],
+            cli_paths={"opencode": "/usr/bin/opencode"},
+            env_keys={"OPENCODE_MODEL": "anthropic/claude-sonnet-4-5"},
+        )
+        assert len(results) == 1
+        assert results[0].cli_name == "opencode"
+        assert results[0].provider == "opencode"
+        assert results[0].api_key_configured is True
 
     def test_empty_input_defaults_to_installed_with_key(self, monkeypatch, tmp_path):
         """Empty input → default to first CLI that is installed AND has a key."""
@@ -431,6 +447,17 @@ class TestBootstrapInstallFlow:
         )
         assert results[0].skipped is True
         assert "npm" in output.lower()
+
+    def test_opencode_npm_missing_shows_alternate_installs(self, monkeypatch, tmp_path):
+        """OpenCode install guidance includes non-npm options when npm is unavailable."""
+        output, results = _run_bootstrap_capture(
+            monkeypatch, tmp_path,
+            ["4", "y"],
+            npm_available=False,
+        )
+        assert results[0].skipped is True
+        assert "curl -fsSL https://opencode.ai/install | bash" in output
+        assert "brew install anomalyco/tap/opencode" in output
 
     def test_not_installed_install_fails(self, monkeypatch, tmp_path):
         """Install command exits non-zero."""
@@ -560,6 +587,41 @@ class TestBootstrapApiKeyFlow:
         )
         assert results[0].api_key_configured is True
 
+    def test_opencode_checks_model_without_api_key_prompt(self, monkeypatch, tmp_path):
+        """OpenCode provider uses OPENCODE_MODEL as setup signal, not a PDD API key."""
+        output, results = _run_bootstrap_capture(
+            monkeypatch, tmp_path, ["4"],
+            cli_paths={"opencode": "/usr/bin/opencode"},
+            env_keys={"OPENCODE_MODEL": "anthropic/claude-sonnet-4-5"},
+        )
+        assert results[0].provider == "opencode"
+        assert results[0].api_key_configured is True
+        assert "Enter your" not in output
+
+    def test_opencode_missing_model_prompts_and_saves(self, monkeypatch, tmp_path):
+        """OpenCode setup can save the recommended OPENCODE_MODEL value."""
+        _, results = _run_bootstrap_capture(
+            monkeypatch, tmp_path,
+            ["4", "anthropic/claude-sonnet-4-5"],
+            cli_paths={"opencode": "/usr/bin/opencode"},
+        )
+        assert results[0].api_key_configured is True
+        assert os.environ.get("OPENCODE_MODEL") == "anthropic/claude-sonnet-4-5"
+        api_env = tmp_path / ".pdd" / "api-env.bash"
+        assert "export OPENCODE_MODEL=anthropic/claude-sonnet-4-5" in api_env.read_text()
+
+    def test_opencode_missing_model_warns_without_api_key_language(self, monkeypatch, tmp_path):
+        """Skipping OPENCODE_MODEL warns about default-model resolution instead of API keys."""
+        output, results = _run_bootstrap_capture(
+            monkeypatch, tmp_path,
+            ["4", ""],
+            cli_paths={"opencode": "/usr/bin/opencode"},
+        )
+        assert results[0].provider == "opencode"
+        assert results[0].api_key_configured is False
+        assert "default-model resolution" in output
+        assert "API key set" not in output
+
 
 # ===================================================================
 # 5. detect_and_bootstrap_cli — CLI test step
@@ -591,7 +653,8 @@ class TestBootstrapInterrupts:
     def test_keyboard_interrupt_on_selection(self, monkeypatch, tmp_path):
         """KeyboardInterrupt at selection prompt → skipped result."""
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
+                     "GEMINI_API_KEY", "OPENCODE_MODEL", "OPENCODE_AGENT",
+                     "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("SHELL", "/bin/bash")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -612,7 +675,8 @@ class TestBootstrapInterrupts:
     def test_eof_on_selection(self, monkeypatch, tmp_path):
         """EOFError at selection prompt → skipped result."""
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
+                     "GEMINI_API_KEY", "OPENCODE_MODEL", "OPENCODE_AGENT",
+                     "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("SHELL", "/bin/bash")
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
@@ -650,7 +714,8 @@ class TestApiKeyPersistence:
         fish_config.write_text("")
 
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
+                     "GEMINI_API_KEY", "OPENCODE_MODEL", "OPENCODE_AGENT",
+                     "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
             monkeypatch.delenv(var, raising=False)
 
         input_iter = iter(["1", "sk-fish-key"])
@@ -684,7 +749,8 @@ class TestApiKeyPersistence:
         (tmp_path / ".bashrc").write_text("")
 
         for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
+                     "GEMINI_API_KEY", "OPENCODE_MODEL", "OPENCODE_AGENT",
+                     "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
             monkeypatch.delenv(var, raising=False)
 
         # First save

@@ -1,4 +1,4 @@
-<pdd-reason>Detects and bootstraps agentic CLI tools for pdd setup, with minimal-friction interactive installation and API key configuration.</pdd-reason>
+<pdd-reason>Detects and bootstraps agentic CLI tools, installation, and provider configuration for pdd setup.</pdd-reason>
 
 <pdd-interface>
 {
@@ -18,7 +18,7 @@
 % You are an expert Python engineer. Your goal is to write the pdd/cli_detector.py module.
 
 % Role & Scope
-Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI) required for `pdd fix`, `pdd change`, `pdd bug`, and `pdd setup`. The primary entry point `detect_and_bootstrap_cli()` presents a numbered table of CLIs with install/key status, lets the user select one or more, and walks through installation and API key configuration for each. The legacy `detect_cli_tools()` function is preserved for backward compatibility.
+Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI, OpenCode CLI) required for `pdd fix`, `pdd change`, `pdd bug`, and `pdd setup`. The primary entry point `detect_and_bootstrap_cli()` presents a numbered table of CLIs with install/configuration status, lets the user select one or more, and walks through installation and provider configuration for each. The legacy `detect_cli_tools()` function is preserved for backward compatibility.
 
 % Requirements
 
@@ -26,18 +26,18 @@ Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI)
 
 2. Function: `detect_and_bootstrap_cli() -> List[CliBootstrapResult]` — Phase 1 entry point for `pdd setup`.
    a. Print a step banner via `_print_step_banner()` imported from `pdd.setup_tool`.
-   b. Detect all three CLIs via `shutil.which()` with fallback to common paths (~/.local/bin, /usr/local/bin, /opt/homebrew/bin) and nvm node version directories.
-   c. Provider mappings: anthropic->claude, google->gemini, openai->codex. Table order: Claude CLI, Codex CLI, Gemini CLI.
-   d. Print a numbered selection table showing install status and API key status per CLI, with aligned columns.
-   e. Accept comma-separated numeric input (e.g. "1,3"). Default to best available (installed+key > installed > Claude). "q"/"n" returns a skipped result.
+   b. Detect all four CLIs via `shutil.which()` with fallback to common paths (~/.npm-global/bin, ~/.local/bin, ~/bin, /usr/local/bin, /opt/homebrew/bin, /home/linuxbrew/.linuxbrew/bin) and nvm node version directories.
+   c. Provider mappings: anthropic->claude, openai->codex, google->gemini, opencode->opencode. Table order: Claude CLI, Codex CLI, Gemini CLI, OpenCode CLI.
+   d. Print a numbered selection table showing install status and configuration status per CLI, with aligned columns.
+   e. Accept comma-separated numeric input (e.g. "1,4"). Default to best available (installed+configured > installed > Claude). "q"/"n" returns a skipped result.
    f. For each selected CLI, process install/key/test in sequence. On skip or failure of one CLI, continue to the next.
-   g. Install step: prompt user, run `npm install -g ...` via subprocess if accepted. Check npm availability first.
-   h. API key step: prompt for key, save to `~/.pdd/api-env.{shell}` with shell-appropriate syntax, add source line to RC file, set in `os.environ`.
-   i. CLI test step (always runs, cannot be skipped): run `cli --version`, fall back to `--help` if that fails.
+   g. Install step: prompt user, run `npm install -g ...` via subprocess if accepted. Check npm availability first. OpenCode install command is `npm install -g opencode-ai`; if npm is unavailable, print alternate guidance: `curl -fsSL https://opencode.ai/install | bash` or `brew install anomalyco/tap/opencode`.
+   h. Configuration step: API-key providers prompt for a key, save to `~/.pdd/api-env.{shell}` with shell-appropriate syntax, add source line to RC file, and set in `os.environ`. OpenCode does not use a PDD-managed API key; check `OPENCODE_MODEL` as its primary configuration signal, recommend an explicit `provider/model` value, offer to save it to `~/.pdd/api-env.{shell}`, and print `opencode auth login` plus `opencode models` guidance. Also display `OPENCODE_AGENT`, `OPENCODE_VARIANT`, and optional `PDD_OPENCODE_MODE` when set.
+   i. CLI test step (always runs, cannot be skipped): run `cli --version`, fall back to `--help` if that fails. Treat a selected OpenCode CLI as usable only when one of those commands completes successfully.
    j. Handle KeyboardInterrupt/EOFError at every input prompt gracefully.
    k. Return list of results; if empty, return `[CliBootstrapResult(skipped=True)]`.
 
-3. Function: `detect_cli_tools() -> None` — legacy detection. For each CLI: show found/not-found status, cross-reference API keys, offer installation for missing CLIs that have matching keys.
+3. Function: `detect_cli_tools() -> None` — legacy detection. For each CLI: show found/not-found status, cross-reference API keys or OpenCode configuration, offer installation for missing CLIs that have matching provider configuration.
 
 4. Shell detection: detect from `SHELL` env var (default "bash"). Map to RC file: zsh->.zshrc, bash->.bashrc, fish->~/.config/fish/config.fish.
 
@@ -45,7 +45,9 @@ Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI)
 
 6. Google provider: primary env var is GEMINI_API_KEY (used by Gemini CLI for AI Studio auth). Fallback is GOOGLE_API_KEY (Vertex AI convention). Check GEMINI_API_KEY first, then GOOGLE_API_KEY. Primary key for saving is GEMINI_API_KEY. Display whichever is actually set.
 
-7. Module-level constants: `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, `CLI_PREFERENCE`, `SHELL_RC_MAP` exposed for use by other modules.
+7. OpenCode provider: primary configuration env var is `OPENCODE_MODEL` and recommended value format is `provider/model`. Missing `OPENCODE_MODEL` should produce a yellow warning explaining that OpenCode default-model resolution can hang or fail; it should not trigger an API-key prompt. Support optional `OPENCODE_AGENT`, `OPENCODE_VARIANT`, and `PDD_OPENCODE_MODE` as pass-through configuration shown in setup messaging.
+
+8. Module-level constants: `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, `CLI_PREFERENCE`, `SHELL_RC_MAP` exposed for use by other modules.
 
 % Dependencies
 

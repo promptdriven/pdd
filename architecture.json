@@ -1,7 +1,7 @@
 [
   {
-    "reason": "Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.",
-    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI stored OAuth credentials.",
+    "reason": "Runs agentic CLI tasks across Anthropic, Google, OpenAI, and OpenCode providers.",
+    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including OpenCode and Gemini CLI stored OAuth credentials.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt"
@@ -30,33 +30,89 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose, quiet, label, timeout, max_retries, retry_delay, deadline, use_playwright)",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           },
           {
+            "name": "detect_control_token",
+            "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]",
+            "returns": "Optional[TokenMatch]"
+          },
+          {
+            "name": "classify_step_output",
+            "signature": "(output, tokens, quiet=False) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "substitute_template_variables",
+            "signature": "(template, variables) -> str",
+            "returns": "str"
+          },
+          {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool",
             "returns": "bool"
           },
           {
             "name": "post_pr_comment",
-            "signature": "(repo_owner, repo_name, pr_number, body, cwd)",
+            "signature": "(repo_owner, repo_name, pr_number, body, cwd) -> bool",
             "returns": "bool"
           },
           {
-            "name": "github_save_state",
-            "signature": "(...)",
-            "returns": "Optional[int]"
+            "name": "post_final_comment",
+            "signature": "(repo_owner, repo_name, issue_number, body, cwd) -> bool",
+            "returns": "bool"
           },
           {
-            "name": "github_load_state",
-            "signature": "(...)",
-            "returns": "Tuple[Optional[Dict], Optional[int]]"
+            "name": "set_agentic_progress",
+            "signature": "(workflow, current_step, total_steps, step_name, completed_steps) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "clear_agentic_progress",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "get_and_clear_agentic_interrupt_context",
+            "signature": "() -> Optional[Dict]",
+            "returns": "Optional[Dict]"
+          },
+          {
+            "name": "get_job_deadline",
+            "signature": "() -> Optional[float]",
+            "returns": "Optional[float]"
           },
           {
             "name": "validate_cached_state",
-            "signature": "(last_completed_step, step_outputs, step_order, quiet)",
+            "signature": "(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]",
             "returns": "Union[int, float]"
+          },
+          {
+            "name": "load_workflow_state",
+            "signature": "(...) -> Tuple[Optional[Dict], Optional[int]]",
+            "returns": "Tuple[Optional[Dict], Optional[int]]"
+          },
+          {
+            "name": "save_workflow_state",
+            "signature": "(...) -> Optional[int]",
+            "returns": "Optional[int]"
+          },
+          {
+            "name": "clear_workflow_state",
+            "signature": "(...) -> None",
+            "returns": "None"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "TokenMatch",
+            "fields": [
+              "tier: str",
+              "token: Optional[str]",
+              "pattern: Optional[str]",
+              "cost: Optional[float]"
+            ]
           }
         ]
       }
@@ -383,7 +439,7 @@
     "dependencies": [],
     "priority": 18,
     "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
+    "filepath": "prompts/resurface_check_Python.prompt",
     "tags": [
       "backend",
       "api",
@@ -2362,7 +2418,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -2921,8 +2980,8 @@
     "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "filename": "agentic_bug_step5_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3043,8 +3102,8 @@
     "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
+    "filename": "agentic_bug_step12_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3405,8 +3464,8 @@
     "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
+    "filename": "auto_include_LLM.prompt",
+    "filepath": "prompts/auto_include_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3951,7 +4010,7 @@
     "dependencies": [],
     "priority": 116,
     "filename": "pdd_completion_bash.prompt",
-    "filepath": "pdd_completion.sh",
+    "filepath": "pdd/pdd_completion.sh",
     "tags": [
       "cli",
       "shell"
@@ -4008,7 +4067,7 @@
     "dependencies": [],
     "priority": 119,
     "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
+    "filepath": "prompts/pdd_theme_json.prompt",
     "tags": [
       "config"
     ],
@@ -4061,7 +4120,7 @@
     "dependencies": [],
     "priority": 121,
     "filename": "pypi_description_restructuredtext.prompt",
-    "filepath": "pypi_description.rst",
+    "filepath": "prompts/pypi_description_restructuredtext.prompt",
     "tags": [
       "config"
     ],
@@ -4199,7 +4258,7 @@
     "dependencies": [],
     "priority": 124,
     "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
+    "filepath": "prompts/regression_analysis_log.prompt",
     "tags": [
       "config"
     ],
@@ -4220,7 +4279,7 @@
     "dependencies": [],
     "priority": 125,
     "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
+    "filepath": "tests/regression.sh",
     "tags": [
       "cli",
       "shell"
@@ -4286,7 +4345,7 @@
     "dependencies": [],
     "priority": 127,
     "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
+    "filepath": "prompts/run_generated_python.prompt",
     "tags": [
       "generation",
       "module",
@@ -4320,9 +4379,56 @@
     }
   },
   {
-    "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
-    "description": "Handles initial setup, configuration, and environment variable management.",
+    "reason": "Detects and bootstraps agentic CLI tools, installation, and provider configuration for pdd setup.",
+    "description": "Detects Claude, Codex, Gemini, and OpenCode CLIs; presents interactive setup choices; installs missing CLIs; configures API-key providers or OpenCode model settings; and preserves the legacy CLI detection helper.",
     "dependencies": [],
+    "priority": 129,
+    "filename": "cli_detector_python.prompt",
+    "filepath": "pdd/cli_detector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_and_bootstrap_cli",
+            "signature": "() -> List[CliBootstrapResult]",
+            "returns": "List[CliBootstrapResult]"
+          },
+          {
+            "name": "detect_cli_tools",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "CliBootstrapResult",
+            "fields": [
+              "cli_name: str",
+              "provider: str",
+              "cli_path: str",
+              "api_key_configured: bool",
+              "skipped: bool"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11200,
+      "y": 400
+    }
+  },
+  {
+    "reason": "Orchestrates pdd setup with interactive CLI bootstrapping and deterministic model configuration.",
+    "description": "Handles initial setup, configuration, and environment variable management.",
+    "dependencies": [
+      "cli_detector_python.prompt"
+    ],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
     "filepath": "pdd/setup_tool.py",
@@ -4959,7 +5065,7 @@
     "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
+    "filepath": "tests/prompt_tester.py",
     "tags": [
       "module",
       "python",
@@ -5405,8 +5511,8 @@
     "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
     "dependencies": [],
     "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filename": "agentic_bug_step7_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step7_prompt_classification_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5429,8 +5535,8 @@
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6836,7 +6942,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
@@ -6918,7 +7028,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
