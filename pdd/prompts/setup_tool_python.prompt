@@ -1,4 +1,4 @@
-<pdd-reason>Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).</pdd-reason>
+<pdd-reason>Orchestrates pdd setup with interactive CLI bootstrapping and deterministic model configuration.</pdd-reason>
 
 <pdd-interface>
 {
@@ -16,7 +16,7 @@
 % You are an expert Python engineer. Your goal is to write the pdd/setup_tool.py module.
 
 % Role & Scope
-Main orchestrator for `pdd setup`. Implements a two-phase flow designed for minimal user friction — users should be able to complete setup by pressing Enter just a few times. Phase 1 bootstraps agentic CLIs (Claude/Gemini/Codex) interactively. Phase 2 runs deterministic Python code that auto-discovers API keys, configures models from a reference CSV, initializes .pddrc, tests a model, and prints a summary — all with clean output and no LLM calls. Uses `rich.console.Console(highlight=False)` for formatted output.
+Main orchestrator for `pdd setup`. Implements a two-phase flow designed for minimal user friction — users should be able to complete setup by pressing Enter just a few times. Phase 1 bootstraps agentic CLIs (Claude/Gemini/Codex/OpenCode) interactively. Phase 2 runs deterministic Python code that auto-discovers API keys, configures models from a reference CSV, initializes .pddrc, tests a model, and prints a summary — all with clean output and no LLM calls. Uses `rich.console.Console(highlight=False)` for formatted output.
 
 % Requirements
 
@@ -27,7 +27,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 
    **Phase 1 — CLI Bootstrap (interactive, 0–2 user inputs):**
    a. Call `cli_detector.detect_and_bootstrap_cli()` which returns `List[CliBootstrapResult]`.
-   b. Iterate results: if `result.skipped`, skip silently (cli_detector already printed skip message). If result has a CLI but `api_key_configured == False`, print a yellow warning note about limited capability.
+   b. Iterate results: if `result.skipped`, skip silently (cli_detector already printed skip message). If result has a CLI but `api_key_configured == False`, print a yellow warning note about limited capability. For OpenCode, phrase the warning as missing recommended `OPENCODE_MODEL=provider/model` rather than a missing API key.
    c. Proceed to Phase 2 regardless (some CLIs like Claude support subscription auth).
 
    **Phase 2 — Deterministic Auto-Configuration (3 steps):**
@@ -68,7 +68,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
    - Run test in a background thread with dot animation (print dots every second). Timeout after 8 seconds.
    - If litellm importable: test via `model_tester._run_test(row)`. If not: skip with message.
    - Print summary with green ✓ / red ✗ / yellow indicators:
-     - CLI: configured names (with API key warnings), or "not configured"
+     - CLI: configured names (with API key warnings), or "not configured". OpenCode entries should include installation/configuration guidance when selected or detected: run `opencode auth login`, choose a model with `opencode models`, and set `OPENCODE_MODEL=provider/model` explicitly to avoid default-model resolution hangs/failures. Mention optional `OPENCODE_AGENT`, `OPENCODE_VARIANT`, and `PDD_OPENCODE_MODE` when present.
      - API Keys: count found
      - Models: count with per-provider breakdown and CSV path
      - .pddrc: exists or not created
@@ -78,7 +78,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 
 6. **Exit summary (`_print_exit_summary`):**
    - Create a sample `success_python.prompt` file if it doesn't exist (simple "print Hello" template).
-   - Write `PDD-SETUP-SUMMARY.txt` with full details: CLIs configured, API keys (masked), files created, quick start instructions, and learn more links (pdd --help, promptdriven.ai, Discord).
+   - Write `PDD-SETUP-SUMMARY.txt` with full details: CLIs configured, OpenCode model/agent/variant configuration when available, API keys (masked), files created, quick start instructions, and learn more links (pdd --help, promptdriven.ai, Discord).
    - Print condensed terminal output: QUICK START section (pdd generate success_python.prompt), LEARN MORE links, and dim note about saved summary file.
    - If the api-env file exists, print a bold yellow "Important:" reminder telling the user to source the api-env file for keys to take effect in the current terminal session, with the exact command (e.g. `source ~/.pdd/api-env.zsh`). Add a dim note that new terminal windows will load keys automatically. Include this in both the terminal output and the PDD-SETUP-SUMMARY.txt file.
 

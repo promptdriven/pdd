@@ -1028,9 +1028,57 @@ def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock
     mock_env["ANTHROPIC_API_KEY"] = "key" # Not strictly needed for logic but good for completeness
     mock_env["GEMINI_API_KEY"] = "key"
     mock_env["OPENAI_API_KEY"] = "key"
+    mock_env["OPENCODE_MODEL"] = "anthropic/claude-sonnet-4-5"
 
-    agents = get_available_agents()
-    assert agents == ["anthropic", "google", "openai"]
+    with patch("pdd.agentic_common._opencode_cli_responsive", return_value=True):
+        agents = get_available_agents()
+
+    assert agents == ["anthropic", "google", "openai", "opencode"]
+
+
+def test_get_available_agents_opencode_available_without_api_key(
+    mock_shutil_which,
+    mock_env,
+    mock_load_model_data,
+):
+    """OpenCode availability requires responsive CLI, not a PDD-managed API key."""
+    mock_shutil_which.side_effect = lambda cmd: "/bin/opencode" if cmd == "opencode" else None
+
+    with patch("pdd.agentic_common._opencode_cli_responsive", return_value=True):
+        agents = get_available_agents()
+
+    assert agents == ["opencode"]
+
+
+def test_get_available_agents_opencode_unavailable_when_cli_not_responsive(
+    mock_shutil_which,
+    mock_env,
+    mock_load_model_data,
+):
+    """OpenCode is excluded when the binary exists but --version/--help fails."""
+    mock_shutil_which.side_effect = lambda cmd: "/bin/opencode" if cmd == "opencode" else None
+
+    with patch("pdd.agentic_common._opencode_cli_responsive", return_value=False):
+        agents = get_available_agents()
+
+    assert "opencode" not in agents
+
+
+def test_get_available_agents_preference_order_includes_opencode(
+    mock_shutil_which,
+    mock_env,
+    mock_load_model_data,
+):
+    """Default availability ordering includes OpenCode after OpenAI."""
+    mock_shutil_which.return_value = "/bin/cmd"
+    mock_env["GEMINI_API_KEY"] = "key"
+    mock_env["OPENAI_API_KEY"] = "key"
+    mock_env["OPENCODE_MODEL"] = "anthropic/claude-sonnet-4-5"
+
+    with patch("pdd.agentic_common._opencode_cli_responsive", return_value=True):
+        agents = get_available_agents()
+
+    assert agents == ["anthropic", "google", "openai", "opencode"]
 
 # --- Tests for Cost Calculation ---
 
@@ -1793,6 +1841,28 @@ class TestCliDiscoveryBug:
             "Should include 'google' when Gemini exists in ~/.npm-global/bin "
             "and Gemini CLI OAuth credentials are present."
         )
+
+    def test_get_available_agents_finds_opencode_in_npm_global(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        """OpenCode installed under ~/.npm-global/bin is available when responsive."""
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda x: None)
+        monkeypatch.setenv("OPENCODE_MODEL", "anthropic/claude-sonnet-4-5")
+
+        npm_bin = tmp_path / ".npm-global" / "bin"
+        npm_bin.mkdir(parents=True)
+        fake_opencode = npm_bin / "opencode"
+        fake_opencode.write_text("#!/bin/bash\necho opencode")
+        fake_opencode.chmod(0o755)
+
+        with patch("pdd.agentic_common._opencode_cli_responsive", return_value=True):
+            agents = get_available_agents()
+
+        assert "opencode" in agents
 
 
 class TestCliDiscovery:
@@ -3003,7 +3073,7 @@ def test_post_pr_comment_no_gh_cli(tmp_path):
 def test_get_agent_provider_preference_default(mock_env):
     """Default preference when PDD_AGENTIC_PROVIDER is not set."""
     mock_env.pop("PDD_AGENTIC_PROVIDER", None)
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 def test_get_agent_provider_preference_single(mock_env):
@@ -3027,7 +3097,7 @@ def test_get_agent_provider_preference_with_spaces(mock_env):
 def test_get_agent_provider_preference_empty_string(mock_env):
     """Empty string falls back to default."""
     mock_env["PDD_AGENTIC_PROVIDER"] = ""
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 # ---------------------------------------------------------------------------
@@ -3410,6 +3480,70 @@ def test_issue557_parse_provider_json_legacy_codex_schema():
     success2, output2, cost2 = _parse_provider_json("openai", legacy_data_output)
     assert success2 is True
     assert output2 == "Legacy Codex output text here."
+
+
+def test_parse_provider_json_opencode_events():
+    """OpenCode parser extracts assistant text from raw event shapes."""
+    from pdd.agentic_common import _parse_provider_json
+
+    data = {
+        "events": [
+            {"type": "status", "message": {"text": "working"}},
+            {
+                "type": "agent_message",
+                "item": {
+                    "type": "agent_message",
+                    "text": "OpenCode completed the requested update with enough detail.",
+                },
+            },
+        ],
+        "usage": {"cost_usd": 0.012},
+    }
+
+    success, output, cost = _parse_provider_json("opencode", data)
+
+    assert success is True
+    assert "OpenCode completed" in output
+    assert cost == pytest.approx(0.012)
+
+
+def test_run_with_provider_opencode_uses_model_and_agent(
+    tmp_path,
+    mock_env,
+    mock_load_model_data,
+):
+    """OpenCode invocation includes JSON output mode plus optional model/agent config."""
+    from pdd.agentic_common import _run_with_provider
+
+    prompt_file = tmp_path / ".agentic_prompt_test.txt"
+    prompt_file.write_text("test prompt")
+
+    mock_env["OPENCODE_MODEL"] = "anthropic/claude-sonnet-4-5"
+    mock_env["OPENCODE_AGENT"] = "reviewer"
+
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/bin/opencode"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "message": "OpenCode produced a sufficiently detailed response for this task."
+            }),
+            stderr="",
+        )
+
+        success, output, cost = _run_with_provider(
+            "opencode", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert "OpenCode produced" in output
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:5] == ["/bin/opencode", "run", "--format", "json", "--dangerously-skip-permissions"]
+    assert "--file" in cmd
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == "anthropic/claude-sonnet-4-5"
+    assert "--agent" in cmd
+    assert cmd[cmd.index("--agent") + 1] == "reviewer"
 
 
 def test_issue557_full_chain_modern_codex_false_positive(tmp_path):

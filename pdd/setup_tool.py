@@ -74,10 +74,16 @@ def run_setup() -> None:
             if result.skipped:
                 pass
             elif not result.api_key_configured:
-                _console.print(
-                    f"[yellow]Note: No API key configured for {result.cli_name or 'the CLI'}. "
-                    "The agent may have limited capability.[/yellow]"
-                )
+                if result.provider == "opencode" or result.cli_name == "opencode":
+                    _console.print(
+                        "[yellow]Note: OPENCODE_MODEL=provider/model is recommended for OpenCode. "
+                        "Default-model resolution can hang or fail without it.[/yellow]"
+                    )
+                else:
+                    _console.print(
+                        f"[yellow]Note: No API key configured for {result.cli_name or 'the CLI'}. "
+                        "The agent may have limited capability.[/yellow]"
+                    )
 
         # ── Phase 2 — Deterministic Auto-Configuration ────────────────────
         auto_result = _run_auto_phase(results)
@@ -474,6 +480,20 @@ def _step2_configure_models_and_pddrc(
 # Step 3 — Test one model + print summary
 # ---------------------------------------------------------------------------
 
+def _opencode_guidance_lines() -> List[str]:
+    """Return setup guidance for OpenCode summaries."""
+    lines = [
+        "run `opencode auth login`",
+        "choose a model with `opencode models`",
+        "set `OPENCODE_MODEL=provider/model` explicitly",
+    ]
+    for key_name in ("OPENCODE_AGENT", "OPENCODE_VARIANT", "PDD_OPENCODE_MODE"):
+        value = os.environ.get(key_name, "").strip()
+        if value:
+            lines.append(f"{key_name}={value}")
+    return lines
+
+
 def _step3_test_and_summary(
     found_keys: List[Tuple[str, str]],
     model_summary: Dict[str, int],
@@ -567,10 +587,28 @@ def _step3_test_and_summary(
             names = ", ".join(r.cli_name for r in configured)
             no_key = [r for r in configured if not r.api_key_configured]
             if no_key:
-                no_key_names = ", ".join(r.cli_name for r in no_key)
-                _console.print(f"    CLI:       [green]✓[/green] {names} configured ([yellow]{no_key_names} missing API key[/yellow])")
+                api_key_missing = [
+                    r.cli_name for r in no_key
+                    if r.provider != "opencode" and r.cli_name != "opencode"
+                ]
+                opencode_missing = [
+                    r.cli_name for r in no_key
+                    if r.provider == "opencode" or r.cli_name == "opencode"
+                ]
+                warnings: List[str] = []
+                if api_key_missing:
+                    warnings.append(f"{', '.join(api_key_missing)} missing API key")
+                if opencode_missing:
+                    warnings.append("opencode missing OPENCODE_MODEL")
+                _console.print(
+                    f"    CLI:       [green]✓[/green] {names} configured "
+                    f"([yellow]{'; '.join(warnings)}[/yellow])"
+                )
             else:
                 _console.print(f"    CLI:       [green]✓[/green] {names} configured")
+            if any(r.provider == "opencode" or r.cli_name == "opencode" for r in configured):
+                for line in _opencode_guidance_lines():
+                    _console.print(f"               [dim]OpenCode: {line}[/dim]")
         elif skipped:
             _console.print("    CLI:       [yellow]✗[/yellow] skipped")
         else:
@@ -684,8 +722,18 @@ def _print_exit_summary(found_keys: List[Tuple[str, str]], cli_results=None) -> 
         configured = [r for r in cli_results if not r.skipped and r.cli_name]
         if configured:
             for r in configured:
-                key_status = "API key set" if r.api_key_configured else "no API key"
+                if r.provider == "opencode" or r.cli_name == "opencode":
+                    key_status = (
+                        "OPENCODE_MODEL set"
+                        if r.api_key_configured
+                        else "OPENCODE_MODEL recommended"
+                    )
+                else:
+                    key_status = "API key set" if r.api_key_configured else "no API key"
                 lines.append(f"  {r.cli_name} ({r.provider}) — {key_status}")
+                if r.provider == "opencode" or r.cli_name == "opencode":
+                    for line in _opencode_guidance_lines():
+                        lines.append(f"    OpenCode: {line}")
         else:
             lines.append("  None")
     else:
