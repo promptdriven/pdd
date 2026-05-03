@@ -2,11 +2,20 @@
 # Added optional debugging prints in _select_model_candidates
 
 import copy
+import getpass
 import os
 import pandas as pd
 import litellm
 import logging # ADDED FOR DETAILED LOGGING
 import importlib.resources
+import re
+import socket
+import subprocess
+import sys
+import traceback
+import urllib.request
+import uuid
+from datetime import datetime, timezone
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
@@ -864,6 +873,684 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
     except Exception:
         _MODEL_RATE_MAP = {}
 
+# --- LLM Attribution Logging ---
+
+_ATTRIBUTION_CONTEXT_CACHE: Dict[str, Dict[str, Any]] = {}
+_ATTRIBUTION_LOG_DEFAULT_MAX_BYTES = 25 * 1024 * 1024
+_CLOUD_RUNTIME_ENV_KEYS = (
+    "CLOUD_BUILD",
+    "BATCH_TASK_INDEX",
+    "K_SERVICE",
+    "CLOUD_RUN_JOB",
+    "CLOUD_RUN_EXECUTION",
+)
+_ATTRIBUTION_ENV_KEYS = [
+    "PDD_MODEL_DEFAULT",
+    "PDD_STRENGTH_DEFAULT",
+    "PDD_AGENTIC_PROVIDER",
+    "PDD_ENVIRONMENT",
+    "PDD_FORCE_LOCAL",
+    "PDD_PATH",
+    "PDD_RUN_REAL_LLM_TESTS",
+    "PDD_RUN_LLM_TESTS",
+    "PDD_BUDGET_CAP",
+    "CI",
+    "CLOUD_BUILD",
+    "BUILD_ID",
+    "TRIGGER_NAME",
+    "BRANCH_NAME",
+    "COMMIT_SHA",
+    "_OWNER",
+    "_REPO",
+    "_PR_NUMBER",
+    "K_SERVICE",
+    "K_CONFIGURATION",
+    "K_REVISION",
+    "CLOUD_RUN_JOB",
+    "CLOUD_RUN_EXECUTION",
+    "CLOUD_RUN_TASK_INDEX",
+    "CLOUD_RUN_TASK_ATTEMPT",
+    "CLOUD_RUN_TASK_COUNT",
+    "BATCH_TASK_INDEX",
+    "BATCH_JOB_UID",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "VERTEX_PROJECT",
+    "VERTEX_LOCATION",
+    "VERTEXAI_PROJECT",
+    "VERTEXAI_LOCATION",
+    "CLAUDE_CODE_USE_VERTEX",
+]
+_SECRET_NAME_PATTERN = re.compile(
+    r"(api[_-]?key|token|secret|password|credential|private[_-]?key|oauth|bearer|auth)",
+    re.IGNORECASE,
+)
+_SAFE_SUBCOMMANDS = frozenset({
+    "change",
+    "config",
+    "detect",
+    "example",
+    "fix",
+    "generate",
+    "install",
+    "setup",
+    "split",
+    "sync",
+    "test",
+    "trace",
+    "update",
+    "verify",
+})
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    """Return a bool from a conventional environment flag."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _llm_attribution_enabled() -> bool:
+    """Whether safe LLM attribution metadata should be emitted."""
+    explicit = os.getenv("PDD_LLM_ATTRIBUTION")
+    if explicit is not None:
+        return _env_truthy("PDD_LLM_ATTRIBUTION")
+    # Avoid writing to a developer's ~/.pdd during unit tests unless a test opts in.
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return False
+    return True
+
+
+def _llm_attribution_process_log_enabled() -> bool:
+    """Whether attribution records should also go to the process log stream."""
+    if os.getenv("PDD_LLM_ATTRIBUTION_PROCESS_LOG") is not None:
+        return _env_truthy("PDD_LLM_ATTRIBUTION_PROCESS_LOG")
+    if os.getenv("PDD_LLM_ATTRIBUTION_STDOUT") is not None:
+        return _env_truthy("PDD_LLM_ATTRIBUTION_STDOUT")
+    return _is_cloud_runtime()
+
+
+def _is_cloud_runtime() -> bool:
+    """Return whether the process appears to be running in a Google cloud runner."""
+    return any(os.getenv(name) for name in _CLOUD_RUNTIME_ENV_KEYS)
+
+
+def _llm_attribution_max_bytes() -> int:
+    """Return the max JSONL file size before best-effort single-file rotation."""
+    raw = os.getenv("PDD_LLM_ATTRIBUTION_MAX_BYTES")
+    if raw is None:
+        return _ATTRIBUTION_LOG_DEFAULT_MAX_BYTES
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return _ATTRIBUTION_LOG_DEFAULT_MAX_BYTES
+    return max(0, value)
+
+
+def _llm_attribution_log_path() -> Optional[Path]:
+    """Return the JSONL log path for attribution records."""
+    raw_path = os.getenv("PDD_LLM_ATTRIBUTION_LOG_PATH")
+    try:
+        if raw_path:
+            return Path(raw_path).expanduser()
+        return Path.home() / ".pdd" / "logs" / "llm-attribution.jsonl"
+    except Exception:
+        return None
+
+
+def _is_default_llm_attribution_log_path(log_path: Path) -> bool:
+    """Return whether a path is the default local attribution log."""
+    try:
+        default_path = Path.home() / ".pdd" / "logs" / "llm-attribution.jsonl"
+        return log_path.expanduser().resolve(strict=False) == default_path.resolve(strict=False)
+    except Exception:
+        return False
+
+
+def _is_sensitive_name(value: Any) -> bool:
+    return bool(_SECRET_NAME_PATTERN.search(str(value or "")))
+
+
+def _safe_command_summary(argv: List[str]) -> Dict[str, Any]:
+    """Summarize argv without preserving raw positional or flag values."""
+    if not argv:
+        return {"argc": 0}
+
+    option_names: List[str] = []
+    positional_count = 0
+    subcommand: Optional[str] = None
+    args = list(argv[1:])
+
+    idx = 0
+    while idx < len(args):
+        arg = str(args[idx])
+        if arg == "--":
+            positional_count += max(0, len(args) - idx - 1)
+            break
+
+        if arg.startswith("--") and len(arg) > 2:
+            option_name = arg.split("=", 1)[0]
+            option_names.append(option_name)
+            # Treat every explicit flag value as sensitive. Option names are
+            # still useful for attribution; values are not needed and may be
+            # prompts, file contents, tokens, or service account paths.
+            if "=" not in arg and idx + 1 < len(args) and not str(args[idx + 1]).startswith("-"):
+                idx += 1
+            idx += 1
+            continue
+
+        if arg.startswith("-") and len(arg) > 1:
+            option_names.append(arg)
+            if len(arg) == 2 and idx + 1 < len(args) and not str(args[idx + 1]).startswith("-"):
+                idx += 1
+            idx += 1
+            continue
+
+        positional_count += 1
+        if subcommand is None and arg in _SAFE_SUBCOMMANDS:
+            subcommand = arg
+        idx += 1
+
+    return {
+        "executable": Path(str(argv[0])).name,
+        "argc": len(argv),
+        "subcommand": subcommand,
+        "option_names": list(dict.fromkeys(option_names)),
+        "positional_count": positional_count,
+    }
+
+
+def _safe_error_fields(error: BaseException) -> Dict[str, Any]:
+    """Return structured exception metadata without provider message text."""
+    fields: Dict[str, Any] = {"error_type": type(error).__name__}
+    for attr_name in ("status_code", "code", "type", "request_id"):
+        try:
+            value = getattr(error, attr_name, None)
+        except Exception:
+            value = None
+        if value is None or _is_sensitive_name(value):
+            continue
+        if isinstance(value, str):
+            fields[attr_name] = _truncate(value, 120)
+        elif isinstance(value, (int, float, bool)):
+            fields[attr_name] = value
+
+    try:
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        if response_status is not None:
+            fields["response_status_code"] = response_status
+    except Exception:
+        pass
+
+    return fields
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert values into JSON-serializable primitives."""
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
+def _truncate(value: Any, max_len: int = 500) -> str:
+    text = str(value)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "...<truncated>"
+
+
+def _run_attribution_command(args: List[str], cwd: Path) -> Optional[str]:
+    """Run a short local command for attribution metadata."""
+    try:
+        result = subprocess.run(
+            args,
+            cwd=str(cwd),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip()
+    except Exception:
+        return None
+
+
+def _read_json_object(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            parsed = json.load(f)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        return None
+    return None
+
+
+def _service_account_summary(raw: Dict[str, Any]) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "type": raw.get("type"),
+        "client_email": raw.get("client_email"),
+        "project_id": raw.get("project_id"),
+    }
+    private_key_id = raw.get("private_key_id")
+    if private_key_id:
+        summary["private_key_id_prefix"] = str(private_key_id)[:12]
+    quota_project_id = raw.get("quota_project_id")
+    if quota_project_id:
+        summary["quota_project_id"] = quota_project_id
+    client_id = raw.get("client_id")
+    if client_id and raw.get("type") != "service_account":
+        summary["client_id_prefix"] = str(client_id)[:12]
+    return {k: v for k, v in summary.items() if v not in (None, "")}
+
+
+def _gcloud_config_summary() -> Dict[str, Any]:
+    """Read active gcloud account/project without shelling out to gcloud."""
+    config_dir = Path.home() / ".config" / "gcloud"
+    summary: Dict[str, Any] = {}
+    try:
+        active_name = (config_dir / "active_config").read_text(encoding="utf-8").strip()
+        if active_name:
+            summary["active_config"] = active_name
+            config_path = config_dir / "configurations" / f"config_{active_name}"
+        else:
+            config_path = config_dir / "configurations" / "config_default"
+    except Exception:
+        config_path = config_dir / "configurations" / "config_default"
+
+    try:
+        for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = [part.strip() for part in line.split("=", 1)]
+            if key == "account":
+                summary["account"] = value
+            elif key == "project":
+                summary["project"] = value
+    except Exception:
+        pass
+    return summary
+
+
+def _metadata_server_service_account_summary() -> Dict[str, Any]:
+    """Read the cloud runtime service account email without requesting a token."""
+    if not _is_cloud_runtime():
+        return {}
+
+    metadata_host = os.getenv("GCE_METADATA_HOST", "metadata.google.internal")
+    url = f"http://{metadata_host}/computeMetadata/v1/instance/service-accounts/default/email"
+    request = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
+    try:
+        with urllib.request.urlopen(request, timeout=0.2) as response:
+            email = response.read(256).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return {}
+
+    if not email or _is_sensitive_name(email):
+        return {}
+    return {"service_account_email": email}
+
+
+def _credential_context() -> Dict[str, Any]:
+    """Return safe credential identity metadata without token or key material."""
+    context: Dict[str, Any] = {}
+
+    gac = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if gac:
+        gac_path = Path(gac).expanduser()
+        context["google_application_credentials"] = {
+            "path": str(gac_path),
+            "exists": gac_path.exists(),
+        }
+        parsed = _read_json_object(gac_path)
+        if parsed:
+            context["google_application_credentials"].update(_service_account_summary(parsed))
+
+    adc_path = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
+    context["application_default_credentials"] = {
+        "path": str(adc_path),
+        "exists": adc_path.exists(),
+    }
+    parsed_adc = _read_json_object(adc_path)
+    if parsed_adc:
+        context["application_default_credentials"].update(_service_account_summary(parsed_adc))
+
+    gcloud_config = _gcloud_config_summary()
+    if gcloud_config:
+        context["gcloud_config"] = gcloud_config
+
+    metadata_account = _metadata_server_service_account_summary()
+    if metadata_account:
+        context["metadata_server"] = metadata_account
+
+    return context
+
+
+def _git_context(cwd: Path) -> Dict[str, Any]:
+    """Return git metadata for the current working directory."""
+    cache_key = str(cwd)
+    if cache_key in _ATTRIBUTION_CONTEXT_CACHE:
+        return dict(_ATTRIBUTION_CONTEXT_CACHE[cache_key])
+
+    context: Dict[str, Any] = {}
+    root = _run_attribution_command(["git", "rev-parse", "--show-toplevel"], cwd)
+    if root:
+        context["root"] = root
+        git_cwd = Path(root)
+    else:
+        git_cwd = cwd
+
+    branch = _run_attribution_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], git_cwd)
+    commit = _run_attribution_command(["git", "rev-parse", "HEAD"], git_cwd)
+    status = _run_attribution_command(["git", "status", "--short"], git_cwd)
+    if branch:
+        context["branch"] = branch
+    if commit:
+        context["commit"] = commit
+    if status is not None:
+        context["dirty"] = bool(status)
+        context["status_line_count"] = 0 if not status else len(status.splitlines())
+
+    _ATTRIBUTION_CONTEXT_CACHE[cache_key] = dict(context)
+    return context
+
+
+def _parent_process_context() -> Dict[str, Any]:
+    pids = [str(os.getpid())]
+    ppid = os.getppid()
+    if ppid:
+        pids.append(str(ppid))
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pid=,ppid=,comm=", "-p", ",".join(pids)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        )
+        if result.returncode == 0:
+            return {
+                "pid": os.getpid(),
+                "ppid": ppid,
+                "processes": [_truncate(line.strip(), 300) for line in result.stdout.splitlines() if line.strip()],
+            }
+    except Exception:
+        pass
+    return {"pid": os.getpid(), "ppid": ppid}
+
+
+def _safe_env_context() -> Dict[str, str]:
+    return {name: os.getenv(name, "") for name in _ATTRIBUTION_ENV_KEYS if os.getenv(name) is not None}
+
+
+def _stack_context(cwd: Path) -> List[str]:
+    """Return a compact stack trace without prompt/message content."""
+    try:
+        git_root = _git_context(cwd).get("root")
+        roots = [Path(git_root)] if git_root else []
+        roots.extend([cwd, Path.home()])
+        frames = []
+        for frame in traceback.extract_stack(limit=40):
+            path = Path(frame.filename)
+            display = str(path)
+            for root in roots:
+                try:
+                    display = str(path.resolve().relative_to(root.resolve()))
+                    break
+                except Exception:
+                    continue
+            frames.append(f"{display}:{frame.lineno}:{frame.name}")
+        return frames[-25:]
+    except Exception:
+        return []
+
+
+def _build_llm_attribution_context(
+    *,
+    strength: float,
+    temperature: float,
+    time_value: Optional[float],
+    use_batch_mode: bool,
+    use_cloud: Optional[bool],
+    output_pydantic: Optional[Type[BaseModel]],
+    output_schema: Optional[Dict[str, Any]],
+    language: Optional[str],
+) -> Dict[str, Any]:
+    """Build safe, prompt-free attribution metadata for an LLM invocation."""
+    cwd = Path.cwd()
+    return {
+        "request_id": uuid.uuid4().hex,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "process": {
+            "command": _safe_command_summary(sys.argv),
+            "cwd": str(cwd),
+            "executable": sys.executable,
+            "user": getpass.getuser(),
+            "hostname": socket.gethostname(),
+            **_parent_process_context(),
+        },
+        "git": _git_context(cwd),
+        "env": _safe_env_context(),
+        "credentials": _credential_context(),
+        "pdd": {
+            "llm_model_csv_path": str(LLM_MODEL_CSV_PATH) if LLM_MODEL_CSV_PATH else "package_default",
+            "default_base_model": DEFAULT_BASE_MODEL,
+            "project_root": str(PROJECT_ROOT),
+            "project_root_from_env": PROJECT_ROOT_FROM_ENV,
+            "env_path": str(ENV_PATH),
+        },
+        "parameters": {
+            "strength": strength,
+            "temperature": temperature,
+            "time": time_value,
+            "use_batch_mode": use_batch_mode,
+            "use_cloud": use_cloud,
+            "output_pydantic": output_pydantic.__name__ if output_pydantic else None,
+            "output_schema": bool(output_schema),
+            "language": language,
+        },
+        "python_stack": _stack_context(cwd),
+    }
+
+
+def _maybe_build_llm_attribution_context(**kwargs: Any) -> Optional[Dict[str, Any]]:
+    """Build attribution context only when emission is enabled."""
+    if not _llm_attribution_enabled():
+        return None
+    return _build_llm_attribution_context(**kwargs)
+
+
+def _api_key_field_names(api_key_field: Any) -> List[str]:
+    try:
+        from pdd.provider_manager import parse_api_key_vars
+        return parse_api_key_vars(str(api_key_field or ""))
+    except Exception:
+        raw = str(api_key_field or "")
+        return [part.strip() for part in raw.split("|") if part.strip()]
+
+
+def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a prompt-free, secret-free summary of LiteLLM kwargs."""
+    safe_keys = [
+        "model",
+        "temperature",
+        "num_retries",
+        "vertex_location",
+        "api_version",
+        "caching",
+    ]
+    summary = {key: kwargs.get(key) for key in safe_keys if key in kwargs}
+    summary["has_api_key"] = bool(kwargs.get("api_key"))
+    summary["has_base_url"] = bool(kwargs.get("base_url") or kwargs.get("api_base"))
+    summary["has_response_format"] = "response_format" in kwargs
+    summary["has_reasoning"] = any(key in kwargs for key in ("reasoning", "reasoning_effort", "thinking"))
+    messages = kwargs.get("messages")
+    if isinstance(messages, list):
+        summary["message_count"] = len(messages)
+        if messages and isinstance(messages[0], list):
+            summary["batch_count"] = len(messages)
+            summary["first_batch_message_count"] = len(messages[0])
+    return summary
+
+
+def _response_usage_summary(response: Any) -> Dict[str, Any]:
+    """Return token and finish metadata from a LiteLLM response."""
+    responses = response if isinstance(response, list) else [response]
+    prompt_tokens = 0
+    completion_tokens = 0
+    total_tokens = 0
+    finish_reasons: List[Any] = []
+
+    for item in responses:
+        usage = getattr(item, "usage", None)
+        prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0)
+        completion_tokens += int(getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0)
+        total_tokens += int(getattr(usage, "total_tokens", 0) or 0)
+        try:
+            finish_reasons.append(getattr(item.choices[0], "finish_reason", None))
+        except Exception:
+            pass
+
+    return {
+        "response_count": len(responses),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "finish_reasons": [reason for reason in finish_reasons if reason is not None],
+    }
+
+
+def _completion_with_attribution(
+    *,
+    context: Dict[str, Any],
+    attempt_id: str,
+    call_type: str,
+    model: str,
+    provider: str,
+    api_key_name: Any,
+    kwargs: Dict[str, Any],
+) -> Any:
+    """Call litellm.completion while emitting safe attribution metadata."""
+    _emit_llm_attribution(
+        context,
+        "llm_invoke.litellm_request",
+        attempt_id=attempt_id,
+        call_type=call_type,
+        model=str(model),
+        provider=str(provider),
+        api_key_env_names=_api_key_field_names(api_key_name),
+        kwargs_summary=_summarize_litellm_kwargs(kwargs),
+    )
+    start = time_module.time()
+    try:
+        response = litellm.completion(**kwargs)
+    except Exception as e:
+        _emit_llm_attribution(
+            context,
+            "llm_invoke.litellm_error",
+            attempt_id=attempt_id,
+            call_type=call_type,
+            model=str(model),
+            provider=str(provider),
+            **_safe_error_fields(e),
+        )
+        raise
+    _emit_llm_attribution(
+        context,
+        "llm_invoke.litellm_response",
+        attempt_id=attempt_id,
+        call_type=call_type,
+        model=str(model),
+        provider=str(provider),
+        duration_seconds=round(time_module.time() - start, 3),
+        usage=_response_usage_summary(response),
+    )
+    return response
+
+
+def _emit_llm_attribution(context: Optional[Dict[str, Any]], event: str, **fields: Any) -> None:
+    """Emit one safe structured attribution record."""
+    if not context or not _llm_attribution_enabled():
+        return
+
+    record = {
+        "schema": "pdd.llm_attribution.v1",
+        "log_type": "pdd_llm_attribution",
+        "severity": "INFO",
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **context,
+        **fields,
+    }
+    try:
+        payload = json.dumps(_json_safe(record), sort_keys=True, separators=(",", ":"))
+    except Exception as dump_error:
+        logger.debug(f"Failed to serialize LLM attribution record: {dump_error}")
+        return
+
+    log_path = _llm_attribution_log_path()
+    if log_path is not None:
+        try:
+            _append_llm_attribution_payload(log_path, payload)
+        except Exception as file_error:
+            logger.debug(f"Failed to write LLM attribution log: {file_error}")
+
+    if _llm_attribution_process_log_enabled():
+        sys.stderr.write(payload + "\n")
+        sys.stderr.flush()
+
+
+def _append_llm_attribution_payload(log_path: Path, payload: str) -> None:
+    """Append one JSONL attribution record with restrictive permissions and rotation."""
+    parent_existed = log_path.parent.exists()
+    log_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if not parent_existed or _is_default_llm_attribution_log_path(log_path):
+        try:
+            os.chmod(log_path.parent, 0o700)
+        except Exception:
+            pass
+
+    max_bytes = _llm_attribution_max_bytes()
+    try:
+        if max_bytes > 0 and log_path.exists() and log_path.stat().st_size >= max_bytes:
+            rotated_path = log_path.with_name(f"{log_path.name}.1")
+            try:
+                rotated_path.unlink()
+            except FileNotFoundError:
+                pass
+            log_path.replace(rotated_path)
+            try:
+                os.chmod(rotated_path, 0o600)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(payload + "\n")
+    finally:
+        try:
+            os.chmod(log_path, 0o600)
+        except Exception:
+            pass
+
 # --- Helper Functions ---
 
 def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
@@ -1458,7 +2145,6 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
         raise ValueError(f"Error formatting prompt: {e}") from e
 
 # --- JSON Extraction Helpers ---
-import re
 
 def _extract_fenced_json_block(text: str) -> Optional[str]:
     try:
@@ -1961,6 +2647,26 @@ def llm_invoke(
             except ImportError:
                 use_cloud = False
 
+    attribution_context = _maybe_build_llm_attribution_context(
+        strength=strength,
+        temperature=temperature,
+        time_value=time,
+        use_batch_mode=use_batch_mode,
+        use_cloud=use_cloud,
+        output_pydantic=output_pydantic,
+        output_schema=output_schema,
+        language=language,
+    )
+    _emit_llm_attribution(
+        attribution_context,
+        "llm_invoke.start",
+        input_shape={
+            "messages_provided": bool(messages),
+            "prompt_provided": bool(prompt),
+            "input_json_provided": input_json is not None,
+        },
+    )
+
     if use_cloud:
         from rich.console import Console
         console = Console()
@@ -1969,6 +2675,7 @@ def llm_invoke(
             logger.debug("Attempting cloud execution...")
 
         try:
+            _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
             return _llm_invoke_cloud(
                 prompt=prompt,
                 input_json=input_json,
@@ -1986,14 +2693,25 @@ def llm_invoke(
             # Notify user and fall back to local execution
             console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
             logger.warning(f"Cloud fallback: {e}")
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.cloud_fallback",
+                **_safe_error_fields(e),
+            )
             # Continue to local execution below
         except InsufficientCreditsError:
             # Re-raise credit errors - user needs to know
+            _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
             raise
         except CloudInvocationError as e:
             # Non-recoverable cloud error - notify and fall back
             console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
             logger.warning(f"Cloud invocation error: {e}")
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.cloud_error",
+                **_safe_error_fields(e),
+            )
             # Continue to local execution below
 
     # --- 2. Local execution uses already-validated formatted_messages ---
@@ -2027,7 +2745,27 @@ def llm_invoke(
         candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
+        _emit_llm_attribution(
+            attribution_context,
+            "llm_invoke.model_selection_error",
+            **_safe_error_fields(e),
+        )
         raise
+
+    _emit_llm_attribution(
+        attribution_context,
+        "llm_invoke.model_candidates",
+        candidate_models=[
+            {
+                "model": str(candidate.get("model")),
+                "provider": str(candidate.get("provider", "")),
+                "api_key_env_names": _api_key_field_names(candidate.get("api_key")),
+                "location": str(candidate.get("location", "")) if pd.notna(candidate.get("location", "")) else "",
+            }
+            for candidate in candidate_models[:10]
+        ],
+        candidate_count=len(candidate_models),
+    )
 
     if verbose:
         # This print statement is crucial for the verbose test
@@ -2091,6 +2829,8 @@ def llm_invoke(
     except Exception:
         pass
 
+    attempt_counter = 0
+
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
@@ -2105,10 +2845,22 @@ def llm_invoke(
         temp_adjustment_done = False
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
+            attempt_counter += 1
+            request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
+            attempt_id = f"{request_id}-{attempt_counter}"
 
             # --- 4. API Key Check & Acquisition ---
             if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.model_skipped",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    api_key_env_names=_api_key_field_names(api_key_name),
+                    reason="credential_check_failed",
+                )
                 if verbose:
                     logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
                 break # Breaks the 'while retry_with_same_model' loop
@@ -2458,7 +3210,23 @@ def llm_invoke(
                             responses_kwargs["reasoning"] = reasoning_param
 
                         # Call litellm.responses() which handles the API interaction
+                        call_start = time_module.time()
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.litellm_request",
+                            attempt_id=attempt_id,
+                            call_type="responses",
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            api_key_env_names=_api_key_field_names(api_key_name),
+                            kwargs_summary={
+                                "model": responses_kwargs.get("model"),
+                                "has_reasoning": "reasoning" in responses_kwargs,
+                                "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
+                            },
+                        )
                         resp = litellm.responses(**responses_kwargs)
+                        call_duration = time_module.time() - call_start
 
                         # Extract text result from response
                         result_text = None
@@ -2484,6 +3252,19 @@ def llm_invoke(
                             in_rate = model_info.get('input', 0.0) or 0.0
                             out_rate = model_info.get('output', 0.0) or 0.0
                             total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.litellm_response",
+                            attempt_id=attempt_id,
+                            call_type="responses",
+                            model=str(model_name_litellm),
+                            duration_seconds=round(call_duration, 3),
+                            usage={
+                                "prompt_tokens": getattr(usage, "input_tokens", 0) if usage is not None else 0,
+                                "completion_tokens": getattr(usage, "output_tokens", 0) if usage is not None else 0,
+                            },
+                            cost=total_cost,
+                        )
 
                         # Parse result if Pydantic output requested
                         final_result = None
@@ -2535,6 +3316,15 @@ def llm_invoke(
                             logger.info(f"[RESULT] Model Used: {model_name_litellm}")
                             logger.info(f"[RESULT] Total Cost (estimated): ${total_cost:.6g}")
 
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.success",
+                            attempt_id=attempt_id,
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            cost=total_cost,
+                            call_type="responses",
+                        )
                         return {
                             'result': final_result,
                             'cost': total_cost,
@@ -2543,6 +3333,15 @@ def llm_invoke(
                         }
                     except Exception as e:
                         last_exception = e
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.litellm_error",
+                            attempt_id=attempt_id,
+                            call_type="responses",
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            **_safe_error_fields(e),
+                        )
                         logger.error(f"[ERROR] OpenAI Responses call failed for {model_name_litellm}: {e}")
                         # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
                         if "reasoning" in litellm_kwargs:
@@ -2553,10 +3352,14 @@ def llm_invoke(
                         # Fall through to LiteLLM path as a fallback
 
                 # --- Context Window Validation ---
+                token_count_for_attribution = None
+                context_limit_for_attribution = None
                 try:
                     messages_for_count = litellm_kwargs.get("messages", [])
                     token_count = litellm.token_counter(model=model_name_litellm, messages=messages_for_count)
                     context_limit = get_context_limit(model_name_litellm)
+                    token_count_for_attribution = token_count
+                    context_limit_for_attribution = context_limit
 
                     # If the Claude 1M beta header is active, honour it as the effective limit
                     extra_headers = litellm_kwargs.get("extra_headers", {})
@@ -2564,6 +3367,7 @@ def llm_invoke(
                             and "anthropic-beta" in extra_headers
                             and "context-1m" in extra_headers.get("anthropic-beta", "")):
                         context_limit = 1_000_000
+                        context_limit_for_attribution = context_limit
 
                     if context_limit is None:
                         if verbose:
@@ -2599,6 +3403,20 @@ def llm_invoke(
                 except Exception as ctx_err:
                     if verbose:
                         logger.debug(f"[CONTEXT] Token validation skipped: {ctx_err}")
+
+                call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_request",
+                    attempt_id=attempt_id,
+                    call_type=call_type_for_attribution,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    api_key_env_names=_api_key_field_names(api_key_name),
+                    kwargs_summary=_summarize_litellm_kwargs(litellm_kwargs),
+                    token_count=token_count_for_attribution,
+                    context_limit=context_limit_for_attribution,
+                )
 
                 if use_batch_mode:
                     if verbose:
@@ -2637,6 +3455,16 @@ def llm_invoke(
                     response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
 
                 end_time = time_module.time()
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_response",
+                    attempt_id=attempt_id,
+                    call_type=call_type_for_attribution,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    duration_seconds=round(end_time - start_time, 3),
+                    usage=_response_usage_summary(response),
+                )
 
                 if verbose:
                     logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
@@ -2706,14 +3534,23 @@ def llm_invoke(
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
                                     try:
-                                        retry_response = litellm.completion(
-                                            model=model_name_litellm,
-                                            messages=retry_messages,
-                                            temperature=current_temperature,
-                                            response_format=response_format,
-                                            timeout=LLM_CALL_TIMEOUT,
+                                        retry_kwargs = {
+                                            "model": model_name_litellm,
+                                            "messages": retry_messages,
+                                            "temperature": current_temperature,
+                                            "response_format": response_format,
+                                            "timeout": LLM_CALL_TIMEOUT,
                                             **time_kwargs,
-                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                        }
+                                        retry_response = _completion_with_attribution(
+                                            context=attribution_context,
+                                            attempt_id=attempt_id,
+                                            call_type="completion_retry_cache_bypass",
+                                            model=str(model_name_litellm),
+                                            provider=str(provider),
+                                            api_key_name=api_key_name,
+                                            kwargs=retry_kwargs,
                                         )
                                     finally:
                                         # Always restore cache, even if retry raises
@@ -2766,14 +3603,23 @@ def llm_invoke(
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
                                     try:
-                                        retry_response = litellm.completion(
-                                            model=model_name_litellm,
-                                            messages=retry_messages,
-                                            temperature=current_temperature,
-                                            response_format=response_format,
-                                            timeout=LLM_CALL_TIMEOUT,
+                                        retry_kwargs = {
+                                            "model": model_name_litellm,
+                                            "messages": retry_messages,
+                                            "temperature": current_temperature,
+                                            "response_format": response_format,
+                                            "timeout": LLM_CALL_TIMEOUT,
                                             **time_kwargs,
-                                            **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                        }
+                                        retry_response = _completion_with_attribution(
+                                            context=attribution_context,
+                                            attempt_id=attempt_id,
+                                            call_type="completion_retry_malformed_json",
+                                            model=str(model_name_litellm),
+                                            provider=str(provider),
+                                            api_key_name=api_key_name,
+                                            kwargs=retry_kwargs,
                                         )
                                     finally:
                                         # Always restore cache, even if retry raises
@@ -3015,14 +3861,23 @@ def llm_invoke(
                                         _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                         _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
                                         try:
-                                            retry_response = litellm.completion(
-                                                model=model_name_litellm,
-                                                messages=retry_messages,
-                                                temperature=current_temperature,
-                                                response_format=response_format,
-                                                timeout=LLM_CALL_TIMEOUT,
+                                            retry_kwargs = {
+                                                "model": model_name_litellm,
+                                                "messages": retry_messages,
+                                                "temperature": current_temperature,
+                                                "response_format": response_format,
+                                                "timeout": LLM_CALL_TIMEOUT,
                                                 **time_kwargs,
-                                                **retry_provider_kwargs  # Issue #185: Pass Vertex AI credentials
+                                                **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                            }
+                                            retry_response = _completion_with_attribution(
+                                                context=attribution_context,
+                                                attempt_id=attempt_id,
+                                                call_type="completion_retry_invalid_python",
+                                                model=str(model_name_litellm),
+                                                provider=str(provider),
+                                                api_key_name=api_key_name,
+                                                kwargs=retry_kwargs,
                                             )
                                         finally:
                                             # Always restore cache, even if retry raises
@@ -3110,6 +3965,18 @@ def llm_invoke(
                     logger.debug("-" * 20) # Separator
 
                 # --- Return Success ---
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.success",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    cost=total_cost,
+                    input_tokens=_LAST_CALLBACK_DATA.get("input_tokens", 0),
+                    output_tokens=_LAST_CALLBACK_DATA.get("output_tokens", 0),
+                    finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
+                    call_type=call_type_for_attribution,
+                )
                 return {
                     'result': final_result,
                     'cost': total_cost,
@@ -3121,6 +3988,14 @@ def llm_invoke(
             except openai.AuthenticationError as e:
                 last_exception = e
                 error_message = str(e)
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                )
                 
                 # Check for WSL-specific issues in authentication errors
                 if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
@@ -3146,6 +4021,15 @@ def llm_invoke(
             except SchemaValidationError as e:
                 # Issue #168: Schema validation failures now trigger model fallback
                 last_exception = e
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.schema_validation_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                    item_index=e.item_index,
+                )
                 logger.warning(f"[SCHEMA ERROR] Validation failed for {model_name_litellm}: {e}. Trying next model.")
                 if verbose:
                     logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
@@ -3155,6 +4039,14 @@ def llm_invoke(
                 # Post-call safety net: model rejected prompt as too large after the pre-call
                 # check (e.g. tokenizer mismatch). Fall back to the next candidate.
                 last_exception = e
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.context_window_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                )
                 logger.error(
                     f"[CONTEXT] {model_name_litellm} rejected prompt as too large. Trying next model."
                 )
@@ -3193,10 +4085,27 @@ def llm_invoke(
                     current_temperature = adjusted_temp
                     temp_adjustment_done = True
                     retry_with_same_model = True
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.temperature_retry",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        adjusted_temperature=adjusted_temp,
+                        **_safe_error_fields(e),
+                    )
                     if verbose:
                         logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
                     continue
 
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.litellm_error",
+                    attempt_id=attempt_id,
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    **_safe_error_fields(e),
+                )
                 logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
                 # Log more details in verbose mode
                 if verbose:
@@ -3216,6 +4125,12 @@ def llm_invoke(
             "or using a model with a larger context window."
         )
     logger.error(f"[FATAL] {error_message}")
+    _emit_llm_attribution(
+        attribution_context,
+        "llm_invoke.failure",
+        failure_reason="all_candidate_models_failed",
+        last_error_type=type(last_exception).__name__ if last_exception else None,
+    )
     raise RuntimeError(error_message) from last_exception
 
 # --- Example Usage (Optional) ---
