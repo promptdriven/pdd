@@ -5435,6 +5435,33 @@ class TestVertexAIClaudeTemperatureFix:
             f"got {captured_kwargs.get('temperature')}"
         )
 
+    def test_vertex_ai_claude_opus_47_omits_temperature(self, llm_mod, tmp_path, monkeypatch):
+        """Claude Opus 4.7 rejects temperature, even when reasoning is enabled."""
+        csv_path = self._make_csv(tmp_path, "Google", "vertex_ai/claude-opus-4-7", "effort")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/claude-opus-4-7")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                temperature=0.7,
+                time=0.8,
+                use_cloud=False,
+            )
+
+        assert "reasoning_effort" in captured_kwargs
+        assert "temperature" not in captured_kwargs
+
     # ------------------------------------------------------------------
     # Pre-flight: Vertex AI Claude with thinking (budget type)
     # ------------------------------------------------------------------

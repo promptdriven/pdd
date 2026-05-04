@@ -1408,6 +1408,12 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
+def _model_disallows_temperature(model_name: Any) -> bool:
+    """Return True for models whose provider rejects the temperature parameter."""
+    model_lower = str(model_name or "").lower()
+    return "claude-opus-4-7" in model_lower or "claude-opus-4.7" in model_lower
+
+
 def _response_usage_summary(response: Any) -> Dict[str, Any]:
     """Return token and finish metadata from a LiteLLM response."""
     responses = response if isinstance(response, list) else [response]
@@ -2869,11 +2875,15 @@ def llm_invoke(
             litellm_kwargs: Dict[str, Any] = {
                 "model": model_name_litellm,
                 "messages": copy.deepcopy(formatted_messages),
-                # Use a local adjustable temperature to allow provider-specific fallbacks
-                "temperature": current_temperature,
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
                 "num_retries": 2,
             }
+            if _model_disallows_temperature(model_name_litellm):
+                if verbose:
+                    logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
+            else:
+                # Use a local adjustable temperature to allow provider-specific fallbacks.
+                litellm_kwargs["temperature"] = current_temperature
 
             # --- Resolve API key / credentials ---
             # The CSV api_key field may be:
@@ -3432,7 +3442,7 @@ def llm_invoke(
                     try:
                         is_claude_model = 'claude' in model_name_litellm.lower()
                         has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
-                        if is_claude_model and has_thinking_or_reasoning:
+                        if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
                             if litellm_kwargs.get('temperature') != 1:
                                 if verbose:
                                     logger.info("[INFO] Claude with thinking/reasoning enabled: forcing temperature=1 for compliance.")
@@ -3543,6 +3553,8 @@ def llm_invoke(
                                             **time_kwargs,
                                             **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
                                         }
+                                        if _model_disallows_temperature(model_name_litellm):
+                                            retry_kwargs.pop("temperature", None)
                                         retry_response = _completion_with_attribution(
                                             context=attribution_context,
                                             attempt_id=attempt_id,
@@ -3612,6 +3624,8 @@ def llm_invoke(
                                             **time_kwargs,
                                             **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
                                         }
+                                        if _model_disallows_temperature(model_name_litellm):
+                                            retry_kwargs.pop("temperature", None)
                                         retry_response = _completion_with_attribution(
                                             context=attribution_context,
                                             attempt_id=attempt_id,
@@ -3870,6 +3884,8 @@ def llm_invoke(
                                                 **time_kwargs,
                                                 **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
                                             }
+                                            if _model_disallows_temperature(model_name_litellm):
+                                                retry_kwargs.pop("temperature", None)
                                             retry_response = _completion_with_attribution(
                                                 context=attribution_context,
                                                 attempt_id=attempt_id,
