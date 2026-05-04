@@ -170,6 +170,7 @@ For CLI enthusiasts, implement GitHub issues directly:
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **OpenCode CLI**: `npm install -g opencode-ai` (requires a configured provider API key, e.g. `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`/`OPENROUTER_API_KEY`, or a stored OpenCode auth token in `~/.local/share/opencode/auth.json`; recommend setting `OPENCODE_MODEL=provider/model`)
 
 **Usage:**
 ```bash
@@ -229,7 +230,7 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and API key configuration if needed
   2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers  based on your available keys
   4. Optionally creates a `.pddrc` project config
@@ -2018,6 +2019,10 @@ For the agentic fallback to function, you need to have at least one of the suppo
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Requires the `OPENAI_API_KEY` environment variable to be set.
+4.  **OpenCode:**
+    *   Requires the `opencode` CLI to be installed and in your `PATH` (e.g. `npm install -g opencode-ai`).
+    *   Requires a configured provider API key (e.g. `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or `GITHUB_TOKEN` for `github-copilot/`) or an OpenCode auth token at `~/.local/share/opencode/auth.json`.
+    *   Recommended: set `OPENCODE_MODEL=provider/model` (e.g. `OPENCODE_MODEL=anthropic/claude-sonnet-4-5`) to avoid relying on OpenCode's default model resolution.
 
 You can configure these keys using `pdd setup` or by setting them in your shell's environment.
 

@@ -1,7 +1,7 @@
 [
   {
-    "reason": "Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.",
-    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI stored OAuth credentials.",
+    "reason": "Shared infrastructure for agentic CLI invocations across Claude, Gemini, Codex, and OpenCode backends.",
+    "description": "Common functions for running agentic tasks across Claude/Gemini/Codex/OpenCode: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection (including Gemini CLI stored OAuth credentials and OpenCode multi-provider auth).",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt"
@@ -34,6 +34,16 @@
             "returns": "Tuple[bool, str, float, str]"
           },
           {
+            "name": "detect_control_token",
+            "signature": "(output, token, tail_lines)",
+            "returns": "Optional[TokenMatch]"
+          },
+          {
+            "name": "classify_step_output",
+            "signature": "(output, tokens, quiet)",
+            "returns": "Optional[str]"
+          },
+          {
             "name": "post_step_comment",
             "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)",
             "returns": "bool"
@@ -44,19 +54,24 @@
             "returns": "bool"
           },
           {
-            "name": "github_save_state",
-            "signature": "(...)",
-            "returns": "Optional[int]"
-          },
-          {
-            "name": "github_load_state",
-            "signature": "(...)",
-            "returns": "Tuple[Optional[Dict], Optional[int]]"
+            "name": "post_final_comment",
+            "signature": "(repo_owner, repo_name, issue_number, body, cwd)",
+            "returns": "bool"
           },
           {
             "name": "validate_cached_state",
             "signature": "(last_completed_step, step_outputs, step_order, quiet)",
             "returns": "Union[int, float]"
+          },
+          {
+            "name": "load_workflow_state",
+            "signature": "(...)",
+            "returns": "Tuple[Optional[Dict], Optional[int]]"
+          },
+          {
+            "name": "save_workflow_state",
+            "signature": "(...)",
+            "returns": "Optional[int]"
           }
         ]
       }
@@ -2362,7 +2377,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -4320,9 +4338,58 @@
     }
   },
   {
-    "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
-    "description": "Handles initial setup, configuration, and environment variable management.",
+    "reason": "Detects and bootstraps agentic CLI tools (Claude, Codex, Gemini, OpenCode) for pdd setup with interactive install and API key configuration.",
+    "description": "Phase 1 of `pdd setup`: detects installed agentic CLIs, presents a numbered selection table, and walks the user through installation and API key configuration. Supports Claude/Codex/Gemini/OpenCode, with OpenCode treated as configured when any accepted provider key is set or `~/.local/share/opencode/auth.json` exists.",
     "dependencies": [],
+    "priority": 128,
+    "filename": "cli_detector_python.prompt",
+    "filepath": "pdd/cli_detector.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python",
+      "setup"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_and_bootstrap_cli",
+            "signature": "() -> List[CliBootstrapResult]",
+            "returns": "List[CliBootstrapResult]"
+          },
+          {
+            "name": "detect_cli_tools",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "CliBootstrapResult",
+            "fields": [
+              "cli_name: str",
+              "provider: str",
+              "cli_path: str",
+              "api_key_configured: bool",
+              "skipped: bool"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11200,
+      "y": 400
+    }
+  },
+  {
+    "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
+    "description": "Handles initial setup, configuration, and environment variable management. Phase 1 delegates to cli_detector for agentic CLI bootstrapping (Claude/Gemini/Codex/OpenCode); Phase 2 performs deterministic auto-configuration with no LLM calls.",
+    "dependencies": [
+      "cli_detector_python.prompt"
+    ],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
     "filepath": "pdd/setup_tool.py",
@@ -6836,7 +6903,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
@@ -6918,7 +6989,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",

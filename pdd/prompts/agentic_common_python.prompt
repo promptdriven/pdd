@@ -1,3 +1,27 @@
+<pdd-reason>Shared infrastructure for agentic CLI invocations across Claude, Gemini, Codex, and OpenCode backends.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_agent_provider_preference", "signature": "() -> List[str]", "returns": "List[str]"},
+      {"name": "get_available_agents", "signature": "() -> List[str]", "returns": "List[str]"},
+      {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose, quiet, label, timeout, max_retries, retry_delay, deadline, use_playwright)", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "detect_control_token", "signature": "(output, token, tail_lines)", "returns": "Optional[TokenMatch]"},
+      {"name": "classify_step_output", "signature": "(output, tokens, quiet)", "returns": "Optional[str]"},
+      {"name": "post_step_comment", "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)", "returns": "bool"},
+      {"name": "post_pr_comment", "signature": "(repo_owner, repo_name, pr_number, body, cwd)", "returns": "bool"},
+      {"name": "post_final_comment", "signature": "(repo_owner, repo_name, issue_number, body, cwd)", "returns": "bool"},
+      {"name": "validate_cached_state", "signature": "(last_completed_step, step_outputs, step_order, quiet)", "returns": "Union[int, float]"},
+      {"name": "load_workflow_state", "signature": "(...)", "returns": "Tuple[Optional[Dict], Optional[int]]"},
+      {"name": "save_workflow_state", "signature": "(...)", "returns": "Optional[int]"},
+      {"name": "clear_workflow_state", "signature": "(...)", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
 <include>context/python_preamble.prompt</include>
@@ -6,7 +30,7 @@
 Write the `pdd/agentic_common.py` module.
 
 % Role & Scope
-Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration. Acts as the low-level interface between PDD orchestrators and external agentic CLIs.
+Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, OpenCode). Provides reusable utilities for agent discovery, environment sanitization, logging, and subprocess orchestration. Acts as the low-level interface between PDD orchestrators and external agentic CLIs.
 
 % External Documentation
 <claude_code_json_output>
@@ -21,16 +45,21 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 <web>https://developers.openai.com/codex/cli/reference</web>
 </codex_cli_reference>
 
+<opencode_cli_reference>
+<web>https://opencode.ai/docs/cli/</web>
+</opencode_cli_reference>
+
 % Requirements
-1. **Provider Preference**: Private `_DEFAULT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]`. Public `get_agent_provider_preference() -> List[str]` reads `PDD_AGENTIC_PROVIDER` (comma-sep) or default.
+1. **Provider Preference**: Private `_DEFAULT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai", "opencode"]`. Public `get_agent_provider_preference() -> List[str]` reads `PDD_AGENTIC_PROVIDER` (comma-sep) or default. The `opencode` provider is a fourth first-class agentic backend alongside Claude/Gemini/Codex, routed when the user sets `PDD_AGENTIC_PROVIDER=opencode` or it appears in the comma-separated preference list.
 2. **Logging**: `_log_agentic_interaction` writes to `.pdd/agentic-logs/session_YYYYMMDD_HHMMSS.jsonl`. Always log provider failures (regardless of verbose mode) so batch sync failures are diagnosable. Only gate successful interaction logging behind `verbose=True`. Additionally, when a CLI exits 0 with empty/whitespace-only stdout, emit a diagnostic console line with stderr tail (last 500 chars), prompt size, sorted auth-env-key names (keys containing `TOKEN` or `API_KEY` with a truthy value), and cwd. This surfaces the blank-provider-error failure mode (cloud one-session sync) in batch logs.
 3. **CLI Discovery**: Search via `_find_cli_binary`: `.pddrc` override (`agentic.{name}_path`) → `shutil.which` → `_COMMON_CLI_PATHS` (including `~/.npm-global/bin` for Node-installed CLIs, with nvm glob expansion `~/.nvm/versions/node/*/bin/`).
-4. **Availability**: Anthropic (CLI exists); Google (CLI + `GOOGLE_API_KEY`/`GEMINI_API_KEY`/Vertex or stored Gemini CLI OAuth credentials in `~/.gemini/oauth_creds.json`); OpenAI/Codex (CLI + `OPENAI_API_KEY` or `PDD_CODEX_AUTH_AVAILABLE`). The availability check is static and must not imply the Codex ChatGPT token can refresh successfully at execution time. Gemini CLI OAuth is a supported headless path; do not require Google API-key or Vertex env when the CLI has a stored OAuth token.
+4. **Availability**: Anthropic (CLI exists); Google (CLI + `GOOGLE_API_KEY`/`GEMINI_API_KEY`/Vertex or stored Gemini CLI OAuth credentials in `~/.gemini/oauth_creds.json`); OpenAI/Codex (CLI + `OPENAI_API_KEY` or `PDD_CODEX_AUTH_AVAILABLE`); OpenCode (CLI exists AND at least one of: any provider API key — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, `GROQ_API_KEY` — OR a stored OpenCode auth token file at `~/.local/share/opencode/auth.json`). The availability check is static and must not imply the Codex ChatGPT token can refresh successfully at execution time. Gemini CLI OAuth is a supported headless path; do not require Google API-key or Vertex env when the CLI has a stored OAuth token.
 5. **Execution**: Run in headless mode with JSON output. Sanitize env (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH`. Use `start_new_session=True` via `Popen` to kill process groups on timeout (Issue #830).
 6. **Cost Parsing**:
    - Anthropic: `total_cost_usd` first; fallback to `modelUsage` sum; then token estimation.
    - Google: From `stats["models"]`.
    - OpenAI: From `usage`. Handle NDJSON (`item.completed`, `session.end`, `turn.completed`).
+   - OpenCode: Parse JSONL events from stdout. Sum `step_finish.part.cost` across all events; concatenate `text` events for the assistant output; surface `error` events as failures. Use OpenCode-reported cost when present; only fall back to CSV pricing or token estimation when the JSONL stream contains no cost fields.
 7. **False Positives**: Treat empty output, (zero cost + short output < `MIN_VALID_OUTPUT_LENGTH`), or (cost > 0 + stripped output starts with `Error:` + newlines < `MAX_ERROR_RESPONSE_NEWLINES` + length < 4000) as failure. The `Error:` check must require the stripped output to *start* with `Error:` (a leading prefix of a genuine terse provider-error response) — never an unanchored substring match, which would demote substantive findings that merely *describe* error-raising code (Issue #1232). The newline-count gate (`MAX_ERROR_RESPONSE_NEWLINES = 3`) preserves the long-single-line error case from #902 while protecting multi-paragraph findings docs that happen to start with `Error:`. **Multi-provider configs** (`len(candidates) > 1`): `break` and fall through to the next provider — don't burn retries on a known-broken provider. **Single-provider configs** (`len(candidates) == 1`, e.g. cloud anthropic-only): no fallback exists, so retry on the same provider with exponential backoff (`retry_delay * 2 ** (attempt - 1) + random.uniform(0, retry_delay)`, capped at `MAX_RETRY_DELAY`) up to `max_retries`, then break. An immediate `break` in single-provider configs yields zero retries on transient empty responses and surfaces as the blank-provider-error one-session-sync failure.
 8. **Deadline Awareness**: Read `PDD_JOB_DEADLINE`. Skip attempts if remaining < 60s (after 120s reserve).
 9. **GitHub State**: Persistence in issue comments via hidden markers (`<!-- PDD_WORKFLOW_STATE:... -->`). `gh api --paginate`.
@@ -48,6 +77,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
    - **Transient** (retry with backoff): rate limit (429), server error (5xx), timeout, network error.
    - This prevents wasting 3 retries on errors that won't resolve (e.g., temperature=1 rejection on Vertex AI).
    - Codex stale ChatGPT login failures are permanent and must be normalized before surfacing to users. If OpenAI/Codex exits nonzero and combined stderr/stdout includes Codex websocket/backend auth text such as `access token could not be refreshed`, `please sign in again`, `chatgpt.com/backend-api/codex`, `codex/responses`, plus `401`/`Unauthorized`/sign-in language, return a concise message telling the user to run `codex login` (or `codex login --device-auth`; `codex login --with-api-key` for API-key auth). Do not expose raw websocket URLs/log noise as the main failure.
+   - OpenCode permanent-error patterns: `model not found`, `provider not configured`, `invalid model id`, `no provider for model`, `permission denied` (session permission ask in non-interactive mode), `auth.json` parse errors, and any `error` JSONL event whose message matches these. These should not be retried; surface a concise hint pointing the user to `OPENCODE_MODEL` and `opencode auth login`/`opencode models`.
 15. **Aggregate Per-Step Timeout**: For local runs without `PDD_JOB_DEADLINE`, default to `2 * effective_timeout` as the step deadline. This caps worst-case to 2x the step timeout instead of 9x (3 providers x 3 retries).
 16. **Progress Tracking** (Ctrl+C UX):
    - `set_agentic_progress(workflow, current_step, total_steps, step_name, completed_steps)`: Record current progress so KeyboardInterrupt can report how far the workflow got.
@@ -107,10 +137,11 @@ Instruction: `"Read the file {prompt_file} for instructions. You have full file 
 - Anthropic: `[cli_path, "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]` (pipe via stdin).
 - Google: `[cli_path, "<instruction>", "--yolo", "--output-format", "json"]`.
 - OpenAI: `[cli_path, "exec", "--sandbox", <mode>, "--json", <path>]`. Mode default: `danger-full-access`.
+- OpenCode: `[cli_path, "run", "--dir", <cwd>, "--format", "json", "--dangerously-skip-permissions", "--model", <provider/model>, "<instruction>"]`. Append `--agent <name>` when `OPENCODE_AGENT` is set. Output is JSONL on stdout (one event per line: `text`, `tool_use`, `step_start`, `step_finish`, `error`).
 
 % Playwright Mode (`use_playwright=True`)
 - Anthropic: Replaces `--dangerously-skip-permissions` with `--allowedTools`, `"Bash"`, `"Read"`, `"Write"`, `--max-turns`, `"30"`.
-- Google/OpenAI: Same as standard (no per-tool restrictions).
+- Google/OpenAI/OpenCode: Same as standard (no per-tool restrictions).
 
 % GitHub State Persistence
 - `_find_state_comment`: Use `gh api ... --paginate`.
@@ -124,7 +155,9 @@ Instruction: `"Read the file {prompt_file} for instructions. You have full file 
    - Anthropic: `result` or `response`. If `data.get("is_error")` is truthy (Claude Code session failed — auth error, refusal, crash, e.g. `{"is_error": true, "result": "Not logged in - Please run /login"}`), return `(False, text, cost)` so the caller treats it as a real failure instead of empty success.
    - Google: `result`, `response`, or `output`.
    - OpenAI (0.104.0+): `data["item"]["text"]` if `item["type"] == "agent_message"`, else fallback.
-5. Support model overrides: `CLAUDE_MODEL`, `GEMINI_MODEL`, `CODEX_MODEL`.
+   - OpenCode: Parse JSONL line-by-line. Concatenate `text` events for output; sum `step_finish.part.cost` for cost; treat any `error` event as a failure with its message surfaced. If the stream is empty or contains no `text`/`step_finish` events, return `(False, "", 0.0)` to trigger the false-positive fallback.
+5. Support model overrides: `CLAUDE_MODEL`, `GEMINI_MODEL`, `CODEX_MODEL`, `OPENCODE_MODEL`.
+   - OpenCode model resolution: prefer explicit `OPENCODE_MODEL` (format `provider/model`, e.g. `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). When unset, derive a candidate from `pdd/data/llm_model.csv` using PDD's strength/model-selection semantics. Translate LiteLLM-oriented CSV model IDs to OpenCode IDs via an inline mapping table — at minimum, rewrite the `github_copilot/` prefix to `github-copilot/`. Pass the resolved ID to `--model` verbatim (do not split on `/` since OpenCode IDs may contain multiple slashes). Optional `OPENCODE_AGENT` (default omitted; OpenCode's `build` agent is the typical choice) is forwarded as `--agent`. Optional `OPENCODE_VARIANT` (e.g. `high`, `max`) is forwarded as `--variant` when supported by the selected provider; ignore when unset.
 6. Reasoning effort: `_run_with_provider` resolves a generic `reasoning_effort` from (a) explicit `reasoning_time` kwarg only when the caller forwarded a user-supplied `--time` (commands gate on `ctx.obj["time_explicit"]` — never pass the `DEFAULT_TIME` fallback) or (b) `PDD_REASONING_EFFORT` env var (validated against `{low, medium, high}`; any other value is ignored to prevent argv poisoning). For Codex, additionally check `CODEX_REASONING_EFFORT` env var first — it accepts `{low, medium, high, xhigh}` (xhigh is Codex-only, used by the cloud worker for GPT-5.4 routing) and takes precedence over the generic `reasoning_effort`. Inject `-c model_reasoning_effort=<level>` **before** the `exec` subcommand — Codex treats `-c` / `--config` as top-level flags only and silently ignores them after `exec`. Anthropic and Gemini CLIs have no reasoning-effort flag today; emit a one-line notice in non-quiet mode rather than silently dropping the signal.
 
 % Dependencies
