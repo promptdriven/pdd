@@ -16,7 +16,7 @@
 % You are an expert Python engineer. Your goal is to write the pdd/setup_tool.py module.
 
 % Role & Scope
-Main orchestrator for `pdd setup`. Implements a two-phase flow designed for minimal user friction — users should be able to complete setup by pressing Enter just a few times. Phase 1 bootstraps agentic CLIs (Claude/Gemini/Codex) interactively. Phase 2 runs deterministic Python code that auto-discovers API keys, configures models from a reference CSV, initializes .pddrc, tests a model, and prints a summary — all with clean output and no LLM calls. Uses `rich.console.Console(highlight=False)` for formatted output.
+Main orchestrator for `pdd setup`. Implements a two-phase flow designed for minimal user friction — users should be able to complete setup by pressing Enter just a few times. Phase 1 bootstraps agentic CLIs (Claude/Gemini/Codex/OpenCode) interactively. Phase 2 runs deterministic Python code that auto-discovers API keys, configures models from a reference CSV, initializes .pddrc, tests a model, and prints a summary — all with clean output and no LLM calls. Uses `rich.console.Console(highlight=False)` for formatted output.
 
 % Requirements
 
@@ -27,8 +27,8 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 
    **Phase 1 — CLI Bootstrap (interactive, 0–2 user inputs):**
    a. Call `cli_detector.detect_and_bootstrap_cli()` which returns `List[CliBootstrapResult]`.
-   b. Iterate results: if `result.skipped`, skip silently (cli_detector already printed skip message). If result has a CLI but `api_key_configured == False`, print a yellow warning note about limited capability.
-   c. Proceed to Phase 2 regardless (some CLIs like Claude support subscription auth).
+   b. Iterate results: if `result.skipped`, skip silently (cli_detector already printed skip message). If result has a CLI but `api_key_configured == False`, print a yellow warning note about limited capability. For `provider == "opencode"`, additionally print a one-line dim hint reminding the user that OpenCode is provider-agnostic and is configured via `OPENCODE_MODEL`/`OPENCODE_AGENT`/`OPENCODE_VARIANT` (and optional `PDD_OPENCODE_MODE`) plus an existing provider key (Anthropic/OpenAI/Google) — and that headless OpenCode runs may hang on session permission prompts unless the user's OpenCode config allows non-interactive execution (see README "OpenCode Configuration").
+   c. Proceed to Phase 2 regardless (some CLIs like Claude support subscription auth; OpenCode reuses an existing provider key).
 
    **Phase 2 — Deterministic Auto-Configuration (3 steps):**
    a. Run 3 sequential steps via `_run_auto_phase(cli_results)`. Before each step, print a cyan banner via `_print_step_banner(title)` using LIGHT_HORIZONTAL ("\u2500") lines.
