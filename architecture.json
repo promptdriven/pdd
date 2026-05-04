@@ -1,7 +1,7 @@
 [
   {
-    "reason": "Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.",
-    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI stored OAuth credentials.",
+    "reason": "Provides shared agentic CLI infrastructure for provider discovery, model selection, and result normalization.",
+    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result normalization, model selection, playwright mode, GitHub state persistence, and provider availability detection including OpenCode and Gemini CLI stored OAuth credentials.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt"
@@ -30,33 +30,83 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose, quiet, label, timeout, max_retries, retry_delay, deadline, use_playwright)",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           },
           {
+            "name": "detect_control_token",
+            "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]",
+            "returns": "Optional[TokenMatch]"
+          },
+          {
+            "name": "classify_step_output",
+            "signature": "(output, expected_tokens, model=\"gemini/gemini-3-flash\") -> Optional[TokenMatch]",
+            "returns": "Optional[TokenMatch]"
+          },
+          {
+            "name": "_codex_auth_failure_message",
+            "signature": "(error_detail: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "substitute_template_variables",
+            "signature": "(template, context, *, strict_unresolved=False) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "set_agentic_progress",
+            "signature": "(workflow, current_step, total_steps, step_name, completed_steps) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "clear_agentic_progress",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "get_and_clear_agentic_interrupt_context",
+            "signature": "() -> Optional[Dict]",
+            "returns": "Optional[Dict]"
+          },
+          {
+            "name": "get_job_deadline",
+            "signature": "() -> Optional[float]",
+            "returns": "Optional[float]"
+          },
+          {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool",
             "returns": "bool"
           },
           {
             "name": "post_pr_comment",
-            "signature": "(repo_owner, repo_name, pr_number, body, cwd)",
+            "signature": "(repo_owner, repo_name, pr_number, body, cwd) -> bool",
             "returns": "bool"
           },
           {
-            "name": "github_save_state",
-            "signature": "(...)",
-            "returns": "Optional[int]"
-          },
-          {
-            "name": "github_load_state",
-            "signature": "(...)",
-            "returns": "Tuple[Optional[Dict], Optional[int]]"
+            "name": "post_final_comment",
+            "signature": "(repo_owner, repo_name, issue_number, reason, total_cost, steps_completed, total_steps, cwd) -> bool",
+            "returns": "bool"
           },
           {
             "name": "validate_cached_state",
-            "signature": "(last_completed_step, step_outputs, step_order, quiet)",
+            "signature": "(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]",
             "returns": "Union[int, float]"
+          },
+          {
+            "name": "load_workflow_state",
+            "signature": "(...) -> Tuple[Optional[Dict], Optional[int]]",
+            "returns": "Tuple[Optional[Dict], Optional[int]]"
+          },
+          {
+            "name": "save_workflow_state",
+            "signature": "(...) -> Optional[int]",
+            "returns": "Optional[int]"
+          },
+          {
+            "name": "clear_workflow_state",
+            "signature": "(...) -> None",
+            "returns": "None"
           }
         ]
       }
@@ -372,51 +422,6 @@
             "errors": [
               "AuthError"
             ]
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
-    "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
-    "dependencies": [],
-    "priority": 18,
-    "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler daily job configuration"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore compound queries for contribution threshold scanning"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub API for merged PR count verification"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
-        "purpose": "Cloud Functions HTTP entry point for scheduler triggers"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_resurface_check",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
           }
         ]
       }
@@ -2362,7 +2367,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -2917,30 +2925,6 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step4 reproduce operations.",
-    "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15280,
-      "y": 660
-    }
-  },
-  {
     "reason": "Analyzes bug root cause with cross-cutting detection, variable reference audit, and state symmetry checks.",
     "description": "Defines the prompt structure for agentic bug step6 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
@@ -3036,31 +3020,6 @@
     "position": {
       "x": 15600,
       "y": 660
-    }
-  },
-  {
-    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
-    "dependencies": [],
-    "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "command",
-      "command": {
-        "name": "agentic_bug_step10",
-        "description": "Generate draft PR with failing tests and link to GitHub issue"
-      }
-    },
-    "position": {
-      "x": 15000,
-      "y": 220
     }
   },
   {
@@ -3397,30 +3356,6 @@
     },
     "position": {
       "x": 3000,
-      "y": 0
-    }
-  },
-  {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
       "y": 0
     }
   },
@@ -3951,7 +3886,7 @@
     "dependencies": [],
     "priority": 116,
     "filename": "pdd_completion_bash.prompt",
-    "filepath": "pdd_completion.sh",
+    "filepath": "pdd/pdd_completion.sh",
     "tags": [
       "cli",
       "shell"
@@ -4008,7 +3943,7 @@
     "dependencies": [],
     "priority": 119,
     "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
+    "filepath": "pdd/prompts/pdd_theme_json.prompt",
     "tags": [
       "config"
     ],
@@ -4061,7 +3996,7 @@
     "dependencies": [],
     "priority": 121,
     "filename": "pypi_description_restructuredtext.prompt",
-    "filepath": "pypi_description.rst",
+    "filepath": "pdd/prompts/pypi_description_restructuredtext.prompt",
     "tags": [
       "config"
     ],
@@ -4199,7 +4134,7 @@
     "dependencies": [],
     "priority": 124,
     "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
+    "filepath": "pdd/prompts/regression_analysis_log.prompt",
     "tags": [
       "config"
     ],
@@ -4220,7 +4155,7 @@
     "dependencies": [],
     "priority": 125,
     "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
+    "filepath": "tests/regression.sh",
     "tags": [
       "cli",
       "shell"
@@ -4286,7 +4221,7 @@
     "dependencies": [],
     "priority": 127,
     "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
+    "filepath": "pdd/prompts/run_generated_python.prompt",
     "tags": [
       "generation",
       "module",
@@ -4959,7 +4894,7 @@
     "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
+    "filepath": "tests/prompt_tester.py",
     "tags": [
       "module",
       "python",
@@ -5398,55 +5333,6 @@
     "position": {
       "x": 20400,
       "y": 800
-    }
-  },
-  {
-    "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
-    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
-    "dependencies": [],
-    "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15560,
-      "y": 440
-    }
-  },
-  {
-    "reason": "Generates E2E tests that verify the bug at a system level.",
-    "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
-    "dependencies": [],
-    "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template",
-      "testing"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15880,
-      "y": 440
     }
   },
   {
@@ -6836,7 +6722,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
@@ -6918,7 +6808,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",

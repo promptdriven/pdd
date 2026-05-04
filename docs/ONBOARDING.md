@@ -215,6 +215,9 @@ pdd fix https://github.com/owner/repo/issues/456
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **OpenCode**: `curl -fsSL https://opencode.ai/install | bash` (run `opencode auth login`)
+
+Set `PDD_AGENTIC_PROVIDER=opencode` to force OpenCode. Set `OPENCODE_MODEL` to an OpenCode `provider/model` ID when a specific OpenCode model is required.
 
 ### Manual Prompt Workflow
 

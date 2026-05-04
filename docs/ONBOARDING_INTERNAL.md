@@ -183,8 +183,9 @@ For most development tasks, use the agentic commands that automate the entire wo
   - **Claude Code**: `npm install -g @anthropic-ai/claude-code`
   - **Gemini CLI**: `npm install -g @google/gemini-cli`
   - **Codex CLI**: `npm install -g @openai/codex`
+  - **OpenCode**: `curl -fsSL https://opencode.ai/install | bash`
 
-API keys are managed via Infisical (no need to set them locally).
+Provider credentials are managed via Infisical where applicable (no need to set API keys locally). OpenCode can also use `opencode auth login`. Set `PDD_AGENTIC_PROVIDER=opencode` to force OpenCode, and set `OPENCODE_MODEL` to an OpenCode `provider/model` ID when a specific model is required.
 
 ### Web Interface (Easiest)
 
