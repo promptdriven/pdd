@@ -1,8 +1,18 @@
 """PDD - Prompt Driven Development"""
 
+from importlib.metadata import PackageNotFoundError, version as _metadata_version
 import os
 
-__version__ = "0.0.179"
+
+def _load_package_version() -> str:
+    """Return the installed pdd-cli distribution version."""
+    try:
+        return _metadata_version("pdd-cli")
+    except PackageNotFoundError:
+        return "0.0.0+unknown"
+
+
+__version__ = _load_package_version()
 
 # Strength parameter used for LLM extraction across the codebase
 # Used in postprocessing, XML tagging, code generation, and other extraction

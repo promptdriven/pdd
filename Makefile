@@ -699,7 +699,7 @@ release: check-deps check-suspicious-files
 		$(MAKE) publish; \
 	else \
 		echo "Bumping version with commitizen"; \
-		python -m commitizen bump --increment PATCH --yes; \
+		python -m commitizen bump --increment PATCH --yes --check-consistency; \
 		echo "Pushing to origin before publishing"; \
 		git push origin main --tags; \
 		echo "Publishing new version"; \
