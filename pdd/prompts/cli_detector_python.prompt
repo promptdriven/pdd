@@ -18,7 +18,7 @@
 % You are an expert Python engineer. Your goal is to write the pdd/cli_detector.py module.
 
 % Role & Scope
-Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI) required for `pdd fix`, `pdd change`, `pdd bug`, and `pdd setup`. The primary entry point `detect_and_bootstrap_cli()` presents a numbered table of CLIs with install/key status, lets the user select one or more, and walks through installation and API key configuration for each. The legacy `detect_cli_tools()` function is preserved for backward compatibility.
+Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI, OpenCode CLI) required for `pdd fix`, `pdd change`, `pdd bug`, and `pdd setup`. The primary entry point `detect_and_bootstrap_cli()` presents a numbered table of CLIs with install/key status, lets the user select one or more, and walks through installation and API key configuration for each. The legacy `detect_cli_tools()` function is preserved for backward compatibility.
 
 % Requirements
 
@@ -26,18 +26,18 @@ Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI)
 
 2. Function: `detect_and_bootstrap_cli() -> List[CliBootstrapResult]` — Phase 1 entry point for `pdd setup`.
    a. Print a step banner via `_print_step_banner()` imported from `pdd.setup_tool`.
-   b. Detect all three CLIs via `shutil.which()` with fallback to common paths (~/.local/bin, /usr/local/bin, /opt/homebrew/bin) and nvm node version directories.
-   c. Provider mappings: anthropic->claude, google->gemini, openai->codex. Table order: Claude CLI, Codex CLI, Gemini CLI.
-   d. Print a numbered selection table showing install status and API key status per CLI, with aligned columns.
+   b. Detect all four CLIs via `shutil.which()` with fallback to common paths (~/.local/bin, /usr/local/bin, /opt/homebrew/bin) and nvm node version directories.
+   c. Provider mappings: anthropic->claude, google->gemini, openai->codex, opencode->opencode (sentinel provider for the provider-agnostic OpenCode CLI). Table order: Claude CLI, Codex CLI, Gemini CLI, OpenCode CLI.
+   d. Print a numbered selection table showing install status and API key status per CLI, with aligned columns. For OpenCode, the API key column shows a re-used provider key (any of ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / GOOGLE_API_KEY) since OpenCode itself has no dedicated key; if none of these are set, show it as missing with a note that any provider key works.
    e. Accept comma-separated numeric input (e.g. "1,3"). Default to best available (installed+key > installed > Claude). "q"/"n" returns a skipped result.
    f. For each selected CLI, process install/key/test in sequence. On skip or failure of one CLI, continue to the next.
-   g. Install step: prompt user, run `npm install -g ...` via subprocess if accepted. Check npm availability first.
-   h. API key step: prompt for key, save to `~/.pdd/api-env.{shell}` with shell-appropriate syntax, add source line to RC file, set in `os.environ`.
+   g. Install step: prompt user, run `npm install -g ...` via subprocess if accepted. Check npm availability first. OpenCode install command is `npm install -g opencode-ai`.
+   h. API key step: prompt for key, save to `~/.pdd/api-env.{shell}` with shell-appropriate syntax, add source line to RC file, set in `os.environ`. For OpenCode (provider == "opencode"), skip the dedicated key prompt — instead let the user pick which provider key (Anthropic/OpenAI/Google) to add if none of the supported provider keys are already configured.
    i. CLI test step (always runs, cannot be skipped): run `cli --version`, fall back to `--help` if that fails.
    j. Handle KeyboardInterrupt/EOFError at every input prompt gracefully.
    k. Return list of results; if empty, return `[CliBootstrapResult(skipped=True)]`.
 
-3. Function: `detect_cli_tools() -> None` — legacy detection. For each CLI: show found/not-found status, cross-reference API keys, offer installation for missing CLIs that have matching keys.
+3. Function: `detect_cli_tools() -> None` — legacy detection. For each CLI: show found/not-found status, cross-reference API keys, offer installation for missing CLIs that have matching keys. For OpenCode, treat any of ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / GOOGLE_API_KEY as a matching key.
 
 4. Shell detection: detect from `SHELL` env var (default "bash"). Map to RC file: zsh->.zshrc, bash->.bashrc, fish->~/.config/fish/config.fish.
 
@@ -45,7 +45,9 @@ Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI)
 
 6. Google provider: primary env var is GEMINI_API_KEY (used by Gemini CLI for AI Studio auth). Fallback is GOOGLE_API_KEY (Vertex AI convention). Check GEMINI_API_KEY first, then GOOGLE_API_KEY. Primary key for saving is GEMINI_API_KEY. Display whichever is actually set.
 
-7. Module-level constants: `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, `CLI_PREFERENCE`, `SHELL_RC_MAP` exposed for use by other modules.
+7. OpenCode provider: provider name is the sentinel `"opencode"` and `PROVIDER_PRIMARY_KEY["opencode"] = ""` (empty — no dedicated key). When checking whether OpenCode has an API key, treat it as configured if ANY of ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is set in `os.environ`. The display name is "OpenCode" / "OpenCode CLI". OpenCode is a provider-agnostic CLI: it uses whichever provider key the user already has and is driven by `OPENCODE_MODEL`, `OPENCODE_AGENT`, `OPENCODE_VARIANT`, and optional `PDD_OPENCODE_MODE` env vars consumed elsewhere in pdd. Do NOT prompt the user for a dedicated OpenCode key.
+
+8. Module-level constants: `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, `CLI_PREFERENCE`, `SHELL_RC_MAP` exposed for use by other modules. `CLI_PREFERENCE` order: ["gemini", "claude", "codex", "opencode"] (opencode last because it requires an existing provider key and is more advanced).
 
 % Dependencies
 

@@ -170,6 +170,7 @@ For CLI enthusiasts, implement GitHub issues directly:
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **OpenCode CLI**: `npm install -g opencode-ai` (provider-agnostic — reuses any of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`; configured via `OPENCODE_MODEL`/`OPENCODE_AGENT`/`OPENCODE_VARIANT`. See [OpenCode Configuration](#opencode-configuration) for headless caveats.)
 
 **Usage:**
 ```bash
@@ -229,7 +230,7 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and API key configuration if needed
   2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers  based on your available keys
   4. Optionally creates a `.pddrc` project config
@@ -2018,6 +2019,10 @@ For the agentic fallback to function, you need to have at least one of the suppo
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Requires the `OPENAI_API_KEY` environment variable to be set.
+4.  **OpenCode (provider-agnostic):**
+    *   Requires the `opencode` CLI to be installed and in your `PATH` (`npm install -g opencode-ai`).
+    *   Requires at least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` to be set — OpenCode reuses whichever provider key you already have.
+    *   Recommended: set `OPENCODE_MODEL` explicitly (and optionally `OPENCODE_AGENT`, `OPENCODE_VARIANT`, `PDD_OPENCODE_MODE`). See [OpenCode Configuration](#opencode-configuration) for headless/non-interactive caveats.
 
 You can configure these keys using `pdd setup` or by setting them in your shell's environment.
 
@@ -2073,7 +2078,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, or Codex) with API key configured
+- At least one supported agent CLI (Claude, Gemini, Codex, or OpenCode) with API key configured (OpenCode reuses any of `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_API_KEY`)
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2254,6 +2259,7 @@ This produces prompts that are more concise while remaining clear to developers 
 - `claude` (Anthropic Claude Code)
 - `gemini` (Google Gemini CLI)
 - `codex` (OpenAI Codex CLI)
+- `opencode` (provider-agnostic OpenCode CLI — reuses an existing provider key; see [OpenCode Configuration](#opencode-configuration))
 
 If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
 
@@ -3034,8 +3040,40 @@ PDD uses several environment variables to customize its behavior:
 #### Agentic Workflow Variables
 
 - **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set.
+- **`OPENCODE_MODEL`**: Override the model used by the OpenCode CLI in agentic workflows (e.g., `anthropic/claude-sonnet-4-5`, `openai/gpt-4o`). **Strongly recommended to set explicitly** — relying on OpenCode's auto-selected default can pick a model that does not match the provider key you have configured. No default; only used if explicitly set.
+- **`OPENCODE_AGENT`**: Override the OpenCode agent profile used in agentic workflows (e.g., `build`, `plan`). No default; only used if explicitly set.
+- **`OPENCODE_VARIANT`**: Override the OpenCode variant/preset used in agentic workflows. No default; only used if explicitly set.
+- **`PDD_OPENCODE_MODE`**: Optional mode selector that pdd passes to OpenCode invocations to influence permission/headless behavior. No default; only used if explicitly set. See [OpenCode Configuration](#opencode-configuration).
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
+
+#### OpenCode Configuration
+
+The OpenCode CLI (`opencode`) is a provider-agnostic agentic CLI: it does **not** ship its own API key. Instead, it uses whichever provider key you already have set (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY`).
+
+**Recommended setup:**
+
+1. Install OpenCode: `npm install -g opencode-ai`.
+2. Make sure at least one provider key is exported in your shell or saved via `pdd setup`.
+3. **Set `OPENCODE_MODEL` explicitly**, for example:
+   ```bash
+   export OPENCODE_MODEL="anthropic/claude-sonnet-4-5"
+   # or, with an OpenAI key:
+   export OPENCODE_MODEL="openai/gpt-4o"
+   ```
+   Without an explicit `OPENCODE_MODEL`, OpenCode may auto-select a model that does not match the provider key you have, leading to confusing auth errors.
+4. Optionally set `OPENCODE_AGENT` and `OPENCODE_VARIANT` to pin the agent profile and variant pdd should drive.
+
+**Headless / non-interactive limitations:**
+
+OpenCode is primarily designed for interactive sessions. When pdd runs it non-interactively (e.g., inside `pdd fix`, `pdd change`, `pdd bug`, or CI), the following caveats apply:
+
+- **Session permission prompts can hang.** If your OpenCode config has `permission: "ask"` (the default in some installations) for tools like file edits or shell commands, OpenCode will block waiting for an interactive approval that pdd cannot answer. To allow non-interactive use, set the relevant tool permissions to `allow` (or the equivalent non-prompting setting) in your OpenCode config (`~/.config/opencode/config.json` or per-project `opencode.json`).
+- **`PDD_OPENCODE_MODE`** can be set to influence the mode pdd asks OpenCode to run in (e.g., a non-interactive build mode). Leave it unset to use OpenCode's default mode.
+- Cancelling a hung headless run requires killing the OpenCode process; pdd's normal timeouts (`PDD_MODULE_TIMEOUT_SECONDS`) still apply but a fast-failing config is preferred.
+- If OpenCode's CLI flags or session model change between releases, pdd's invocation contract may need to be updated; pin a known-good `opencode-ai` version if you depend on it in CI.
+
+If headless OpenCode is unreliable in your environment, prefer Claude, Gemini, or Codex for automated workflows and use OpenCode interactively.
 
 #### Output Path Variables
 
