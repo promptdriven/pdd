@@ -1,13 +1,27 @@
+## v0.0.227 (2026-05-03)
+
+### Feat
+
+- add support for Claude Opus 4.7 and implement temperature parameter exclusion for models that reject it
+- implement secure, structured LLM call attribution logging and fix public release helper script inclusion
+
 ## v0.0.226 (2026-05-02)
 
 ### Feat
 
-- add LLM call attribution logging
-- implement durable issue-sync mode, configurable module timeouts, and headless JWT authentication, while adding a dependency tracking manifest.
+- **llm_invoke**: every `llm_invoke()` call now emits safe, prompt-free attribution records (`pdd.llm_attribution.v1`) capturing a request id, redacted argv summary (executable, subcommand, option names only — flag values are dropped because they may be prompts, file contents, or tokens), parent process / hostname / user, git root + branch + commit + dirty state, an allowlisted env subset (PDD/CI/Cloud Run/Cloud Build/Vertex/Batch keys), and credential identity metadata derived from `GOOGLE_APPLICATION_CREDENTIALS`, `~/.config/gcloud/application_default_credentials.json`, the active `gcloud` config, and (in cloud runtimes only) the GCE metadata server service-account email — never the token or private key material.
+- **llm_invoke**: attribution events cover the full call lifecycle — `llm_invoke.start`, `llm_invoke.cloud_dispatch`, `llm_invoke.cloud_fallback`, `llm_invoke.cloud_error`, `llm_invoke.cloud_insufficient_credits`, `llm_invoke.model_selection_error`, `llm_invoke.litellm_request`, `llm_invoke.litellm_response`, and `llm_invoke.litellm_error` — with response usage (`prompt_tokens`, `completion_tokens`, `total_tokens`, `finish_reasons`), wall-clock duration, and structured `_safe_error_fields` (type, status_code, request_id) for failures.
+- **llm_invoke**: records are appended as JSONL to `~/.pdd/logs/llm-attribution.jsonl` with 0600 file mode and 0700 parent dir; the file rotates to `<name>.1` once it crosses `PDD_LLM_ATTRIBUTION_MAX_BYTES` (default 25 MiB). When running under a Google cloud runtime (`CLOUD_BUILD`, `BATCH_TASK_INDEX`, `K_SERVICE`, `CLOUD_RUN_JOB`, or `CLOUD_RUN_EXECUTION` set) the same payload is also written to stderr so Cloud Logging picks it up.
+- **llm_invoke**: new env vars — `PDD_LLM_ATTRIBUTION` (master enable/disable; on by default outside pytest), `PDD_LLM_ATTRIBUTION_PROCESS_LOG` / `PDD_LLM_ATTRIBUTION_STDOUT` (force stderr emission on/off), `PDD_LLM_ATTRIBUTION_LOG_PATH` (override the JSONL path), and `PDD_LLM_ATTRIBUTION_MAX_BYTES` (rotation threshold; `0` disables rotation). Attribution is suppressed when `PYTEST_CURRENT_TEST` is set unless `PDD_LLM_ATTRIBUTION` is explicitly true, so unit tests no longer scribble into a developer's `~/.pdd`.
 
 ### Fix
 
-- **release**: sync public release helper payload
+- **release**: `.sync-config.yml` and `scripts/copy_package_data_to_public.py` are themselves now mirrored to the public repo via `shared:`, so the public release tree carries the sync config and helper script that produced it (previously the helper would mirror everything *except* itself, leaving the public repo unable to re-run the same sync).
+
+### Build
+
+- New `tests/test_llm_invoke.py` cases (+277 lines) covering kwargs/argv/error redaction, JSONL append + 0600 permissions + size-based rotation, default-disable under pytest, env-toggle behavior, and stderr emission under simulated cloud runtimes; `tests/test_copy_package_data_to_public.py` extended for the new `shared:` entries.
+- Refreshed `.cloud-image-hash`, `pypi_description.rst`, `ci/cloud-batch/test-durations.json`, and version bump to 0.0.226.
 
 ## v0.0.225 (2026-05-02)
 

@@ -1,141 +1,130 @@
+from __future__ import annotations
+
 import os
 import sys
-from typing import List, Optional
-from pydantic import BaseModel, Field
-from rich.console import Console
+import json
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 
-# Ensure the package is in the python path for this example
-# In a real installation, this would just be 'from pdd.llm_invoke import llm_invoke'
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Import the core function from the pdd package
+from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
-from pdd.llm_invoke import llm_invoke
+# --- Setup for Non-Interactive Example ---
+# Ensure we are in non-interactive mode for headless environments
+os.environ["PDD_FORCE"] = "1"
 
-console = Console()
-
-# --- Example 1: Simple Text Generation ---
-def example_simple_text():
-    console.print("[bold blue]--- Example 1: Simple Text Generation ---[/bold blue]")
+def run_llm_invoke_examples() -> None:
+    """
+    Demonstrates the various capabilities of the llm_invoke module,
+    including simple text generation, structured output, and batching.
+    """
     
-    # Define a prompt template
-    prompt_template = "Explain the concept of {concept} to a {audience} in one sentence."
+    # 1. Configuration & API Key Checks
+    # The module dynamically selects models from pdd/data/llm_model.csv based on 'strength'.
+    # Most models require an API key (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY).
+    # We check for a generic key to ensure the example has a chance to run.
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        print("No LLM API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY) found.")
+        print("Set one to run this example. Skipping execution.")
+        sys.exit(0)
+
+    # Enable detailed logging to see model selection and token usage
+    set_verbose_logging(verbose=True)
+
+    # --- Example 1: Simple Prompt with Input Data ---
+    print("\n--- Example 1: Basic Invocation ---")
+    # strength 0.5: Uses the base model (default or first available).
+    # temperature 0.1: Low randomness for deterministic output.
+    try:
+        response = llm_invoke(
+            prompt="Summarize the following topic in one sentence: {topic}",
+            input_json={"topic": "Quantum Computing"},
+            strength=0.5,
+            temperature=0.1
+        )
+        
+        print(f"Model Used: {response['model_name']}")
+        print(f"Result: {response['result']}")
+        print(f"Cost: ${response['cost']:.6f}") # Cost is in USD
+    except Exception as e:
+        print(f"Invocation failed: {e}")
+
+    # --- Example 2: Structured Output using Pydantic ---
+    print("\n--- Example 2: Structured Output (Pydantic) ---")
     
-    # Define input variables
-    input_data = {
-        "concept": "quantum entanglement",
-        "audience": "5-year-old"
-    }
+    class CodeAnalysis(BaseModel):
+        language: str
+        complexity_score: int
+        is_functional: bool
+        summary: str
 
-    # Invoke the LLM
-    # strength=0.5 targets the 'base' model (usually a balance of cost/performance)
-    result = llm_invoke(
-        prompt=prompt_template,
-        input_json=input_data,
-        strength=0.5,
-        temperature=0.7,
-        verbose=True  # Set to True to see detailed logs about model selection and cost
-    )
-
-    console.print(f"[green]Result:[/green] {result['result']}")
-    console.print(f"[dim]Model used: {result['model_name']} | Cost: ${result['cost']:.6f}[/dim]\n")
-
-
-# --- Example 2: Structured Output with Pydantic ---
-class MovieReview(BaseModel):
-    title: str = Field(..., description="The title of the movie")
-    rating: int = Field(..., description="Rating out of 10")
-    summary: str = Field(..., description="A brief summary of the plot")
-    tags: List[str] = Field(..., description="List of genre tags")
-
-def example_structured_output():
-    console.print("[bold blue]--- Example 2: Structured Output (Pydantic) ---[/bold blue]")
-
-    prompt = "Generate a review for a fictional sci-fi movie about {topic}."
-    input_data = {"topic": "time traveling cats"}
-
-    # Invoke with output_pydantic to enforce a schema
-    # strength=0.8 targets a higher-performance model (better at following schemas)
-    result = llm_invoke(
-        prompt=prompt,
-        input_json=input_data,
-        strength=0.8,
-        output_pydantic=MovieReview,
-        temperature=0.5
-    )
-
-    # The 'result' key will contain an instance of the Pydantic model
-    review: MovieReview = result['result']
-    
-    console.print(f"[green]Title:[/green] {review.title}")
-    console.print(f"[green]Rating:[/green] {review.rating}/10")
-    console.print(f"[green]Tags:[/green] {', '.join(review.tags)}")
-    console.print(f"[dim]Model used: {result['model_name']}[/dim]\n")
-
-
-# --- Example 3: Batch Processing ---
-def example_batch_processing():
-    console.print("[bold blue]--- Example 3: Batch Processing ---[/bold blue]")
-
-    prompt = "What is the capital of {country}?"
-    
-    # List of inputs triggers batch mode
-    batch_inputs = [
-        {"country": "France"},
-        {"country": "Japan"},
-        {"country": "Brazil"}
-    ]
-
-    # use_batch_mode=True uses the provider's batch API if available/supported by LiteLLM
-    # strength=0.2 targets a cheaper/faster model
-    results = llm_invoke(
-        prompt=prompt,
-        input_json=batch_inputs,
-        use_batch_mode=True,
-        strength=0.2,
-        temperature=0.1
-    )
-
-    # In batch mode, 'result' is a list of strings (or objects)
-    for i, res in enumerate(results['result']):
-        console.print(f"[green]Input:[/green] {batch_inputs[i]['country']} -> [green]Output:[/green] {res}")
-    
-    console.print(f"[dim]Model used: {results['model_name']} | Total Cost: ${results['cost']:.6f}[/dim]\n")
-
-
-# --- Example 4: Reasoning / Thinking Time ---
-def example_reasoning():
-    console.print("[bold blue]--- Example 4: Reasoning / Thinking Time ---[/bold blue]")
-
-    # Some models (like Claude 3.7 or OpenAI o1/o3) support explicit thinking steps.
-    # Setting time > 0 enables this behavior based on the model's configuration in llm_model.csv.
-    
-    prompt = "Solve this riddle: {riddle}"
-    input_data = {"riddle": "I speak without a mouth and hear without ears. I have no body, but I come alive with wind. What am I?"}
-
-    result = llm_invoke(
-        prompt=prompt,
-        input_json=input_data,
-        strength=1.0,  # Target highest capability model
-        time=0.5,      # Request moderate thinking time/budget
-        verbose=True
-    )
-
-    console.print(f"[green]Answer:[/green] {result['result']}")
-    
-    # If the model supports it, thinking output is captured separately
-    if result.get('thinking_output'):
-        console.print(f"[yellow]Thinking Process:[/yellow] {result['thinking_output']}")
-    else:
-        console.print("[dim]No separate thinking output returned for this model.[/dim]")
-
-
-if __name__ == "__main__":
-    # Ensure you have a valid .env file or environment variables set for API keys
-    # (e.g., OPENAI_API_KEY, ANTHROPIC_API_KEY)
+    # strength 0.8: Targets a higher-ELO (more capable) model.
+    # output_pydantic: Forces the LLM to return valid JSON matching the schema.
+    code_to_analyze = "def add(a, b): return a + b"
     
     try:
-        example_simple_text()
-        example_structured_output()
-        example_batch_processing()
-        example_reasoning()
+        response_struct = llm_invoke(
+            prompt="Analyze this code snippet: {code}",
+            input_json={"code": code_to_analyze},
+            strength=0.8,
+            output_pydantic=CodeAnalysis
+        )
+        
+        # 'result' is automatically parsed into a Pydantic object
+        analysis: CodeAnalysis = response_struct['result']
+        print(f"Language: {analysis.language}")
+        print(f"Summary: {analysis.summary}")
+        print(f"Cost: ${response_struct['cost']:.6f}")
     except Exception as e:
-        console.print(f"[bold red]Error running examples:[/bold red] {e}")
+        print(f"Structured invocation failed: {e}")
+
+    # --- Example 3: Batch Processing ---
+    print("\n--- Example 3: Batch Mode ---")
+    # input_json as a list triggers batch mode.
+    # strength 0.2: Targets a cheaper model to save costs.
+    batch_inputs = [
+        {"word": "Python"},
+        {"word": "Rust"},
+        {"word": "C++"}
+    ]
+    
+    try:
+        response_batch = llm_invoke(
+            prompt="What is the primary use case for the {word} programming language?",
+            input_json=batch_inputs,
+            strength=0.2,
+            use_batch_mode=True
+        )
+        
+        # In batch mode, 'result' is a list of strings (or objects)
+        for i, res in enumerate(response_batch['result']):
+            print(f"Result {i+1} ({batch_inputs[i]['word']}): {res[:50]}...")
+            
+        print(f"Total Batch Cost: ${response_batch['cost']:.6f}")
+    except Exception as e:
+        print(f"Batch invocation failed: {e}")
+
+    # --- Example 4: Reasoning/Thinking Time ---
+    print("\n--- Example 4: Reasoning Time (Thinking) ---")
+    # time 0.7: Requests high thinking effort (0.0 to 1.0 scale).
+    # This maps to 'thinking' (Anthropic) or 'reasoning_effort' (OpenAI/O1).
+    try:
+        response_thinking = llm_invoke(
+            prompt="Solve this logic puzzle: If all A are B, and some B are C, are all A necessarily C? Explain.",
+            input_json={},
+            strength=1.0, # Target the most capable model
+            time=0.7      # Request significant reasoning time
+        )
+        
+        print(f"Result: {response_thinking['result']}")
+        # thinking_output contains the internal reasoning chain if the provider exposes it
+        if response_thinking['thinking_output']:
+            print(f"Thinking Process: {response_thinking['thinking_output'][:100]}...")
+    except Exception as e:
+        print(f"Reasoning invocation failed: {e}")
+
+if __name__ == "__main__":
+    # Ensure the output directory exists as per requirements
+    os.makedirs("./output", exist_ok=True)
+    run_llm_invoke_examples()

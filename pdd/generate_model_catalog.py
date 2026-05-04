@@ -1032,6 +1032,24 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
     },
 ]
 
+# Rows that PDD depends on as configured defaults but that may be absent from
+# LiteLLM's bundled registry. Keep this list small: these are compatibility
+# shims for PDD's own model routing, not a second model catalog.
+_MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
+    {
+        "provider": "Google Vertex AI",
+        "model": "vertex_ai/gemini-3-flash-preview",
+        "input": 0.5,
+        "output": 3.0,
+        "base_url": "",
+        "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "global",
+    },
+]
+
 
 def _local_runner_rows_from_existing_csv(
     csv_path: Path,
@@ -1103,6 +1121,26 @@ def _local_runner_rows_from_existing_csv(
         return []
 
     return preserved
+
+
+def _mandatory_rows_missing_from(
+    rows: List[dict],
+    arena_index: Dict[str, Dict[str, Any]],
+    elo_source_counts: Dict[str, int],
+) -> List[dict]:
+    existing_ids = {r["model"] for r in rows}
+    missing: List[dict] = []
+    for default_row in _MANDATORY_MODEL_ROWS:
+        if default_row["model"] in existing_ids:
+            continue
+        elo, src = _get_elo(default_row["model"], arena_index)
+        if elo < ELO_CUTOFF:
+            continue
+        seeded = dict(default_row)
+        seeded["coding_arena_elo"] = elo
+        missing.append(seeded)
+        elo_source_counts[src.split(":", 1)[0]] += 1
+    return missing
 
 
 def build_rows(
@@ -1263,15 +1301,6 @@ def build_rows(
                 f"(defaults + preserved user rows)."
             )
 
-    # ELO source breakdown — useful for spotting silent regressions where
-    # the leaderboard fetch silently fell back to static (e.g. all rows
-    # resolving to "static-prefix" means no Arena hit happened).
-    if elo_source_counts:
-        breakdown = ", ".join(
-            f"{src}={n}" for src, n in sorted(elo_source_counts.items())
-        )
-        print(f"  ELO sources: {breakdown}")
-
     initial_count = len(rows)
 
     # ------------------------------------------------------------------
@@ -1428,6 +1457,20 @@ def build_rows(
     rows = pareto_kept
     if pareto_removed:
         print(f"  Fix D: Removed {pareto_removed} Pareto-dominated model(s).")
+
+    mandatory_pool = _mandatory_rows_missing_from(rows, arena_index, elo_source_counts)
+    if mandatory_pool:
+        rows.extend(mandatory_pool)
+        print(f"  Added {len(mandatory_pool)} mandatory PDD default model row(s).")
+
+    # ELO source breakdown — useful for spotting silent regressions where
+    # the leaderboard fetch silently fell back to static (e.g. all rows
+    # resolving to "static-prefix" means no Arena hit happened).
+    if elo_source_counts:
+        breakdown = ", ".join(
+            f"{src}={n}" for src, n in sorted(elo_source_counts.items())
+        )
+        print(f"  ELO sources: {breakdown}")
 
     print(f"  Post-processing: {initial_count} -> {len(rows)} rows.")
 

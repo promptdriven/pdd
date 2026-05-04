@@ -313,9 +313,40 @@ def test_local_runner_default_survives_when_score_known(monkeypatch):
     assert any(r["model"] == "lm_studio/qwen3-coder-next" for r in rows)
 
 
+def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
+    fake_litellm = type("L", (), {"model_cost": {
+        "vertex_ai/zai-org/glm-4.7-maas": {
+            "mode": "chat",
+            "input_cost_per_token": 0.6e-6,
+            "output_cost_per_token": 2.2e-6,
+            "litellm_provider": "vertex_ai",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {})
+
+    rows = gmc.build_rows()
+
+    row = next(
+        r for r in rows
+        if r["model"] == "vertex_ai/gemini-3-flash-preview"
+    )
+    assert row["provider"] == "Google Vertex AI"
+    assert row["api_key"] == "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION"
+    assert row["location"] == "global"
+
+
 def test_committed_csv_has_no_chatgpt_rows():
     csv_path = Path("pdd/data/llm_model.csv")
     text = csv_path.read_text(encoding="utf-8")
 
     assert "chatgpt/" not in text
     assert "ChatGPT," not in text
+
+
+def test_committed_csv_includes_vertex_gemini_flash_ci_default():
+    csv_path = Path("pdd/data/llm_model.csv")
+    text = csv_path.read_text(encoding="utf-8")
+
+    assert "Google Vertex AI,vertex_ai/gemini-3-flash-preview," in text
