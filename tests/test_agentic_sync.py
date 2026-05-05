@@ -954,6 +954,34 @@ class TestResolveModuleCwd:
         result = _resolve_module_cwd("components/button", tmp_path)
         assert result == sub
 
+    def test_nested_pddrc_match_requires_matching_prompt_file(self, tmp_path):
+        """Broad nested contexts must not hijack similarly named root modules.
+
+        The prompts-linter example has patterns like ``*llm*`` and a local
+        ``llm_python.prompt``. That must not claim the root ``llm_model``
+        module, whose prompt exists only at the project root.
+        """
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "llm_model_python.prompt").write_text("% root prompt")
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "default": {
+                "defaults": {"prompts_dir": "prompts"},
+            },
+        })
+
+        nested = tmp_path / "examples" / "prompts_linter"
+        (nested / "prompts").mkdir(parents=True)
+        (nested / "prompts" / "llm_python.prompt").write_text("% nested prompt")
+        self._write_pddrc(nested / ".pddrc", {
+            "utils": {
+                "paths": ["*llm*"],
+                "defaults": {"prompts_dir": "prompts"},
+            },
+        })
+
+        assert _resolve_module_cwd("llm_model", tmp_path) == tmp_path
+        assert _resolve_module_cwd("llm", tmp_path) == nested
+
     # --- Issue #1128: nested .pddrc shadowed by root .pddrc ---
 
     def test_nested_pddrc_takes_precedence_over_root(self, tmp_path):

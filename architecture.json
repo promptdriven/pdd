@@ -5841,7 +5841,7 @@
   {
     "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
-    "dependencies": [],
+    "dependencies": ["agentic_bug_orchestrator_python.prompt"],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
     "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
@@ -5861,11 +5861,11 @@
           },
           {
             "name": "push_with_retry",
-            "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD') -> Tuple[bool, str]",
+            "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True) -> Tuple[bool, str]",
             "returns": "Tuple[bool, str]",
             "sideEffects": [
               "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward",
-              "On auth failure, reads PDD_GH_TOKEN_FILE, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
+              "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
             ]
           }
         ]

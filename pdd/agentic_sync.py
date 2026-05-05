@@ -7,6 +7,8 @@ then dispatches to the async sync runner for parallel execution.
 """
 from __future__ import annotations
 
+import fnmatch
+import glob
 import json
 import logging
 import os
@@ -650,6 +652,74 @@ def _is_catchall_match(basename: str, config: Dict[str, Any]) -> bool:
     return best_specificity == 0
 
 
+def _is_broad_basename_glob_match(
+    basename: str,
+    config: Dict[str, Any],
+    context_name: str,
+) -> bool:
+    """Return True when a context matched only by broad basename globs.
+
+    Patterns such as ``*llm*`` in nested example projects are useful inside
+    that project, but they are too weak to claim root modules like
+    ``llm_model`` unless the nested project actually has that prompt.
+    Structured path patterns such as ``src/services/**`` remain authoritative.
+    """
+    contexts = config.get("contexts", {})
+    context_config = contexts.get(context_name, {})
+    matched_broad = False
+
+    defaults = context_config.get("defaults", {})
+    prompts_dir = defaults.get("prompts_dir", "")
+    if prompts_dir:
+        prefix = _extract_prefix_from_prompts_dir(prompts_dir)
+        if prefix and (basename == prefix or basename.startswith(prefix + "/")):
+            return False
+
+    for path_pattern in context_config.get("paths", []):
+        pattern_base = path_pattern.rstrip("/**").rstrip("/*")
+        matched = (
+            fnmatch.fnmatch(basename, path_pattern)
+            or basename.startswith(pattern_base + "/")
+            or basename == pattern_base
+        )
+        if not matched:
+            continue
+        if "/" in path_pattern or not any(ch in path_pattern for ch in "*?["):
+            return False
+        matched_broad = True
+
+    return matched_broad
+
+
+def _prompt_exists_for_context(
+    candidate_dir: Path,
+    config: Dict[str, Any],
+    context_name: str,
+    basename: str,
+) -> bool:
+    """Check whether ``candidate_dir`` contains the prompt for ``basename``."""
+    context_config = config.get("contexts", {}).get(context_name, {})
+    prompts_dir = context_config.get("defaults", {}).get("prompts_dir", "prompts")
+    prompt_root = candidate_dir / prompts_dir
+
+    prompt_basename = basename
+    prefix = _extract_prefix_from_prompts_dir(prompts_dir) if prompts_dir else ""
+    if prefix:
+        if basename == prefix:
+            prompt_basename = Path(prefix).name
+        elif basename.startswith(prefix + "/"):
+            prompt_basename = basename[len(prefix) + 1 :]
+
+    if "/" in prompt_basename:
+        dir_part, name_part = prompt_basename.rsplit("/", 1)
+        prompt_dir = prompt_root / dir_part
+    else:
+        name_part = prompt_basename
+        prompt_dir = prompt_root
+
+    return prompt_dir.is_dir() and any(prompt_dir.glob(f"{glob.escape(name_part)}_*.prompt"))
+
+
 def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
@@ -670,13 +740,17 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
         for pddrc_path in project_root.glob(pattern):
             try:
                 config = _load_pddrc_config(pddrc_path)
-                detected = _detect_context_from_basename(basename, config)
+                detected = _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
                 if detected and detected != "default":
                     # Skip catch-all patterns from subdirectories — they match
                     # everything and would incorrectly claim unrelated modules
                     if _is_catchall_match(basename, config):
                         continue
                     candidate_dir = pddrc_path.parent
+                    if _is_broad_basename_glob_match(basename, config, detected) and not (
+                        _prompt_exists_for_context(candidate_dir, config, detected, basename)
+                    ):
+                        continue
                     candidate_depth = len(candidate_dir.relative_to(project_root).parts)
                     if candidate_depth > best_depth:
                         best_match = candidate_dir
