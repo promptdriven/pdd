@@ -87,7 +87,7 @@ After a successful inner loop, `_commit_and_push` stages only files whose hashes
 
 `push_with_retry` MUST:
 - Retry non-fast-forward rejections (markers `"non-fast-forward"`, `"tip of your current branch is behind"`) with `--force-with-lease`. Other `[rejected]` reasons (protected branches, hooks) MUST NOT force-push.
-- On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), if `PDD_GH_TOKEN_FILE` points to a non-empty file, rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
+- On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), first read a non-empty `PDD_GH_TOKEN_FILE`; if no token file token is available, fall back to `GH_TOKEN`, `GITHUB_TOKEN`, then `PDD_GITHUB_TOKEN`. Rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
 
 % Step 11: Code Cleanup
 `_run_step11_code_cleanup` runs only if files changed, builds the cleanup prompt with `git diff <initial_sha>` plus current contents of changed files, runs the cleanup agent, then:

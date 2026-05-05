@@ -1369,6 +1369,9 @@ class TestPushWithRetryTokenFile:
         from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
 
         monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
 
         with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
             mock_run.return_value = type("Result", (), {
@@ -1387,6 +1390,9 @@ class TestPushWithRetryTokenFile:
         token_file = tmp_path / "gh_token"
         token_file.write_text("  \n")
         monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
 
         with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
             mock_run.return_value = type("Result", (), {
@@ -1396,6 +1402,41 @@ class TestPushWithRetryTokenFile:
             success, err = _push_with_retry(tmp_path, "owner", "repo")
 
         assert success is False
+
+    def test_push_with_retry_auth_failure_uses_gh_token_env_when_file_absent(
+        self, tmp_path, monkeypatch
+    ):
+        """Cloud checkup verifiers provide GH_TOKEN/GITHUB_TOKEN but no token file."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "ghs_env_token")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+
+        pushed_urls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"] and not pushed_urls:
+                pushed_urls.append("origin")
+                result.returncode = 1
+                result.stderr = "fatal: could not read Username for 'https://github.com': No such device or address"
+            elif cmd[0:3] == ["git", "remote", "get-url"]:
+                result.stdout = "https://github.com/owner/repo.git"
+            elif cmd[0:3] == ["git", "remote", "set-url"]:
+                pushed_urls.append(cmd[4])
+            return result
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=mock_run_side_effect,
+        ):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+        assert err == ""
+        assert any("x-access-token:ghs_env_token" in url for url in pushed_urls)
 
     def test_push_with_retry_restores_original_url(self, tmp_path, monkeypatch):
         """After token retry (success or fail), original remote URL must be restored."""
