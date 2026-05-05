@@ -730,6 +730,16 @@ class TestPromptNotABugCategory:
             "This ensures the generated code includes the NOT_A_BUG check."
         )
 
+    def test_orchestrator_prompt_pins_step8_timeout(self):
+        """Issue #1366: source prompt must preserve the Step 8 timeout bump."""
+        prompt_path = Path(__file__).parent.parent / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        if not prompt_path.exists():
+            pytest.skip("Prompt file not available in public repo")
+        template = prompt_path.read_text()
+        assert "E2E_FIX_STEP_TIMEOUTS[8]" in template
+        assert "3600.0" in template
+        assert "pdd fix --loop" in template
+
     def test_orchestrator_prompt_documents_direct_edit_guard(self):
         """Issue #1206: orchestrator prompt must document that the NOT_A_BUG
         guard honors direct edits via `_detect_meaningful_changes`.
@@ -786,6 +796,95 @@ class TestPromptNotABugCategory:
         assert "current_cycle > 1" in template, (
             "Orchestrator prompt must document `current_cycle > 1` as a "
             "precondition of the cycle-waste breaker (cycle 1 must not trigger it)."
+        )
+
+
+class TestE2EFixMetadataContracts:
+    """Regression tests for prompt/architecture metadata touched by sync healing."""
+
+    def test_orchestrator_prompt_omits_unused_auth_context(self):
+        """push_with_retry uses GitHub env/token-file auth, not PDD login helpers."""
+        prompt_path = (
+            Path(__file__).parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+        assert prompt_path.exists(), f"Orchestrator prompt not found at {prompt_path}"
+        template = prompt_path.read_text()
+
+        assert "context/auth_service_example.py" not in template
+        assert "context/_keyring_timeout_example.py" not in template
+
+    def test_architecture_push_with_retry_metadata_matches_runtime_contract(self):
+        """architecture.json must match the shared push_with_retry contract."""
+        arch_path = Path(__file__).parent.parent / "architecture.json"
+        architecture = json.loads(arch_path.read_text())
+        entry = next(
+            module
+            for module in architecture
+            if module.get("filename") == "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+
+        dependencies = entry.get("dependencies", [])
+        assert "_keyring_timeout_python.prompt" not in dependencies
+        assert "auth_service_python.prompt" not in dependencies
+
+        functions = entry["interface"]["module"]["functions"]
+        push_with_retry = next(
+            function
+            for function in functions
+            if function.get("name") == "push_with_retry"
+        )
+        assert "set_upstream: bool = True" in push_with_retry["signature"]
+
+        side_effects = " ".join(push_with_retry.get("sideEffects", []))
+        for token_name in (
+            "PDD_GH_TOKEN_FILE",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "PDD_GITHUB_TOKEN",
+        ):
+            assert token_name in side_effects
+
+    def test_agentic_sync_metadata_omits_unused_autoheal_context(self):
+        """agentic_sync metadata must not pull unrelated helper prompts."""
+        repo_root = Path(__file__).parent.parent
+        prompt_path = repo_root / "pdd" / "prompts" / "agentic_sync_python.prompt"
+        template = prompt_path.read_text()
+
+        assert "context/agentic_langtest_example.py" not in template
+        assert "context/api_key_scanner_example.py" not in template
+
+        architecture = json.loads((repo_root / "architecture.json").read_text())
+        entry = next(
+            module
+            for module in architecture
+            if module.get("filename") == "agentic_sync_python.prompt"
+        )
+        assert "agentic_langtest_python.prompt" not in entry.get("dependencies", [])
+
+    def test_orchestrator_prompt_declares_architecture_dependencies(self):
+        """Architecture dependency metadata must be backed by prompt tags."""
+        repo_root = Path(__file__).parent.parent
+        prompt_path = (
+            repo_root
+            / "pdd"
+            / "prompts"
+            / "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+        template = prompt_path.read_text()
+        architecture = json.loads((repo_root / "architecture.json").read_text())
+        entry = next(
+            module
+            for module in architecture
+            if module.get("filename") == "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+
+        assert "agentic_bug_orchestrator_python.prompt" in entry.get("dependencies", [])
+        assert (
+            "<pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>"
+            in template
         )
 
 
@@ -1369,6 +1468,9 @@ class TestPushWithRetryTokenFile:
         from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
 
         monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
 
         with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
             mock_run.return_value = type("Result", (), {
@@ -1387,6 +1489,9 @@ class TestPushWithRetryTokenFile:
         token_file = tmp_path / "gh_token"
         token_file.write_text("  \n")
         monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
 
         with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
             mock_run.return_value = type("Result", (), {
@@ -1396,6 +1501,41 @@ class TestPushWithRetryTokenFile:
             success, err = _push_with_retry(tmp_path, "owner", "repo")
 
         assert success is False
+
+    def test_push_with_retry_auth_failure_uses_gh_token_env_when_file_absent(
+        self, tmp_path, monkeypatch
+    ):
+        """Cloud checkup verifiers provide GH_TOKEN/GITHUB_TOKEN but no token file."""
+        from pdd.agentic_e2e_fix_orchestrator import _push_with_retry
+
+        monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+        monkeypatch.setenv("GH_TOKEN", "ghs_env_token")
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+
+        pushed_urls = []
+
+        def mock_run_side_effect(cmd, **kwargs):
+            result = type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "push", "-u", "origin", "HEAD"] and not pushed_urls:
+                pushed_urls.append("origin")
+                result.returncode = 1
+                result.stderr = "fatal: could not read Username for 'https://github.com': No such device or address"
+            elif cmd[0:3] == ["git", "remote", "get-url"]:
+                result.stdout = "https://github.com/owner/repo.git"
+            elif cmd[0:3] == ["git", "remote", "set-url"]:
+                pushed_urls.append(cmd[4])
+            return result
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=mock_run_side_effect,
+        ):
+            success, err = _push_with_retry(tmp_path, "owner", "repo")
+
+        assert success is True
+        assert err == ""
+        assert any("x-access-token:ghs_env_token" in url for url in pushed_urls)
 
     def test_push_with_retry_restores_original_url(self, tmp_path, monkeypatch):
         """After token retry (success or fail), original remote URL must be restored."""
@@ -5265,6 +5405,18 @@ class TestStep11CodeCleanup:
         from pdd.agentic_e2e_fix_orchestrator import E2E_FIX_STEP_TIMEOUTS
         assert 11 in E2E_FIX_STEP_TIMEOUTS
         assert E2E_FIX_STEP_TIMEOUTS[11] == 600.0
+
+    def test_step8_timeout_pinned(self):
+        """Step 8 must remain at 3600s — recursive ``pdd fix --loop`` on large
+        dev units (≈2000+ lines) needs the full hour. ``run_agentic_task``
+        doubles this for the aggregate retry budget, so the practical ceiling
+        is 2h, well under the 4h Cloud Run executor job timeout. Reverting to
+        a smaller value silently kills the subprocess mid-iteration with a
+        misleading ``Cost: $0.0000`` failure (root-cause history: gltanaka/pdd#1366).
+        """
+        from pdd.agentic_e2e_fix_orchestrator import E2E_FIX_STEP_TIMEOUTS
+        assert 8 in E2E_FIX_STEP_TIMEOUTS
+        assert E2E_FIX_STEP_TIMEOUTS[8] == 3600.0
 
     def test_step11_integrated_with_orchestrator_skip_ci(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """Step 11 should run before CI validation on the skip_ci path."""

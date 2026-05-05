@@ -75,7 +75,7 @@ E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     5: 340.0,   # Identify dev units involved in failures
     6: 600.0,   # Create/append unit tests for dev units (Complex)
     7: 600.0,   # Verify unit tests detect bugs (Complex)
-    8: 1000.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls)
+    8: 3600.0,  # Run pdd fix on failing dev units (Most Complex - multiple LLM calls; large dev units (>2000 lines) need >>1000s for full file regeneration)
     9: 240.0,   # Final verification, loop control
     10: 600.0,  # Post-push CI validation and remediation
     11: 600.0,  # Code cleanup pass
@@ -1058,9 +1058,10 @@ def push_with_retry(
     - Non-fast-forward: retry with ``--force-with-lease`` (safe — only
       overwrites the remote if it still matches what we last fetched).
     - Auth failure (``Authentication failed``, ``HTTP 401``,
-      ``could not read Username``, ``HTTP Basic: Access denied``): if
-      ``PDD_GH_TOKEN_FILE`` points at a non-empty file, save the current
-      remote URL, rewrite it to
+      ``could not read Username``, ``HTTP Basic: Access denied``): read a
+      token from a non-empty ``PDD_GH_TOKEN_FILE`` or fall back to
+      ``GH_TOKEN``, ``GITHUB_TOKEN``, then ``PDD_GITHUB_TOKEN``. Save the
+      current remote URL, rewrite it to
       ``https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git``,
       retry the push once, and restore the original URL in ``finally`` so
       the token never leaks into git config.
@@ -1109,16 +1110,22 @@ def push_with_retry(
     if not is_auth_failure:
         return False, stderr
 
-    # Auth failure — try PDD_GH_TOKEN_FILE.
+    # Auth failure — try PDD_GH_TOKEN_FILE first, then standard GitHub token env vars.
+    # The cloud executor writes a refreshed token file, while direct verifier
+    # paths and GitHub Actions commonly provide only GH_TOKEN/GITHUB_TOKEN.
     token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
-    if not token_file_path:
-        return False, stderr
-
-    token_path = Path(token_file_path)
-    if not token_path.exists():
-        return False, stderr
-
-    token = token_path.read_text().strip()
+    token = ""
+    if token_file_path:
+        token_path = Path(token_file_path)
+        if token_path.exists():
+            token = token_path.read_text().strip()
+    if not token:
+        token = (
+            os.environ.get("GH_TOKEN")
+            or os.environ.get("GITHUB_TOKEN")
+            or os.environ.get("PDD_GITHUB_TOKEN")
+            or ""
+        ).strip()
     if not token:
         return False, stderr
 
@@ -1220,7 +1227,8 @@ def _commit_and_push(
     The PR was already created by `pdd bug`, so pushing
     automatically updates it.
 
-    On push auth failure, retries using PDD_GH_TOKEN_FILE if available.
+    On push auth failure, retries using PDD_GH_TOKEN_FILE or standard GitHub
+    token environment variables if available.
 
     Args:
         cwd: Working directory

@@ -1343,9 +1343,12 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     assert len(generated_test) > 0, "Cloud should return generated test code"
     assert "def test" in generated_test.lower() or "class test" in generated_test.lower(), \
         "Should contain test functions or test class"
-    assert cost > 0, "Cloud execution should have a cost"
+    # cost may legitimately be 0 on a LiteLLM cache hit. The "Cloud Success"
+    # check below (printed only on the cloud-success path in cmd_test_main.py)
+    # plus PDD_CLOUD_ONLY=1 set above is the cache-stable proof the cloud
+    # branch ran.
+    assert isinstance(cost, (int, float)) and cost >= 0, f"Expected non-negative cost, got {cost!r}"
     assert output_file.exists(), "Output file should be created"
-    # Verify cloud was actually used by checking for "Cloud Success" in output
     assert "Cloud Success" in captured.out, \
         f"Expected 'Cloud Success' in output, got: {captured.out[:500]}"
 def test_cmd_test_main_example_file_detection(mock_ctx_fixture, mock_files_fixture):

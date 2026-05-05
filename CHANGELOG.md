@@ -1,9 +1,33 @@
+## v0.0.228 (2026-05-04)
+
+### Feat
+
+- add Claude Opus 4.7 with temperature exclusion, implement mandatory model catalog row injection, and refresh model lineup for v0.0.227
+
+### Fix
+
+- **test**: drop cost>0 in test_cmd_test_main_cloud_e2e_generate_mode
+- **test**: replace brittle cost>0 cloud-use proxy with cache-stable success markers
+- **cloud-test**: include architecture.json in tarball; loosen brittle KeyError assertion
+- remove e2e auth drift
+- declare e2e bug-state dependency
+- keep auto-heal metadata scoped
+- align e2e metadata contracts
+- harden sync cwd and checkup push auth
+- report pdd version from package metadata
+
 ## v0.0.227 (2026-05-03)
 
 ### Feat
 
-- add support for Claude Opus 4.7 and implement temperature parameter exclusion for models that reject it
-- implement secure, structured LLM call attribution logging and fix public release helper script inclusion
+- **llm_invoke**: add Claude Opus 4.7 across the model catalog (`openrouter/anthropic/claude-opus-4.7`, `perplexity/anthropic/claude-opus-4-7`, `vertex_ai/claude-opus-4-7`, etc.) and introduce `_model_disallows_temperature()` so `litellm` calls for Opus 4.7 omit the `temperature` parameter (the provider rejects it). The exclusion also applies on every Vertex AI Claude retry path and disables the existing "force temperature=1 for Claude with thinking/reasoning" override when temperature has been stripped.
+- **model catalog**: add `Google Vertex AI,vertex_ai/gemini-3-flash-preview` as a CI-default row. New `_MANDATORY_MODEL_ROWS` / `_mandatory_rows_missing_from()` mechanism in `pdd/generate_model_catalog.py` re-injects this row into generated catalogs even when LiteLLM's bundled registry omits it and Pareto filtering would otherwise drop it. The ELO source breakdown print now runs after mandatory-row injection so its counts reflect the final row set.
+
+### Build
+
+- Refresh `pdd/data/llm_model.csv`, `.pdd/llm_model.csv`, and `examples/template_example/data/llm_model.csv` to the new model lineup: `gpt-5-nano` → `gpt-5.4-nano` (and pricing), `deepseek-reasoner` / `deepseek/deepseek-v3.2` → `deepseek/deepseek-v4-pro` and `deepseek/deepseek-v4-flash`, `fireworks_ai/glm-4p7` → `fireworks_ai/glm-5p1`, `minimax-m2.1` → `minimax-m2.7`, `zai/glm-4.7` → `zai/glm-5.1`, `xai/grok-4-0709` → `xai/grok-4.3`, `lm_studio/qwen3-coder-next` → `lm_studio/mlx-community/qwen3.6-35b-a3b@bf16`, and removal of `moonshot/kimi-k2.5` / `moonshot/kimi-k2-thinking`.
+- New `tests/test_llm_invoke.py::test_vertex_ai_claude_opus_47_omits_temperature` covering the temperature exclusion alongside `reasoning_effort`; new `tests/test_generate_model_catalog.py` cases (`test_build_rows_includes_vertex_gemini_flash_ci_default`, `test_committed_csv_includes_vertex_gemini_flash_ci_default`) covering the mandatory-row injection and the committed CSV.
+- Refreshed `.cloud-image-hash`, `pypi_description.rst`, `ci/cloud-batch/test-durations.json`, and version bump to 0.0.227.
 
 ## v0.0.226 (2026-05-02)
 

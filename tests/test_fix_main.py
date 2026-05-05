@@ -2277,8 +2277,10 @@ FAILED test_sum_list.py::test_sum_list - AssertionError: assert 6 == 10
         # Capture output to check for cloud success
         captured = capsys.readouterr()
 
-        # Assertions
-        assert cost > 0, f"Expected cost > 0 for cloud execution, got {cost}"
+        # Assertions. cost may legitimately be 0 on a LiteLLM cache hit, so we
+        # rely on the "Cloud Success" panel from fix_main.py to prove the cloud
+        # branch ran (PDD_CLOUD_ONLY=1 above already prevents silent fallback).
+        assert isinstance(cost, (int, float)) and cost >= 0, f"Expected non-negative cost, got {cost!r}"
         assert attempts == 1, f"Expected attempts == 1 in non-loop mode, got {attempts}"
         assert "Cloud Success" in captured.out, f"Expected 'Cloud Success' in output, got: {captured.out[:500]}"
 
@@ -2392,13 +2394,16 @@ sys.exit(result.returncode)
         # Capture output to check for cloud usage
         captured = capsys.readouterr()
 
-        # Assertions
+        # Assertions. cost may legitimately be 0 on a LiteLLM cache hit, so we
+        # require a cloud-success log line instead. fix_error_loop.py:139 prints
+        # "Cloud fix completed" only on the success path; the fallback branch at
+        # fix_error_loop.py:726 prints "Cloud fix failed, falling back to local",
+        # so a generic substring match on "cloud" would be insufficient.
         assert isinstance(success, bool), f"Expected success to be bool, got {type(success)}"
-        assert cost > 0, f"Expected cost > 0 for cloud execution, got {cost}"
+        assert isinstance(cost, (int, float)) and cost >= 0, f"Expected non-negative cost, got {cost!r}"
         assert attempts >= 1, f"Expected at least 1 attempt, got {attempts}"
-        # In loop mode with cloud, we should see cloud-related output
-        assert "cloud" in captured.out.lower() or "Cloud" in captured.out, \
-            f"Expected cloud-related output, got: {captured.out[:500]}"
+        assert "Cloud fix completed" in captured.out, \
+            f"Expected 'Cloud fix completed' in output (proves cloud path, not fallback), got: {captured.out[:500]}"
 
     finally:
         # Clean up environment variable

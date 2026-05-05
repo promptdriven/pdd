@@ -1,13 +1,14 @@
 <include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>
 
 <pdd.agentic_e2e_fix_orchestrator>
-<include select="def:_check_e2e_environment,def:_verify_tests_independently,def:_extract_test_files,def:_get_modified_and_untracked,def:_detect_meaningful_changes,def:_is_noise_path,def:push_with_retry,def:_run_step11_code_cleanup">context/agentic_e2e_fix_orchestrator_example.py</include>
+<include select="def:_check_e2e_environment,def:_verify_tests_independently,def:_extract_test_files,def:_get_modified_and_untracked,def:_detect_meaningful_changes,def:_is_noise_path,def:push_with_retry,def:_run_step11_code_cleanup,def:_classify_verification_failure,def:_is_intermediate_file,def:_commit_and_push,def:_revert_out_of_scope_changes,def:_check_staleness,pattern:/VERIFY_TIMEOUT_SECONDS/,pattern:/_fallback_scan_was_capped/,pattern:/MAX_FALLBACK_TEST_FILES/,pattern:/E2E_FIX_STEP_TIMEOUTS/">context/agentic_e2e_fix_orchestrator_example.py</include>
 </pdd.agentic_e2e_fix_orchestrator>
 <pdd.ci_validation>
 <include>context/ci_validation_example.py</include>
 </pdd.ci_validation>
 <pdd.agentic_common>
-    <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment">context/agentic_common_example.py</include>
+    <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_post_final_comment,def:example_github_state_helpers,def:example_provider_preference,pattern:/consecutive_provider_failures/">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
@@ -15,6 +16,12 @@
 <pdd.agentic_test_orchestrator>
     <include select="def:example_state_resumption,def:example_step_timeouts,def:example_hard_stop_duplicate">context/agentic_test_orchestrator_example.py</include>
 </pdd.agentic_test_orchestrator>
+<pdd.agentic_bug_orchestrator>
+    <include query="reusing bug_state json and pre-populating step_outputs for steps 2 and 3">context/agentic_bug_orchestrator_example.py</include>
+</pdd.agentic_bug_orchestrator>
+<pdd.change.fix_error_loop>
+    <include select="def:extract_test_results,def:fix_error_loop">context/change/16/fix_error_loop.py</include>
+</pdd.change.fix_error_loop>
 
 % Goal
 Design `agentic_e2e_fix_orchestrator` for the 11-step E2E-fix workflow:
@@ -69,9 +76,12 @@ If a prior cycle applied a direct edit but the current cycle makes no new meanin
 - `current_cycle > 1` (cycle 1 direct edits do not trigger the breaker)
 
 % Step-Specific Retries
-- Step 1: on a single timeout failure, retry once with timeout × 1.5 before falling through.
+- Step 1: on a single timeout failure, retry once with timeout multiplied by 1.5 before falling through.
 - Step 9: if the run succeeded but emitted no recognizable loop-control token, retry Step 9 once with the same prompt (and persist retry cost/output to state). Tier-4 `CLASSIFICATION_ERROR` is treated as CONTINUE_CYCLE (transient classifier).
 - Provider failures: track `consecutive_provider_failures`; abort the entire workflow after 3 in a row (`"All agent providers failed"` substring). Reset on any successful step.
+
+% Step 8 Timeout (Issue #1366)
+`E2E_FIX_STEP_TIMEOUTS[8]` MUST be `3600.0` (1 hour base). Step 8 fans out to one full recursive `pdd fix --loop` invocation per failing dev unit, and `run_agentic_task` caps the aggregate retry budget at `2 * effective_timeout`, giving Step 8 a 2-hour ceiling under the 4-hour Cloud Run job limit. The earlier 1000s budget was inherited from the original single-LLM-call step shape and silently kills recursive fix mid-iteration on large dev units (for example, 2000+ line files where regenerating the file once can take tens of minutes). All other entries in `E2E_FIX_STEP_TIMEOUTS` keep their existing values.
 
 % Reuse pdd-bug Analysis (Issue #830)
 On the first cycle, look for a sibling `bug_state_<issue>.json` under the state dir or `.pdd/{state,bug-state}/`. Reuse non-FAILED outputs of bug Steps 2 and 3 by pre-populating `step_outputs` and treating those steps as already completed.
@@ -87,7 +97,7 @@ After a successful inner loop, `_commit_and_push` stages only files whose hashes
 
 `push_with_retry` MUST:
 - Retry non-fast-forward rejections (markers `"non-fast-forward"`, `"tip of your current branch is behind"`) with `--force-with-lease`. Other `[rejected]` reasons (protected branches, hooks) MUST NOT force-push.
-- On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), if `PDD_GH_TOKEN_FILE` points to a non-empty file, rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
+- On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), first read a non-empty `PDD_GH_TOKEN_FILE`; if no token file token is available, fall back to `GH_TOKEN`, `GITHUB_TOKEN`, then `PDD_GITHUB_TOKEN`. Rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
 
 % Step 11: Code Cleanup
 `_run_step11_code_cleanup` runs only if files changed, builds the cleanup prompt with `git diff <initial_sha>` plus current contents of changed files, runs the cleanup agent, then:
