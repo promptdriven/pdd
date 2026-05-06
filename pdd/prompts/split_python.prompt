@@ -32,12 +32,12 @@
 
         For running prompts with llm_invoke:
         <llm_invoke_example>
-            <include select="def:llm_invoke">context/llm_invoke_example.py</include>
+            <include select="def:llm_invoke">pdd/llm_invoke.py</include>
         </llm_invoke_example>
 
         For preprocessing prompts:
         <preprocess_example>
-            <include>context/preprocess_example.py</include>
+            <include select="def:preprocess">pdd/preprocess.py</include>
         </preprocess_example>
     </internal_modules>
 

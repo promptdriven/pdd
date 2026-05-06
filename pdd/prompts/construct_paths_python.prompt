@@ -19,7 +19,7 @@
     - 'output_file_paths' (dict[str, str]) - Output paths from generate_output_paths.
     - 'language' (string) - Detected language.
 
-% Program description: <include>README.md</include>
+% Program description: <include query="Overview and program description of PDD">README.md</include>
 
 % Internal module examples:
 <internal_example_modules>
@@ -130,4 +130,19 @@
 
 9. Finalize: Add output paths and inferred directories to resolved_config.
    - Determine examples_dir: use ROOT directory (first path component) from raw context config's
-     example_output_path, defaulting to "context". Do NOT use resolved absolute paths.
+     example_output_path. When no example_output_path is configured, fall back to
+     `_resolve_default_examples_dir(_default_examples_project_root(pddrc_path))`. Do NOT use
+     resolved absolute paths.
+   - `_resolve_default_examples_dir(project_root: Path | None = None) -> str` (#616):
+     module-scope helper that returns `EXAMPLES_DIR` (imported from
+     `generate_output_paths`) as the default. Only falls back to `"context"` when the
+     project root has no `examples/` directory AND a `context/` directory containing at
+     least one `*_example.*` file — i.e. actual evidence of a legacy examples layout.
+     A `context/` populated only with PRDs, schemas, or docs is NOT a legacy-examples
+     signal and must keep the canonical default. Wrap the `*_example.*` probe in
+     `try/except OSError` so a probe failure cannot keep the legacy fallback alive.
+     Downstream consumers (e.g. EXAMPLE_OUTPUT_PATH injection in code_generator_main)
+     consume `resolved_config["examples_dir"]` to stay aligned.
+   - `_default_examples_project_root(pddrc_path)` returns `pddrc_path.parent` when a
+     `.pddrc` was found, otherwise `Path.cwd()`, so subdirectory invocations inspect the
+     same project root that configuration discovery used.

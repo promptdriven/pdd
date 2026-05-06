@@ -76,9 +76,9 @@ variables:
   EXAMPLE_OUTPUT_PATH:
     required: false
     type: string
-    description: Directory where dependency example files are located. Resolved from .pddrc example_output_path or defaults to context.
-    examples: [examples/shared, context, examples]
-    default: context
+    description: Directory where dependency example files are located. Resolved from .pddrc example_output_path, or from construct_paths' default resolver when absent.
+    examples: [examples, examples/shared, context]
+    default: examples
   PDDRC_FILE:
     required: false
     type: path
@@ -109,18 +109,18 @@ discover:
 IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end with `</prompt>` on the final line. Do not include any text, whitespace, or code fences outside this block.
 
 % Project context (architecture required, others optional):
-<prd><include>${PRD_FILE}</include></prd>
-<api><include>${API_DOC_FILE}</include></api>
-<database><include>${DB_SCHEMA_FILE}</include></database>
-<backend_files_csv><include>${BACKEND_FILES_CSV}</include></backend_files_csv>
-<io_dependencies_csv><include>${IO_DEPENDENCIES_CSV}</include></io_dependencies_csv>
+<prd><include optional="true">${PRD_FILE}</include></prd>
+<api><include optional="true">${API_DOC_FILE}</include></api>
+<database><include optional="true">${DB_SCHEMA_FILE}</include></database>
+<backend_files_csv><include optional="true">${BACKEND_FILES_CSV}</include></backend_files_csv>
+<io_dependencies_csv><include optional="true">${IO_DEPENDENCIES_CSV}</include></io_dependencies_csv>
 <architecture><include>${ARCHITECTURE_FILE}</include></architecture>
-<tech_stack><include>${TECH_STACK_FILE}</include></tech_stack>
-<generate_code_cli_example><include>${CODE_GENERATOR_PROMPT}</include></generate_code_cli_example>
-<pddrc><include>${PDDRC_FILE}</include></pddrc>
+<tech_stack><include optional="true">${TECH_STACK_FILE}</include></tech_stack>
+<generate_code_cli_example><include optional="true">${CODE_GENERATOR_PROMPT}</include></generate_code_cli_example>
+<pddrc><include optional="true">${PDDRC_FILE}</include></pddrc>
 
 % Existing prompt references (optional):
-<existing_backend_prompts><include-many>${EXISTING_PROMPTS}</include-many></existing_backend_prompts>
+<existing_backend_prompts><include-many optional="true">${EXISTING_PROMPTS}</include-many></existing_backend_prompts>
 
 % Do the following:
 - Identify the architecture entry for ${MODULE} and analyze its requirements, dependencies, and interface constraints for the specified layer and stack.

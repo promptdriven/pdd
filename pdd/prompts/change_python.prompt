@@ -20,7 +20,7 @@
     <internal_modules>
         % Here is an example how to preprocess the prompt from a file using an internal module: 
         <preprocess_example>
-            <include>context/preprocess_example.py</include>
+            <include select="def:preprocess">pdd/preprocess.py</include>
         </preprocess_example>
 
         % For loading prompt templates:
@@ -30,8 +30,16 @@
 
         % For running prompts with llm_invoke:
         <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
+            <include select="def:llm_invoke">pdd/llm_invoke.py</include>
         </llm_invoke_example>
+
+        <change.initial_change>
+            <include>context/change/14/initial_change.py</include>
+        </change.initial_change>
+
+        <change.initial_postprocess>
+            <include>context/change/12/initial_postprocess.py</include>
+        </change.initial_postprocess>
     </internal_modules>
 
 % This program will do the following:

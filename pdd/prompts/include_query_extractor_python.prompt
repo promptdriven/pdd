@@ -47,8 +47,8 @@ When a PDD prompt contains `<include query="...">file</include>`, the system nee
 
 % Dependencies
 <internal_modules>
-    <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
-    <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+    <llm_invoke_example><include select="def:llm_invoke">pdd/llm_invoke.py</include></llm_invoke_example>
+    <preprocess_example><include select="def:preprocess">pdd/preprocess.py</include></preprocess_example>
 </internal_modules>
 
 % Deliverables

@@ -5,6 +5,14 @@ Implement `pdd which`: show resolved PDD config plus candidate search paths for 
 
 <include>context/python_preamble.prompt</include>
 
+% Dependencies
+<pdd.construct_paths>
+    <include select="def:mock_construct_paths">context/auto_deps_main_example.py</include>
+</pdd.construct_paths>
+<pdd.commands>
+    <include>context/__init__example.py</include>
+</pdd.commands>
+
 % Requirements
 1. CLI
    - Define Click command `which`.
@@ -24,7 +32,7 @@ Implement `pdd which`: show resolved PDD config plus candidate search paths for 
    - Compute `config_base` as `.pddrc` parent when available, else `Path.cwd()`.
    - Build ordered candidate lists, resolve relatives against `config_base`, convert to absolute strings, drop empties, and de-duplicate while preserving order.
    - Prompts precedence: CLI overrides -> env (`PDD_PROMPT_PATH`, `PDD_PROMPTS_DIR`) -> resolved config (`prompts_dir`/`prompt_dir`, `prompt_path`) -> fallback `prompts`.
-   - Examples/tests/generate precedence: env (`PDD_EXAMPLE_OUTPUT_PATH`, `PDD_TEST_OUTPUT_PATH`, `PDD_GENERATE_OUTPUT_PATH`) -> resolved config (`example_output_path`, `test_output_path`, `generate_output_path`) -> fallbacks `context`, `tests`, `pdd`.
+   - Examples/tests/generate precedence: env (`PDD_EXAMPLE_OUTPUT_PATH`, `PDD_TEST_OUTPUT_PATH`, `PDD_GENERATE_OUTPUT_PATH`) -> resolved config (`example_output_path`, `test_output_path`, `generate_output_path`) -> conventional defaults. For examples, the conventional default mirrors `construct_paths._resolve_default_examples_dir(config_base)` (greenfield → `examples`; legacy populated `context/` with `*_example.*` files → `context`), with the alternate appended as a secondary candidate so the diagnostic matches the runtime resolution and users see both locations (#616). Tests and generate fall back to `tests` and `pdd` respectively.
    - Use a best-effort nested lookup helper for resolved config key discovery.
 4. Effective-config view
    - Flatten resolved config one level (`section.key`), excluding top-level `context` and `context_name`.

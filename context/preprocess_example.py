@@ -1,62 +1,100 @@
-from pdd.preprocess import preprocess
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
 from rich.console import Console
+
+# Ensure the project root is in sys.path to allow imports from pdd
+# The script is assumed to be in a subdirectory of the project root
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from pdd.preprocess import preprocess
+
 console = Console()
 
-# --- Basic tag processing ---
-prompt = """
-<prompt>
-    <shell>echo Hello World</shell>
-    <pdd>This is a comment</pdd>
-    <web>https://www.google.com</web>
-    {test}
-    {test2}
-    ```<TODO.md>```
+def main() -> None:
+    """
+    Demonstrates the usage of pdd.preprocess to prepare LLM prompts.
 
-    <pdd>
-        multi-line
-        comment should not show up
-    </pdd>
-</prompt>
+    The preprocess function handles:
+    - <include>tags</include> for file insertion.
+    - <include select=\"...\"> for specific code extraction.
+    - <shell>cmd</shell> for dynamic command output.
+    - Double-curly brace escaping for Template compatibility.
+    """
+
+    # 1. Setup: Create sample files to include
+    output_dir = Path("./output")
+    output_dir.mkdir(exist_ok=True)
+
+    math_file = output_dir / "math_utils.py"
+    with open(math_file, "w", encoding="utf-8") as f:
+        f.write("""def add(a: int, b: int) -> int:
+    \"\"\"Adds two numbers.\"\"\"
+    return a + b
+
+def multiply(a: int, b: int) -> int:
+    return a * b
+""")
+
+    readme_file = output_dir / "README.txt"
+    with open(readme_file, "w", encoding="utf-8") as f:
+        f.write("This is a sample project documentation.")
+
+    # 2. Define a prompt with various tags
+    # - <include>: Inserts entire file
+    # - <include select>: Uses ContentSelector to extract only the 'add' function
+    # - <shell>: Runs a local command
+    # - {variable}: Will be doubled to {{variable}} unless excluded
+    raw_prompt = f"""System: You are a coding assistant.
+
+Context from README:
+<include>{readme_file}</include>
+
+Here is the math utility (only the add function):
+<include select=\"def:add\">{math_file}</include>
+
+Current Directory Listing:
+<shell>ls {output_dir}</shell>
+
+User Question: How do I use the {{function_name}} in my code?
+Note: Use the template key {{expected_key}}.
 """
 
-recursive = False
-double_curly_brackets = True
-exclude_keys = ["test2"] # exclude test2 from being doubled
+    console.print("[bold blue]Original Prompt:[/bold blue]")
+    console.print(raw_prompt)
+    console.print("-" * 40)
 
-# Debug info
-console.print(f"[bold yellow]Debug: exclude_keys = {exclude_keys}[/bold yellow]")
+    # 3. Execute Preprocessing
+    # Parameters:
+    # - prompt (str): The raw text to process.
+    # - recursive (bool): If True, resolves tags inside included files.
+    # - double_curly_brackets (bool): If True, escapes '{' to '{{' for PromptTemplate safety.
+    # - exclude_keys (List[str]): Keys that should NOT be doubled (e.g. for existing variables).
+    processed_prompt = preprocess(
+        prompt=raw_prompt,
+        recursive=False,
+        double_curly_brackets=True,
+        exclude_keys=["expected_key"]
+    )
 
-processed = preprocess(prompt, recursive, double_curly_brackets, exclude_keys=exclude_keys)
-console.print("[bold white]Processed Prompt:[/bold white]")
-console.print(processed)
+    console.print("[bold green]Preprocessed Prompt Output:[/bold green]")
+    console.print(processed_prompt)
 
-# --- Selective include with select/mode attributes ---
-# Extract only a specific function definition from a Python file:
-selective_prompt = '<include select="def:preprocess" mode="interface">pdd/preprocess.py</include>'
-console.print("\n[bold yellow]Selective include (function signature only):[/bold yellow]")
-result = preprocess(selective_prompt, recursive=False, double_curly_brackets=False)
-console.print(result)
+    # 4. Demonstrate Recursive Processing
+    # Create a file that includes another file
+    nested_file = output_dir / "nested.txt"
+    with open(nested_file, "w", encoding="utf-8") as f:
+        f.write(f"Nested content starts here: <include>{readme_file}</include>")
 
-# Extract by line range:
-line_range_prompt = '<include select="lines:1-10">pdd/preprocess.py</include>'
-console.print("\n[bold yellow]Selective include (lines 1-10):[/bold yellow]")
-result = preprocess(line_range_prompt, recursive=False, double_curly_brackets=False)
-console.print(result)
+    recursive_input = f"Main prompt including nested: <include>{nested_file}</include>"
 
-# --- Semantic LLM query include ---
-# Uses IncludeQueryExtractor to ask an LLM about a file, with caching:
-query_prompt = '<include query="What are the main public functions?">pdd/preprocess.py</include>'
-console.print("\n[bold yellow]Semantic query include:[/bold yellow]")
-result = preprocess(query_prompt, recursive=False, double_curly_brackets=False)
-console.print(result)
+    console.print("\n[bold yellow]Recursive Preprocessing:[/bold yellow]")
+    recursive_output = preprocess(recursive_input, recursive=True)
+    console.print(recursive_output)
 
-# Semantic query is deferred during recursive pass:
-console.print("\n[bold yellow]Semantic query (recursive=True, should be deferred):[/bold yellow]")
-deferred = preprocess(query_prompt, recursive=True, double_curly_brackets=False)
-console.print(deferred)  # Tag should remain intact
-
-# --- include-many: multiple files concatenated ---
-many_prompt = '<include-many>README.md, LICENSE</include-many>'
-console.print("\n[bold yellow]Include-many:[/bold yellow]")
-result = preprocess(many_prompt, recursive=False, double_curly_brackets=False)
-console.print(result[:200] + "..." if len(result) > 200 else result)
+if __name__ == "__main__":
+    main()
