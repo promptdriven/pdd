@@ -258,7 +258,7 @@ def test_sync_with_github_issue_url_keeps_agentic_dispatch(
 ):
     """A GitHub issue URL should still dispatch to agentic issue sync."""
     mock_agentic_sync.return_value = (True, "Sync completed", 0.25, "agentic-sync")
-    issue_url = "https://github.com/gltanaka/pdd/issues/636"
+    issue_url = "https://github.com/promptdriven/pdd/issues/636"
 
     result = runner.invoke(
         cli.cli,

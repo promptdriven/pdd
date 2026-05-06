@@ -2528,7 +2528,7 @@ class TestFindAndResolveAllPairsNoTouch:
             )
 
 
-# --- Regression tests for gltanaka/pdd#1220 ---
+# --- Regression tests for promptdriven/pdd#1220 ---
 # Legacy regeneration path must read the existing prompt from disk rather
 # than hardcoding "no prompt exists yet, create a new one", which caused the
 # autoheal destructive-rewrite class of bugs in PR #1187 and 5 other

@@ -60,7 +60,7 @@ class CodeFixLikeModel(BaseModel):
 @pytest.fixture
 def mock_load_models():
     # Mock the internal helper that returns a DataFrame
-    # Also force local execution to prevent cloud routing when infisical secrets are present
+    # Also force local execution to prevent cloud routing when shell secrets are present.
     with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
         with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
             mock_data = [
@@ -123,7 +123,7 @@ def mock_set_llm_cache():
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
         # Disable cloud detection by default to prevent Firebase authentication prompts
         # Tests that need cloud behavior should explicitly mock CloudConfig differently
-        # Also set PDD_FORCE_LOCAL to ensure local execution when infisical secrets are present
+        # Also set PDD_FORCE_LOCAL to ensure local execution when shell secrets are present.
         with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
             with patch('pdd.core.cloud.CloudConfig.is_cloud_enabled', return_value=False):
                 yield mock_cache_class

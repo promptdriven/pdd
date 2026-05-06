@@ -12,7 +12,7 @@ from pdd.sync_determine_operation import _find_prompt_file
 
 @pytest.fixture
 def prompts_tree(tmp_path):
-    """Create a nested prompts directory mimicking pdd_cloud's structure."""
+    """Create a nested prompts directory mimicking downstream_project's structure."""
     prompts = tmp_path / "prompts"
     # Flat file
     (prompts).mkdir(parents=True)

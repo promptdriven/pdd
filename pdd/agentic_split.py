@@ -74,7 +74,7 @@ def run_agentic_split(
         git_root / "prompts",
         git_root / "pdd" / "prompts",
     ]
-    # Also search extensions/*/prompts/ (pdd_cloud convention)
+    # Also search extensions/*/prompts/ for downstream extension projects.
     extensions_root = git_root / "extensions"
     if extensions_root.is_dir():
         for ext_dir in extensions_root.iterdir():

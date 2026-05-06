@@ -1,0 +1,8 @@
+{
+  "pythonVersion": "3.12",
+  "exclude": [
+    "**/__pycache__",
+    "build",
+    "dist"
+  ]
+}

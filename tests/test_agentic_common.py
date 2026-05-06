@@ -4203,7 +4203,7 @@ def test_git_work_tree_set_to_cwd_in_subprocess_env(mock_cwd, mock_env, mock_loa
 
     Without this, agents follow the worktree's .git file pointer back to
     the main repo and write files there instead of in the worktree.
-    See: https://github.com/gltanaka/pdd/issues/894
+    See: https://github.com/promptdriven/pdd/issues/894
     """
     mock_shutil_which.return_value = "/bin/claude"
     os.environ["ANTHROPIC_API_KEY"] = "key"

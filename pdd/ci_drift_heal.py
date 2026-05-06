@@ -20,7 +20,7 @@ _ROLLBACK_PATHS = (".pdd/meta", "project_dependencies.csv")
 _AUTO_HEAL_SUCCESS_TRAILER = "PDD-Auto-Heal-Checkpoint: success"
 _PDD_FLAGS_WITH_VALUES = {"--strength", "--time"}
 
-# Change-magnitude gate threshold. Motivation: PR gltanaka/pdd#1187 autohealed
+# Change-magnitude gate threshold. Motivation: PR #1187 autohealed
 # a 1-line code fix (`ad98ea17`) into a 176-line prompt rewrite — a 1:176 ratio.
 # Typical healthy prompt-update ratios sit between 1:1 and 2:1; a cap at 5×
 # catches pathological cases cleanly without blocking legitimate updates where
@@ -568,7 +568,7 @@ def _enforce_prompt_churn_gate(drift: DriftInfo) -> bool:
     return False so the caller treats the heal as failed.
 
     This is a safety net for cases where the LLM rewrites far more of the
-    prompt than the code change warrants (see PR gltanaka/pdd#1187).
+    prompt than the code change warrants (see PR #1187).
     Returns True when the gate passes or when we cannot measure (missing
     paths, git errors) — in the unmeasurable case we prefer to let the
     healthier structural-invariant validator be the gatekeeper.
@@ -599,7 +599,7 @@ def _enforce_prompt_churn_gate(drift: DriftInfo) -> bool:
         f"[red]✗ Prompt churn gate tripped for {drift.basename}: "
         f"prompt changed {prompt_churn} lines vs code {code_churn} lines "
         f"(ratio {ratio:.1f} > cap {ratio_cap:.1f}).[/red]\n"
-        f"[red]  Rewrite was likely destructive — see PR gltanaka/pdd#1187. "
+        f"[red]  Rewrite was likely destructive — see PR #1187. "
         f"Reverting {drift.prompt_path} and skipping this module.[/red]"
     )
     _revert_prompt_file(drift)
@@ -716,7 +716,7 @@ def _enforce_structural_invariants(drift: DriftInfo) -> bool:
     churn gate — the churn gate is still running alongside as a
     magnitude-based belt-and-suspenders).
 
-    Invariants (motivated by PR gltanaka/pdd#1187):
+    Invariants (motivated by PR #1187):
       1. `<include>` / `<include-many>` tag count must not decrease.
       2. Every `<pdd.NAME>` open tag in the original must still appear
          verbatim (prefix included) in the current content.
@@ -794,7 +794,7 @@ def _enforce_structural_invariants(drift: DriftInfo) -> bool:
     for v in violations:
         console.print(f"[red]  - {v}[/red]")
     console.print(
-        f"[red]  Reverting {drift.prompt_path} — see PR gltanaka/pdd#1187.[/red]"
+        f"[red]  Reverting {drift.prompt_path} — see PR #1187.[/red]"
     )
     _revert_prompt_file(drift)
     return False

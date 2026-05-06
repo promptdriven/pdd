@@ -2550,7 +2550,7 @@ def test_get_pdd_file_paths_no_duplication_when_prompts_dir_is_absolute_with_sub
     Regression test: prompt path duplication when prompts_dir is an absolute path
     that already contains the context's subdirectory.
 
-    Bug scenario (from pdd_cloud recruiting modules):
+    Bug scenario (from downstream_project recruiting modules):
       - .pddrc context has prompts_dir: "prompts/recruiting"
       - sync_main discovers a prompt via template and passes the absolute parent as
         prompts_dir, e.g. "/abs/path/prompts/recruiting"
@@ -2569,7 +2569,7 @@ def test_get_pdd_file_paths_no_duplication_when_prompts_dir_is_absolute_with_sub
     """
     monkeypatch.chdir(tmp_path)
 
-    # Directory structure mimicking pdd_cloud recruiting
+    # Directory structure mimicking downstream_project recruiting
     prompts_recruiting = tmp_path / "prompts" / "recruiting"
     prompts_recruiting.mkdir(parents=True)
 
@@ -4204,7 +4204,7 @@ class TestGeneratePathsFromTemplatesCodeFallback:
     dict must still have a 'code' key. Otherwise sync_orchestration crashes with
     KeyError: 'code'.
 
-    Regression test for promptdriven/pdd_cloud#826: the frontend catch-all
+    Regression test for promptdriven/example_app#826: the frontend catch-all
     context has outputs.prompt but no outputs.code, causing page syncs to crash.
     """
 

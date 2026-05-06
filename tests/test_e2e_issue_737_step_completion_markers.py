@@ -376,6 +376,6 @@ class TestExecutorCredentialWaterfallE2E:
             "EXECUTOR WOULD MISIDENTIFY AS AUTH FAILURE!\n"
             "The change orchestrator produced zero step completion markers.\n"
             "The executor regex `(?:→|->)\\s*Step\\s+(\\S+)\\s+complete` found no matches.\n"
-            "This is the exact bug described in issue #737 / pdd_cloud#568.\n"
+            "This is the exact bug described in issue #737 / downstream_project#568.\n"
             f"Full output:\n{output}"
         )

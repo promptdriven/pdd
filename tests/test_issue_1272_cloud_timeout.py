@@ -362,7 +362,7 @@ def test_fix_code_loop_cloud_crash_fix_passes_timeout_from_helper(monkeypatch):
 # pattern is wired correctly in _llm_invoke_cloud, setting PDD_CLOUD_TIMEOUT
 # must flow all the way to the mock requests.post call.
 # ---------------------------------------------------------------------------
-def test_llm_invoke_cloud_respects_pdd_cloud_timeout_env(monkeypatch):
+def test_llm_invoke_cloud_respects_downstream_project_timeout_env(monkeypatch):
     """Setting PDD_CLOUD_TIMEOUT must affect the timeout passed to
     requests.post in _llm_invoke_cloud (documented behavior per README).
     """
@@ -424,7 +424,7 @@ def test_llm_invoke_cloud_respects_pdd_cloud_timeout_env(monkeypatch):
 # fix_code_loop.py — currently it's hardcoded to 400, so the env var is
 # ignored.
 # ---------------------------------------------------------------------------
-def test_fix_code_loop_respects_pdd_cloud_timeout_env(monkeypatch):
+def test_fix_code_loop_respects_downstream_project_timeout_env(monkeypatch):
     """cloud_crash_fix must honor PDD_CLOUD_TIMEOUT (currently hardcoded 400)."""
     monkeypatch.setenv("PDD_CLOUD_TIMEOUT", "73")
 

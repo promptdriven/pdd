@@ -1705,13 +1705,13 @@ class TestDetectModulesFromBranchDiff:
     def test_preserves_context_prefix_for_multi_context_prompts(self):
         """Prompts under context-specific dirs like prompts/frontend/ preserve the full path.
 
-        When pdd_cloud has multiple contexts (frontend, backend, etc.), the diff
+        When downstream_project has multiple contexts (frontend, backend, etc.), the diff
         output contains paths like 'prompts/frontend/app/dashboard/page_TypescriptReact.prompt'.
         The basename must include the context prefix ('frontend/app/dashboard/page') so that
         pdd sync can resolve the correct .pddrc context. Stripping to just 'page' causes
         sync to pick the wrong context or fail with 'No prompt files found'.
 
-        Regression test for GitHub issue promptdriven/pdd_cloud#826.
+        Regression test for GitHub issue promptdriven/example_app#826.
         """
         diff_output = (
             "prompts/frontend/app/dashboard/page_TypescriptReact.prompt\n"
@@ -2135,7 +2135,7 @@ class TestAugmentArchitectureFromPrBranch:
         """New entries in nested architecture files (e.g. frontend/architecture.json)
         on the PR branch should be merged into the combined architecture.
 
-        Regression test for promptdriven/pdd_cloud#826: pdd change created
+        Regression test for promptdriven/example_app#826: pdd change created
         GitHubAppCTA in frontend/architecture.json but _augment_architecture only
         fetched root architecture.json, so the new module was rejected as invalid.
         """
@@ -2181,7 +2181,7 @@ class TestFilterInvalidBasenamesCodeExtensions:
     """_filter_invalid_basenames must strip code file extensions (.tsx, .ts, .py, etc.)
     from architecture.json filename entries before matching against sync basenames.
 
-    Regression test for promptdriven/pdd_cloud#826: frontend/architecture.json uses
+    Regression test for promptdriven/example_app#826: frontend/architecture.json uses
     filename: "GitHubAppCTA.tsx" but sync expects basename "GitHubAppCTA".
     """
 
@@ -2218,7 +2218,7 @@ class TestFilterInvalidBasenamesCodeExtensions:
     def test_matches_filepath_when_filename_differs(self):
         """Architecture entries where filename differs from filepath basename.
 
-        Regression test for pdd_cloud#826: dashboard page has
+        Regression test for downstream_project#826: dashboard page has
         filename='dashboardPage.tsx' but filepath='src/app/dashboard/page.tsx'.
         The sync basename 'page' should match via the filepath.
         """
@@ -2271,7 +2271,7 @@ class TestAugmentAndFilterIntegration:
     """Integration test: _augment_architecture_from_pr_branch + _filter_invalid_basenames
     working together for multi-context repos with nested architecture files.
 
-    Reproduces the exact scenario from pdd_cloud#826 where pdd-change created
+    Reproduces the exact scenario from downstream_project#826 where pdd-change created
     GitHubAppCTA in frontend/architecture.json but sync rejected it.
     """
 

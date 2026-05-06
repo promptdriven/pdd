@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.228",
+  "timestamp": "2026-05-06T03:28:20.886449+00:00",
+  "command": "regenerate-public",
+  "prompt_hash": "78280cc83ad3ef82258567dfe9efaeed6cb95ad4a34e1cdf764a15ecc74244c1",
+  "code_hash": "e497138075639047c2e09265c79515730fdef6e8fe13ee2c4b9fc63aa300ece0",
+  "example_hash": null,
+  "test_hash": "c1d0ca196a77968b79f31e1374f038954fd0755c875bd3818009b1010f6f6288",
+  "test_files": {
+    "test_agentic_crash.py": "c1d0ca196a77968b79f31e1374f038954fd0755c875bd3818009b1010f6f6288"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/get_run_command_example.py": "4d187e844adb255c2738274556f4828728d0d73d84ebf8bda885d51d4be9414f",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "prompts/agentic_crash_explore_LLM.prompt": "1a63eddbf271c5976841de535dcc518db58a5b4b5a61b7a6c08472458ad9ed3c"
+  }
+}

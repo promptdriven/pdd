@@ -401,9 +401,10 @@ class TestAuthLoginE2EEnvironment:
         jwt_cache = tmp_path / ".pdd" / "jwt_cache_nonexistent"
         monkeypatch.setattr("pdd.commands.auth.JWT_CACHE_FILE", jwt_cache)
         monkeypatch.setattr("pdd.auth_service.JWT_CACHE_FILE", jwt_cache)
-        # Mock has_refresh_token to guarantee no keyring entry is found
-        # (in Cloud Batch, keyring may have tokens from entrypoint JWT exchange)
+        # Mock refresh-token lookup to guarantee no keyring entry is found
+        # (in CI, keyring access may time out or contain runner credentials).
         monkeypatch.setattr("pdd.auth_service.has_refresh_token", lambda: False)
+        monkeypatch.setattr("pdd.auth_service._get_refresh_token_status", lambda: (None, None))
 
         result = runner.invoke(cli.cli, ["auth", "status"])
 

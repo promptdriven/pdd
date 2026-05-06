@@ -1368,7 +1368,7 @@ def update_main(
             # preserve its structure. Only fall back to the first-time
             # sentinel when the file truly doesn't exist or is empty —
             # otherwise the legacy path regenerates from scratch and strips
-            # <pdd.*> tags, <include> preambles, and % markers (gltanaka/pdd#1220).
+            # <pdd.*> tags, <include> preambles, and % markers (issue #1220).
             existing_prompt_text = ""
             try:
                 if prompt_path and Path(prompt_path).exists():

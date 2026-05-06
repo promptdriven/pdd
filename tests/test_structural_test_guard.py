@@ -664,7 +664,7 @@ class TestStartLinePastEOF:
     treated "past EOF" as "file shrank, rescan everything", but the
     normal "no new lines appended" case is ``start_line = len(lines) + 1``
     — which tripped the clamp and false-flagged every pre-existing
-    pattern.  This was the pdd_cloud #1064 failure (issue #774).
+    pattern.  This was the downstream_project #1064 failure (issue #774).
 
     With the clamp removed, past-EOF start_line naturally reports no
     violations because the line-iteration loop only runs up to
@@ -703,7 +703,7 @@ class TestStartLinePastEOF:
         _write_fixture(test_file, [_hasattr_lines()])
         total_lines = len(test_file.read_text().splitlines())
 
-        # This is the snapshot+1 case that tripped #774 on pdd_cloud.
+        # This is the snapshot+1 case that tripped #774 on downstream_project.
         violations = detect_structural_test_patterns(
             str(test_file), start_line=total_lines + 1
         )
@@ -767,7 +767,7 @@ class TestStartLineCrossBoundaryVarTracking:
 # Helper: _scan_step9_file_for_new_patterns
 #
 # Content-based change detection (introduced after the gltanaka review of
-# pdd_cloud #1064 surfaced two false negatives in the line-count-only
+# downstream_project #1064 surfaced two false negatives in the line-count-only
 # approach).  The helper distinguishes:
 #   - file unchanged          -> skip (no violations)
 #   - pure append             -> scan only appended lines (#990 optimisation)
@@ -800,7 +800,7 @@ class TestScanStep9HelperUnchanged:
 
     Even when the snapshot itself contains pre-existing structural
     patterns, an unchanged file means Step 9 introduced nothing new — so
-    the helper must report zero violations.  This is the pdd_cloud #1064
+    the helper must report zero violations.  This is the downstream_project #1064
     failure mode that drove the SIGKILL retry loop.
     """
 

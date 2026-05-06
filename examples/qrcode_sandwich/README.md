@@ -74,7 +74,7 @@ For local mode, you'll need API keys (see [main PDD README](../README.md) for de
 ### 1. Clone & Install Dependencies
 
 ```bash
-git clone https://github.com/gltanaka/pdd.git
+git clone https://github.com/promptdriven/pdd.git
 cd qrcode_sandwich
 pip install -r requirements.txt
 ```

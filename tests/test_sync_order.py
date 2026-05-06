@@ -492,7 +492,7 @@ def test_topological_sort_cascade_not_flagged_as_cycle():
 def test_topological_sort_large_cascade_not_all_cyclic():
     """
     A small cycle should not cause 50+ nodes to be flagged as cyclic.
-    Simulates the pdd_cloud scenario where a core cycle poisons everything.
+    Simulates the downstream_project scenario where a core cycle poisons everything.
     """
     # Create a small cycle: X↔Y
     # Then 50 modules that depend on X (directly)

@@ -675,7 +675,7 @@ class TestIssue1080MonorepoCwd:
     # --- Test 16: Exact monorepo scenario from the issue ---
 
     def test_exact_monorepo_scenario_from_issue(self, tmp_path):
-        """Reproduce the exact scenario from issue pdd_cloud#900.
+        """Reproduce the exact scenario from issue downstream_project#900.
 
         Structure: frontend/jest.config.js, frontend/src/lib/__test__/api.test.ts
         Expected: cwd=frontend/ so Jest can find jest-environment-jsdom

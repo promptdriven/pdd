@@ -395,7 +395,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
 
 3. [ ] **Wait for approval** - Get a 👍 or approval comment before starting implementation
 
-4. [ ] **Use docs to drive prompt changes** - Your approved documentation describes the intended behavior. Use it to guide your prompt modifications in `pdd_cap`.
+4. [ ] **Use docs to drive prompt changes** - Your approved documentation describes the intended behavior. Use it to guide any prompt modifications in this repository.
 
 **After implementation:**
 
@@ -405,7 +405,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
 
 ### Required if Prompt Files Changed
 
-- [ ] **Prompt changes submitted to pdd_cap** - If you modified any `.prompt` files, submit corresponding changes to the [pdd_cap repository](https://github.com/promptdriven/pdd_cap)
+- [ ] **Prompt changes included** - If you modified behavior generated from prompts, include the corresponding `.prompt` changes in the same PR.
 
 ### PR Description
 
@@ -445,7 +445,7 @@ Use **GitHub Copilot** to auto-generate your PR description:
 - [x] No merge conflicts
 - [ ] (If bug fix) Failing test added
 - [ ] (If feature) A/B comparison included
-- [ ] (If prompts changed) Submitted to pdd_cap
+- [ ] (If prompts changed) Included corresponding prompt updates
 
 Fixes #123
 ```
@@ -841,10 +841,9 @@ python -c "import pdd; print('Success!')"
 **Understanding API key priority:**
 PDD checks for API keys in this order (highest priority first):
 
-1. **Infisical secrets** (when using `infisical run --`)
-2. **`~/.pdd/llm_model.csv`** (user-specific model registry)
-3. **`.env` file** (project root)
-4. **Shell environment variables**
+1. **Shell environment variables**
+2. **`.env` file** (project root)
+3. **`~/.pdd/llm_model.csv`** (user-specific model registry)
 
 **Fix for "quota exceeded":**
 
@@ -869,15 +868,13 @@ The wizard will:
 - Show exactly where each key is loaded from for transparency
 
 **Manual fixes:**
-- If using **Infisical**: Follow **"Step 7: Set Up Infisical for Secrets Management"** above to configure your API keys
-- If using **.env file**: Ensure your `.env` file in the project root contains your API keys (e.g., `OPENAI_API_KEY=sk-...`)
+- If using shell environment variables, export the required API keys before running PDD.
+- If using a **.env file**, ensure your `.env` file in the project root contains your API keys (e.g., `OPENAI_API_KEY=sk-...`).
 
 **Verify keys are loaded:**
 
 ```bash
-infisical run -- env | grep API_KEY  # If using Infisical
-# OR
-env | grep API_KEY  # If using .env
+env | grep API_KEY
 # OR
 pdd setup  # Shows scan of all keys with source transparency
 ```
@@ -901,9 +898,9 @@ Some tests require multiple API providers. If you only have a single API key (e.
 export TEST_LOCAL=true
 ./tests/regression.sh
 
-# Or with Infisical:
+# Or with explicit API keys exported in the shell:
 export TEST_LOCAL=true
-infisical run -- make regression
+make regression
 ```
 
 **Why this happens:** WSL paths like `/mnt/c/...` sometimes don't translate correctly between Windows and Linux.
@@ -999,8 +996,8 @@ echo "5. Python Import:"
 python -c "import pdd" 2>/dev/null && echo "[PASS] Python can import pdd" || echo "[FAIL] Import failed"
 echo ""
 
-echo "6. API Keys (Infisical):"
-infisical run -- env | grep -q API_KEY && echo "[PASS] API keys available" || echo "[WARN] API keys not detected (may be in .env)"
+echo "6. API Keys:"
+env | grep -q API_KEY && echo "[PASS] API keys available" || echo "[WARN] API keys not detected (may be in .env or ~/.pdd)"
 echo ""
 
 echo "========================="
