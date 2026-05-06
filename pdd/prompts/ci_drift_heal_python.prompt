@@ -22,6 +22,7 @@
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>auto_include_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write a standalone CI script that detects prompt/example drift across all PDD modules and auto-heals drifted modules.
 

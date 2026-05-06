@@ -12,6 +12,13 @@
 }
 </pdd-interface>
 <pdd-dependency>agentic_architecture_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_test_python.prompt</pdd-dependency>
+<pdd-dependency>cmd_test_main_python.prompt</pdd-dependency>
+<pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
+<pdd-dependency>context_generator_main_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>template_registry_python.prompt</pdd-dependency>
+<pdd-dependency>track_cost_python.prompt</pdd-dependency>
 % You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
 
 % Role & Scope

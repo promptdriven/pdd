@@ -12,6 +12,7 @@
 }
 </pdd-interface>
 <pdd-dependency>agentic_architecture_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>incremental_prd_architecture_python.prompt</pdd-dependency>
 
 % Role & Scope
 The `pdd/agentic_architecture.py` module serves as the CLI entry point for the agentic architecture workflow. Its responsibility is to validate GitHub issue URLs, fetch issue content and comments via the `gh` CLI, ensure the local repository context is correctly set up (cloning if necessary), discover cross-project context (such as sibling architectures and existing configurations), and finally invoke the orchestrator to begin the generation process.
