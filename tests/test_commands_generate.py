@@ -374,6 +374,38 @@ def test_cli_generate_forwards_project_root_to_incremental(
 
 
 @patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+def test_cli_generate_rejects_project_root_in_standard_mode(
+    mock_main,
+    mock_auto_update,
+    runner,
+    create_dummy_files,
+    tmp_path,
+):
+    """`--project-root` is mode-specific. Passing it on a standard prompt-file
+    invocation must raise UsageError instead of silently no-opping (issue #815
+    review feedback)."""
+    files = create_dummy_files("plain.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+    project = tmp_path / "nested-project"
+    project.mkdir()
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--project-root", str(project),
+            str(files["plain.prompt"]),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--project-root" in result.output
+    assert "agentic" in result.output or "incremental" in result.output
+    mock_main.assert_not_called()
+
+
+@patch('pdd.core.cli.auto_update')
 @patch('pdd.agentic_architecture.run_incremental_architecture')
 def test_cli_generate_incremental_prd_requires_explicit_experimental_opt_in(
     mock_incremental,

@@ -5280,7 +5280,7 @@
   },
   {
     "reason": "Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.",
-    "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root using tier precedence: .pddrc/.pdd/ (Tier A), then sources/ + PRD/spec markdown (Tier B), then enclosing .git (Tier C). Innermost match within the highest tier seen wins, so a self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root (issue #815).",
+    "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root: PDD markers (.pddrc/.pdd/ Tier A or sources/ + PRD/spec markdown Tier B) form a single innermost-wins pool, with .git (Tier C) consulted only when no PDD marker is found. A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root.",
     "dependencies": [],
     "priority": 208,
     "filename": "architecture_registry_python.prompt",

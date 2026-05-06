@@ -12,6 +12,8 @@ import pytest
 
 from pdd.architecture_registry import (
     find_architecture_for_project,
+    find_git_toplevel,
+    find_project_root,
     get_modules_for_issue,
     load_registry,
     merge_architecture,
@@ -628,3 +630,153 @@ def test_load_combined_preserves_object_format_on_write_back(tmp_path):
     assert "prd_files" in reloaded, "prd_files key should be preserved on write-back"
     assert reloaded["prd_files"] == ["docs/prd.md", "docs/spec.md"]
     assert reloaded["modules"][0]["priority"] == 99
+
+
+# --- find_project_root Tier Precedence Tests (issue 815) ---
+
+
+class TestFindProjectRootTiers:
+    """Tier-precedence tests for the project-root resolver.
+
+    Verifies the contract from architecture_registry_python.prompt:
+      Tier A (PDD-explicit) `.pddrc` / `.pdd/` wins over
+      Tier B (PDD-conventional) `sources/` + PRD/spec markdown wins over
+      Tier C (.git fallback). Innermost match within the highest tier seen wins.
+    """
+
+    def test_tier_a_pddrc_file(self, tmp_path: Path) -> None:
+        (tmp_path / ".pddrc").touch()
+        deep = tmp_path / "src" / "sub"
+        deep.mkdir(parents=True)
+        assert find_project_root(deep) == tmp_path.resolve()
+
+    def test_tier_a_pdd_directory(self, tmp_path: Path) -> None:
+        (tmp_path / ".pdd").mkdir()
+        deep = tmp_path / "deep"
+        deep.mkdir()
+        assert find_project_root(deep) == tmp_path.resolve()
+
+    def test_tier_b_sources_plus_prd_markdown(self, tmp_path: Path) -> None:
+        (tmp_path / "sources").mkdir()
+        (tmp_path / "PRD.md").write_text("# Product spec", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        assert find_project_root(sub) == tmp_path.resolve()
+
+    def test_tier_b_negative_sources_only_no_markdown(self, tmp_path: Path) -> None:
+        # `sources/` alone, no PRD/spec markdown -> Tier B does NOT match.
+        (tmp_path / "sources").mkdir()
+        (tmp_path / "notes.md").write_text("not a prd", encoding="utf-8")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        # No markers anywhere -> falls through to start.resolve().
+        assert find_project_root(sub) == sub.resolve()
+
+    @pytest.mark.parametrize("name", ["PRD.md", "prd.md", "feature_prd.md", "Spec.md", "service_spec.md", "spec_overview.md"])
+    def test_tier_b_case_insensitive_globs(self, tmp_path: Path, name: str) -> None:
+        (tmp_path / "sources").mkdir()
+        (tmp_path / name).write_text("x", encoding="utf-8")
+        assert find_project_root(tmp_path) == tmp_path.resolve()
+
+    def test_tier_c_git_fallback(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        assert find_project_root(tmp_path) == tmp_path.resolve()
+
+    def test_no_markers_returns_start_resolved(self, tmp_path: Path) -> None:
+        deep = tmp_path / "a" / "b"
+        deep.mkdir(parents=True)
+        assert find_project_root(deep) == deep.resolve()
+
+    def test_tier_a_beats_enclosing_git(self, tmp_path: Path) -> None:
+        # The bug fix: nested .pddrc inside an outer .git resolves to the inner.
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / ".git").mkdir()
+        inner = outer / "projects" / "service-a"
+        inner.mkdir(parents=True)
+        (inner / ".pddrc").touch()
+        deep = inner / "src" / "sub"
+        deep.mkdir(parents=True)
+        assert find_project_root(deep) == inner.resolve()
+
+    def test_innermost_pdd_marker_wins_across_tier_a_and_b(self, tmp_path: Path) -> None:
+        # Tier A (outer) and Tier B (inner) are a single PDD-marker pool; the
+        # innermost directory carrying *any* PDD marker wins, regardless of which
+        # tier matched. This is what makes a self-contained PDD project inside an
+        # outer PDD project resolve to itself.
+        (tmp_path / ".pddrc").touch()  # Tier A at outer
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        (inner / "sources").mkdir()
+        (inner / "prd.md").write_text("x", encoding="utf-8")  # Tier B at inner
+        sub = inner / "sub"
+        sub.mkdir()
+        assert find_project_root(sub) == inner.resolve()
+
+    def test_pdd_marker_beats_git_regardless_of_depth(self, tmp_path: Path) -> None:
+        # Tier C (.git) is a strict fallback. An outer .pddrc must beat a
+        # deeper .git ancestor — the original #815 bug.
+        (tmp_path / ".pddrc").touch()
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        (inner / ".git").mkdir()
+        sub = inner / "sub"
+        sub.mkdir()
+        assert find_project_root(sub) == tmp_path.resolve()
+
+    def test_innermost_within_tier_wins(self, tmp_path: Path) -> None:
+        # Two `.pddrc` files at different depths -> innermost wins.
+        (tmp_path / ".pddrc").touch()
+        inner = tmp_path / "inner"
+        inner.mkdir()
+        (inner / ".pddrc").touch()
+        sub = inner / "sub"
+        sub.mkdir()
+        assert find_project_root(sub) == inner.resolve()
+
+    def test_walk_capped_at_20_ancestors(self, tmp_path: Path) -> None:
+        # Build a deep tree where the marker is more than 20 levels above.
+        deep = tmp_path
+        for i in range(25):
+            deep = deep / f"d{i}"
+        deep.mkdir(parents=True)
+        (tmp_path / ".pddrc").touch()  # 25 levels above `deep`
+        # Should fall through (cap stops the walk before reaching tmp_path).
+        assert find_project_root(deep) == deep.resolve()
+
+    def test_default_uses_cwd(self, tmp_path: Path, monkeypatch) -> None:
+        (tmp_path / ".pddrc").touch()
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        assert find_project_root() == tmp_path.resolve()
+
+
+# --- find_git_toplevel Tests (issue 815) ---
+
+
+class TestFindGitToplevel:
+    """Tests for the path-based .git ancestor walker."""
+
+    def test_returns_directory_containing_git(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        deep = tmp_path / "a" / "b"
+        deep.mkdir(parents=True)
+        assert find_git_toplevel(deep) == tmp_path.resolve()
+
+    def test_returns_start_when_start_has_git(self, tmp_path: Path) -> None:
+        (tmp_path / ".git").mkdir()
+        assert find_git_toplevel(tmp_path) == tmp_path.resolve()
+
+    def test_returns_none_when_no_git(self, tmp_path: Path) -> None:
+        sub = tmp_path / "x" / "y"
+        sub.mkdir(parents=True)
+        # tmp_path is under /tmp which is not a git repo -> None.
+        assert find_git_toplevel(sub) is None
+
+    def test_default_uses_cwd(self, tmp_path: Path, monkeypatch) -> None:
+        (tmp_path / ".git").mkdir()
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        assert find_git_toplevel() == tmp_path.resolve()

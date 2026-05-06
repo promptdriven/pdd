@@ -18,7 +18,7 @@ from rich.console import Console
 # Internal imports
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .agentic_architecture_orchestrator import run_agentic_architecture_orchestrator
-from .architecture_registry import extract_modules
+from .architecture_registry import extract_modules, find_git_toplevel, find_project_root
 from .incremental_prd_architecture import INCREMENTAL_STATUS_MARKER
 
 # Backwards-compatible alias for any code that imported the leading-underscore name.
@@ -104,6 +104,7 @@ def _ensure_repo_context(
     repo: str,
     current_cwd: Path,
     quiet: bool,
+    *,
     project_root: Optional[Path] = None,
 ) -> Tuple[Path, Optional[str]]:
     """
@@ -111,7 +112,11 @@ def _ensure_repo_context(
 
     Logic:
     1. If current_cwd is inside the target repo (checked via remote), use it.
-    2. If current_cwd is a git repo but mismatch, warn and use it (user might be in a fork).
+    2. If current_cwd is a git repo but the remote does not match owner/repo,
+       warn and proceed — except when ``project_root`` is a strict descendant
+       of the enclosing git toplevel (a self-contained pdd project nested
+       inside an unrelated outer git repo), in which case the warning is
+       suppressed because the outer remote is irrelevant.
     3. If current_cwd is NOT a git repo:
        a. Check if subdirectory {repo} exists and is a git repo -> use it.
        b. Clone {owner}/{repo} -> use it.
@@ -153,19 +158,19 @@ def _ensure_repo_context(
 
         # Mismatch. Suppress the warning when the resolved PDD project root is
         # a strict descendant of the enclosing git toplevel — the cwd is a
-        # self-contained pdd project nested inside an unrelated outer git repo
-        # (issue #815), so the outer remote is expected to differ from the
-        # issue's owner/repo and the warning is a false positive.
+        # self-contained pdd project nested inside an unrelated outer git repo,
+        # so the outer remote is expected to differ from the issue's owner/repo
+        # and the warning is a false positive.
         suppress_warning = False
         if project_root is not None:
             try:
-                from .architecture_registry import find_git_toplevel
-
                 git_top = find_git_toplevel(current_cwd)
-                pr_resolved = project_root.resolve()
-                if git_top is not None and pr_resolved != git_top.resolve():
-                    pr_resolved.relative_to(git_top.resolve())
-                    suppress_warning = True
+                if git_top is not None:
+                    pr_resolved = project_root.resolve()
+                    git_top_resolved = git_top.resolve()
+                    if pr_resolved != git_top_resolved:
+                        pr_resolved.relative_to(git_top_resolved)
+                        suppress_warning = True
             except (ValueError, OSError):
                 suppress_warning = False
 
@@ -446,6 +451,10 @@ def run_agentic_architecture(
         skip_prompts: If True, skip Step 9 (prompt generation). Default False (prompts ARE generated).
         target_dir: Optional subdirectory for new project. If None, parsed from issue body.
         force_single: If True, skip complexity check and force single-project generation.
+        project_root: Optional explicit override for the resolved PDD project root.
+            When None, walks up from cwd through tier A/B/C markers (`.pddrc`/`.pdd/`,
+            `sources/` + PRD/spec markdown, `.git`). When supplied, the path is used
+            verbatim, bypassing marker discovery.
 
     Returns:
         Tuple containing:
@@ -458,11 +467,9 @@ def run_agentic_architecture(
     cwd = Path.cwd()
 
     # Resolve PDD project root. Explicit --project-root wins; otherwise walk up
-    # from cwd looking for PDD-explicit / PDD-conventional / git markers
-    # (issue #815: a self-contained pdd project nested inside an unrelated
-    # outer git repo must be detected as its own root).
-    from .architecture_registry import find_project_root
-
+    # from cwd looking for PDD-explicit / PDD-conventional / git markers so a
+    # self-contained pdd project nested inside an unrelated outer git repo is
+    # detected as its own root.
     if project_root is not None:
         candidate = Path(project_root).expanduser()
         if not candidate.exists():
@@ -514,7 +521,7 @@ def run_agentic_architecture(
     # 5. Ensure Repo Context. Use the resolved project root as the working
     # directory for repo discovery so a self-contained pdd project nested
     # inside an unrelated outer git repo isn't routed through the outer
-    # repo's remote (issue #815).
+    # repo's remote.
     repo_path, error = _ensure_repo_context(
         owner, repo, resolved_project_root, quiet, project_root=resolved_project_root
     )
@@ -576,12 +583,23 @@ def run_incremental_architecture(
     time: float = DEFAULT_TIME,
     project_root: Optional[str] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
-    """Run guarded incremental PRD -> architecture propagation."""
+    """Run guarded incremental PRD -> architecture propagation.
+
+    Args:
+        prd_source: Path to a local PRD-like file or a GitHub issue URL.
+        dry_run: When True, analyze and report what would change without writing.
+        verbose: Enable verbose logging.
+        quiet: Suppress non-error output.
+        use_github_state: Persist progress as GitHub issue comments (when applicable).
+        target_dir: Optional subdirectory under the resolved project root.
+        strength, temperature, time: Forwarded model knobs.
+        project_root: Optional explicit override for the resolved PDD project root.
+            When None, walks up from cwd through tier A/B/C markers; when supplied,
+            the path is used verbatim, bypassing marker discovery.
+    """
     cwd = Path.cwd()
 
-    # Resolve PDD project root via explicit override or marker walk (issue #815).
-    from .architecture_registry import find_project_root
-
+    # Resolve PDD project root via explicit override or marker walk.
     if project_root is not None:
         candidate = Path(project_root).expanduser()
         if not candidate.exists():

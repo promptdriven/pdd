@@ -133,20 +133,22 @@
 % - Log warnings on OSError/IOError but don't raise.
 
 % Function: find_project_root(start: Optional[Path] = None) -> Path
-% - Walk up from `start` (default: cwd) looking for a project-root marker, using the
-%   following tier precedence (innermost match within the highest tier seen wins):
+% - Walk up from `start` (default: cwd) looking for a project-root marker. Tier A
+%   (PDD-explicit) and Tier B (PDD-conventional) are treated as a single
+%   "PDD project marker" pool; Tier C (`.git`) is a fallback consulted only when
+%   no PDD marker is found anywhere on the walk.
 %   - Tier A (PDD-explicit): a directory containing `.pddrc` or a `.pdd/` directory.
 %   - Tier B (PDD-conventional): a directory containing a `sources/` subdirectory **and**
 %     at least one PRD/spec markdown file (case-insensitive match for filenames matching
 %     `prd*.md`, `spec*.md`, or `*_prd.md` / `*_spec.md`) at that directory.
 %   - Tier C (git fallback): a directory containing `.git`.
-% - Walk parents from `start` upward, recording the innermost (deepest) match for each
-%   tier. After the walk completes, return Tier A's match if any; otherwise Tier B's
-%   match if any; otherwise Tier C's match if any.
+% - Walk parents from `start` upward, recording the innermost (deepest) directory whose
+%   markers satisfy Tier A or Tier B (whichever matches first), and separately the
+%   innermost `.git` ancestor. After the walk, return the innermost PDD marker if any,
+%   else the innermost `.git`, else `start.resolve()`.
 % - Limit to 20 parent traversals.
-% - If no marker is found in any tier, return start.resolve().
-% - This precedence ensures that a self-contained pdd project nested inside an unrelated
-%   outer git repo is correctly identified as its own project root (issue #815).
+% - This guarantees that a self-contained pdd project nested inside an unrelated
+%   outer git repo is correctly identified as its own project root.
 
 % Function: find_git_toplevel(start: Optional[Path] = None) -> Optional[Path]
 % - Walk parents from `start` (default: cwd) looking for a directory containing `.git`.
@@ -155,7 +157,7 @@
 %   found within that bound.
 % - Used by callers (e.g. `agentic_architecture._ensure_repo_context`) to detect when a
 %   resolved PDD project root is a strict descendant of an enclosing, unrelated git
-%   repo so that remote-mismatch warnings can be suppressed (issue #815).
+%   repo so that remote-mismatch warnings can be suppressed.
 
 % Function: load_combined_architecture_data(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]
 % - Load and merge all architecture.json lists under project_root.

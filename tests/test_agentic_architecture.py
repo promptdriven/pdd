@@ -727,3 +727,198 @@ def test_full_agentic_path_filters_pdd_status_comments():
     assert "Initial PRD comment from human." in text
     assert _INCREMENTAL_STATUS_MARKER not in text
     assert "pdd incremental architecture update" not in text
+
+
+# --- _ensure_repo_context warning-suppression matrix (issue 815) ---
+
+
+class TestEnsureRepoContextWarningSuppression:
+    """Tests for the false-positive remote-mismatch warning suppression.
+
+    `_ensure_repo_context` emits a warning when the cwd is a git repo whose
+    `origin` remote does not match the issue's `owner/repo`. When the cwd is a
+    self-contained pdd project (`.pddrc`/`.pdd/` or `sources/`+PRD) nested
+    inside an unrelated outer git repo, the warning is a false positive and
+    must be suppressed. This matrix locks the four discriminating cases.
+    """
+
+    @staticmethod
+    def _make_outer_repo_with_inner_pddrc(tmp_path: Path) -> tuple[Path, Path]:
+        """Build outer (with .git) + inner (with .pddrc) and return (outer, inner)."""
+        import subprocess as _sp
+
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        # Real git init so `git rev-parse --show-toplevel` works inside.
+        _sp.run(["git", "init", "-q"], cwd=str(outer), check=True)
+        _sp.run(
+            ["git", "remote", "add", "origin", "git@example.com:other/unrelated.git"],
+            cwd=str(outer),
+            check=True,
+        )
+        inner = outer / "projects" / "service-a"
+        inner.mkdir(parents=True)
+        (inner / ".pddrc").touch()
+        return outer, inner
+
+    def test_suppresses_warning_when_project_root_is_strict_descendant(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Inner pdd project nested in an unrelated outer git repo -> warning suppressed."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        _outer, inner = self._make_outer_repo_with_inner_pddrc(tmp_path)
+        result_path, error = _ensure_repo_context(
+            owner="issue-owner",
+            repo="issue-repo",
+            current_cwd=inner,
+            quiet=False,
+            project_root=inner,
+        )
+        captured = capsys.readouterr()
+        assert error is None
+        assert result_path == inner
+        assert "does not match" not in captured.out
+        assert "does not match" not in captured.err
+
+    def test_emits_warning_when_no_project_root_supplied(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Legacy callers (no project_root) still see the mismatch warning."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        _outer, inner = self._make_outer_repo_with_inner_pddrc(tmp_path)
+        result_path, error = _ensure_repo_context(
+            owner="issue-owner",
+            repo="issue-repo",
+            current_cwd=inner,
+            quiet=False,
+        )
+        captured = capsys.readouterr()
+        assert error is None
+        assert result_path == inner
+        # Rich routes warnings to stdout in this codepath; check both streams.
+        combined = captured.out + captured.err
+        assert "does not match" in combined or "Warning" in combined
+
+    def test_emits_warning_when_project_root_equals_git_toplevel(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """Equality guard: if project_root == git toplevel, do NOT suppress."""
+        import subprocess as _sp
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _sp.run(["git", "init", "-q"], cwd=str(repo), check=True)
+        _sp.run(
+            ["git", "remote", "add", "origin", "git@example.com:fork/repo.git"],
+            cwd=str(repo),
+            check=True,
+        )
+        # project_root resolved to repo itself (e.g. .pddrc at repo root, fork case)
+        (repo / ".pddrc").touch()
+
+        result_path, error = _ensure_repo_context(
+            owner="upstream-owner",
+            repo="upstream-repo",
+            current_cwd=repo,
+            quiet=False,
+            project_root=repo,
+        )
+        captured = capsys.readouterr()
+        assert error is None
+        assert result_path == repo
+        combined = captured.out + captured.err
+        assert "does not match" in combined or "Warning" in combined
+
+    def test_quiet_suppresses_warning_regardless_of_branch(
+        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+    ) -> None:
+        """quiet=True silences output even when project_root is None."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        _outer, inner = self._make_outer_repo_with_inner_pddrc(tmp_path)
+        _ensure_repo_context(
+            owner="issue-owner",
+            repo="issue-repo",
+            current_cwd=inner,
+            quiet=True,
+        )
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "does not match" not in combined
+        assert "Warning" not in combined
+
+    def test_project_root_must_be_keyword_only(self) -> None:
+        """Spec requires project_root to be keyword-only — calling positionally fails."""
+        from pdd.agentic_architecture import _ensure_repo_context
+
+        with pytest.raises(TypeError):
+            _ensure_repo_context("o", "r", Path("/tmp"), False, Path("/tmp"))  # type: ignore[misc]
+
+
+# --- Library-level project_root validation (issue 815) ---
+
+
+class TestProjectRootValidationAtEntryPoints:
+    """When `project_root` is supplied to library entry points, it must exist
+    and be a directory. Click guards the CLI surface; these tests cover the
+    library-call path used programmatically and by `pdd_cloud`.
+    """
+
+    def test_run_agentic_architecture_rejects_nonexistent_project_root(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_agentic_architecture
+
+        missing = tmp_path / "does-not-exist"
+        success, message, cost, model, files = run_agentic_architecture(
+            issue_url="https://github.com/o/r/issues/1",
+            quiet=True,
+            project_root=str(missing),
+        )
+        assert success is False
+        assert "does not exist" in message
+        assert cost == 0.0
+        assert files == []
+
+    def test_run_agentic_architecture_rejects_project_root_that_is_a_file(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_agentic_architecture
+
+        f = tmp_path / "regular.txt"
+        f.write_text("not a directory", encoding="utf-8")
+        success, message, _, _, _ = run_agentic_architecture(
+            issue_url="https://github.com/o/r/issues/1",
+            quiet=True,
+            project_root=str(f),
+        )
+        assert success is False
+        assert "is not a directory" in message
+
+    def test_run_incremental_architecture_rejects_nonexistent_project_root(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_incremental_architecture
+
+        prd = tmp_path / "prd.md"
+        prd.write_text("# spec", encoding="utf-8")
+        missing = tmp_path / "nope"
+        success, message, _, _, _ = run_incremental_architecture(
+            prd_source=str(prd),
+            quiet=True,
+            project_root=str(missing),
+        )
+        assert success is False
+        assert "does not exist" in message
+
+    def test_run_incremental_architecture_rejects_project_root_that_is_a_file(self, tmp_path: Path) -> None:
+        from pdd.agentic_architecture import run_incremental_architecture
+
+        prd = tmp_path / "prd.md"
+        prd.write_text("# spec", encoding="utf-8")
+        f = tmp_path / "regular.txt"
+        f.write_text("not a directory", encoding="utf-8")
+        success, message, _, _, _ = run_incremental_architecture(
+            prd_source=str(prd),
+            quiet=True,
+            project_root=str(f),
+        )
+        assert success is False
+        assert "is not a directory" in message

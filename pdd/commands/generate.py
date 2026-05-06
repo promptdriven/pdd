@@ -88,7 +88,9 @@ class GenerateCommand(click.Command):
     help=(
         "Explicit project-root override. Use the given path as the resolved "
         "project root instead of walking up from cwd. Useful when the cwd is "
-        "a self-contained pdd project nested inside an unrelated outer git repo."
+        "a self-contained pdd project nested inside an unrelated outer git repo. "
+        "Only valid in agentic-issue mode and --incremental --experimental-prd "
+        "mode; passing it on a standard prompt-file invocation is rejected."
     ),
 )
 @click.pass_context
@@ -264,6 +266,12 @@ def generate(
                 if output_files:
                     click.echo(f"Output files: {', '.join(output_files)}")
             return (message, cost, model) if success else None
+
+        if project_root:
+            raise click.UsageError(
+                "--project-root is only supported in agentic-issue mode "
+                "(GitHub issue URL) or --incremental --experimental-prd mode."
+            )
 
         # Validate file path (not a URL, must exist and not be a directory)
         if prompt_file and not template:

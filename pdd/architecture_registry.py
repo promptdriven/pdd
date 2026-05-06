@@ -287,8 +287,8 @@ def find_project_root(start: Optional[Path] = None) -> Path:
     (PDD-conventional) are treated as a single "PDD project marker" pool: the
     innermost directory that matches **either** wins, so a self-contained PDD
     project nested inside an unrelated outer PDD repository is correctly
-    identified as its own root (issue #815). Only when no PDD marker is found
-    does the resolver fall back to the enclosing git repository.
+    identified as its own root. Only when no PDD marker is found does the
+    resolver fall back to the enclosing git repository.
 
     * Tier A (PDD-explicit): a directory containing ``.pddrc`` or a ``.pdd/``
       directory.
