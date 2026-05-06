@@ -1,0 +1,92 @@
+<pdd-reason>Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_incremental_prd_propagation",
+        "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
+        "returns": "Tuple of success flag, message, cost, model, and changed files"
+      },
+      {
+        "name": "apply_architecture_patch",
+        "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
+        "returns": "Validated in-memory architecture patch application result"
+      }
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>change_python.prompt</pdd-dependency>
+<pdd-dependency>detect_change_python.prompt</pdd-dependency>
+<pdd-dependency>incremental_prd_architecture_patch_LLM.prompt</pdd-dependency>
+% You are an expert Python engineer. Your goal is to write `pdd/incremental_prd_architecture.py`.
+
+% Role & Scope
+Implement incremental PRD-to-architecture propagation. The LLM may propose a patch, but deterministic Python code must validate and apply it. Do not let the LLM write `architecture.json` directly.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+1. Provide strict Pydantic models for the architecture patch contract:
+   - `ModuleToAdd`, `ModuleRemoval`, `ModuleModification`, `DependencyUpdate`, `PatchConflict`, and `ArchitecturePatch`.
+   - `ArchitecturePatch` must include `requires_full_regeneration`, `rationale`, `modules_to_add`, `modules_to_remove`, `modules_to_modify`, `dependency_updates`, and `conflicts`.
+   - Added modules must carry enough information to seed a new prompt file, including `requirements`.
+
+2. Implement `run_incremental_prd_propagation(...)`:
+   - Accept a GitHub issue URL or local PRD file.
+   - Build a PRD diff from `.pdd/meta/prd_hashes.json` fingerprints and ignored `.pdd/cache/prd_snapshots/` raw baselines when present.
+   - `.pdd/meta/prd_hashes.json` must store hashes and minimal provenance only. Never persist raw PRD, GitHub issue body, or issue comment text in tracked metadata.
+   - For local PRD files without a snapshot, try `git show HEAD:<path>` as the baseline; otherwise treat the full PRD as new content.
+   - Load `architecture.json` in either bare-array or `{prd_files, modules}` format.
+   - Ask the LLM for an `ArchitecturePatch` using `incremental_prd_architecture_patch_LLM`.
+   - If the patch requests full regeneration or reports conflicts, stop without writing.
+   - Apply the patch through deterministic validation and merge code:
+     - validate prompt filenames and module filepaths as safe relative paths;
+     - reject unknown modules, dangling dependencies, removals that leave dependents, and newly introduced cycles;
+     - validate `modules_to_modify.changes` field values by type (`reason`/`description` strings, `interface` object, `tags` list of strings, `priority` int, `filepath` safe relative path);
+     - validate added-module priority values strictly and normalize resulting priorities so every dependency has a lower priority than its dependents, including existing modules that gain dependencies on newly added modules.
+   - In `dry_run`, print/report the architecture diff and changed files without writing.
+   - On success, atomically write `architecture.json`, update prompt metadata tags, update affected prompt Requirements, create prompt files for new modules, save the PRD hash/provenance metadata, and save raw baseline text only in the ignored local cache. Ensure `.pdd/cache/.gitignore` ignores cache contents even when the host project has no root `.gitignore` rule for `.pdd/cache/`.
+   - Capture the parsed architecture and concurrent-modification baseline from the same byte buffer; under the architecture-directory lock, compare the current bytes to that baseline before writing.
+   - Under the same write lock, compare every prompt preview against current disk content before writing: existing/deleted prompt files must still equal the preview baseline, and newly created prompt files must still be absent.
+
+3. Implement `apply_architecture_patch(raw_architecture, patch)`:
+   - Preserve unrelated architecture entries exactly.
+   - Preserve object-format wrapper keys such as `prd_files`.
+   - Add modules only when they do not already exist.
+   - Remove modules only with a non-empty removal justification.
+   - Modify only an allowlist of architecture fields: `reason`, `description`, `interface`, `filepath`, `tags`, and `priority`.
+   - Require dependency changes to go through `dependency_updates`.
+   - Validate dependency targets for affected modules.
+   - Reject newly introduced circular dependencies.
+   - Return the updated raw architecture, changed filenames, and unified diff.
+
+4. Prompt updates:
+   - Use `generate_tags_from_architecture` to update `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` tags for affected existing prompts.
+   - Use `detect_change()` with the architecture diff to identify prompts whose Requirements sections need content changes.
+   - Use `change()` to apply those Requirements changes.
+   - For newly added modules, create a minimal prompt from the architecture entry and `requirements` list when no prompt file exists.
+   - Build new prompt dependency include-tag paths relative to the architecture target directory (the directory containing `architecture.json`), not necessarily the PRD snapshot root, so `--output-dir` subprojects can sync from their own directory.
+   - When a module is removed from `architecture.json`, delete its prompt file transactionally as part of the same commit, include it in dry-run previews, and list it in `changed_files`.
+
+5. Safety:
+   - Validate local PRD paths stay inside the project root.
+   - Validate LLM-controlled module filenames and `filepath` values before writing them into architecture metadata or reading code content: reject absolute paths, parent traversal, backslashes, whitespace, newlines, Markdown backticks, shell metacharacters, leading-hyphen path segments, hidden path components, and secret-like files such as `.env`, npm/pypi/netrc config, private keys, and certificate/key material. Prompt filenames must still end in `.prompt`. `_read_code_for_entry` must return the standard "No existing code file..." fallback instead of reading any unsafe filepath, even if unsafe metadata already exists.
+   - Write JSON atomically with `atomic_write_json`.
+   - Hold one commit lock across architecture, prompt, snapshot, and rollback work.
+   - Track per-write rollback actions so partial failures restore the pre-commit state.
+   - Return project-root-relative changed files only.
+   - Redact local absolute paths from GitHub status comments.
+   - Do not auto-run `pdd sync`.
+   - Return a clear `(success, message, cost, model, changed_files)` tuple for CLI use.
+
+% Dependencies
+  <include select="def:example_generate_tags,def:example_sync_all,def:example_parse_tags">context/architecture_sync_example.py</include>
+  <include>context/change_example.py</include>
+  <include>context/detect_change_example.py</include>
+
+% Deliverables
+  - Code: `pdd/incremental_prd_architecture.py`

@@ -1,1 +1,0 @@
-Spec content for schema regression

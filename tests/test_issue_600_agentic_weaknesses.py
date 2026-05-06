@@ -1,5 +1,5 @@
 """
-Tests for three weaknesses found during pdd_cloud issue #600 assessment:
+Tests for three weaknesses found during downstream_project issue #600 assessment:
 
 1. Duplicate check should instruct LLM to reuse prior PR artifacts (#610 partial)
 2. Step 9 test generation prompt should block vacuous waitFor negative assertions

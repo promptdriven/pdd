@@ -7383,7 +7383,7 @@ class TestValidateTypescriptImportsPackageJsonFallback:
     """When node_modules doesn't exist, _validate_typescript_imports should
     check package.json dependencies before flagging imports as hallucinated.
 
-    Regression test for pdd_cloud#826: generated code imports next/link and
+    Regression test for downstream_project#826: generated code imports next/link and
     lucide-react which are real deps in package.json, but flagged as
     hallucinated because node_modules wasn't installed in the git clone.
     """

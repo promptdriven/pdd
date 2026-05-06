@@ -1,0 +1,123 @@
+% Example Prompt with Architecture Metadata Tags
+% This demonstrates the proper usage of <pdd-reason>, <pdd-interface>, and <pdd-dependency> tags
+
+<pdd-reason>Validates user input and sanitizes data before processing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "validate_email",
+        "signature": "(email: str) -> bool",
+        "returns": "bool",
+        "sideEffects": ["None"]
+      },
+      {
+        "name": "sanitize_html",
+        "signature": "(html: str, allowed_tags: Optional[List[str]] = None) -> str",
+        "returns": "str",
+        "sideEffects": ["None"]
+      },
+      {
+        "name": "validate_and_sanitize",
+        "signature": "(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]",
+        "returns": "Dict[str, Any]",
+        "sideEffects": ["May raise ValidationError"]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>path_resolution_python.prompt</pdd-dependency>
+
+% === Shared Context ===
+<include>context/python_preamble.prompt</include>
+
+% === Role & Scope ===
+
+Your goal is to write the `data_validator` module for the PDD project. This module provides comprehensive input validation and sanitization for user-submitted data, protecting against XSS, SQL injection, and other security vulnerabilities.
+
+% === Requirements ===
+
+1. Email validation using regex and optional DNS checks
+2. HTML sanitization with configurable allowed tags (default: safe subset)
+3. Schema-based validation for complex data structures
+4. Clear error messages for validation failures
+5. Zero dependencies on external validation libraries (use stdlib only)
+6. Type hints for all functions
+7. Comprehensive docstrings
+8. Security-first design: default-deny for HTML tags
+9. Performance: validate_email should complete in < 1ms for typical inputs
+10. Extensibility: Easy to add new validation rules
+
+% === Dependencies ===
+
+<module_dependencies>
+  <pdd.llm_invoke>
+    <include>context/llm_invoke_example.py</include>
+  </pdd.llm_invoke>
+
+  <pdd.path_resolution>
+    <include>context/path_resolution_example.py</include>
+  </pdd.path_resolution>
+</module_dependencies>
+
+% === Instructions ===
+
+1. Implement `validate_email()`:
+   - Use regex for basic format validation (RFC 5322 compliant)
+   - Return True for valid emails, False otherwise
+   - Handle edge cases: empty string, None, malformed addresses
+
+2. Implement `sanitize_html()`:
+   - Strip all HTML tags by default
+   - If `allowed_tags` provided, preserve only those tags
+   - Remove all attributes from allowed tags (security)
+   - Handle malformed HTML gracefully (don't crash)
+   - Use html.parser from stdlib
+
+3. Implement `validate_and_sanitize()`:
+   - Accept data dict and schema dict
+   - Schema format: {"field_name": {"type": "email|html|string", "required": bool}}
+   - Apply appropriate validation/sanitization based on type
+   - Raise ValidationError (custom exception) on failure with clear message
+   - Return sanitized data dict
+
+4. Define custom exception:
+   - `class ValidationError(Exception)` with field name and reason
+
+5. Error handling:
+   - Never return None - always bool or raise exception
+   - Log warnings for malformed input (use logging module)
+
+% === Deliverables ===
+
+- Single file: `pdd/data_validator.py`
+- All functions with type hints
+- ValidationError exception class
+- Docstrings with examples for each function
+- No external dependencies (stdlib only)
+
+% === Testing Notes ===
+
+The following test cases should pass (tests will be auto-generated):
+- Valid/invalid emails (RFC 5322 edge cases)
+- XSS attack vectors in HTML (script tags, event handlers)
+- Missing required fields in schema validation
+- Type mismatches (email field with non-email content)
+- Empty/None inputs
+
+<pdd>
+Note: This example shows all three metadata tags at the top of the prompt.
+When you run "Sync from Prompt", these tags will update architecture.json:
+- reason field will be updated
+- interface field will be set to the module interface JSON
+- dependencies array will include llm_invoke_python.prompt and path_resolution_python.prompt
+
+The rest of the prompt (role, requirements, instructions) remains unchanged and
+is used for code generation as usual.
+</pdd>

@@ -1707,7 +1707,7 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
     2. The 'package_dir' (local pdd/pdd) does not contain the target file.
     3. The file *does* exist in the repository root (parent of pdd/pdd).
 
-    Bug: https://github.com/gltanaka/pdd/issues/240
+    Bug: https://github.com/promptdriven/pdd/issues/240
     """
     mock_file_name = "context/insert/1/prompt_to_update.prompt"
 
@@ -1752,7 +1752,7 @@ def test_get_file_path_repo_root_fallback(monkeypatch, tmp_path):
 
 # ============================================================================
 # Tests for Issue #375: Malformed JSON in PDD metadata tags
-# https://github.com/gltanaka/pdd/issues/375
+# https://github.com/promptdriven/pdd/issues/375
 #
 # Issue #410 fix: double_curly() must double ALL braces uniformly, including
 # inside PDD metadata tags (<pdd-interface>, <pdd-reason>, <pdd-dependency>).

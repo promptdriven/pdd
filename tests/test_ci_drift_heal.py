@@ -1779,7 +1779,7 @@ class TestParseArgs:
 
 
 # ---------------------------------------------------------------------------
-# Change-magnitude gate tests (PR gltanaka/pdd#1187 regression)
+# Change-magnitude gate tests (PR promptdriven/pdd#1187 regression)
 # ---------------------------------------------------------------------------
 
 class TestPromptChurnGate:
@@ -1887,7 +1887,7 @@ class TestPromptChurnGate:
 
 
 # ---------------------------------------------------------------------------
-# Structural-invariants gate tests (PR gltanaka/pdd#1187 regression)
+# Structural-invariants gate tests (PR promptdriven/pdd#1187 regression)
 # ---------------------------------------------------------------------------
 
 _FIXTURE_DIR = Path(__file__).parent / "fixtures"

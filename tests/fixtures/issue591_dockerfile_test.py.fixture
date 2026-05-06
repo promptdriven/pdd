@@ -1,7 +1,7 @@
 """Fixture: real pdd-bug output for Dockerfile version pin test (issue #591).
 
 This is a legitimate config-content test that should NOT be flagged.
-Copied from the validation run of pdd bug against promptdriven/pdd_cloud#591.
+Copied from the validation run of pdd bug against promptdriven/example_app#591.
 """
 
 import re

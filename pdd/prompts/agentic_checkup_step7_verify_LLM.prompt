@@ -79,7 +79,7 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 
    - **Issue mode** (default; `pr_mode` = `false`): "Did the fixes applied in Steps 6.1–6.3 resolve the issue described in `<issue_content>`, with no new regressions?" Set `success` true if yes, false otherwise.
 
-   - **PR mode** (`pr_mode` = `true`): "Does the PR at `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow has run analysis steps inside the PR's worktree (NOT the issue-author's HEAD). The verdict you must produce here is whether the PR's diff, on its own, addresses the issue's intent — independent of any local fixes. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream consumers (e.g. `pdd_cloud`'s checkup_verifier adapter) gate terminal-fail on this field.
+   - **PR mode** (`pr_mode` = `true`): "Does the PR at `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow has run analysis steps inside the PR's worktree (NOT the issue-author's HEAD). The verdict you must produce here is whether the PR's diff, on its own, addresses the issue's intent — independent of any local fixes. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
 
 5. **Generate the final JSON report**
 
@@ -119,7 +119,7 @@ Set `"success": false` otherwise.
      gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
      ```
 
-   - **PR mode** (`pr_mode` = `true`): post to **BOTH** the PR thread (for human reviewers of the PR) AND the source issue thread (the canonical location downstream consumers — `pdd_cloud`'s checkup_verifier — fetch from). Order: PR comment first, then issue comment with the same body. Do NOT skip the issue post — it is part of the contract with the consumer.
+   - **PR mode** (`pr_mode` = `true`): post to **BOTH** the PR thread (for human reviewers of the PR) AND the source issue thread (the canonical location downstream consumers fetch from). Order: PR comment first, then issue comment with the same body. Do NOT skip the issue post — it is part of the contract with the consumer.
      ```
      # 1. Post to the PR (human reviewers see verdict in PR context)
      gh pr comment {pr_number} --repo {pr_owner}/{pr_repo} --body "..."

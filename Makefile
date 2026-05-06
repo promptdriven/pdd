@@ -26,8 +26,6 @@ help:
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make cloud-regression [TEST_NUM=n] - Run cloud regression tests (no --local flag)"
 	@echo "  make test-all-ci [PR_NUMBER=n] [PR_URL=url] - Run all tests with result capture"
-	@echo "  make test-all-with-infisical [PR_NUMBER=n] [PR_URL=url] - Run all tests with Infisical"
-	@echo "  make pr-test pr-url=URL      - Test any GitHub PR on GitHub Actions (e.g., https://github.com/owner/repo/pull/123)"
 	@echo "  make cloud-test              - Build image + push + run all tests on Cloud Batch"
 	@echo "  make cloud-test-quick        - Run tests on Cloud Batch (skip image rebuild)"
 	@echo "  make cloud-test-build        - Build and push image via Cloud Build"
@@ -57,7 +55,6 @@ help:
 	@echo "  make build                   - Build pdd package"
 	@echo "  make publish                 - Build & upload current version"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
-	@echo "  make publish-public-cap      - Copy artifacts to CAP public repo only"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
 	@echo "  make release                 - Bump version and build package (runs check-deps first)"
 	@echo "  make staging                 - Copy files to staging"
@@ -67,9 +64,6 @@ help:
 # Public repo paths (override via env if needed)
 PUBLIC_PDD_REPO_DIR ?= staging/public/pdd
 PUBLIC_PDD_REMOTE ?= https://github.com/promptdriven/pdd.git
-# CAP public repo (optional second destination)
-PUBLIC_PDD_CAP_REPO_DIR ?= staging/public/pdd_cap
-PUBLIC_PDD_CAP_REMOTE ?= https://github.com/promptdriven/pdd_cap.git
 # Top-level files to publish if present (read from .sync-config.yml)
 PUBLIC_ROOT_FILES ?= $(shell python scripts/get_sync_patterns.py root_files 2>/dev/null || echo "LICENSE README.md requirements.txt pyproject.toml")
 # Include core unit tests by default
@@ -106,7 +100,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public publish-public-cap public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend
+.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -576,7 +570,7 @@ cloud-test-setup:
 	@GCP_PROJECT_ID=$(GCP_PROJECT_ID) GCP_REGION=$(GCP_REGION) GCS_BUCKET=$(GCS_BUCKET) \
 		bash $(CLOUD_BATCH_DIR)/setup-gcp.sh
 
-# Automated test runner with Infisical for CI/CD
+# Automated test runner for CI/CD
 .PHONY: test-all-ci
 test-all-ci: ensure-dev-deps
 	@echo "Running all test suites with result capture for CI/CD"
@@ -590,54 +584,6 @@ endif
 else
 	@conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
 endif
-
-# Run all tests with Infisical (for local development and CI)
-.PHONY: test-all-with-infisical
-test-all-with-infisical: ensure-dev-deps
-	@echo "Running all test suites with Infisical"
-	@if ! command -v infisical &> /dev/null; then \
-		echo "Error: Infisical CLI not found. Please install it:"; \
-		echo "npm install -g @infisical/cli"; \
-		exit 1; \
-	fi
-	@mkdir -p test_results
-ifdef PR_NUMBER
-ifdef PR_URL
-	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER) --pr-url $(PR_URL)
-else
-	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py --pr-number $(PR_NUMBER)
-endif
-else
-	@infisical run -- conda run -n pdd --no-capture-output python scripts/run_all_tests_with_results.py
-endif
-
-# Test a PR from a public or private repo by triggering GitHub Actions
-.PHONY: pr-test
-pr-test:
-	@if [ -z "$(pr-url)" ]; then \
-		echo "Error: pr-url is required"; \
-		echo "Usage: make pr-test pr-url=https://github.com/owner/repo/pull/123"; \
-		exit 1; \
-	fi
-	@echo "Triggering GitHub Actions to test PR at $(pr-url)..."
-	@if ! command -v gh &> /dev/null; then \
-		echo "Error: GitHub CLI (gh) not found. Please install it:"; \
-		echo "  macOS: brew install gh"; \
-		echo "  Linux: https://github.com/cli/cli/blob/trunk/docs/install_linux.md"; \
-		exit 1; \
-	fi
-	@PR_NUMBER=$$(echo "$(pr-url)" | grep -o '[0-9]*$$'); \
-	if [ -z "$$PR_NUMBER" ]; then \
-		echo "Error: Could not extract PR number from URL."; \
-		exit 1; \
-	fi; \
-	gh workflow run pr-tests.yml \
-		--repo gltanaka/pdd \
-		--field public_pr_number=$$PR_NUMBER \
-		--field public_pr_url=$(pr-url)
-	@echo "Workflow triggered successfully!"
-	@echo "View progress: https://github.com/gltanaka/pdd/actions"
-	@echo "Results will be posted to: $(pr-url)"
 
 install:
 	@echo "Installing pdd"
@@ -658,7 +604,7 @@ build:
 publish:
 	@echo "Building and uploading package"
 	@$(MAKE) build
-	@$(MAKE) publish-public publish-public-cap
+	@$(MAKE) publish-public
 
 # Check that pyproject.toml dependencies match requirements.txt
 check-deps:
@@ -714,7 +660,7 @@ release: check-deps check-suspicious-files
 2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
 3. For files with significant changes (>20 lines in the stat), run 'git diff <prior>..HEAD -- <file>' to understand the SEMANTIC meaning of the change, not just that lines changed. Look for: new features, behavior changes, removed constants/functions, generalized logic. \
 4. Note any DELETED files (shown as 'delete mode' or '0 insertions, N deletions') - these are often meaningful (e.g., removed prompts, deprecated modules). \
-5. IMPORTANT: PR numbers in merge commits (e.g., 'Merge pull request #337') are from the FORK (gltanaka/pdd), NOT the public repo (promptdriven/pdd). Do NOT include fork PR numbers in the CHANGELOG - they will confuse users who look them up on the public repo. \
+5. IMPORTANT: PR numbers in merge commits may come from forks rather than the public repo (promptdriven/pdd). Do NOT include fork-only PR numbers in the CHANGELOG - they will confuse users who look them up on the public repo. \
 6. For external contributor credits ONLY: use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs. Verify PRs exist with 'gh pr view <num> --repo promptdriven/pdd --json state,title'. Only credit PRs that are actually merged on promptdriven/pdd. \
 7. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
 8. Keep descriptions concise but complete. Every significant code change should be represented. \
@@ -809,58 +755,6 @@ public-ensure:
 	else \
 		echo "Public repo clone already present: $(PUBLIC_PDD_REPO_DIR)"; \
 		fi
-
-# Publish to CAP public repo (copies all prompts, including non _LLM.prompt)
-.PHONY: publish-public-cap
-publish-public-cap:
-	@# Ensure target directory is a Git repo (clone if empty and not a repo)
-	@if [ ! -d "$(PUBLIC_PDD_CAP_REPO_DIR)/.git" ]; then \
-		if [ ! -d "$(PUBLIC_PDD_CAP_REPO_DIR)" ] || [ -z "$$(/bin/ls -A "$(PUBLIC_PDD_CAP_REPO_DIR)" 2>/dev/null)" ]; then \
-			echo "Cloning public CAP repo $(PUBLIC_PDD_CAP_REMOTE) into $(PUBLIC_PDD_CAP_REPO_DIR)"; \
-			mkdir -p "$(dir $(PUBLIC_PDD_CAP_REPO_DIR))"; \
-			git clone "$(PUBLIC_PDD_CAP_REMOTE)" "$(PUBLIC_PDD_CAP_REPO_DIR)"; \
-		else \
-			echo "Warning: $(PUBLIC_PDD_CAP_REPO_DIR) exists and is not a Git repo."; \
-			echo "Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE) or remove the directory and re-run."; \
-		fi; \
-	fi
-	@echo "Ensuring CAP public repo directory exists: $(PUBLIC_PDD_CAP_REPO_DIR)"
-	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)
-	@# Reset to origin/main before copying so the copy lands on a clean baseline
-	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git fetch origin && git reset --hard origin/main; \
-	fi
-	@echo "Copying files from .sync-config.yml (shared + cap_only sections)"
-	@python scripts/copy_package_data_to_public.py \
-		--dest $(PUBLIC_PDD_CAP_REPO_DIR) \
-		--project-root . \
-		--config .sync-config.yml \
-		--sections shared cap_only \
-		--sync-deletions
-	@# Create prompts symlink if needed (prompts/ -> pdd/prompts/)
-	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/prompts" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/prompts" ]; then \
-		echo "Creating prompts symlink"; \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && ln -s pdd/prompts prompts; \
-	fi
-	@# Create data symlink for regression tests (data/ -> pdd/data/)
-	@if [ -d "$(PUBLIC_PDD_CAP_REPO_DIR)/pdd/data" ] && [ ! -e "$(PUBLIC_PDD_CAP_REPO_DIR)/data" ]; then \
-		echo "Creating data symlink for regression tests"; \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && ln -s pdd/data data; \
-	fi
-	@echo "Committing and pushing updates in CAP public repo"
-	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git add . && \
-		if ! git diff --cached --quiet; then \
-			git commit -m "Bump version" && \
-			CURR_VER=$$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1) && \
-			(git tag -a "v$$CURR_VER" -m "Release v$$CURR_VER" 2>/dev/null || true) && \
-			git push && git push --tags; \
-		else \
-			echo "No changes to commit in CAP public repo — skipping push"; \
-		fi; \
-	else \
-		echo "Skip commit: $(PUBLIC_PDD_CAP_REPO_DIR) is not a Git repo. Set PUBLIC_PDD_CAP_REPO_DIR to a clone of $(PUBLIC_PDD_CAP_REMOTE)."; \
-	fi
 
 # Update the public repo clone to its default branch
 public-update: public-ensure

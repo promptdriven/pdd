@@ -10,7 +10,7 @@ setup(
     description="PDD (Prompt-Driven Development) - A toolkit for AI-powered code generation and maintenance",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    url="https://github.com/gltanaka/pdd",
+    url="https://github.com/promptdriven/pdd",
     packages=find_packages(),
     include_package_data=True,
     package_data={
@@ -90,8 +90,8 @@ setup(
     ],
     keywords="pdd prompt-driven-development ai code-generation cli llm",
     project_urls={
-        "Bug Reports": "https://github.com/gltanaka/pdd/issues",
-        "Source": "https://github.com/gltanaka/pdd",
+        "Bug Reports": "https://github.com/promptdriven/pdd/issues",
+        "Source": "https://github.com/promptdriven/pdd",
         "Discord": "https://discord.gg/Yp4RTh8bG7",
     },
 )

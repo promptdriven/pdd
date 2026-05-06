@@ -8,7 +8,7 @@ The bug: `_commit_and_push()` in `agentic_e2e_fix_orchestrator.py` commits ALL
 files that changed during the workflow based solely on hash comparison, with no
 filtering for intermediate/debug file patterns.
 
-Evidence: In PR #44 of pdd_cap repository, files like `pdd/auth_test_commands_auth_fixed.py`
+Evidence: In the original report, files like `pdd/auth_test_commands_auth_fixed.py`
 and `tests/test_auth_test_commands_auth_fixed.py` were incorrectly committed.
 
 This E2E test:
@@ -38,7 +38,7 @@ import pytest
 def e2e_git_repo(tmp_path):
     """Create a realistic git repository for E2E testing.
 
-    This fixture creates a git repo structure similar to the pdd_cap repo
+    This fixture creates a git repo structure similar to the repository
     where the bug was observed.
     """
     # Initialize git repo

@@ -2,7 +2,7 @@
 
 These tests exercise the full orchestrator workflow end-to-end, simulating
 realistic multi-cycle scenarios that match the original bug report
-(pdd_cloud#591: 5 cycles when only 2 needed, cycles 3-5 wasted).
+(issue #591: 5 cycles when only 2 needed, cycles 3-5 wasted).
 
 Unlike the unit tests in test_agentic_e2e_fix_orchestrator.py which test
 individual convergence checks in isolation, these E2E tests verify the
@@ -59,14 +59,14 @@ def e2e_orchestrator_mocks(tmp_path):
 def orchestrator_args(tmp_path):
     """Standard arguments matching a realistic pdd-fix invocation."""
     return {
-        "issue_url": "https://github.com/promptdriven/pdd_cloud/issues/591",
+        "issue_url": "https://github.com/promptdriven/example_app/issues/591",
         "issue_content": (
             "Title: Fix auth middleware token storage\n\n"
             "Description:\nAuth middleware stores tokens in plaintext.\n\n"
             "Comments:\n"
         ),
         "repo_owner": "promptdriven",
-        "repo_name": "pdd_cloud",
+        "repo_name": "example_app",
         "issue_number": 591,
         "issue_author": "gltanaka",
         "issue_title": "Fix auth middleware token storage",
@@ -94,7 +94,7 @@ def _count_cycles(labels: List[str]) -> int:
 
 
 class TestE2EWastedCyclesScenario:
-    """Reproduces the exact scenario from pdd_cloud#591: cycles 3-5 run with
+    """Reproduces the exact scenario from issue #591: cycles 3-5 run with
     0 dev units, wasting time and cost.
 
     This is the primary E2E test. It simulates a realistic 5-cycle workflow

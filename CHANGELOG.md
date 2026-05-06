@@ -91,7 +91,7 @@
 - Review-loop prompts now receive bounded issue, architecture, `.pddrc`, PR metadata, changed-file, PR comment, and PR review context; verification rounds re-check prior findings and perform a fresh full PR review.
 - Agent discovery now handles stale Codex CLI auth with an actionable `codex login` message, treats Gemini CLI OAuth credentials as Google availability, and searches runtime-expanded common install paths for `claude`, `codex`, and `gemini`.
 - Implemented global tier-1 sync mode, deterministic manifest-driven model catalog, and improved dependency-aware CLI architecture management.
-- **sync**: opt-in durable issue-sync mode (`pdd sync --durable <issue-url>`) that isolates each module in `.pdd/worktrees/sync-issue-<N>-<module>/`, checkpoints successful module diffs to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/` with a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` commit trailer, and resumes by skipping checkpointed modules on rerun. New flags `--durable-branch`, `--no-resume`, and `--durable-max-parallel` control the durable branch name, fresh re-runs, and concurrency cap; durable mode refuses `main`/`master`/the repository default branch and excludes secrets, lock files, cost CSVs, `.pdd/worktrees/`, and `.pdd/agentic_sync_state.json` from checkpoints (#1328). Cloud wiring (`pdd_cloud` passing `--durable` for issue-sync jobs, Phase 5 of #1328) lands separately.
+- **sync**: opt-in durable issue-sync mode (`pdd sync --durable <issue-url>`) that isolates each module in `.pdd/worktrees/sync-issue-<N>-<module>/`, checkpoints successful module diffs to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/` with a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` commit trailer, and resumes by skipping checkpointed modules on rerun. New flags `--durable-branch`, `--no-resume`, and `--durable-max-parallel` control the durable branch name, fresh re-runs, and concurrency cap; durable mode refuses `main`/`master`/the repository default branch and excludes secrets, lock files, cost CSVs, `.pdd/worktrees/`, and `.pdd/agentic_sync_state.json` from checkpoints (#1328). Cloud wiring (`downstream_project` passing `--durable` for issue-sync jobs, Phase 5 of #1328) lands separately.
 
 ### Fix
 
@@ -205,7 +205,7 @@
 
 ### Feat
 
-- **`pdd checkup --pr <pr-url> --issue <issue-url>` mode**: new PR-verification entry point that runs the agentic checkup workflow against an existing pull request's actual code instead of creating a new branch. New helper `_parse_pr_url` in `pdd/agentic_change.py` parses GitHub PR URLs; `pdd/agentic_checkup.py` and `pdd/agentic_checkup_orchestrator.py` thread `pr_url`/`pr_owner`/`pr_repo`/`pr_number` through the orchestrator. New `_setup_pr_worktree` fetches `pull/N/head` into an isolated `.pdd/worktrees/checkup-pr-N` worktree on a `checkup/pr-N` branch; `_resolve_pr_remote` walks `git remote -v` to find a remote whose URL matches the PR's owner/repo before falling back to fetching directly from the explicit GitHub URL — fixes fork-PR verification where the local clone's `origin` is not the upstream PR repo. Step 8 (create-PR) is skipped in PR mode and step 7's verify prompt (`agentic_checkup_step7_verify_LLM.prompt`) gains a `pr_mode`/`pr_url`/`pr_owner`/`pr_repo`/`pr_number` substitution block plus a new top-level `issue_aligned` boolean (required in PR mode, omitted/null in issue mode) so downstream consumers like `pdd_cloud`'s `checkup_verifier` adapter can gate a terminal-fail on PR-vs-issue misalignment. Push-back to the PR is not yet implemented, so `--pr` forces `--no-fix` with a warning. The new state-identity guard in the orchestrator validates `mode` (issue vs pr), `pr_number`, and `pr_owner`/`pr_repo` against the cached state before reuse so a verification of PR B can never silently inherit PR A's worktree path or step outputs. New `tests/test_checkup_pr_mode.py` (~720 lines) covers CLI argument validation, worktree setup, fork-remote resolution, state-identity guard, and the PR-mode prompt context wiring
+- **`pdd checkup --pr <pr-url> --issue <issue-url>` mode**: new PR-verification entry point that runs the agentic checkup workflow against an existing pull request's actual code instead of creating a new branch. New helper `_parse_pr_url` in `pdd/agentic_change.py` parses GitHub PR URLs; `pdd/agentic_checkup.py` and `pdd/agentic_checkup_orchestrator.py` thread `pr_url`/`pr_owner`/`pr_repo`/`pr_number` through the orchestrator. New `_setup_pr_worktree` fetches `pull/N/head` into an isolated `.pdd/worktrees/checkup-pr-N` worktree on a `checkup/pr-N` branch; `_resolve_pr_remote` walks `git remote -v` to find a remote whose URL matches the PR's owner/repo before falling back to fetching directly from the explicit GitHub URL — fixes fork-PR verification where the local clone's `origin` is not the upstream PR repo. Step 8 (create-PR) is skipped in PR mode and step 7's verify prompt (`agentic_checkup_step7_verify_LLM.prompt`) gains a `pr_mode`/`pr_url`/`pr_owner`/`pr_repo`/`pr_number` substitution block plus a new top-level `issue_aligned` boolean (required in PR mode, omitted/null in issue mode) so downstream consumers like `downstream_project`'s `checkup_verifier` adapter can gate a terminal-fail on PR-vs-issue misalignment. Push-back to the PR is not yet implemented, so `--pr` forces `--no-fix` with a warning. The new state-identity guard in the orchestrator validates `mode` (issue vs pr), `pr_number`, and `pr_owner`/`pr_repo` against the cached state before reuse so a verification of PR B can never silently inherit PR A's worktree path or step outputs. New `tests/test_checkup_pr_mode.py` (~720 lines) covers CLI argument validation, worktree setup, fork-remote resolution, state-identity guard, and the PR-mode prompt context wiring
 - **`generate_test_LLM.prompt` overhaul + formal-test-generation benchmark**: replaces the old "write a Z3 plan, then tests" instruction with a formal-vs-runtime classification step (FORMAL_CANDIDATE vs RUNTIME_TEST_ONLY) and ~25 new CRITICAL guardrails for: package-aware imports derived from `source_file_path` (`pdd/foo.py` → `pdd.foo`, never bare `foo`), public-API-only testing (no underscored helpers), refusing to monkeypatch symbols not visible as module attributes, refusing to patch function-local imports as module globals, exercising real parsers over mocking same-package internals, language-specific prompt fixture filenames (e.g. `module_a_python.prompt`, never bare `a.prompt`), normalized-warning-string assertions (`'log'` not `'log_python'`), file-vs-directory rules with trailing-slash semantics, env-var hygiene for path tests, and avoiding decorative test-plan docstrings. New `experiments/formal_test_generation_benchmark/` harness (gitignored `results/`, README, BENCHMARK_RESULTS, two runner scripts) measures generated-test quality on `architecture_include_validation` and `generate_output_paths` against seeded mutants. Mutation kill score moved from "invalid (baseline failed)" → 75% (3/4) and 100% (4/4) after the prompt update; the new prompt also drops decorative Z3 imports while preserving formal verification when truly justified
 
 ### Fix
@@ -329,7 +329,7 @@
 
 ### Feat
 
-- **auto-heal — skip draft PR builds via in-build `draft-guard`**: auto-heal was re-running on every pushed WIP commit during active draft churn. `cloudbuild-auto-heal.yaml` adds a `draft-guard` step (between `mint-token` and `fetch-history`) that queries `GET /repos/gltanaka/pdd/pulls?state=open&head=gltanaka:<branch>&base=<base>` with the installation token; if the matched PR has `draft: true`, the guard touches `/ci-state/skip` and downstream steps exit immediately. Fails open on API errors (the guard is an efficiency policy, not a safety gate) and skips itself on push-to-`main` builds. `docs/ci-auto-heal.md` documents the new step, PR trigger behavior, and the post-`ready_for_review` first-run caveat (GCB triggers have no draft filter, so the first guaranteed full run is the next pushed commit or a manual rerun)
+- **auto-heal — skip draft PR builds via in-build `draft-guard`**: auto-heal was re-running on every pushed WIP commit during active draft churn. `cloudbuild-auto-heal.yaml` adds a `draft-guard` step (between `mint-token` and `fetch-history`) that queries `GET /repos/promptdriven/pdd/pulls?state=open&head=gltanaka:<branch>&base=<base>` with the installation token; if the matched PR has `draft: true`, the guard touches `/ci-state/skip` and downstream steps exit immediately. Fails open on API errors (the guard is an efficiency policy, not a safety gate) and skips itself on push-to-`main` builds. `docs/ci-auto-heal.md` documents the new step, PR trigger behavior, and the post-`ready_for_review` first-run caveat (GCB triggers have no draft filter, so the first guaranteed full run is the next pushed commit or a manual rerun)
 - **`path_resolution` — `find_project_root_from_path` standalone + strong/weak markers**: adds top-level `find_project_root_from_path(start, max_levels=10)` that walks upward from a file or directory looking for project markers with priority: `.git` wins immediately (strong); `.pddrc`, `pyproject.toml`, `data/`, `.env` are tracked as weak markers where the *outermost* match wins but the walk continues in case a strong marker sits above. `PathResolver.resolve_project_root` adopts the same priority and widens `max_levels` from 5 to 10. Used across the auto-healed modules below so CSV caches, extract caches, and include-dedup all key off the same project root regardless of CWD
 - **`pddrc_initializer` — named `SCAFFOLD_DEFAULT_STRENGTH = 0.818` constant**: the scaffold default used to be a magic number in `STANDARD_DEFAULTS`. Hoisted to a module-level constant so `.pddrc` generation is deterministic and intentionally diverges from the env-overridable runtime `DEFAULT_STRENGTH` (0.75) — the scaffolded value is tuned to steer new projects toward Gemini 3.1 Pro. Standard defaults dict references the constant; YAML template and copy updated from `0.75` to `0.818`; new test `test_scaffold_default_strength_is_pinned` prevents accidental drift
 
@@ -388,7 +388,7 @@
 
 ### Feat
 
-- **auto-heal structural-invariant + churn gates (#1220)**: new `pdd/ci_drift_heal.py` gates (+318 lines) that refuse destructive `pdd update` rewrites. `_enforce_prompt_churn_gate` reverts prompts whose churn-ratio vs. originating code change exceeds `_HEAL_PROMPT_CHURN_MAX_RATIO = 5.0` (override via `PDD_HEAL_PROMPT_CHURN_MAX_RATIO`); `_enforce_structural_invariants` diffs the HEAD prompt against post-heal content and reverts when `<include>`/`<include-many>` tag count drops, `<pdd.NAME>` namespace tags disappear, `%` section markers fall below `max(1, ceil(original/2))`, or any fenced code block is not byte-preserved. Selectively disable invariants via comma-separated `PDD_HEAL_INVARIANTS_SKIP` (`include`, `pdd_tags`, `percent_markers`, `fenced_blocks`); motivated by the PR gltanaka/pdd#1187 1→176-line autoheal incident
+- **auto-heal structural-invariant + churn gates (#1220)**: new `pdd/ci_drift_heal.py` gates (+318 lines) that refuse destructive `pdd update` rewrites. `_enforce_prompt_churn_gate` reverts prompts whose churn-ratio vs. originating code change exceeds `_HEAL_PROMPT_CHURN_MAX_RATIO = 5.0` (override via `PDD_HEAL_PROMPT_CHURN_MAX_RATIO`); `_enforce_structural_invariants` diffs the HEAD prompt against post-heal content and reverts when `<include>`/`<include-many>` tag count drops, `<pdd.NAME>` namespace tags disappear, `%` section markers fall below `max(1, ceil(original/2))`, or any fenced code block is not byte-preserved. Selectively disable invariants via comma-separated `PDD_HEAL_INVARIANTS_SKIP` (`include`, `pdd_tags`, `percent_markers`, `fenced_blocks`); motivated by the PR promptdriven/pdd#1187 1→176-line autoheal incident
 - **multi-provider auto-heal on Cloud Build**: `cloudbuild-auto-heal.yaml` installs all three agent CLIs (`@anthropic-ai/claude-code`, `@google/gemini-cli`, `@openai/codex`), sets `PDD_AGENTIC_PROVIDER=anthropic,google,openai` (anthropic first — empirically preserves structure best), wires `OPENAI_API_KEY` and `CLAUDE_CODE_OAUTH_TOKEN` Secret Manager secrets, raises `_PDD_BUDGET_CAP` 5.00→15.00 (pilot measured ~$1.95/module), and aborts the heal step when any CLI is missing after install
 - **core/duplicate_cli_guard — keyed multi-invocation store (#1178, #1180)**: `.pdd/last_run.json` is now a signature-keyed dict instead of a single record so interleaved re-runs across different modules each track their own entry. `_signature_key` hashes `(project_root, argv_tail)`; `_load_store` migrates legacy single-record files on read and tolerates corrupt JSON; `save_last_run` prunes expired entries on every write; `_entry_timestamp` treats malformed timestamps as expired; `_lookup_matching_record` routes through `load_last_run` to preserve pre-existing test mocks. Also ships new `pdd/prompts/core/duplicate_cli_guard_python.prompt`
 
@@ -646,7 +646,7 @@
 - **prompts**: restore orchestrator prompt; simplify from 12-step to 10-step workflow and remove `timeout_adder`/`use_github_state` parameters
 - **prompt**: Step 11 API mock example uses 'GET'/'POST' for test matchers
 - **sync**: delegate fix-phase test subprocess to a separate symbol (`_run_fix_operation_test_subprocess`) for reliable test patching
-- **test**: use TestCommand mock for cherry-pick compat with gltanaka/pdd
+- **test**: use TestCommand mock for cherry-pick compat with promptdriven/pdd
 - remove 18 orphaned entries and sync stale dependencies in architecture.json
 - **arch validation**: `_module_prompt_include_target` now filters non-`.prompt` includes (e.g. context/example files) so validation matches architecture.json semantics
 
@@ -1507,7 +1507,7 @@
 
 - Update cloud batch test durations.
 - increase pdd crash E2E test timeout from 300s to 600s.
-- Add `.infisical.json` and `test-durations.json` to `.gitignore`.
+- Add `.external-secret-manager.json` and `test-durations.json` to `.gitignore`.
 
 ### Docs
 
@@ -2092,7 +2092,7 @@
 ### Docs
 
 - **README.md**: Document `--no-steer` and `--steer-timeout` sync options. Add `CLAUDE_MODEL` and `PDD_USER_FEEDBACK` environment variable documentation. Update macOS Python note (no longer ships pre-installed).
-- **ONBOARDING.md**: Update all repository URLs from `gltanaka/pdd` to `promptdriven/pdd`.
+- **ONBOARDING.md**: Update all repository URLs from `promptdriven/pdd` to `promptdriven/pdd`.
 
 ### Tests
 
@@ -2547,7 +2547,7 @@ Thanks James Levine for the _LLM preprocess fixes!
 
 ### Build
 
-- Add `scripts/pytest-infisical.sh` for VS Code Test Explorer secret injection.
+- Add `scripts/pytest-external-secret-manager.sh` for VS Code Test Explorer secret injection.
 - Remove unused `simple_math` example files.
 
 ## v0.0.123 (2026-01-20)
@@ -2994,13 +2994,13 @@ Thanks James Levine for the _LLM preprocess fixes!
 ### Feat
 
 - **Agentic Bug Investigation Workflow (Issue #153):** New 9-step automated workflow for investigating GitHub issues. Parses issue URL via `gh` CLI, fetches issue content/comments, and runs steps: duplicate detection, documentation check, triage, reproduction, root cause analysis, test plan design, test generation, verification, and PR creation. Includes hard-stop conditions (duplicate, feature request, user error, needs info) and context accumulation between steps.
-- **Bidirectional Repository Sync:** Added `.sync-config.yml` for syncing files between `pdd` and `pdd_cap` repositories, including prompts, context files, and documentation.
+- **Bidirectional Repository Sync:** Added `.sync-config.yml` for syncing files between `pdd` and `pdd prompt files` repositories, including prompts, context files, and documentation.
 - **Analysis Command Enhancements:** Added function namespaces to analysis prompts, improved output handling in examples, and better error handling.
 
 ### Fix
 
 - **Firecrawl API 4.0+ Compatibility:** Updated API calls for newer Firecrawl versions.
-- **Preprocess Tag Escaping:** Escape tag examples in `preprocess_python.prompt` (from pdd_cap PR #11).
+- **Preprocess Tag Escaping:** Escape tag examples in `preprocess_python.prompt` (from pdd prompt files PR #11).
 - **ONBOARDING.md Sync Path:** Use `docs/*.md` pattern instead of root file.
 - **Git Auth for CAP_REPO_TOKEN:** Use git config for token authentication in sync workflow.
 
@@ -3422,7 +3422,7 @@ Many thanks to Jiamin Cai for your contributions to the update fix!
 
 ### CI
 
-- **Public Repo Sync Workflow:** Added `.github/workflows/sync-from-public.yml` GitHub Actions workflow to automatically sync changes from public repositories (`promptdriven/pdd` and `promptdriven/pdd_cap`). Creates PRs with changed files from specified patterns (Python modules, tests, configs) and runs tests before PR creation.
+- **Public Repo Sync Workflow:** Added `.github/workflows/sync-from-public.yml` GitHub Actions workflow to automatically sync changes from public repositories (`promptdriven/pdd` and `promptdriven/pdd`). Creates PRs with changed files from specified patterns (Python modules, tests, configs) and runs tests before PR creation.
 
 ### Docs
 
@@ -3885,7 +3885,7 @@ Many thanks to Jiamin Cai for your amazing contributions!
 - include PR link in test results comment
 - extract and display failed test numbers in results
 - add manual workflow trigger support without requiring keys in code
-- automate test execution with GitHub Actions and Infisical
+- automate test execution with GitHub Actions and external secret manager
 
 ### Fix
 
@@ -3893,16 +3893,16 @@ Many thanks to Jiamin Cai for your amazing contributions!
 - improve patch application process in PR tests workflow with fallback mechanism
 - simplify comment body parsing in PR tests workflow
 - update sync command to include local flag for multi-language tests
-- update Infisical environment variable usage and improve sync regression test logging
-- update repository references from pdd_cloud to gltanaka/pdd
-- update all repository URLs to promptdriven/pdd_cloud
+- update external secret manager environment variable usage and improve sync regression test logging
+- update repository references from downstream_project to promptdriven/pdd
+- update all repository URLs to promptdriven/example_app
 - update repository references to promptdriven organization
 
 ### Refactor
 
 - enhance `update` command functionality in CLI to support repository-wide updates and improved prompt handling (Thank you Jiamin Cai for your contributions!)
 - enhance test logging and output handling in TestRunner
-- enhance Infisical integration in test scripts and update workflow for token usage
+- enhance external secret manager integration in test scripts and update workflow for token usage
 - update GitHub Actions workflow to apply public PR patches on private repo
 - use pr-url instead of pr-num for flexibility
 - change workflow to manual-only execution
