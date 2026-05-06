@@ -5,6 +5,7 @@
   "module": {
     "functions": [
       {"name": "run_agentic_architecture", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "run_incremental_architecture", "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float)", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "_is_github_issue_url", "signature": "(url: str)", "returns": "bool"},
       {"name": "_parse_github_url", "signature": "(url: str)", "returns": "Optional[Tuple[str, str, int]]"}
     ]
@@ -34,15 +35,24 @@ The `pdd/agentic_architecture.py` module serves as the CLI entry point for the a
         - If it's a mismatched git repo, warn the user but proceed.
         - If not in a git repo, check for a `{repo}/` subdirectory or clone it using `gh repo clone`.
 6. **Context Discovery**:
-    - `_extract_target_dir(issue_body) -> Optional[str]`: Parse target subdirectory from the issue body. Match backtick-quoted (`` in `dir` ``), double-quote-quoted (`in "dir"`), or unquoted directory-like names (must contain underscore or slash). CLI parameter `target_dir` takes precedence.
+    - `_extract_target_dir(issue_body) -> Optional[str]`: Parse target subdirectory from the issue body. Match backtick-quoted (`` in `dir` ``), double-quote-quoted (`in "dir"`), or unquoted directory-like names (must contain slash, underscore, or dot). CLI parameter `target_dir` takes precedence. For explicit quoted targets, accept the same safe repo-relative path policy as `--output-dir`, including path characters such as `.` that do not escape the repo. Reject absolute paths, parent traversal, backslashes, whitespace, newlines, shell metacharacters, Markdown backticks, leading-hyphen path segments, and any path outside the shell-safe grammar `[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?(/[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?)*`. If issue text explicitly contains an unsafe target path, fail the workflow instead of silently falling back to the repo root.
+    - Validate any CLI or issue-derived `target_dir` before use; resolve it under the repository root and fail if it would escape the repository or be unsafe to interpolate into a copyable shell hint.
     - `_parse_related_issues(body)`: Extract `#NNN` references from a `### Related sub-issues:` section.
     - `_fetch_sibling_architectures(cwd, target_dir)`: Scan peer directories for `architecture.json` files (ignoring hidden, `node_modules`, and `__pycache__`). When generating into a subdir, also check root `architecture.json`. Format findings as a Markdown table with filename, filepath, description, interface type, and origin issue columns.
     - `_read_existing_pddrc(cwd)`: Read the content of the root `.pddrc` file if present.
     - `_read_existing_architecture(cwd, target_dir)`: Read existing `architecture.json` at the target location (for merge context).
-7. **Orchestration**: Pass all gathered context (`sibling_architectures`, `existing_pddrc`, `existing_architecture`, `related_issues`, `target_dir`, `force_single`) to the `run_agentic_architecture_orchestrator`.
+7. **Incremental PRD Architecture**:
+    - `run_incremental_architecture(prd_source, *, dry_run=False, verbose=False, quiet=False, use_github_state=True, target_dir=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME)` supports `pdd generate --incremental <issue-url|prd.md>`.
+    - For GitHub issue URLs, reuse the agentic shell: fetch issue/comments, ensure repository context, parse `target_dir`, and pass the composed issue content into `run_incremental_prd_propagation`.
+    - For local PRD files, validate the file relative to the current repository and call `run_incremental_prd_propagation` with the target architecture and prompts directories.
+    - When a GitHub issue incremental run targets a subdirectory, convert returned `changed_files` to repo-relative paths by prefixing the normalized `target_dir` before returning or posting status.
+    - When a successful non-dry-run incremental run targets a subdirectory, append a CLI/status hint that follow-up sync should be run from that target directory (for example, `cd service && pdd sync`) because starter prompt includes are target-directory relative.
+    - If `use_github_state=True` for a GitHub issue and the run is not a dry run, post a concise status comment without failing the main workflow if comment posting fails.
+    - Before posting status comments, redact absolute local paths from both messages and changed-file entries, including common user, CI, container, and WSL roots such as `/Users`, `/home`, `/root`, `/workspace`, `/workspaces`, `/tmp`, and `/mnt/...`.
+8. **Orchestration**: Pass all gathered context (`sibling_architectures`, `existing_pddrc`, `existing_architecture`, `related_issues`, `target_dir`, `force_single`) to the `run_agentic_architecture_orchestrator`.
 
 % Dependencies
-Import `run_agentic_architecture_orchestrator` from `pdd.agentic_architecture_orchestrator`.
+Import `run_agentic_architecture_orchestrator` from `pdd.agentic_architecture_orchestrator`. Import `run_incremental_prd_propagation` lazily inside `run_incremental_architecture`.
 
 % Instructions
 - Use `subprocess.run` for executing `gh` and `git` commands, capturing output for processing.

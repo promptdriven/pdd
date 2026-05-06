@@ -462,6 +462,26 @@ AGENTIC_LOG_DIR = ".pdd/agentic-logs"
 _AGENTIC_SESSION_ID: Optional[str] = None
 
 
+_PROVIDER_MODEL_ENV: Dict[str, str] = {
+    "anthropic": "CLAUDE_MODEL",
+    "google": "GEMINI_MODEL",
+    "openai": "CODEX_MODEL",
+}
+
+
+def _get_provider_model(provider: str) -> Optional[str]:
+    """Return the requested model for *provider* from its env var.
+
+    Returns ``None`` when the env var is unset, empty, or the provider is
+    unknown, signalling "provider default" in the audit log.
+    """
+    env_var = _PROVIDER_MODEL_ENV.get(provider)
+    if not env_var:
+        return None
+    value = os.environ.get(env_var) or ""
+    return value.strip() or None
+
+
 def _log_agentic_interaction(
     label: str,
     prompt: str,
@@ -470,23 +490,38 @@ def _log_agentic_interaction(
     provider: str,
     success: bool,
     duration: float,
-    cwd: Path
+    cwd: Path,
+    *,
+    model: Optional[str] = None,
+    false_positive: bool = False,
+    include_bodies: bool = True,
 ) -> None:
     """
-    Log full prompt and response to JSONL file in .pdd/agentic-logs/.
+    Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
 
-    Each workflow run generates a single session file with all step interactions.
-    Logs are only written when --verbose flag is enabled.
+    Issue #1376: every attempt (success, failure, false-positive) leaves a
+    record so the log answers "which provider/model produced step N's output"
+    without ``--verbose``. ``include_bodies=False`` writes a summary-only
+    record (omits ``prompt``/``response``) to keep file size manageable when
+    the same prompt repeats across many successful steps.
 
     Args:
-        label: Step identifier (e.g., "step1", "step5_5")
-        prompt: Full prompt text sent to the agent
-        response: Full response text from the agent
-        cost: Cost in USD for this interaction
-        provider: Provider name (anthropic, google, openai)
-        success: Whether the interaction succeeded
-        duration: Duration in seconds
-        cwd: Working directory for the task
+        label: Step identifier (e.g., ``"step1"``).
+        prompt: Full prompt text sent to the agent.
+        response: Full response text from the agent.
+        cost: Cost in USD for this interaction.
+        provider: Provider name (``"anthropic"``, ``"google"``, ``"openai"``).
+        success: Whether the run-level outcome was a success.
+        duration: Duration in seconds.
+        cwd: Working directory for the task.
+        model: Requested model (e.g., ``"claude-opus-4-7"``) or ``None`` for
+            "provider default".
+        false_positive: True when the provider call returned but the PDD
+            heuristic rejected the output (e.g., short ``"Done."`` reply).
+            Pairs with ``success=False``.
+        include_bodies: When True, include the full ``prompt`` and ``response``
+            text. When False, omit them but keep ``prompt_length`` and
+            ``response_length`` so downstream tooling can still gauge size.
     """
     global _AGENTIC_SESSION_ID
 
@@ -501,19 +536,22 @@ def _log_agentic_interaction(
 
         log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
 
-        entry = {
+        entry: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
             "label": label,
             "cwd": str(cwd),
             "provider": provider,
+            "model": model,
             "success": success,
+            "false_positive": false_positive,
             "cost_usd": cost,
             "duration_seconds": round(duration, 2),
             "prompt_length": len(prompt),
             "response_length": len(response),
-            "prompt": prompt,
-            "response": response,
         }
+        if include_bodies:
+            entry["prompt"] = prompt
+            entry["response"] = response
 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
@@ -936,6 +974,19 @@ def run_agentic_task(
 
             last_output = ""
             deadline_exhausted = False
+            # Issue #1376 codex round 4: tracks "ANY attempt was logged inline
+            # for this provider". Stays True once set — must NOT reset per
+            # attempt, because a budget-skipped attempt 2 after a logged
+            # attempt 1 would otherwise let the bottom block re-log attempt
+            # 1's stale data as a fake second row. Round-2 inline logging
+            # already covers per-attempt records (success, FP, and failure),
+            # so the bottom block now only needs to fire when zero attempts
+            # ran for this provider (budget exhausted before first attempt).
+            any_attempt_logged_inside = False
+            # Issue #1376 P2: actual model from the last attempt's response
+            # (used by both inside-loop logs and the bottom failure log).
+            actual_model: Optional[str] = None
+            effective_model: Optional[str] = _get_provider_model(provider)
             for attempt in range(1, max_retries + 1):
                 # Deadline-aware budget check before each attempt
                 now = time.time()
@@ -961,12 +1012,16 @@ def run_agentic_task(
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-                success, output, cost = _run_with_provider(
+                success, output, cost, actual_model = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
                 )
                 last_output = output
+                # Issue #1376: prefer the model the provider actually reported;
+                # fall back to the requested model from env vars when the JSON
+                # didn't surface one (e.g. early-error returns).
+                effective_model = actual_model or _get_provider_model(provider)
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
@@ -997,6 +1052,22 @@ def run_agentic_task(
                     if is_false_positive:
                         if not quiet:
                             console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt}/{max_retries})[/yellow]")
+                        # Issue #1376: log false-positive provider replies so the
+                        # heuristic-rejection path leaves the same audit trail
+                        # as outright failures (was previously silent).
+                        _log_agentic_interaction(
+                            label=label,
+                            prompt=full_instruction,
+                            response=output,
+                            cost=cost,
+                            provider=provider,
+                            success=False,
+                            duration=time.time() - task_start_time,
+                            cwd=cwd,
+                            model=effective_model,
+                            false_positive=True,
+                        )
+                        any_attempt_logged_inside = True
                         # Multi-provider configs (default): fall through to the
                         # next provider instead of burning retries on the same
                         # known-broken one.
@@ -1024,21 +1095,45 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
-                        # Real success — only log when verbose (success is not diagnostic)
-                        if verbose:
-                            _log_agentic_interaction(
-                                label=label,
-                                prompt=full_instruction,
-                                response=output,
-                                cost=cost,
-                                provider=provider,
-                                success=True,
-                                duration=time.time() - task_start_time,
-                                cwd=cwd
-                            )
+                        # Issue #1376: always emit a summary record so the audit
+                        # log answers "which provider/model produced step N?"
+                        # without --verbose. Full prompt+response bodies stay
+                        # behind verbose to avoid bloating the file with the
+                        # same large prompt repeated across every step.
+                        _log_agentic_interaction(
+                            label=label,
+                            prompt=full_instruction,
+                            response=output,
+                            cost=cost,
+                            provider=provider,
+                            success=True,
+                            duration=time.time() - task_start_time,
+                            cwd=cwd,
+                            model=effective_model,
+                            include_bodies=verbose,
+                        )
                         return True, output, cost, provider
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
+                # Issue #1376 codex round 2: log each failed attempt inside
+                # the loop so the audit trail captures every retry, not just
+                # the final one. Without this, max_retries=3 with 3 failures
+                # produces only one JSONL row — exactly the audit-trail gap
+                # this PR set out to close.
+                if not success:
+                    _log_agentic_interaction(
+                        label=label,
+                        prompt=full_instruction,
+                        response=output,
+                        cost=cost,
+                        provider=provider,
+                        success=False,
+                        duration=time.time() - task_start_time,
+                        cwd=cwd,
+                        model=effective_model,
+                    )
+                    any_attempt_logged_inside = True
+
                 if not success and _is_permanent_error(output):
                     if verbose:
                         console.print(f"[yellow]Permanent error from {provider}, skipping retries.[/yellow]")
@@ -1060,17 +1155,25 @@ def run_agentic_task(
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
-            # Issue #1072: Always log failures (not just when verbose)
-            _log_agentic_interaction(
-                label=label,
-                prompt=full_instruction,
-                response=last_output,
-                cost=0.0,
-                provider=provider,
-                success=False,
-                duration=time.time() - task_start_time,
-                cwd=cwd
-            )
+            # Issue #1072 / #1376 (codex round 2): inline per-attempt logging
+            # above already emits one record per provider attempt (success,
+            # FP, or failure). This bottom block now only covers the
+            # budget-exhausted-before-first-attempt case where no inline log
+            # ran — any_attempt_logged_inside stays False from
+            # initialization in that path, and we still want a record
+            # documenting the provider was skipped.
+            if not any_attempt_logged_inside:
+                _log_agentic_interaction(
+                    label=label,
+                    prompt=full_instruction,
+                    response=last_output,
+                    cost=0.0,
+                    provider=provider,
+                    success=False,
+                    duration=time.time() - task_start_time,
+                    cwd=cwd,
+                    model=effective_model,
+                )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
@@ -1203,10 +1306,16 @@ def _run_with_provider(
     label: str = "",
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
-) -> Tuple[bool, str, float]:
+) -> Tuple[bool, str, float, Optional[str]]:
     """
     Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost).
+    Returns (success, output_or_error, cost, actual_model).
+
+    Issue #1376: ``actual_model`` is the model name extracted from the
+    provider's JSON response (e.g. ``claude-sonnet-4-6``,
+    ``gemini-3-flash-preview``, ``gpt-5``). ``None`` when the response did
+    not surface a model name (early-exit error paths) — callers blend with
+    env-var lookup for "actual or requested" semantics.
 
     Args:
         provider: Provider name (anthropic, google, openai)
@@ -1238,13 +1347,13 @@ def _run_with_provider(
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
     if not cli_name:
-        return False, f"Unknown provider {provider}", 0.0
+        return False, f"Unknown provider {provider}", 0.0, None
 
     # Find CLI binary path (use explicit path if provided)
     if cli_path is None:
         cli_path = _find_cli_binary(cli_name)
     if not cli_path:
-        return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0
+        return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0, None
 
     cmd: List[str] = []
 
@@ -1365,7 +1474,7 @@ def _run_with_provider(
         if codex_model:
             cmd.extend(["--model", codex_model])
     else:
-        return False, f"Unknown provider {provider}", 0.0
+        return False, f"Unknown provider {provider}", 0.0, None
 
     # For anthropic, pipe prompt content via stdin; others use file path in cmd
     stdin_content = prompt_content if provider == "anthropic" else None
@@ -1382,9 +1491,9 @@ def _run_with_provider(
             start_new_session=True,
         )
     except subprocess.TimeoutExpired:
-        return False, "Timeout expired", 0.0
+        return False, "Timeout expired", 0.0, None
     except Exception as e:
-        return False, str(e), 0.0
+        return False, str(e), 0.0, None
 
     if result.returncode != 0:
         error_detail = result.stderr or result.stdout[:500]
@@ -1398,8 +1507,8 @@ def _run_with_provider(
             )
             codex_auth_message = _codex_auth_failure_message(combined_error)
             if codex_auth_message:
-                return False, codex_auth_message, 0.0
-        return False, f"Exit code {result.returncode}: {error_detail}", 0.0
+                return False, codex_auth_message, 0.0, None
+        return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
 
     # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
     # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
@@ -1451,9 +1560,18 @@ def _run_with_provider(
                     continue
             if not data:
                 if agent_message_data is not None:
-                    # Merge usage from session.end so cost can be calculated
+                    # Merge usage AND model from session.end so cost calculation
+                    # works AND the audit log captures the actual model name
+                    # (Issue #1376 codex round 3: previously only `usage` was
+                    # carried over, so default-model Codex runs logged
+                    # `model: null` because session.end.model was discarded).
                     if session_end is not None:
-                        data = {**agent_message_data, "usage": session_end.get("usage", {})}
+                        merged: Dict[str, Any] = {**agent_message_data}
+                        if "usage" in session_end:
+                            merged["usage"] = session_end.get("usage", {})
+                        if "model" in session_end:
+                            merged["model"] = session_end.get("model")
+                        data = merged
                     else:
                         data = agent_message_data
                 elif session_end is not None:
@@ -1472,16 +1590,16 @@ def _run_with_provider(
             except json.JSONDecodeError:
                 data = _extract_json_from_output(output_str)
 
-        success, text, cost = _parse_provider_json(provider, data)
+        success, text, cost, actual_model = _parse_provider_json(provider, data)
         if cost == 0.0 and verbose and isinstance(data, dict):
             console.print(
                 f"[dim]Warning: {provider} returned $0 cost. "
                 f"JSON keys: {sorted(data.keys())}[/dim]"
             )
-        return success, text, cost
+        return success, text, cost, actual_model
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
+        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0, None
 
 
 def _extract_json_from_output(output_str: str) -> dict:
@@ -1542,12 +1660,64 @@ def _extract_json_from_output(output_str: str) -> dict:
     )
 
 
-def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
+def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Optional[str]:
+    """Extract the actual model name from a provider's JSON response.
+
+    Issue #1376 codex review (P2): supplements ``_get_provider_model`` (env-var
+    only) so the audit log can record the model the provider *actually* used,
+    not just the one the user asked for. Falls back to ``None`` when the JSON
+    doesn't expose a model name; callers blend with env-var lookup for a
+    "actual or requested" view.
+
+    - Anthropic: keys of ``modelUsage`` (Claude Code emits one entry per model
+      it routed through; if multiple, joins with ``+`` for transparency).
+    - Google: keys of ``stats.models`` (Gemini CLI emits one entry per model).
+    - OpenAI: ``data["model"]`` (Codex CLI surfaces it on the result envelope).
     """
-    Extracts (success, text_response, cost_usd) from provider JSON.
+    if not isinstance(data, dict):
+        return None
+    try:
+        if provider == "anthropic":
+            usage = data.get("modelUsage")
+            if isinstance(usage, dict) and usage:
+                names = [str(k) for k in usage.keys() if k]
+                if names:
+                    return "+".join(sorted(names)) if len(names) > 1 else names[0]
+        elif provider == "google":
+            models = (data.get("stats") or {}).get("models")
+            if isinstance(models, dict) and models:
+                names = [str(k) for k in models.keys() if k]
+                if names:
+                    return "+".join(sorted(names)) if len(names) > 1 else names[0]
+        elif provider == "openai":
+            model = data.get("model")
+            if isinstance(model, str) and model:
+                return model
+            # Fallback: some Codex schemas place model on session.end / item
+            for nested_key in ("session", "item"):
+                nested = data.get(nested_key)
+                if isinstance(nested, dict):
+                    nm = nested.get("model")
+                    if isinstance(nm, str) and nm:
+                        return nm
+    except Exception:
+        return None
+    return None
+
+
+def _parse_provider_json(
+    provider: str, data: Dict[str, Any]
+) -> Tuple[bool, str, float, Optional[str]]:
+    """
+    Extracts (success, text_response, cost_usd, actual_model) from provider JSON.
+
+    Issue #1376: returns the model the provider actually used (when the JSON
+    response carries it) so the audit log can answer "which provider/model
+    produced step N?" without relying on env-var overrides.
     """
     cost = 0.0
     output_text = ""
+    actual_model = _extract_provider_model_from_data(provider, data)
 
     try:
         if provider == "anthropic":
@@ -1561,7 +1731,7 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
             # (auth, refusal, crash). Propagate as failure so callers can
             # retry or fall through instead of treating it as success.
             if data.get("is_error"):
-                return False, str(output_text) or "CLI reported is_error with no message", cost
+                return False, str(output_text) or "CLI reported is_error with no message", cost, actual_model
 
         elif provider == "google":
             stats = data.get("stats", {})
@@ -1578,10 +1748,10 @@ def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str
             else:
                 output_text = data.get("result") or data.get("output") or ""
 
-        return True, str(output_text), cost
+        return True, str(output_text), cost, actual_model
 
     except Exception as e:
-        return False, f"Error parsing {provider} JSON: {e}", 0.0
+        return False, f"Error parsing {provider} JSON: {e}", 0.0, actual_model
 
 
 # --- GitHub State Persistence ---
