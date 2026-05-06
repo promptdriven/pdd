@@ -545,4 +545,3 @@ Similarly, PDD's batch architecture keeps operational complexity outside the con
 
 ## North Star
 Prompts encode intent. Tests preserve behavior. Regeneration sustains integrity. Together, they convert maintenance from an endless patchwork into a compounding system of leverage.
-
