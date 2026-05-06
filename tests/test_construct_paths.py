@@ -823,8 +823,12 @@ def test_construct_paths_sync_discovery_mode(tmpdir):
     assert Path(resolved_config["prompts_dir"]).name == "prompts"
     assert Path(resolved_config["code_dir"]).name == "src"
     assert Path(resolved_config["tests_dir"]).name == "tests"
-    # examples_dir defaults to "context" since no example_output_path in raw config
-    assert resolved_config["examples_dir"] == "context"
+    # examples_dir defaults to EXAMPLES_DIR when no example_output_path is
+    # configured and the project root has no legacy context/ directory (#616).
+    # See test_construct_paths_sync_legacy_context_back_compat for the
+    # back-compat branch.
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
 
 
 def test_construct_paths_sync_discovery_requires_basename(tmpdir):
@@ -925,10 +929,11 @@ def test_construct_paths_sync_uses_outputs_example_path_for_examples_dir(tmpdir)
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be ROOT directory ("context"), NOT parent ("context/backend")
-    # This ensures auto-deps scans ALL examples, not just a subdirectory
-    assert resolved_config["examples_dir"] == "context", \
-        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent)"
+    # When example_output_path is missing from raw config, fall back to
+    # EXAMPLES_DIR (#616). outputs.example.path is NOT used for scan-scope
+    # resolution (using it caused #332 regression).
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
 
 
 def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples_dir(tmpdir):
@@ -976,10 +981,10 @@ def test_construct_paths_sync_with_prompt_uses_outputs_example_path_for_examples
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be ROOT directory ("context"), NOT parent ("context/backend")
-    # This ensures auto-deps scans ALL examples, not just a subdirectory
-    assert resolved_config["examples_dir"] == "context", \
-        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent)"
+    # When example_output_path is missing, fall back to EXAMPLES_DIR (#616).
+    # outputs.example.path is intentionally NOT used.
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
 
 
 def test_construct_paths_sync_discovery_prompts_dir_bug_fix(tmpdir):
@@ -2670,11 +2675,12 @@ def test_examples_dir_uses_root_of_outputs_example_path_not_parent(tmpdir):
             input_file_paths, force, quiet, command, command_options
         )
 
-    # examples_dir should be "context" (root), NOT "context/backend" (parent)
-    # This ensures auto-deps scans all example files, not just a subdirectory
-    assert resolved_config["examples_dir"] == "context", \
-        f"Expected 'context' (root) but got '{resolved_config['examples_dir']}' (parent). " \
-        "examples_dir should use root of outputs.example.path, not parent directory."
+    # When example_output_path is missing, examples_dir falls back to
+    # EXAMPLES_DIR (#616). The #332 guard (never a subdirectory path like
+    # 'context/backend') is preserved via the parts[0] extraction.
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert resolved_config["examples_dir"] == EXAMPLES_DIR
+    assert "/" not in resolved_config["examples_dir"]
 
 
 def test_examples_dir_extracts_root_from_flat_example_output_path(tmpdir):
@@ -3608,3 +3614,158 @@ class TestIssue1165_ConstructPaths:
                     "construct_paths failed to resolve context for basename "
                     "'src/services/solving_orchestrator' with nested prompts_dir"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Issue #616 — single-source-of-truth + back-compat regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_default_examples_dir_canonical(tmp_path, monkeypatch):
+    """Empty project: helper returns EXAMPLES_DIR."""
+    monkeypatch.chdir(tmp_path)
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_back_compat_legacy(tmp_path, monkeypatch):
+    """Project with populated context/ but no examples/ → fallback to context/."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "foo_example.py").write_text("# legacy\n")
+    from pdd.construct_paths import _resolve_default_examples_dir
+    assert _resolve_default_examples_dir() == "context"
+
+
+def test_resolve_default_examples_dir_examples_takes_precedence(tmp_path, monkeypatch):
+    """If both directories exist, examples/ wins (forward-compat)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "stale.py").write_text("# old\n")
+    (tmp_path / "examples").mkdir()
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_empty_context_dir_no_fallback(tmp_path, monkeypatch):
+    """An empty context/ directory does not trigger the back-compat path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()  # empty
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_non_example_context_no_fallback(tmp_path, monkeypatch):
+    """A context/ populated with PRDs / schemas / docs (but no *_example.* files)
+    is NOT a legacy-examples signal — keeps the canonical default so the original
+    issue stays fixed for greenfield projects that use context/ for non-example
+    content (review feedback on the heuristic).
+    """
+    monkeypatch.chdir(tmp_path)
+    ctx = tmp_path / "context"
+    ctx.mkdir()
+    (ctx / "PRD.md").write_text("# product reqs\n")
+    (ctx / "schema.json").write_text("{}\n")
+    (ctx / "notes.txt").write_text("notes\n")
+    (ctx / "subdir").mkdir()
+    (ctx / "subdir" / "design.md").write_text("# design\n")
+    from pdd.construct_paths import _resolve_default_examples_dir
+    from pdd.generate_output_paths import EXAMPLES_DIR
+    assert _resolve_default_examples_dir() == EXAMPLES_DIR
+
+
+def test_resolve_default_examples_dir_nested_example_triggers_fallback(tmp_path, monkeypatch):
+    """An *_example.* file under a context/ subdirectory still counts as legacy."""
+    monkeypatch.chdir(tmp_path)
+    ctx = tmp_path / "context"
+    (ctx / "prisma").mkdir(parents=True)
+    (ctx / "prisma" / "schema_example.prisma").write_text("// legacy\n")
+    from pdd.construct_paths import _resolve_default_examples_dir
+    assert _resolve_default_examples_dir() == "context"
+
+
+def test_construct_paths_sync_legacy_context_back_compat(tmpdir, monkeypatch):
+    """Issue #616 back-compat: with no .pddrc and a populated legacy context/
+    directory but no examples/, examples_dir falls back to 'context'."""
+    monkeypatch.chdir(tmpdir)
+    legacy = Path(tmpdir) / "context"
+    legacy.mkdir()
+    (legacy / "foo_example.py").write_text("# legacy\n")
+    mock_output_paths = {
+        "generate_output_path": str(tmpdir / "src" / "m.py"),
+        "test_output_path": str(tmpdir / "tests" / "test_m.py"),
+        "example_output_path": str(tmpdir / "context" / "ex_m.py"),
+    }
+    with patch('pdd.construct_paths.generate_output_paths', return_value=mock_output_paths), \
+         patch('pdd.construct_paths._find_pddrc_file', return_value=None), \
+         patch('pdd.construct_paths._load_pddrc_config', return_value={'contexts': {}}), \
+         patch('pdd.construct_paths._detect_context', return_value=None), \
+         patch('pdd.construct_paths._get_context_config', return_value={}):
+        resolved_config, *_ = construct_paths(
+            {}, False, True, 'sync', {'basename': 'm'},
+        )
+    assert resolved_config["examples_dir"] == "context"
+
+
+def test_construct_paths_sync_legacy_context_back_compat_from_subdir(tmp_path, monkeypatch):
+    """Issue #616 back-compat must inspect the .pddrc project root, not CWD.
+
+    Users often run `pdd sync` from a package subdirectory. If the repo root has
+    a populated legacy context/ directory and no examples/ directory, the
+    fallback must still be context/.
+    """
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    legacy = tmp_path / "context"
+    legacy.mkdir()
+    (legacy / "foo_example.py").write_text("# legacy\n", encoding="utf-8")
+    workdir = tmp_path / "pkg"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    mock_output_paths = {
+        "generate_output_path": str(workdir / "m.py"),
+        "test_output_path": str(tmp_path / "tests" / "test_m.py"),
+        "example_output_path": str(tmp_path / "examples" / "m_example.py"),
+    }
+    with patch("pdd.construct_paths.generate_output_paths", return_value=mock_output_paths):
+        resolved_config, *_ = construct_paths(
+            {}, False, True, "sync", {"basename": "m"},
+        )
+
+    assert resolved_config["examples_dir"] == "context"
+
+
+def test_construct_paths_generate_legacy_context_back_compat_from_subdir(tmp_path, monkeypatch):
+    """Normal command finalization should use the .pddrc project root too."""
+    (tmp_path / ".pddrc").write_text(
+        "contexts:\n  default:\n    defaults:\n      prompts_dir: prompts\n",
+        encoding="utf-8",
+    )
+    legacy = tmp_path / "context"
+    legacy.mkdir()
+    (legacy / "foo_example.py").write_text("# legacy\n", encoding="utf-8")
+    workdir = tmp_path / "pkg"
+    workdir.mkdir()
+    prompt_file = workdir / "m_python.prompt"
+    prompt_file.write_text("Generate m", encoding="utf-8")
+    monkeypatch.chdir(workdir)
+
+    with patch(
+        "pdd.construct_paths.generate_output_paths",
+        return_value={"output": str(workdir / "m.py")},
+    ):
+        resolved_config, *_ = construct_paths(
+            {"prompt_file": str(prompt_file)},
+            True,
+            True,
+            "generate",
+            {},
+        )
+
+    assert resolved_config["examples_dir"] == "context"

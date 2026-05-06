@@ -94,6 +94,15 @@ def test_reverse_dep_detects_include_many(monkeypatch):
     assert "core/cli" in result
 
 
+def test_reverse_dep_ignores_literal_include_tag_prose(monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(_repo_root())
+
+    result = module._reverse_dep_basenames(["pdd/prompts/__main___python.prompt"])
+
+    assert "incremental_prd_architecture" not in result
+
+
 def test_detect_combines_nested_direct_and_reverse_dependencies(monkeypatch):
     module = _load_module()
     monkeypatch.chdir(_repo_root())

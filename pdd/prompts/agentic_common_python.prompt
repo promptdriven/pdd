@@ -1,5 +1,6 @@
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
+<pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -23,7 +24,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex). 
 
 % Requirements
 1. **Provider Preference**: Private `_DEFAULT_PROVIDER_PREFERENCE = ["anthropic", "google", "openai"]`. Public `get_agent_provider_preference() -> List[str]` reads `PDD_AGENTIC_PROVIDER` (comma-sep) or default.
-2. **Logging**: `_log_agentic_interaction` writes to `.pdd/agentic-logs/session_YYYYMMDD_HHMMSS.jsonl`. Always log provider failures (regardless of verbose mode) so batch sync failures are diagnosable. Only gate successful interaction logging behind `verbose=True`. Additionally, when a CLI exits 0 with empty/whitespace-only stdout, emit a diagnostic console line with stderr tail (last 500 chars), prompt size, sorted auth-env-key names (keys containing `TOKEN` or `API_KEY` with a truthy value), and cwd. This surfaces the blank-provider-error failure mode (cloud one-session sync) in batch logs.
+2. **Logging**: `_log_agentic_interaction` writes to `.pdd/agentic-logs/session_YYYYMMDD_HHMMSS.jsonl`. Issue #1376: every provider *attempt* — success, false-positive heuristic rejection, *and* every retry failure inside the retry loop — emits exactly one record so the log answers "which provider/model produced step N?" without `--verbose`. With `max_retries=N`, a fully failing single-provider run produces N rows (not 1). Each record carries `timestamp`, `label`, `cwd`, `provider`, `model`, `success`, `false_positive`, `cost_usd`, `duration_seconds`, `prompt_length`, `response_length`. The `model` field is resolved by `_extract_provider_model_from_data(provider, data)` first (keys of `modelUsage` for anthropic, keys of `stats.models` for google, `data["model"]`/nested for openai — multiple models join with `+`); when the JSON does not surface a model name (early-error returns, parse failures, or budget-skipped attempts), it falls back to `_get_provider_model(provider)` which reads `CLAUDE_MODEL` / `GEMINI_MODEL` / `CODEX_MODEL` env vars. `null` only when neither path yields a value. Full `prompt`/`response` bodies are gated by the keyword-only `include_bodies` parameter (default `True`). Call-site policy: failures and false-positives pass `include_bodies=True` (the bodies are the diagnostic payload — small responses with high signal); successes pass `include_bodies=verbose` (the prompt is large and identical across attempts, so summary-only by default keeps file size manageable). False-positive records pair `success=False` with `false_positive=True` so the run-level outcome stays correct while disambiguating heuristic rejection from CLI failure. Additionally, when a CLI exits 0 with empty/whitespace-only stdout, emit a diagnostic console line with stderr tail (last 500 chars), prompt size, sorted auth-env-key names (keys containing `TOKEN` or `API_KEY` with a truthy value), and cwd. This surfaces the blank-provider-error failure mode (cloud one-session sync) in batch logs.
 3. **CLI Discovery**: Search via `_find_cli_binary`: `.pddrc` override (`agentic.{name}_path`) → `shutil.which` → `_COMMON_CLI_PATHS` (including `~/.npm-global/bin` for Node-installed CLIs, with nvm glob expansion `~/.nvm/versions/node/*/bin/`).
 4. **Availability**: Anthropic (CLI exists); Google (CLI + `GOOGLE_API_KEY`/`GEMINI_API_KEY`/Vertex or stored Gemini CLI OAuth credentials in `~/.gemini/oauth_creds.json`); OpenAI/Codex (CLI + `OPENAI_API_KEY` or `PDD_CODEX_AUTH_AVAILABLE`). The availability check is static and must not imply the Codex ChatGPT token can refresh successfully at execution time. Gemini CLI OAuth is a supported headless path; do not require Google API-key or Vertex env when the CLI has a stored OAuth token.
 5. **Execution**: Run in headless mode with JSON output. Sanitize env (TERM=dumb, NO_COLOR=1, CI=1). Strip `PDD_OUTPUT_COST_PATH`. Use `start_new_session=True` via `Popen` to kill process groups on timeout (Issue #830).
@@ -109,7 +110,7 @@ Instruction: `"Read the file {prompt_file} for instructions. You have full file 
 - OpenAI: `[cli_path, "exec", "--sandbox", <mode>, "--json", <path>]`. Mode default: `danger-full-access`.
 
 % Playwright Mode (`use_playwright=True`)
-- Anthropic: Replaces `--dangerously-skip-permissions` with `--allowedTools`, `"Bash"`, `"Read"`, `"Write"`, `--max-turns`, `"30"`.
+- Anthropic: Replaces `--dangerously-skip-permissions` with `--allowedTools`, `"Bash"`, `"Read"`, `"Write"`, `--max-turns", `"30"`.
 - Google/OpenAI: Same as standard (no per-tool restrictions).
 
 % GitHub State Persistence
@@ -120,23 +121,29 @@ Instruction: `"Read the file {prompt_file} for instructions. You have full file 
 1. Implement `_subprocess_run` using `Popen(..., start_new_session=True)`. Catch `TimeoutExpired` and kill process group (`-proc.pid`).
 2. `run_agentic_task`: Inject `PDD_USER_FEEDBACK` if present. Use exponential backoff with jitter for retries: `backoff = retry_delay * (2 ** (attempt - 1)) + random.uniform(0, retry_delay)`, capped at `MAX_RETRY_DELAY`. Classify errors via `_is_permanent_error()` before retrying — permanent errors skip retries and move to next provider. For OpenAI/Codex nonzero exits, `_run_with_provider` must inspect combined stderr/stdout with `_codex_auth_failure_message()` before returning a generic `Exit code ...` string, so stale Codex login failures become actionable `codex login` guidance and remain permanent.
 3. Detect single-letter files `C`, `E`, `T` after success; log red warning via `console.print`.
-4. `_parse_provider_json`:
-   - Anthropic: `result` or `response`. If `data.get("is_error")` is truthy (Claude Code session failed — auth error, refusal, crash, e.g. `{"is_error": true, "result": "Not logged in - Please run /login"}`), return `(False, text, cost)` so the caller treats it as a real failure instead of empty success.
+4. `_parse_provider_json` returns `(success, text, cost, actual_model)` (4-tuple — Issue #1376). `actual_model` is the model name extracted via `_extract_provider_model_from_data(provider, data)`: keys of `modelUsage` for anthropic, keys of `stats.models` for google, `data["model"]` (with `data["session"]["model"]` / `data["item"]["model"]` fallback) for openai. Multiple model keys join with `+`. Returns `None` when the JSON does not surface a model. Provider-specific text/cost extraction:
+   - Anthropic: `result` or `response`. If `data.get("is_error")` is truthy (Claude Code session failed — auth error, refusal, crash, e.g. `{"is_error": true, "result": "Not logged in - Please run /login"}`), return `(False, text, cost, actual_model)` so the caller treats it as a real failure instead of empty success while still surfacing the model.
    - Google: `result`, `response`, or `output`.
-   - OpenAI (0.104.0+): `data["item"]["text"]` if `item["type"] == "agent_message"`, else fallback.
+   - OpenAI (0.104.0+): `data["item"]["text"]` if `item["type"] == "agent_message"`, else fallback. **NDJSON merge contract:** when `item.completed` carries the agent text and `session.end` / `turn.completed` carries usage and model, the merge must preserve **both** `usage` (for cost) and `model` (for actual-model attribution) on the merged data dict — dropping `model` would re-introduce `model: null` for default-model Codex runs.
 5. Support model overrides: `CLAUDE_MODEL`, `GEMINI_MODEL`, `CODEX_MODEL`.
 6. Reasoning effort: `_run_with_provider` resolves a generic `reasoning_effort` from (a) explicit `reasoning_time` kwarg only when the caller forwarded a user-supplied `--time` (commands gate on `ctx.obj["time_explicit"]` — never pass the `DEFAULT_TIME` fallback) or (b) `PDD_REASONING_EFFORT` env var (validated against `{low, medium, high}`; any other value is ignored to prevent argv poisoning). For Codex, additionally check `CODEX_REASONING_EFFORT` env var first — it accepts `{low, medium, high, xhigh}` (xhigh is Codex-only, used by the cloud worker for GPT-5.4 routing) and takes precedence over the generic `reasoning_effort`. Inject `-c model_reasoning_effort=<level>` **before** the `exec` subcommand — Codex treats `-c` / `--config` as top-level flags only and silently ignores them after `exec`. Anthropic and Gemini CLIs have no reasoning-effort flag today; emit a one-line notice in non-quiet mode rather than silently dropping the signal.
 
 % Dependencies
 <pdd.llm_invoke>
-    <include select="class:TokenMatch,def:detect_control_token,def:classify_step_output,def:substitute_template_variables">context/llm_invoke_example.py</include>
+    <include select="def:llm_invoke">pdd/llm_invoke.py</include>
 </pdd.llm_invoke>
+<agentic_common_existing_impl>
+    <include select="class:TokenMatch,def:detect_control_token,def:classify_step_output,def:substitute_template_variables">pdd/agentic_common.py</include>
+</agentic_common_existing_impl>
 <utils.api_key_scanner>
     <include>context/api_key_scanner_example.py</include>
 </utils.api_key_scanner>
 <utils.auth_service>
-    <include select="def:verify_auth,def:get_auth_status">context/auth_service_example.py</include>
+    <include select="def:verify_auth,def:get_auth_status,def:get_refresh_token,def:get_cached_jwt">context/auth_service_example.py</include>
 </utils.auth_service>
+<utils.keyring_timeout>
+    <include>context/_keyring_timeout_example.py</include>
+</utils.keyring_timeout>
 
 % Deliverables
 - `pdd/agentic_common.py`

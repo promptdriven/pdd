@@ -19,6 +19,26 @@ import subprocess
 import sys
 
 
+DESTINATION_PRUNE_DIR_NAMES = {
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pdd",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "staging",
+    "venv",
+}
+
+
 # ============================================================================
 # YAML Config Support
 # ============================================================================
@@ -120,6 +140,15 @@ def copy_from_sync_config(
         if not is_excluded(rel_path):
             paths.add(rel_path)
 
+    def should_prune_dest_dir(root: str, dirname: str) -> bool:
+        """Return True for generated/cache dirs that should not be scanned."""
+        if dirname in DESTINATION_PRUNE_DIR_NAMES:
+            return True
+        rel_path = normalize_rel_path(
+            os.path.relpath(os.path.join(root, dirname), dest)
+        )
+        return is_excluded(rel_path) or is_excluded(f"{rel_path}/")
+
     def is_git_work_tree(path: str) -> bool:
         result = subprocess.run(
             ["git", "-C", path, "rev-parse", "--is-inside-work-tree"],
@@ -192,7 +221,10 @@ def copy_from_sync_config(
                     continue
                 if os.path.isdir(match):
                     for root, dirs, files in os.walk(match, followlinks=False):
-                        dirs[:] = [d for d in dirs if d != "__pycache__"]
+                        dirs[:] = [
+                            d for d in dirs
+                            if not should_prune_dest_dir(root, d)
+                        ]
                         for fname in files:
                             add_existing_dest_path(
                                 existing_dest_files,

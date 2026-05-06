@@ -177,6 +177,15 @@
     - Skip known prose field names (reasoning, explanation, analysis, etc.) during Python validation.
     - If invalid Python code remains after repair and language is "python" or None, retry with cache bypass.
     - Extract thinking output from response._hidden_params['thinking'] or response.choices[0].message.reasoning_content.
+    - Vertex AI Anthropic envelope unwrap (issue #1364): Vertex routes Anthropic Claude structured
+      outputs through tool-calling, which returns the schema fields wrapped as
+      `{"parameter": {<schema fields>}}`. Every `model_validate*` and `jsonschema.validate` call
+      site MUST go through `_validate_pydantic_with_unwrap` / `_validate_jsonschema_with_unwrap`,
+      which try direct validation first and then retry once after stripping the single-key
+      `"parameter"` envelope. On second failure they re-raise the **original** error so existing
+      diagnostics keep pointing at real schema fields. Without this, every Vertex Anthropic
+      structured-output call walks the entire Opus → Sonnet fallback chain (4–8 minutes per failed
+      sync) hitting the identical wrap on every model.
 
 % Retry Cost Accumulation:
     - On cache-bypass retries (None content, malformed JSON, invalid Python), save the accumulated
@@ -208,7 +217,12 @@
       - InsufficientCreditsError: Raised for 402 Payment Required. Does NOT fall back to local.
     - Helper functions:
       - `_pydantic_to_json_schema(pydantic_class)`: Convert Pydantic model to JSON Schema for cloud transport. Calls _ensure_all_properties_required. Include `__pydantic_class_name__` for debugging.
-      - `_validate_with_pydantic(result, pydantic_class)`: Validate cloud response (dict or str) using the Pydantic model.
+      - `_unwrap_parameter_envelope(obj)`: Return `obj["parameter"]` only when `obj` is a dict with exactly one key `"parameter"` whose value is itself a dict; otherwise return `obj` unchanged. Used by both Pydantic and jsonschema validation helpers to peel Vertex AI Anthropic's tool-call envelope. Caller-side gates (below) decide whether the unwrap retry is safe for a given target schema.
+      - `_pydantic_schema_accepts_parameter_key(cls)`: Return True if `cls` could validate a top-level `"parameter"` key — by field name, `Field(alias=...)`, or `Field(validation_alias=...)` (string, `AliasChoices`, or first segment of `AliasPath`). Used as the gate predicate for `_validate_pydantic_with_unwrap`.
+      - `_jsonschema_eligible_for_envelope_unwrap(schema)`: Return True only when `schema` is an explicit object schema whose top-level `properties` map exists and does not contain `parameter`. Composed schemas (`allOf`/`anyOf`/`oneOf`/`$ref`) and flexible schemas (no top-level `properties` map, e.g. `additionalProperties` only) return False so the unwrap retry is skipped.
+      - `_validate_pydantic_with_unwrap(payload, pydantic_class)`: Validate `payload` against `pydantic_class`. Try direct validation; on `ValidationError`, retry once after `_unwrap_parameter_envelope`; on second failure, re-raise the **original** error. **Gating (PR #1365 review):** if `_pydantic_schema_accepts_parameter_key(pydantic_class)` is True (declared field name OR any alias / validation_alias maps `"parameter"` at the top level), the unwrap retry is skipped entirely so legitimate user payloads that legitimately use `parameter` aren't silently reshaped — the direct-validation error propagates unchanged.
+      - `_validate_jsonschema_with_unwrap(instance, schema)`: Mirror of the above for the raw `output_schema` path. Try `jsonschema.validate(instance, schema)`; on `jsonschema.ValidationError`, retry once after `_unwrap_parameter_envelope(instance)`; on second failure, re-raise the **original** error. Returns the validated payload (the original `instance` when direct validation succeeds, or the unwrapped inner dict when the envelope-unwrap retry succeeds). Callers MUST serialize the returned value, never the original `instance`, otherwise the `{"parameter": {...}}` wrapper leaks back to the user. Both helpers must wrap every `model_validate*` and `jsonschema.validate` call site in this file. **Gating (PR #1365 review):** the unwrap retry only runs when `_jsonschema_eligible_for_envelope_unwrap(schema)` is True — explicit object schema, top-level `properties` map without `parameter`, no `allOf`/`anyOf`/`oneOf`/`$ref`. Composed and flexible schemas keep their direct-validation error so they aren't silently reshaped.
+      - `_validate_with_pydantic(result, pydantic_class)`: Validate cloud response (dict or str) using the Pydantic model — delegates to `_validate_pydantic_with_unwrap` so the cloud path also benefits from the envelope unwrap.
       - `_llm_invoke_cloud(...)`: Execute llm_invoke via cloud endpoint `llmInvoke`. The `requests.post` call MUST pass `timeout=get_cloud_request_timeout()` (imported from `pdd.core.cloud`). Do NOT hardcode a literal value (e.g. `timeout=300`) — the helper derives a `(connect, read)` tuple from the `PDD_CLOUD_TIMEOUT` env var documented in the README so operators can tune it without editing code. Hardcoding silently ignores the env var and was one of the four non-compliant sites that contributed to #1272.
 
     - Cloud execution path (at start of llm_invoke, before local validation):

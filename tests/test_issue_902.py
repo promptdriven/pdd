@@ -25,7 +25,7 @@ class TestIssue902(unittest.TestCase):
     @patch("pdd.agentic_common.random.uniform")
     def test_jitter_is_additive(self, mock_uniform, mock_sleep, mock_run_with_provider, _mock_agents):
         """Requirement: Backoff jitter should be additive to the exponential base."""
-        mock_run_with_provider.return_value = (False, "Error: transient", 0.0)
+        mock_run_with_provider.return_value = (False, "Error: transient", 0.0, None)
         mock_uniform.return_value = 2.5
 
         run_agentic_task(
@@ -48,7 +48,7 @@ class TestIssue902(unittest.TestCase):
         Currently buggy code has a < 500 char limit which misses long error messages.
         """
         long_error = "Error: " + "A" * 600
-        mock_run_with_provider.return_value = (True, long_error, 0.05)
+        mock_run_with_provider.return_value = (True, long_error, 0.05, None)
         
         success, output, cost, provider = run_agentic_task(
             instruction="test",
@@ -78,7 +78,7 @@ class TestIssue902(unittest.TestCase):
         mock_time.side_effect = times
 
         with patch("pdd.agentic_common._DEFAULT_PROVIDER_PREFERENCE", ["anthropic", "google"]):
-            mock_run_with_provider.return_value = (False, "Fail", 0.0)
+            mock_run_with_provider.return_value = (False, "Fail", 0.0, None)
             
             success, output, cost, provider = run_agentic_task(
                 instruction="test",

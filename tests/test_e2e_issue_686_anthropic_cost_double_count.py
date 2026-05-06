@@ -22,7 +22,7 @@ class TestE2EAnthropicCostParsing:
     def _parse_anthropic_json(self, data):
         """Exercise the full provider JSON parsing path used by run_agentic_task."""
         from pdd.agentic_common import _parse_provider_json
-        success, text, cost = _parse_provider_json("anthropic", data)
+        success, text, cost, _model = _parse_provider_json("anthropic", data)
         return success, text, cost
 
     def test_e2e_claude_output_with_prompt_caching(self):

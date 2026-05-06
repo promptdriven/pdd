@@ -941,7 +941,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if pddrc_path:
                     try:
                         config = _load_pddrc_config(pddrc_path)
-                        context_name = context_override or _detect_context(Path.cwd(), config, None)
+                        context_name = resolved_context_name
+                        if not context_name and arch_filepath:
+                            context_name = _detect_context(Path(arch_filepath), config, context_override)
+                        if not context_name:
+                            context_name = _detect_context(Path.cwd(), config, context_override)
                         context_config = config.get('contexts', {}).get(context_name or '', {})
                         defaults = context_config.get('defaults', {})
                         example_dir = defaults.get('example_output_path', 'examples/')

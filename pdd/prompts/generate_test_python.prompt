@@ -1,6 +1,7 @@
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "generate_test", that will create a unit test from a code file.
 
 <include>./context/python_preamble.prompt</include>
+<pdd-dependency>bug_to_unit_test_python.prompt</pdd-dependency>
 
 % Here are the inputs and outputs of the function:
     Inputs:
@@ -30,12 +31,12 @@
 
         For running prompts with llm_invoke:
         <llm_invoke_example>
-            <include select="def:llm_invoke">context/llm_invoke_example.py</include>
+            <include select="def:llm_invoke">pdd/llm_invoke.py</include>
         </llm_invoke_example>
 
         For preprocessing prompts:
         <preprocess_example>
-            <include>context/preprocess_example.py</include>
+            <include select="def:preprocess">pdd/preprocess.py</include>
         </preprocess_example>
 
         For handling unfinished prompts:
@@ -50,8 +51,22 @@
 
         For postprocessing results:
         <postprocess_example>
-            <include select="def:postprocess">context/postprocess_example.py</include>
+            <include select="def:postprocess">pdd/postprocess.py</include>
         </postprocess_example>
+
+        <pdd.continue_generation>
+            <include select="def:continue_generation">context/change/17/continue_generation.py</include>
+        </pdd.continue_generation>
+        <pdd.postprocess>
+            <include>context/change/12/initial_postprocess.py</include>
+        </pdd.postprocess>
+
+        <pdd.bug_to_unit_test>
+            <include>context/bug_to_unit_test_example.py</include>
+        </pdd.bug_to_unit_test>
+        <pdd.code_generator>
+            <include>context/change/18/code_generator.py</include>
+        </pdd.code_generator>
     </internal_modules>
 
 % This program will do the following:

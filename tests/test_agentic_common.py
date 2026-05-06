@@ -717,7 +717,7 @@ def test_run_with_provider_includes_stdout_when_stderr_empty(mock_cwd, mock_env,
     prompt_file = mock_cwd / ".agentic_prompt_test.txt"
     prompt_file.write_text("test prompt")
 
-    success, msg, cost = _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=False)
+    success, msg, cost, _model = _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=False)
 
     assert not success
     assert "Authentication failed" in msg  # Should include stdout content
@@ -748,7 +748,7 @@ def test_run_with_provider_accepts_timeout_parameter(mock_cwd, mock_env, mock_lo
     prompt_file.write_text("Read the file .agentic_prompt.txt for instructions.")
 
     # This call should accept a timeout parameter
-    success, msg, cost = _run_with_provider(
+    success, msg, cost, _model = _run_with_provider(
         "anthropic",
         prompt_file,
         mock_cwd,
@@ -2040,6 +2040,9 @@ class TestAgenticDebugLogging:
         assert entry["response_length"] == len("The answer is 4.")
         assert "timestamp" in entry
         assert entry["cwd"] == str(tmp_path)
+        # Issue #1376: schema includes model and false_positive fields
+        assert entry["model"] is None
+        assert entry["false_positive"] is False
 
     def test_log_agentic_interaction_appends_to_same_session(self, tmp_path):
         """Multiple calls within same session should append to same file."""
@@ -2223,12 +2226,12 @@ class TestAgenticDebugLogging:
         assert entry["success"] is False
         assert entry["provider"] == "anthropic"
 
-    def test_run_agentic_task_no_log_when_not_verbose(
-        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    def test_run_agentic_task_logs_summary_on_success_without_verbose(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
     ):
-        """run_agentic_task should NOT log successful interactions when verbose=False.
-
-        Only failures are always logged (#1072). Success logging stays verbose-only.
+        """Issue #1376: success without --verbose still emits a summary record
+        (provider+model) so the log answers 'which provider produced step N?'.
+        Bodies stay omitted to keep file size manageable.
         """
         import pdd.agentic_common
 
@@ -2251,11 +2254,304 @@ class TestAgenticDebugLogging:
 
         assert success
 
-        # No log entries should be written for success when verbose=False
         log_dir = tmp_path / AGENTIC_LOG_DIR
-        if log_dir.exists():
-            log_files = list(log_dir.glob("*.jsonl"))
-            assert len(log_files) == 0, "No JSONL log files should be written for success when verbose=False"
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) == 1, "Expected one summary record on non-verbose success"
+
+        with open(log_files[0], "r", encoding="utf-8") as f:
+            entry = json.loads(f.read().strip())
+
+        # Summary fields are present
+        assert entry["label"] == "step_silent"
+        assert entry["provider"] == "anthropic"
+        assert entry["success"] is True
+        assert entry["false_positive"] is False
+        assert entry["cost_usd"] == 0.05
+        assert entry["prompt_length"] > 0
+        assert entry["response_length"] > 0
+        assert "model" in entry  # may be None (env var unset) but key must exist
+        # Bodies are omitted on non-verbose success
+        assert "prompt" not in entry, "prompt body should be omitted without --verbose"
+        assert "response" not in entry, "response body should be omitted without --verbose"
+
+    def test_log_agentic_interaction_omits_bodies_when_include_bodies_false(self, tmp_path):
+        """Issue #1376: include_bodies=False writes a summary record without
+        full prompt/response, but keeps prompt_length/response_length so size
+        is still observable.
+        """
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        _log_agentic_interaction(
+            label="step1",
+            prompt="x" * 4096,
+            response="y" * 128,
+            cost=0.01,
+            provider="google",
+            success=True,
+            duration=0.5,
+            cwd=tmp_path,
+            model="gemini-3-flash",
+            include_bodies=False,
+        )
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        assert len(log_files) == 1
+        entry = json.loads(log_files[0].read_text().strip())
+
+        assert entry["model"] == "gemini-3-flash"
+        assert entry["prompt_length"] == 4096
+        assert entry["response_length"] == 128
+        assert "prompt" not in entry
+        assert "response" not in entry
+
+    def test_log_agentic_interaction_records_false_positive(self, tmp_path):
+        """Issue #1376: false_positive=True pairs with success=False to
+        disambiguate heuristic rejection from CLI failure.
+        """
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        _log_agentic_interaction(
+            label="step5",
+            prompt="long prompt here",
+            response="Done.",
+            cost=0.02,
+            provider="google",
+            success=False,
+            duration=0.3,
+            cwd=tmp_path,
+            model=None,
+            false_positive=True,
+        )
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        entry = json.loads(log_files[0].read_text().strip())
+
+        assert entry["success"] is False
+        assert entry["false_positive"] is True
+        assert entry["response"] == "Done."
+
+    def test_run_agentic_task_records_model_from_env_var(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path, monkeypatch
+    ):
+        """Issue #1376: when CLAUDE_MODEL is set, the log records the requested model."""
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+        monkeypatch.setenv("CLAUDE_MODEL", "claude-opus-4-7")
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Task completed successfully with enough output characters.",
+            "total_cost_usd": 0.05,
+        })
+
+        success, _, _, _ = run_agentic_task(
+            "Fix the bug", tmp_path, verbose=False, label="step1"
+        )
+        assert success
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        entry = json.loads(log_files[0].read_text().strip())
+        assert entry["provider"] == "anthropic"
+        assert entry["model"] == "claude-opus-4-7"
+
+    def test_run_agentic_task_logs_full_bodies_on_verbose_success(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376: verbose=True keeps the historical full-body behavior
+        so debugging deep dives still see prompt+response in the log.
+        """
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Task completed with sufficient output to clear false-positive checks.",
+            "total_cost_usd": 0.07,
+        })
+
+        run_agentic_task("Fix the bug", tmp_path, verbose=True, label="step_v")
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        entry = json.loads(log_files[0].read_text().strip())
+        assert "prompt" in entry
+        assert "response" in entry
+        assert "Fix the bug" in entry["prompt"]
+
+    def test_run_agentic_task_no_duplicate_when_attempt_skipped_by_budget(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376 codex round 4 (medium): if attempt 1 fails and logs,
+        and attempt 2 is then SKIPPED due to budget exhaustion, the bottom
+        block must NOT re-log attempt 1's stale ``last_output`` as a
+        duplicate row.
+
+        Pre-fix flow: per-attempt reset of the log-tracking flag let the
+        bottom block see ``flag=False`` after a budget-skipped attempt
+        and re-log the previous attempt's response — producing 2
+        identical failure records for one actual provider call.
+        """
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        # Single subprocess call — attempt 1 fails. Attempt 2 should never
+        # run because we'll mock time.time() to make the budget look
+        # exhausted before the second attempt.
+        mock_subprocess_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="500 transient"
+        )
+
+        # Mock time.time so attempt 2's budget check sees < 60s remaining.
+        # JOB_TIMEOUT_MARGIN_SECONDS=120, MIN_ATTEMPT_TIMEOUT_SECONDS=60.
+        # task_start_time and aggregate_deadline = task_start_time + 2*timeout.
+        # We set timeout=300, then jump time forward to exhaust the aggregate.
+        from itertools import count
+        time_iter = iter(count(start=1000.0, step=200.0))  # each call advances 200s
+        with patch("pdd.agentic_common.time.time", side_effect=lambda: next(time_iter)), \
+             patch("pdd.agentic_common.time.sleep"):
+            run_agentic_task(
+                "step prompt",
+                tmp_path,
+                verbose=False,
+                label="step_skip",
+                max_retries=3,
+                retry_delay=0.0,
+                timeout=300,
+            )
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        # Attempt 1 ran and produced 1 failure record. Attempt 2 was
+        # skipped → must NOT produce a stale duplicate record.
+        assert len(records) == 1, (
+            f"Expected exactly 1 record (attempt 1 failure; attempt 2 budget-"
+            f"skipped, must not duplicate). Got {len(records)}: "
+            f"{[(r['provider'], r['success']) for r in records]}"
+        )
+        assert records[0]["success"] is False
+        # subprocess was called exactly once — the budget skip blocked attempt 2
+        assert mock_subprocess_run.call_count == 1
+
+    def test_run_agentic_task_logs_each_failed_attempt_in_retry_loop(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376 codex round 2 (P1): every retry attempt must leave
+        an audit record, not just the final one. With max_retries=3 and
+        three transient failures, expect exactly 3 JSONL rows for the
+        single provider — one per attempt — so the retry trail is visible.
+        """
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # Single-provider config so all attempts hit the same provider
+        mock_shutil_which.return_value = "/bin/claude"
+        # Three back-to-back transient failures
+        fail_resp = MagicMock(returncode=1, stdout="", stderr="500 Internal Server Error")
+        mock_subprocess_run.side_effect = [fail_resp, fail_resp, fail_resp]
+        # Skip real backoff sleeps so the test is fast
+        with patch("pdd.agentic_common.time.sleep"):
+            run_agentic_task(
+                "step prompt",
+                tmp_path,
+                verbose=False,
+                label="step_retry",
+                max_retries=3,
+                retry_delay=0.0,
+            )
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        assert len(records) == 3, (
+            f"Expected exactly 3 records (one per attempt) with max_retries=3, "
+            f"got {len(records)}: {[(r['provider'], r['success']) for r in records]}"
+        )
+        for r in records:
+            assert r["provider"] == "anthropic"
+            assert r["success"] is False
+            assert r["false_positive"] is False
+
+    def test_run_agentic_task_false_positive_emits_exactly_one_record_per_attempt(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376 codex review (P3): a false-positive provider attempt
+        must emit exactly one record, not two.
+
+        Pre-fix flow logged once in the FP branch and again in the bottom
+        provider-failure block, producing two JSONL rows for one attempt
+        (one with false_positive=True, one generic failure with the same
+        last_output). That violated the prompt's 'exactly one record per
+        attempt' contract and made the audit trail noisier.
+        """
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        # Zero-cost short reply → triggers the FP heuristic
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Done.",
+            "total_cost_usd": 0.0,
+        })
+
+        run_agentic_task(
+            "step prompt", tmp_path, verbose=False, label="step_fp_dedup", max_retries=1
+        )
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        # Single-provider config (only anthropic) with max_retries=1 →
+        # exactly one attempt → exactly one record (the FP one)
+        assert len(records) == 1, (
+            f"Expected exactly 1 record per FP attempt (codex P3); got "
+            f"{len(records)}: {records}"
+        )
+        assert records[0]["false_positive"] is True
+        assert records[0]["success"] is False
+
+    def test_run_agentic_task_logs_false_positive_record(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376: when the heuristic rejects a short response with cost
+        (e.g. ``Done.`` from a real provider), the rejection is recorded with
+        false_positive=True instead of being silently dropped from the log.
+        """
+        import pdd.agentic_common
+
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        # cost > 0 + short output that does NOT start with "Error:" hits
+        # the (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH) gate
+        # only when cost is zero. Use cost=0 + short output to trigger FP.
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Done.",
+            "total_cost_usd": 0.0,
+        })
+
+        run_agentic_task(
+            "Fix the bug", tmp_path, verbose=False, label="step_fp", max_retries=1
+        )
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        assert len(log_files) == 1
+        # multiple records possible (one per provider attempt); find the FP one
+        records = [
+            json.loads(line) for line in log_files[0].read_text().splitlines() if line
+        ]
+        fp_records = [r for r in records if r.get("false_positive")]
+        assert fp_records, f"Expected false_positive record, got: {records}"
+        fp = fp_records[0]
+        assert fp["success"] is False
+        assert fp["response"] == "Done."  # bodies present for FP records
 
     def test_session_id_format(self, tmp_path):
         """Session ID should follow YYYYMMDD_HHMMSS format."""
@@ -3222,7 +3518,7 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
         prompt_file = tmp_path / ".agentic_prompt_test.txt"
         prompt_file.write_text("test prompt")
 
-        success, output, cost = _run_with_provider(
+        success, output, cost, _model = _run_with_provider(
             "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
         )
 
@@ -3258,7 +3554,7 @@ def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
         prompt_file = tmp_path / ".agentic_prompt_test.txt"
         prompt_file.write_text("test prompt")
 
-        success, output, cost = _run_with_provider(
+        success, output, cost, _model = _run_with_provider(
             "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
         )
 
@@ -3295,7 +3591,7 @@ def test_issue557_session_end_usage_for_cost(tmp_path):
         prompt_file = tmp_path / ".agentic_prompt_test.txt"
         prompt_file.write_text("test prompt")
 
-        success, output, cost = _run_with_provider(
+        success, output, cost, _model = _run_with_provider(
             "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
         )
 
@@ -3337,7 +3633,7 @@ def test_issue557_single_line_json_no_ndjson(tmp_path):
         prompt_file = tmp_path / ".agentic_prompt_test.txt"
         prompt_file.write_text("test prompt")
 
-        success, output, cost = _run_with_provider(
+        success, output, cost, _model = _run_with_provider(
             "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
         )
 
@@ -3370,7 +3666,7 @@ def test_issue557_parse_provider_json_modern_codex_schema():
         }
     }
 
-    success, output, cost = _parse_provider_json("openai", modern_data)
+    success, output, cost, _model = _parse_provider_json("openai", modern_data)
 
     assert success is True
     assert "MODULES_TO_SYNC" in output, (
@@ -3396,7 +3692,7 @@ def test_issue557_parse_provider_json_legacy_codex_schema():
         "usage": {"input_tokens": 50, "output_tokens": 25}
     }
 
-    success, output, cost = _parse_provider_json("openai", legacy_data_result)
+    success, output, cost, _model = _parse_provider_json("openai", legacy_data_result)
     assert success is True
     assert output == "Legacy Codex response text here."
 
@@ -3407,7 +3703,7 @@ def test_issue557_parse_provider_json_legacy_codex_schema():
         "usage": {"input_tokens": 50, "output_tokens": 25}
     }
 
-    success2, output2, cost2 = _parse_provider_json("openai", legacy_data_output)
+    success2, output2, cost2, _model2 = _parse_provider_json("openai", legacy_data_output)
     assert success2 is True
     assert output2 == "Legacy Codex output text here."
 
@@ -4576,16 +4872,16 @@ class TestIssue1072FailureLogging:
             f"Expected failure log entry, got success={entry['success']}"
         )
 
-    # Scope addition: covers expansion item "agentic_common.py:895 success logging
-    # is also verbose-only and should be ungated" identified by Step 6 but absent
-    # from Step 8's plan
-    def test_success_not_logged_when_not_verbose(
-        self, mock_shutil_which, mock_subprocess_run, tmp_path
+    # Issue #1376 update: success now ALSO writes a record without --verbose,
+    # but as a summary (no full prompt/response bodies). Inverts the original
+    # #1072 contract that left successes invisible — see issue gltanaka/pdd#1376.
+    def test_success_logs_summary_without_verbose(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
     ):
-        """Issue #1072: Success interactions remain verbose-only (not diagnostic).
-
-        Only failures need always-on logging for post-mortem diagnosis.
-        Success logging stays behind `if verbose:` to avoid unnecessary I/O.
+        """Issue #1376: success without --verbose writes a summary record so
+        the log answers 'which provider/model produced step N?'. Bodies stay
+        omitted to keep file size manageable when the same large prompt
+        repeats across many steps.
         """
         import pdd.agentic_common
 
@@ -4607,14 +4903,18 @@ class TestIssue1072FailureLogging:
 
         assert success
 
-        # Success logging stays verbose-only — no JSONL written
         log_dir = tmp_path / AGENTIC_LOG_DIR
-        if log_dir.exists():
-            log_files = list(log_dir.glob("session_*.jsonl"))
-            assert len(log_files) == 0, (
-                "Success should not be logged when verbose=False — "
-                "only failures need always-on logging"
-            )
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) == 1, "Expected one summary record on non-verbose success"
+
+        entry = json.loads(log_files[0].read_text().strip())
+        assert entry["success"] is True
+        assert entry["provider"] == "anthropic"
+        # Summary-only: bodies omitted, lengths retained
+        assert "prompt" not in entry
+        assert "response" not in entry
+        assert entry["prompt_length"] > 0
+        assert entry["response_length"] > 0
 
 
 # ---------------------------------------------------------------------------
@@ -5650,7 +5950,7 @@ def test_codex_stale_chatgpt_token_returns_actionable_message(
         }),
     )
 
-    success, msg, cost = _run_with_provider(
+    success, msg, cost, _model = _run_with_provider(
         "openai", prompt_path, mock_cwd, timeout=10, quiet=True
     )
 
@@ -5694,3 +5994,270 @@ class TestIssue1232NotLoggedInPermanent:
     def test_login_unrelated_words_do_not_match(self):
         """Unrelated mentions of 'login' must not trigger permanent classification."""
         assert _is_permanent_error("login flow timed out, retrying") is False
+
+
+# ---------------------------------------------------------------------------
+# Issue #1376 incident reproduction: provider fallback audit trail.
+#
+# Original incident: anthropic returned 400 ("Credit balance is too low"),
+# google fallback succeeded with output "Done." (which then triggered a
+# downstream completeness-gate loop). The user could not tell from the logs
+# which provider produced the "Done." output because successful provider
+# attempts were only logged when --verbose was set. This regression test
+# pins the new contract: success records ARE in the JSONL even on a non-
+# verbose run, and they identify which provider (and which model, when an
+# env var is set) produced the output.
+# ---------------------------------------------------------------------------
+
+
+class TestIssue1376IncidentReplay:
+    """End-to-end-ish replay of the provider-fallback audit-trail incident.
+
+    Uses subprocess-level mocks so the test is deterministic and free, but
+    drives the same code path the user exercised: ``run_agentic_task`` with
+    ``verbose=False`` against a multi-provider config where anthropic fails
+    and google succeeds.
+    """
+
+    def test_google_fallback_success_after_anthropic_400_is_logged(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """The exact incident from Issue #1376.
+
+        Anthropic 400s ("Credit balance is too low"), google fallback
+        returns ``"Done."`` with non-zero cost. With ``verbose=False`` (the
+        cloud one-session sync default), the JSONL log MUST contain a
+        record showing google produced the successful output — which is
+        what the issue says was missing.
+        """
+        import pdd.agentic_common
+
+        # Reset session ID so the test gets a fresh log file
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        # Make both anthropic and google available
+        def which_side_effect(cmd):
+            return {"claude": "/bin/claude", "gemini": "/bin/gemini"}.get(cmd)
+        mock_shutil_which.side_effect = which_side_effect
+        os.environ["GEMINI_API_KEY"] = "key-for-availability-check"
+
+        # Sequence: 1st subprocess call (anthropic) fails with the exact
+        # 400 the incident reported; 2nd call (google fallback) succeeds
+        # with the literal "Done." reply that triggered the downstream
+        # completeness-gate loop.
+        anthropic_400 = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr='API Error: 400 {"error":{"message":"Credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+        )
+        google_done = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "response": "Done.",
+                "stats": {
+                    "models": {
+                        "gemini-3-flash-preview": {
+                            "tokens": {"prompt": 100, "candidates": 1, "cached": 0}
+                        }
+                    }
+                }
+            }),
+            stderr="",
+        )
+        mock_subprocess_run.side_effect = [anthropic_400, google_done]
+
+        success, output, cost, provider = run_agentic_task(
+            "Step 5: write the final summary",
+            tmp_path,
+            verbose=False,           # The user's scenario — non-verbose run
+            label="step5",
+        )
+
+        # Sanity: the orchestrator-level result reflects google's success
+        assert success is True, "Google fallback should have succeeded"
+        assert provider == "google", f"Expected google fallback, got {provider}"
+        assert output == "Done."
+
+        # Critical: the JSONL log must NOW exist and answer the issue's question
+        log_dir = tmp_path / AGENTIC_LOG_DIR
+        log_files = list(log_dir.glob("session_*.jsonl"))
+        assert len(log_files) == 1, (
+            f"Expected exactly 1 log file. Found {len(log_files)}. "
+            "Issue #1376: log file must exist on non-verbose runs so the "
+            "audit trail captures successful provider attempts."
+        )
+
+        records = [
+            json.loads(line)
+            for line in log_files[0].read_text().splitlines() if line
+        ]
+
+        # Failure record (anthropic): preserves issue #1072 behaviour
+        anthropic_records = [r for r in records if r["provider"] == "anthropic"]
+        assert anthropic_records, "Anthropic 400 must still be logged"
+        assert all(r["success"] is False for r in anthropic_records)
+
+        # Success record (google): was previously silent — this is the fix
+        google_records = [r for r in records if r["provider"] == "google"]
+        assert len(google_records) == 1, (
+            f"Issue #1376: expected exactly 1 google success record, got "
+            f"{len(google_records)}. records={records}"
+        )
+        g = google_records[0]
+        assert g["success"] is True
+        assert g["false_positive"] is False
+        assert g["label"] == "step5"
+        # Model field must be present (None when env var unset is fine)
+        assert "model" in g
+        # Summary fields populated
+        assert g["prompt_length"] > 0
+        assert g["response_length"] == len("Done.")
+        # Bodies omitted because verbose=False (size control)
+        assert "prompt" not in g, "prompt body must be omitted on non-verbose success"
+        assert "response" not in g, "response body must be omitted on non-verbose success"
+
+    def test_google_fallback_records_actual_model_from_response_json(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376 codex review (P2): when no env var is set, the audit
+        record carries the *actual* model name extracted from the provider's
+        JSON response — not just ``null``. For google, the model is the keys
+        of ``data['stats']['models']``.
+        """
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        def which_side_effect(cmd):
+            return {"claude": "/bin/claude", "gemini": "/bin/gemini"}.get(cmd)
+        mock_shutil_which.side_effect = which_side_effect
+        os.environ["GEMINI_API_KEY"] = "key"
+        # Deliberately NO GEMINI_MODEL env var → model must come from JSON
+
+        anthropic_fail = MagicMock(returncode=1, stdout="", stderr="500 server error")
+        google_ok = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "response": "Output sufficient to clear false-positive checks.",
+                "stats": {"models": {"gemini-3-pro-preview": {"tokens": {"prompt": 50, "candidates": 50, "cached": 0}}}},
+            }),
+            stderr="",
+        )
+        mock_subprocess_run.side_effect = [anthropic_fail, google_ok]
+
+        run_agentic_task("step prompt", tmp_path, verbose=False, label="step5")
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        google_record = next(r for r in records if r["provider"] == "google")
+        assert google_record["model"] == "gemini-3-pro-preview", (
+            f"Expected actual model 'gemini-3-pro-preview' from response JSON, "
+            f"got: {google_record['model']!r}"
+        )
+
+    def test_codex_modern_ndjson_preserves_model_from_session_end(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376 codex round 3 (P2): when modern Codex NDJSON splits
+        agent text (``item.completed``) from usage+model (``session.end``),
+        the merge must carry over BOTH ``usage`` and ``model`` so the audit
+        log captures the actual model name. Previously only ``usage`` was
+        merged, dropping the model and logging ``model: null``.
+        """
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        def which_side_effect(cmd):
+            return {"codex": "/bin/codex"}.get(cmd)
+        mock_shutil_which.side_effect = which_side_effect
+        os.environ["OPENAI_API_KEY"] = "key-for-availability"
+
+        # Modern Codex NDJSON: text in item.completed, model+usage in session.end
+        ndjson_lines = [
+            json.dumps({
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "Substantive output of sufficient length to pass FP."},
+            }),
+            json.dumps({
+                "type": "session.end",
+                "model": "gpt-5.5-codex",
+                "usage": {"input_tokens": 100, "output_tokens": 50, "cached_input_tokens": 0},
+            }),
+        ]
+        mock_subprocess_run.return_value = MagicMock(
+            returncode=0, stdout="\n".join(ndjson_lines), stderr=""
+        )
+
+        run_agentic_task("step prompt", tmp_path, verbose=False, label="codex_step")
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        codex_records = [r for r in records if r["provider"] == "openai"]
+        assert codex_records, f"Expected codex/openai record; got: {records}"
+        assert codex_records[-1]["model"] == "gpt-5.5-codex", (
+            f"Expected actual model 'gpt-5.5-codex' from session.end; got: "
+            f"{codex_records[-1]['model']!r}"
+        )
+
+    def test_anthropic_records_actual_model_from_modelUsage(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """Issue #1376 codex review (P2): anthropic exposes its model via
+        ``modelUsage`` keys. The audit record reflects that even when no
+        env var is set."""
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        mock_shutil_which.return_value = "/bin/claude"
+        mock_subprocess_run.return_value.returncode = 0
+        mock_subprocess_run.return_value.stdout = json.dumps({
+            "result": "Substantive output of sufficient length to bypass FP heuristic.",
+            "total_cost_usd": 0.05,
+            "modelUsage": {"claude-opus-4-7": {"costUSD": 0.05}},
+        })
+        run_agentic_task("step prompt", tmp_path, verbose=False, label="step1")
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        anthropic_records = [r for r in records if r["provider"] == "anthropic"]
+        assert anthropic_records, f"Expected an anthropic record; got: {records}"
+        assert anthropic_records[-1]["model"] == "claude-opus-4-7", (
+            f"Expected actual model 'claude-opus-4-7' from modelUsage, got: "
+            f"{anthropic_records[-1]['model']!r}"
+        )
+
+    def test_google_fallback_records_model_when_env_var_set(
+        self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
+    ):
+        """When GEMINI_MODEL is set, the audit record names the model.
+
+        Pins the new ``model`` field that closes the issue's ask: "which
+        provider/MODEL produced step N's output?".
+        """
+        import pdd.agentic_common
+        pdd.agentic_common._AGENTIC_SESSION_ID = None
+
+        def which_side_effect(cmd):
+            return {"claude": "/bin/claude", "gemini": "/bin/gemini"}.get(cmd)
+        mock_shutil_which.side_effect = which_side_effect
+        os.environ["GEMINI_API_KEY"] = "key"
+        os.environ["GEMINI_MODEL"] = "gemini-3-flash-preview"
+
+        anthropic_fail = MagicMock(returncode=1, stdout="", stderr="500 server error")
+        google_ok = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "response": "Step 5 complete with sufficient detail.",
+                "stats": {"models": {"gemini-3-flash-preview": {"tokens": {"prompt": 50, "candidates": 50, "cached": 0}}}},
+            }),
+            stderr="",
+        )
+        mock_subprocess_run.side_effect = [anthropic_fail, google_ok]
+
+        run_agentic_task("step prompt", tmp_path, verbose=False, label="step5")
+
+        log_files = list((tmp_path / AGENTIC_LOG_DIR).glob("session_*.jsonl"))
+        records = [json.loads(line) for line in log_files[0].read_text().splitlines() if line]
+        google_record = next(r for r in records if r["provider"] == "google")
+        assert google_record["model"] == "gemini-3-flash-preview", (
+            f"Expected model from GEMINI_MODEL env var, got: {google_record['model']}"
+        )

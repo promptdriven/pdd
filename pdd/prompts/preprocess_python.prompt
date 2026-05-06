@@ -64,7 +64,27 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 - Debug mode: when `PDD_PREPROCESS_DEBUG=1`, log detailed processing events to console. When `PDD_PREPROCESS_DEBUG_FILE` is also set, write a debug report to that file path.
 - After processing, scan for risky placeholders remaining outside code fences and log via debug output (no effect on returned prompt):
   - Single-brace variables like `{name}` that weren't doubled (potential PromptTemplate errors)
-  - `${...}` template literals
+  - `${name}` template literals
+- Unresolved-include surfacing: on the final non-recursive pass, surface include
+  paths that the include processors actually failed to expand. Track failed
+  paths directly during expansion (a `_failed: List[str]` list threaded through
+  `process_backtick_includes`, `process_xml_tags`, `process_include_tags`, and
+  `process_include_many_tags`); the include processors append the failing
+  `file_path` to this list when they emit a `[File not found: ...]` placeholder
+  on the final pass. Do NOT regex-scan the returned prompt for that literal
+  pattern — it can legitimately appear in documentation, prompt specs, or
+  other non-include content and would produce false-positive warnings (#1354
+  review). De-duplicate the failed paths before warning. For each tracked
+  failure, emit a single warning line via the standard logger AND via Rich
+  console output (suppressed when `PDD_QUIET=1`):
+    `Warning: Unresolved include in preprocessed prompt: <path>. Generated code may be missing dependency context. Check that example_output_path in .pddrc matches where example files are written (default: 'examples/').`
+  Do NOT mutate the returned prompt — surfacing is observational. Recursive
+  passes (`recursive=True`) MUST NOT emit this warning, since unresolved tags
+  may resolve on a later pass.
+  When the unresolved path's first component is `"context"` or `"examples"` and
+  the same file exists at the swapped location, append `Found at: <alt-path>.`
+  to the warning. Wrap the filesystem probe in `try/except` so a probe failure
+  cannot suppress the primary warning (#616).
 
 % Curly Brace Handling (when double_curly_brackets=True)
 - Double single braces: `{var}` → `{{var}}`
@@ -79,9 +99,12 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 
 % Dependencies
 <path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
-<content_selector_example><include>context/content_selector_example.py</include></content_selector_example>
-<include_query_extractor_example><include>context/include_query_extractor_example.py</include></include_query_extractor_example>
+<content_selector_example><include select="class:ContentSelector">pdd/content_selector.py</include></content_selector_example>
+<include_query_extractor_example><include select="class:IncludeQueryExtractor">pdd/include_query_extractor.py</include></include_query_extractor_example>
 <firecrawl_example><include>./context/firecrawl_example.py</include></firecrawl_example>
+<pdd.auto_include>
+    <include select="def:main">context/auto_include_example.py</include>
+</pdd.auto_include>
 
 % Deliverables
 - Code: `pdd/preprocess.py`

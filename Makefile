@@ -758,9 +758,9 @@ publish-public:
 	fi
 	@echo "Ensuring public repo directory exists: $(PUBLIC_PDD_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_REPO_DIR)
-	@# Reset to origin/main before copying so the copy lands on a clean baseline
+	@# Reset and clean to origin/main before copying so the copy lands on a clean baseline
 	@if git -C "$(PUBLIC_PDD_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_REPO_DIR)" && git fetch origin && git reset --hard origin/main; \
+		cd "$(PUBLIC_PDD_REPO_DIR)" && git fetch origin && git reset --hard origin/main && git clean -ffdx; \
 	fi
 	@echo "Copying files from .sync-config.yml (shared section only)"
 	@python scripts/copy_package_data_to_public.py \
@@ -826,9 +826,9 @@ publish-public-cap:
 	fi
 	@echo "Ensuring CAP public repo directory exists: $(PUBLIC_PDD_CAP_REPO_DIR)"
 	@mkdir -p $(PUBLIC_PDD_CAP_REPO_DIR)
-	@# Reset to origin/main before copying so the copy lands on a clean baseline
+	@# Reset and clean to origin/main before copying so the copy lands on a clean baseline
 	@if git -C "$(PUBLIC_PDD_CAP_REPO_DIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
-		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git fetch origin && git reset --hard origin/main; \
+		cd "$(PUBLIC_PDD_CAP_REPO_DIR)" && git fetch origin && git reset --hard origin/main && git clean -ffdx; \
 	fi
 	@echo "Copying files from .sync-config.yml (shared + cap_only sections)"
 	@python scripts/copy_package_data_to_public.py \

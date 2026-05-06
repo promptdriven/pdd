@@ -1,20 +1,49 @@
-## v0.0.228 (2026-05-04)
+## v0.0.229 (2026-05-05)
 
 ### Feat
 
-- add Claude Opus 4.7 with temperature exclusion, implement mandatory model catalog row injection, and refresh model lineup for v0.0.227
+- add guarded incremental PRD propagation
 
 ### Fix
 
-- **test**: drop cost>0 in test_cmd_test_main_cloud_e2e_generate_mode
-- **test**: replace brittle cost>0 cloud-use proxy with cache-stable success markers
-- **cloud-test**: include architecture.json in tarball; loosen brittle KeyError assertion
-- remove e2e auth drift
-- declare e2e bug-state dependency
-- keep auto-heal metadata scoped
-- align e2e metadata contracts
-- harden sync cwd and checkup push auth
-- report pdd version from package metadata
+- **cost**: fall back to CSV rates when LiteLLM silently returns 0 cost
+- **cost**: register CSV models with LiteLLM so completion_cost is nonzero
+- **#1353**: default examples dir to examples
+- **#1376**: address codex round 4 — no double-log on budget-skipped attempts
+- **#1376**: address codex round 3 — Codex NDJSON model + prompt is_error tuple
+- **#1376**: address codex round 2 — per-attempt logging + prompt-spec sync
+- **#1376**: address codex review — actual model from JSON, FP dedup, README docs
+- **#1376**: always emit a summary record for every provider attempt
+- preserve path-qualified sync dependencies
+- **release**: harden public sync cleanup
+- **llm_invoke**: widen envelope-unwrap gates for aliases and composed schemas (#1364)
+- **llm_invoke**: gate envelope unwrap on schema declaring 'parameter' (#1364)
+- **llm_invoke**: return validated payload from jsonschema unwrap helper; serialize unwrapped form (#1364)
+- **llm_invoke**: extend envelope unwrap to output_schema/jsonschema path; sync prompt (#1364)
+- unwrap Vertex Anthropic 'parameter' tool-call envelope before pydantic validation (#1364)
+- **test**: drop cost>0 in test_integration_prompt_authoritative_with_live_llm
+
+## v0.0.228 (2026-05-04)
+
+### Fix
+
+- **versioning**: `pdd.__version__` now reads the installed `pdd-cli` distribution metadata, so `pdd --version` stays aligned with the packaged release; Commitizen now bumps `pdd/setup.py` instead of hard-coding `pdd/__init__.py`.
+- **sync**: nested `.pddrc` files matched only by broad basename globs such as `*llm*` no longer claim root modules unless the nested project has an exact prompt for that basename, preventing example workspaces from hijacking modules like `llm_model`.
+- **e2e fix**: Step 8 is pinned to a 3600s timeout for recursive `pdd fix --loop` runs on large dev units, with prompt and regression coverage to prevent reverting to the shorter budget.
+- **push auth**: e2e-fix/checkup push retries now fall back from `PDD_GH_TOKEN_FILE` to `GH_TOKEN`, `GITHUB_TOKEN`, and `PDD_GITHUB_TOKEN`, while still restoring tokenized remote URLs after retry.
+- **cloud CI/tests**: cloud-batch submissions include `architecture.json`; cloud-path tests now accept legitimate LiteLLM cache hits with zero cost and verify explicit cloud success markers instead; the Step 5 JSON-brace regression no longer depends on unstable `KeyError` text.
+- **prompt metadata**: e2e bug-state dependencies, selected prompt includes, generated examples, and architecture metadata were realigned without pulling unused auth or helper contexts.
+
+### Docs
+
+- Reworked the prompting guide with natural-language contract rules, clearer simple vs. non-trivial prompt structure, grounding caveats, prompt-density guidance, and updated user-story template language.
+- Added `context/setup_example.py` for setup/package metadata examples and corrected the prior 0.0.227 release notes for the model catalog changes.
+
+### Build
+
+- Refreshed the cloud image hash, cloud-batch timing baselines, README/PyPI version references, bash completion version marker, `project_dependencies.csv`, package metadata, and version bump to 0.0.228.
+- `make release` now invokes Commitizen with `--check-consistency`.
+- Added regression coverage for package version reporting, sync cwd resolution, e2e-fix timeout/auth metadata, cache-stable cloud tests, prompt metadata, and release metadata.
 
 ## v0.0.227 (2026-05-03)
 

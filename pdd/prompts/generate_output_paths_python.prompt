@@ -1,4 +1,5 @@
 % You are an expert Python software engineer.
+<pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
 
 % Role & Scope
   Implement `generate_output_paths`, a function that determines absolute output file paths
@@ -12,7 +13,15 @@
   - Default filename patterns per command
   - Environment variables (PDD_*_OUTPUT_PATH)
   - Configuration priority and .pddrc context settings
-  <program_description><include>README.md</include></program_description>
+  <program_description><include select="section:Commands,section:Environment Variables,section:Configuration">README.md</include></program_description>
+
+% Dependencies
+<pdd.cli>
+    <include select="def:get_paths_for_shell,def:log_cost">context/change/15/initial_cli.py</include>
+</pdd.cli>
+<pdd.auto_deps>
+    <include select="def:mock_construct_paths">context/auto_deps_main_example.py</include>
+</pdd.auto_deps>
 
 % Function Signature
   def generate_output_paths(
@@ -71,7 +80,9 @@
 
 % Deliverables
   Single file with:
-  - Module-level constants: EXAMPLES_DIR = "examples"
+  - Module-level constants: `EXAMPLES_DIR = "examples"` — the canonical default
+    example-output directory when no `.pddrc` is present. `construct_paths`
+    imports this constant rather than redefining the literal.
   - Module-level configuration dictionaries: COMMAND_OUTPUT_KEYS, DEFAULT_FILENAMES,
     ENV_VAR_MAP, CONTEXT_CONFIG_MAP
   - Helper: _get_default_filename(command, output_key, basename, language, file_extension)

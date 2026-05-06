@@ -227,6 +227,74 @@ class TestBuildDepGraphFromArchitecture:
         assert result.graph["commands/maintenance"] == ["agentic_sync"]
         assert result.graph["agentic_sync"] == []
 
+    def test_preserves_dependencies_for_path_qualified_targets(self, tmp_path):
+        """Regression for #1382: branch-diff targets may be code paths."""
+        arch = [
+            {
+                "filename": "config_Python.prompt",
+                "filepath": "src/config.py",
+                "dependencies": [],
+            },
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "dependencies": ["config_Python.prompt"],
+            },
+            {
+                "filename": "firestore_client_Python.prompt",
+                "filepath": "src/clients/firestore_client.py",
+                "dependencies": ["config_Python.prompt", "models_Python.prompt"],
+            },
+            {
+                "filename": "solving_orchestrator_Python.prompt",
+                "filepath": "src/services/solving_orchestrator.py",
+                "dependencies": [
+                    "config_Python.prompt",
+                    "models_Python.prompt",
+                    "firestore_client_Python.prompt",
+                ],
+            },
+            {
+                "filename": "worker_app_Python.prompt",
+                "filepath": "src/worker_app.py",
+                "dependencies": [
+                    "config_Python.prompt",
+                    "models_Python.prompt",
+                    "firestore_client_Python.prompt",
+                ],
+            },
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+
+        result = build_dep_graph_from_architecture(
+            arch_path,
+            [
+                "src/clients/firestore_client",
+                "src/config",
+                "src/models",
+                "src/services/solving_orchestrator",
+                "src/worker_app",
+            ],
+        )
+
+        assert result.graph == {
+            "src/config": [],
+            "src/models": ["src/config"],
+            "src/clients/firestore_client": ["src/config", "src/models"],
+            "src/services/solving_orchestrator": [
+                "src/config",
+                "src/models",
+                "src/clients/firestore_client",
+            ],
+            "src/worker_app": [
+                "src/config",
+                "src/models",
+                "src/clients/firestore_client",
+            ],
+        }
+        assert result.warnings == []
+
 
 # ---------------------------------------------------------------------------
 # Global sync helpers

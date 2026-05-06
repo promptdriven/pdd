@@ -12,6 +12,7 @@
 </pdd-interface>
 
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
@@ -426,13 +427,13 @@ Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_w
 Import from `pdd.preprocess`: `preprocess`
 Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
-<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
+<pdd.sync_order><include select="def:build_dependency_graph,def:topological_sort,def:get_affected_modules,def:generate_sync_order_script,def:extract_module_from_include,def:discover_associated_documents">pdd/sync_order.py</include></pdd.sync_order>
 <pdd.construct_paths><include>context/construct_paths_example.py</include></pdd.construct_paths>
 <pdd.get_extension><include>context/get_extension_example.py</include></pdd.get_extension>
-<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
-<pdd.architecture_sync><include query="_merge_interface_signatures and register_untracked_prompts usage examples">context/architecture_sync_example.py</include></pdd.architecture_sync>
+<pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
+<pdd.architecture_sync><include select="def:_merge_interface_signatures,def:register_untracked_prompts">pdd/architecture_sync.py</include></pdd.architecture_sync>
 
 % Deliverables
 - Code: `pdd/agentic_change_orchestrator.py`

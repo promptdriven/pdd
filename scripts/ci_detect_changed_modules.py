@@ -43,6 +43,24 @@ _INCLUDE_BLOCK_TAG = re.compile(
     re.DOTALL,
 )
 _PROMPT_DIRS = ("prompts/", "pdd/prompts/")
+_INCLUDE_PATH_SUFFIXES = (
+    ".adoc",
+    ".csv",
+    ".css",
+    ".html",
+    ".js",
+    ".json",
+    ".md",
+    ".prompt",
+    ".py",
+    ".rst",
+    ".sh",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".yaml",
+    ".yml",
+)
 
 
 def _git_changed_files(diff_base: str) -> list[str]:
@@ -140,9 +158,22 @@ def _extract_include_paths(content: str) -> list[str]:
     for block in _INCLUDE_BLOCK_TAG.findall(content):
         for part in block.split(","):
             normalized = _normalize_repo_path(part)
-            if normalized:
+            if _is_include_path(normalized):
                 includes.append(normalized)
     return includes
+
+
+def _is_include_path(path: str) -> bool:
+    """Return True when an include payload looks like a repo file path.
+
+    Prompt prose may mention literal XML tags such as ``<include>`` inside
+    Markdown. The regex above intentionally remains simple, so guard the
+    payload before reverse-dependency matching; otherwise a prose fragment like
+    "prompt" can match every changed ``*.prompt`` file by suffix.
+    """
+    if not path:
+        return False
+    return "/" in path or path.endswith(_INCLUDE_PATH_SUFFIXES)
 
 
 def _reverse_dep_basenames(changed_files: list[str]) -> set[str]:
