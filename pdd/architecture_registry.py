@@ -8,6 +8,7 @@ entries with existing ones.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
@@ -252,13 +253,28 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
 _PRD_SPEC_GLOBS = ("prd*.md", "spec*.md", "*_prd.md", "*_spec.md")
 
 
+def _matches_prd_spec(name: str) -> bool:
+    """Return True if ``name`` matches any PRD/spec glob, case-insensitively."""
+    lowered = name.lower()
+    for pattern in _PRD_SPEC_GLOBS:
+        if fnmatch.fnmatchcase(lowered, pattern):
+            return True
+    return False
+
+
 def _has_prd_spec_marker(directory: Path) -> bool:
-    """Return True if ``directory`` contains any PRD/spec markdown file."""
+    """Return True if ``directory`` contains any PRD/spec markdown file.
+
+    The match is case-insensitive so that ``PRD.md`` or ``Spec.md`` are
+    recognised on case-sensitive filesystems (e.g. Linux).
+    """
     try:
-        for pattern in _PRD_SPEC_GLOBS:
-            for match in directory.glob(pattern):
-                if match.is_file():
+        for entry in directory.iterdir():
+            try:
+                if entry.is_file() and _matches_prd_spec(entry.name):
                     return True
+            except OSError:
+                continue
     except OSError:
         return False
     return False

@@ -12,6 +12,7 @@
       {"name": "merge_architecture", "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str)", "returns": "Tuple[List[dict], dict]"},
       {"name": "find_architecture_for_project", "signature": "(project_root: Path)", "returns": "List[Path]"},
       {"name": "find_project_root", "signature": "(start: Optional[Path] = None)", "returns": "Path"},
+      {"name": "find_git_toplevel", "signature": "(start: Optional[Path] = None)", "returns": "Optional[Path]"},
       {"name": "load_combined_architecture_data", "signature": "(project_root: Path)", "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"},
       {"name": "get_modules_for_issue", "signature": "(arch_data: List[dict], issue_number: int)", "returns": "List[dict]"}
     ]
@@ -146,6 +147,15 @@
 % - If no marker is found in any tier, return start.resolve().
 % - This precedence ensures that a self-contained pdd project nested inside an unrelated
 %   outer git repo is correctly identified as its own project root (issue #815).
+
+% Function: find_git_toplevel(start: Optional[Path] = None) -> Optional[Path]
+% - Walk parents from `start` (default: cwd) looking for a directory containing `.git`.
+% - Limit to 20 parent traversals.
+% - Return the first ancestor directory containing `.git`, or `None` if no git root is
+%   found within that bound.
+% - Used by callers (e.g. `agentic_architecture._ensure_repo_context`) to detect when a
+%   resolved PDD project root is a strict descendant of an enclosing, unrelated git
+%   repo so that remote-mismatch warnings can be suppressed (issue #815).
 
 % Function: load_combined_architecture_data(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]
 % - Load and merge all architecture.json lists under project_root.

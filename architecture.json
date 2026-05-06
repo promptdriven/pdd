@@ -5336,6 +5336,11 @@
             "returns": "Path"
           },
           {
+            "name": "find_git_toplevel",
+            "signature": "(start: Optional[Path] = None)",
+            "returns": "Optional[Path]"
+          },
+          {
             "name": "load_combined_architecture_data",
             "signature": "(project_root: Path)",
             "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"
