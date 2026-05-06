@@ -1166,6 +1166,17 @@ Each validation step retries up to 3 times with automatic fixes before proceedin
 
 **Options:**
 - `--skip-prompts`: Skip prompt file generation (steps 8-11), only generate `architecture.json` and `.pddrc`
+- `--project-root <path>`: Explicit project-root override. Use the given path as the resolved project root instead of walking up from cwd. Useful when the cwd is a self-contained pdd project nested inside an unrelated outer git repo.
+
+**Project Root Detection:**
+
+`pdd generate <issue-url>` (and `pdd generate --incremental --experimental-prd`) resolves the project root by walking up from cwd and selecting the **innermost match within the highest tier** seen:
+
+1. **Tier A (PDD-explicit)**: a directory containing `.pddrc` or a `.pdd/` directory.
+2. **Tier B (PDD-conventional)**: a directory containing `sources/` plus PRD/spec markdown (`prd*.md`, `spec*.md`, or `*_prd.md`/`*_spec.md`).
+3. **Tier C (git fallback)**: a directory containing `.git`.
+
+This means a self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root. When the resolved project root is a strict descendant of the enclosing git toplevel, the remote-vs-issue mismatch warning is suppressed (it would be a false positive). Pass `--project-root <path>` to bypass marker-based discovery entirely.
 
 Prerequisites:
 - `gh` CLI must be installed and authenticated

@@ -1,3 +1,24 @@
+<pdd-reason>Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "extract_modules", "signature": "(data: Any)", "returns": "List[Dict[str, Any]]"},
+      {"name": "extract_prd_files", "signature": "(data: Any)", "returns": "List[str]"},
+      {"name": "load_registry", "signature": "(project_root: Path)", "returns": "dict"},
+      {"name": "save_registry", "signature": "(project_root: Path, registry: dict)", "returns": "None"},
+      {"name": "record_generation", "signature": "(project_root: Path, issue_number: int, issue_url: str, modules_added: List[str], modules_updated: List[str], target_dir: Optional[str] = None)", "returns": "None"},
+      {"name": "merge_architecture", "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str)", "returns": "Tuple[List[dict], dict]"},
+      {"name": "find_architecture_for_project", "signature": "(project_root: Path)", "returns": "List[Path]"},
+      {"name": "find_project_root", "signature": "(start: Optional[Path] = None)", "returns": "Path"},
+      {"name": "load_combined_architecture_data", "signature": "(project_root: Path)", "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"},
+      {"name": "get_modules_for_issue", "signature": "(arch_data: List[dict], issue_number: int)", "returns": "List[dict]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % Module: architecture_registry.py
 % Purpose: Architecture registry for tracking multi-issue generation provenance.
 %
@@ -111,9 +132,20 @@
 % - Log warnings on OSError/IOError but don't raise.
 
 % Function: find_project_root(start: Optional[Path] = None) -> Path
-% - Walk up from `start` (default: cwd) looking for a directory containing `.pddrc` or `.git`.
+% - Walk up from `start` (default: cwd) looking for a project-root marker, using the
+%   following tier precedence (innermost match within the highest tier seen wins):
+%   - Tier A (PDD-explicit): a directory containing `.pddrc` or a `.pdd/` directory.
+%   - Tier B (PDD-conventional): a directory containing a `sources/` subdirectory **and**
+%     at least one PRD/spec markdown file (case-insensitive match for filenames matching
+%     `prd*.md`, `spec*.md`, or `*_prd.md` / `*_spec.md`) at that directory.
+%   - Tier C (git fallback): a directory containing `.git`.
+% - Walk parents from `start` upward, recording the innermost (deepest) match for each
+%   tier. After the walk completes, return Tier A's match if any; otherwise Tier B's
+%   match if any; otherwise Tier C's match if any.
 % - Limit to 20 parent traversals.
-% - If not found, return start.resolve().
+% - If no marker is found in any tier, return start.resolve().
+% - This precedence ensures that a self-contained pdd project nested inside an unrelated
+%   outer git repo is correctly identified as its own project root (issue #815).
 
 % Function: load_combined_architecture_data(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]
 % - Load and merge all architecture.json lists under project_root.

@@ -949,7 +949,9 @@
   {
     "reason": "Determines output file paths for generated code.",
     "description": "Calculates where generated files should be written based on project structure and conventions.",
-    "dependencies": ["auto_deps_main_python.prompt"],
+    "dependencies": [
+      "auto_deps_main_python.prompt"
+    ],
     "priority": 30,
     "filename": "generate_output_paths_python.prompt",
     "filepath": "pdd/generate_output_paths.py",
@@ -2363,7 +2365,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -2577,7 +2582,9 @@
   {
     "reason": "Generates unit tests for PDD-generated code modules.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
-    "dependencies": ["bug_to_unit_test_python.prompt"],
+    "dependencies": [
+      "bug_to_unit_test_python.prompt"
+    ],
     "priority": 68,
     "filename": "generate_test_python.prompt",
     "filepath": "pdd/generate_test.py",
@@ -5272,11 +5279,83 @@
     }
   },
   {
+    "reason": "Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.",
+    "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root using tier precedence: .pddrc/.pdd/ (Tier A), then sources/ + PRD/spec markdown (Tier B), then enclosing .git (Tier C). Innermost match within the highest tier seen wins, so a self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root (issue #815).",
+    "dependencies": [],
+    "priority": 208,
+    "filename": "architecture_registry_python.prompt",
+    "filepath": "pdd/architecture_registry.py",
+    "tags": [
+      "module",
+      "python",
+      "architecture",
+      "registry"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_modules",
+            "signature": "(data: Any)",
+            "returns": "List[Dict[str, Any]]"
+          },
+          {
+            "name": "extract_prd_files",
+            "signature": "(data: Any)",
+            "returns": "List[str]"
+          },
+          {
+            "name": "load_registry",
+            "signature": "(project_root: Path)",
+            "returns": "dict"
+          },
+          {
+            "name": "save_registry",
+            "signature": "(project_root: Path, registry: dict)",
+            "returns": "None"
+          },
+          {
+            "name": "record_generation",
+            "signature": "(project_root: Path, issue_number: int, issue_url: str, modules_added: List[str], modules_updated: List[str], target_dir: Optional[str] = None)",
+            "returns": "None"
+          },
+          {
+            "name": "merge_architecture",
+            "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str)",
+            "returns": "Tuple[List[dict], dict]"
+          },
+          {
+            "name": "find_architecture_for_project",
+            "signature": "(project_root: Path)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "find_project_root",
+            "signature": "(start: Optional[Path] = None)",
+            "returns": "Path"
+          },
+          {
+            "name": "load_combined_architecture_data",
+            "signature": "(project_root: Path)",
+            "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"
+          },
+          {
+            "name": "get_modules_for_issue",
+            "signature": "(arch_data: List[dict], issue_number: int)",
+            "returns": "List[dict]"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Also wraps guarded incremental PRD-to-architecture propagation for issue URLs and local PRD files, including shell-safe target-directory validation, repo-relative status paths, subproject sync hints, and GitHub status comment redaction.",
     "dependencies": [
       "agentic_architecture_orchestrator_python.prompt",
-      "incremental_prd_architecture_python.prompt"
+      "incremental_prd_architecture_python.prompt",
+      "architecture_registry_python.prompt"
     ],
     "priority": 209,
     "filename": "agentic_architecture_python.prompt",
@@ -5292,12 +5371,12 @@
         "functions": [
           {
             "name": "run_agentic_architecture",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, project_root: Optional[str])",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "run_incremental_architecture",
-            "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float)",
+            "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float, project_root: Optional[str])",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -5346,7 +5425,7 @@
         "commands": [
           {
             "name": "generate",
-          "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
           },
           {
             "name": "test",
@@ -5965,7 +6044,9 @@
   {
     "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
-    "dependencies": ["agentic_bug_orchestrator_python.prompt"],
+    "dependencies": [
+      "agentic_bug_orchestrator_python.prompt"
+    ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
     "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
@@ -6960,7 +7041,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
@@ -7042,7 +7127,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
