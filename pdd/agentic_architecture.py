@@ -464,7 +464,12 @@ def run_agentic_architecture(
     from .architecture_registry import find_project_root
 
     if project_root is not None:
-        resolved_project_root = Path(project_root).resolve()
+        candidate = Path(project_root).expanduser()
+        if not candidate.exists():
+            return False, f"project_root does not exist: {candidate}", 0.0, "", []
+        if not candidate.is_dir():
+            return False, f"project_root is not a directory: {candidate}", 0.0, "", []
+        resolved_project_root = candidate.resolve()
     else:
         resolved_project_root = find_project_root(cwd)
 
@@ -578,7 +583,12 @@ def run_incremental_architecture(
     from .architecture_registry import find_project_root
 
     if project_root is not None:
-        resolved_project_root = Path(project_root).resolve()
+        candidate = Path(project_root).expanduser()
+        if not candidate.exists():
+            return False, f"project_root does not exist: {candidate}", 0.0, "", []
+        if not candidate.is_dir():
+            return False, f"project_root is not a directory: {candidate}", 0.0, "", []
+        resolved_project_root = candidate.resolve()
     else:
         resolved_project_root = find_project_root(cwd)
 

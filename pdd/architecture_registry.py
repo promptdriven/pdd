@@ -283,33 +283,34 @@ def _has_prd_spec_marker(directory: Path) -> bool:
 def find_project_root(start: Optional[Path] = None) -> Path:
     """Resolve the PDD project root by walking up from ``start`` (default: cwd).
 
-    Tiered marker discovery (highest tier wins; innermost match within the
-    highest tier is preferred):
+    Tiered marker discovery. Tier A (PDD-explicit) and Tier B
+    (PDD-conventional) are treated as a single "PDD project marker" pool: the
+    innermost directory that matches **either** wins, so a self-contained PDD
+    project nested inside an unrelated outer PDD repository is correctly
+    identified as its own root (issue #815). Only when no PDD marker is found
+    does the resolver fall back to the enclosing git repository.
 
     * Tier A (PDD-explicit): a directory containing ``.pddrc`` or a ``.pdd/``
       directory.
     * Tier B (PDD-conventional): a directory containing ``sources/`` plus PRD
       or spec markdown (``prd*.md``, ``spec*.md``, ``*_prd.md``, ``*_spec.md``).
     * Tier C (git fallback): a directory containing ``.git``.
-
-    This means a self-contained pdd project nested inside an unrelated outer
-    git repository is correctly identified as its own project root.
     """
     if start is None:
         start = Path.cwd()
     current = start.resolve()
 
-    tier_a: Optional[Path] = None  # innermost PDD-explicit
-    tier_b: Optional[Path] = None  # innermost PDD-conventional
-    tier_c: Optional[Path] = None  # innermost git fallback
+    pdd_marker: Optional[Path] = None  # innermost PDD-explicit OR PDD-conventional
+    tier_c: Optional[Path] = None      # innermost git fallback
 
     for _ in range(20):
-        if tier_a is None and (
-            (current / ".pddrc").exists() or (current / ".pdd").is_dir()
-        ):
-            tier_a = current
-        if tier_b is None and (current / "sources").is_dir() and _has_prd_spec_marker(current):
-            tier_b = current
+        if pdd_marker is None:
+            is_tier_a = (current / ".pddrc").exists() or (current / ".pdd").is_dir()
+            is_tier_b = (
+                (current / "sources").is_dir() and _has_prd_spec_marker(current)
+            )
+            if is_tier_a or is_tier_b:
+                pdd_marker = current
         if tier_c is None and (current / ".git").exists():
             tier_c = current
 
@@ -318,10 +319,8 @@ def find_project_root(start: Optional[Path] = None) -> Path:
             break
         current = parent
 
-    if tier_a is not None:
-        return tier_a
-    if tier_b is not None:
-        return tier_b
+    if pdd_marker is not None:
+        return pdd_marker
     if tier_c is not None:
         return tier_c
     return start.resolve()
