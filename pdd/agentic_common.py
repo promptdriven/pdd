@@ -929,10 +929,14 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
     OpenCode requires a ``provider/model`` identifier. When OPENCODE_MODEL is
     not set we walk the CSV catalog and combine the CSV ``provider`` column
     with the ``model`` column, filtered by the providers the user has auth for
-    (provider env vars + OpenCode's ``auth.json``). Rows whose model already
-    contains ``/`` are skipped because those identifiers route through a
-    sub-provider (e.g. ``moonshotai/kimi-k2-instruct`` served on Groq) and
-    cannot be passed to OpenCode verbatim.
+    (provider env vars + OpenCode's ``auth.json``). Rows whose ``model`` value
+    already includes a slash are accepted when the first segment is itself a
+    known OpenCode provider id (LiteLLM-style ids such as
+    ``github_copilot/...`` or ``openrouter/openai/...``); rows whose model
+    contains a slash but whose first segment is not an OpenCode provider are
+    treated as sub-provider routing (e.g. ``moonshotai/kimi-k2-instruct``
+    served on Groq) and skipped because they cannot be passed to OpenCode
+    verbatim.
     """
     source = env if env is not None else os.environ
     explicit = source.get("OPENCODE_MODEL", "").strip()
@@ -950,15 +954,46 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
         rows = _load_model_data()
         if rows:
             fallback: Optional[str] = None
+            known_opencode_ids = set(_OPENCODE_PROVIDER_BY_CSV.values())
             for row in rows:
                 provider = (row.get("provider") or "").strip().lower()
                 model = (row.get("model") or row.get("model_id") or "").strip()
-                if not provider or not model or "/" in model:
+                if not provider or not model:
                     continue
-                opencode_provider = _OPENCODE_PROVIDER_BY_CSV.get(provider)
-                if not opencode_provider:
-                    continue
-                candidate = _normalize_opencode_model_id(f"{opencode_provider}/{model}")
+
+                candidate: Optional[str] = None
+                opencode_provider: Optional[str] = None
+
+                if "/" in model:
+                    # The model column may already be a LiteLLM-style fully
+                    # qualified id. Accept it when the first segment (after
+                    # ``github_copilot`` -> ``github-copilot`` normalization)
+                    # is a known OpenCode provider.
+                    normalized = _normalize_opencode_model_id(model)
+                    first_seg = normalized.split("/", 1)[0].strip().lower()
+                    if first_seg in known_opencode_ids:
+                        candidate = normalized
+                        opencode_provider = first_seg
+
+                if candidate is None:
+                    # Fall back to mapping the CSV provider column. Try the
+                    # raw lowercased value first, then with spaces normalized
+                    # to dashes so values like ``Github Copilot`` match the
+                    # ``github-copilot`` entry in ``_OPENCODE_PROVIDER_BY_CSV``.
+                    mapped = _OPENCODE_PROVIDER_BY_CSV.get(provider)
+                    if mapped is None:
+                        mapped = _OPENCODE_PROVIDER_BY_CSV.get(
+                            provider.replace(" ", "-")
+                        )
+                    if not mapped:
+                        continue
+                    if "/" in model:
+                        # Sub-provider routing that OpenCode can't address via
+                        # a plain ``provider/model`` id; skip.
+                        continue
+                    candidate = _normalize_opencode_model_id(f"{mapped}/{model}")
+                    opencode_provider = mapped
+
                 if not authed:
                     # No auth signal at all: behave like the previous fallback
                     # and just take the first OpenCode-mappable row.

@@ -1648,8 +1648,10 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             raise FileNotFoundError(f"Failed to load default LLM model CSV from package: {e}")
     
     try:
-        # Basic validation and type conversion
-        required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output', 'reasoning_type']
+        # Basic validation and type conversion. ``reasoning_type`` is treated as
+        # optional so the bundled catalog (which omits it) loads cleanly; rows
+        # without an explicit value default to ``'none'`` below.
+        required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output']
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"Missing required column in CSV: {col}")
@@ -1678,8 +1680,12 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
         else:
              df['structured_output'] = False # Assume false if column missing
 
-        # Ensure reasoning_type is string, fillna with 'none' and lowercase
-        df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
+        # Ensure reasoning_type is string, fillna with 'none' and lowercase.
+        # The column is optional in the catalog; default missing rows to 'none'.
+        if 'reasoning_type' in df.columns:
+            df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
+        else:
+            df['reasoning_type'] = 'none'
 
         # Ensure api_key is treated as string, fill NaN with empty string ''
         # This handles cases where read_csv might interpret empty fields as NaN
