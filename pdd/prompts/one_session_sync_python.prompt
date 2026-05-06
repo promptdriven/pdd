@@ -35,6 +35,12 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 <pdd.agentic_common><include select="def:example_run_agentic_task">context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.agentic_sync_runner>
+    <include>context/agentic_sync_runner_example.py</include>
+</pdd.agentic_sync_runner>
+<pdd.agentic_langtest>
+    <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
+</pdd.agentic_langtest>
 
 % Error Handling
 - Raise `FileNotFoundError` if code file missing: "Code file not found: {path}\nRun `pdd generate {basename}` first."

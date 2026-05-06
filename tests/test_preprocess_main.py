@@ -5,6 +5,7 @@ Uses pytest and unittest.mock to verify correct behavior under various scenarios
 """
 
 import sys
+from pathlib import Path
 import pytest
 import click
 from unittest.mock import patch, MagicMock, mock_open
@@ -78,7 +79,8 @@ def test_preprocess_main_no_xml(basic_click_context):
             "fake prompt content",
             False,  # recursive
             False,  # double
-            exclude_keys=[]
+            exclude_keys=[],
+            _seen={str(Path("input.prompt").resolve())},
         )
         # xml_tagger should NOT be called in this scenario
         mock_xml_tagger.assert_not_called()
@@ -195,7 +197,8 @@ def test_preprocess_main_recursive_and_double(basic_click_context):
             "some prompt for recursive test",
             True,   # recursive
             True,   # double
-            exclude_keys=["do_not_double_this"]
+            exclude_keys=["do_not_double_this"],
+            _seen={str(Path("recursive.prompt").resolve())},
         )
         mock_xml_tagger.assert_not_called()
         m_file.assert_called_once_with("/tmp/output_recursive.prompt", "w")

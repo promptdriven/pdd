@@ -70,7 +70,7 @@ It calls `auto_include` to analyze the prompt and get back a string of directive
 <internal_modules>
     <llm_invoke_example><include>context/llm_invoke_example.py</include></llm_invoke_example>
     <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
-    <auto_include_example><include>context/auto_include_example.py</include></auto_include_example>
+    <auto_include_example><include select="def:main">context/auto_include_example.py</include></auto_include_example>
     <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
 </internal_modules>
 

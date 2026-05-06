@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import base64
@@ -14,6 +15,7 @@ from pdd.path_resolution import get_default_resolver
 
 install()
 console = Console()
+logger = logging.getLogger(__name__)
 
 # Maximum iterations for the non-recursive convergence loop.
 # Diamond includes converge quickly; true cycles never converge.
@@ -47,6 +49,53 @@ def _write_debug_report() -> None:
                 console.print(f"[yellow]Warning: Could not write debug report to {output_file}: {e}[/yellow]")
         else:
             console.print("[dim]Debug mode enabled but PDD_PREPROCESS_DEBUG_FILE not set (output shown in console only)[/dim]")
+
+def _looks_like_user_intent_path(path: str) -> bool:
+    """Heuristic: distinguish a real include path from a parser false positive.
+
+    `<include>` / `<include-many>` / backtick-include regexes can match literal
+    tag syntax that appears inside an already-included source file's docstrings,
+    regex strings, or comments (e.g. `pdd/preprocess.py` is itself routinely
+    included by prompts and contains literal `<include>...</include>` examples).
+    Production callers do a two-pass preprocess(recursive=True) → expand vars →
+    preprocess(recursive=False), and the literal tags from the first pass's
+    expanded source then look like first-iteration matches in the second pass —
+    so the iteration gate alone cannot suppress them.
+
+    A real user-intent include path:
+      * is non-empty after stripping whitespace
+      * fits on a single line (no embedded newlines)
+      * is reasonably short (≤ 256 chars; real paths rarely exceed this)
+      * doesn't start with comment or tag punctuation (`#`, `//`, `/*`, `*`, `<`)
+      * contains at least one path-y character — `/`, `\\`, `.`, or `$` (for
+        `${VAR}` placeholders). Bare-word strings like "path" — common in
+        docstring examples — get filtered out.
+
+    Returning False here suppresses the FileNotFound console warning, the
+    `_failed` tracking, and the trailing unresolved-include warning for the
+    given path. Anything legitimately resembling a path still passes through.
+    """
+    if not path:
+        return False
+    if "\n" in path:
+        return False
+    if len(path) > 256:
+        return False
+    stripped = path.strip()
+    if not stripped:
+        return False
+    if stripped.startswith(("#", "//", "/*", "*", "<")):
+        return False
+    if not any(c in stripped for c in "/\\.$"):
+        return False
+    # Real include paths don't contain whitespace inside the path itself.
+    # Natural-language fragments like "in a docstring)." or "set from the
+    # original prompt" pass the punctuation check above (because of the `.`)
+    # but are clearly parser-artifact prose, not paths.
+    if any(c.isspace() for c in stripped):
+        return False
+    return True
+
 
 def _extract_fence_spans(text: str) -> List[Tuple[int, int]]:
     """Return list of (start, end) spans for fenced code blocks (``` or ~~~).
@@ -119,7 +168,64 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
         pass
     return single_brace, template_brace
 
-def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None) -> str:
+def compute_user_intent_paths(text: str) -> set:
+    """Extract the set of paths that appear inside `<include>`, `<include-many>`,
+    and `\\`\\`\\`<...>\\`\\`\\`` tags in the given text.
+
+    Recognises every grammar `process_include_tags` accepts:
+      * body form: `<include>path</include>`
+      * `path=` attribute on body form: `<include path="path">...</include>`
+      * self-closing form: `<include path="path" />`
+    plus `<include-many>...</include-many>` (comma/newline-separated paths) and
+    backtick includes (`\\`\\`\\`<path>\\`\\`\\``).
+
+    Production callers run preprocess in two passes (recursive=True, then
+    `_expand_vars`, then recursive=False). Pass 2's input contains content from
+    pass 1's expansions, including any literal `<include>...</include>` syntax
+    that was inside an expanded `.py` source's docstrings or regex strings.
+    Pass 2 cannot, on its own, distinguish those parser artifacts from real
+    user-intent includes that appear textually identical.
+
+    The fix: callers pre-compute this set from the ORIGINAL prompt (before
+    any expansion) and pass it to pass 2 via the `_user_intent_paths`
+    parameter on `preprocess()`. Pass 2 only emits warnings for paths in the
+    set, suppressing the false positives.
+
+    To accommodate `<include>${VAR}</include>` includes whose paths only
+    materialize after `_expand_vars`, callers should union the result of
+    `compute_user_intent_paths(original_prompt)` with the result of
+    `compute_user_intent_paths(_expand_vars(original_prompt, env_vars))`.
+    """
+    paths: set = set()
+    if not text:
+        return paths
+    # Match the full `<include>` grammar that `process_include_tags` accepts —
+    # body form (with optional attrs) and self-closing form. Both forms can
+    # carry a `path="..."` attribute, which takes precedence over body content.
+    include_pattern = (
+        r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>'
+        r'|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+    )
+    for m in re.finditer(include_pattern, text, flags=re.DOTALL):
+        attrs = _parse_attrs(m.group('attrs') or m.group('attrs_self') or "")
+        path_attr = attrs.get('path')
+        body = m.group('content') if m.group('content') is not None else ""
+        p = (path_attr or body).strip()
+        if p:
+            paths.add(p)
+    for m in re.finditer(r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', text, flags=re.DOTALL):
+        inner = m.group(1)
+        for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
+            if raw:
+                paths.add(raw)
+    for m in re.finditer(r"```<([^>]*?)>```", text):
+        p = m.group(1).strip()
+        if p:
+            paths.add(p)
+    return paths
+
+
+def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     try:
         # Some tests patch template loading to return mock objects with .format().
         # In that case preprocessing is not applicable; return as string.
@@ -130,14 +236,19 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
             return ""
         if _seen is None:
             _seen = set()
+        # Track include paths that the include processors actually failed to expand,
+        # so the unresolved-include warning fires only for real failures — not for
+        # `[File not found: ...]` text that appears in documentation or spec content.
+        if _failed is None:
+            _failed = []
         _DEBUG_EVENTS.clear()
         _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
         _dbg(f"Initial length: {len(prompt)} characters")
         if not _is_quiet_mode():
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
-        prompt = process_backtick_includes(prompt, recursive, _seen=_seen)
+        prompt = process_backtick_includes(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
         _dbg("After backtick includes processed")
-        prompt = process_xml_tags(prompt, recursive, _seen=_seen)
+        prompt = process_xml_tags(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
             prompt = double_curly(prompt, exclude_keys)
@@ -152,6 +263,46 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
             _dbg(f"INFO: Found {len(templates)} template literals ${{...}} outside code fences (examples):")
             for ln, frag in templates[:5]:
                 _dbg(f"  line {ln}: {frag}")
+        # Surface include paths that the processors actually failed to expand,
+        # so missing dependency context is a visible signal, not silent corruption
+        # (#616). Tracking direct failures (not regex-scanning the final prompt)
+        # avoids false positives on documentation/spec text that mentions the
+        # `[File not found: ...]` marker as an example. Skipped on recursive passes.
+        if not recursive:
+            seen_in_warning: set[str] = set()
+            for unresolved in _failed:
+                unresolved = unresolved.strip()
+                if not unresolved or unresolved in seen_in_warning:
+                    continue
+                # Defensive filter: only re-apply the path-shape heuristic when
+                # the caller didn't supply `_user_intent_paths`. With an
+                # authoritative set, anything that reached `_failed` already
+                # passed the user-intent gate, so re-filtering here would
+                # spuriously suppress legitimate extensionless paths
+                # (Makefile, Dockerfile, LICENSE).
+                if _user_intent_paths is None and not _looks_like_user_intent_path(unresolved):
+                    continue
+                seen_in_warning.add(unresolved)
+                msg = (
+                    f"Unresolved include in preprocessed prompt: {unresolved}. "
+                    "Generated code may be missing dependency context. Check that "
+                    "example_output_path in .pddrc matches where example files are "
+                    "written (default: 'examples/')."
+                )
+                # If the file exists at the context↔examples swap location, name it.
+                try:
+                    _parts = Path(unresolved).parts
+                    if _parts and _parts[0] in ("context", "examples"):
+                        _alt_root = "examples" if _parts[0] == "context" else "context"
+                        _alt_path = Path(_alt_root, *_parts[1:])
+                        if _alt_path.exists():
+                            msg += f" Found at: {_alt_path}."
+                except Exception:
+                    pass
+                logger.warning(msg)
+                if not _is_quiet_mode():
+                    console.print(f"[bold yellow]Warning:[/bold yellow] {msg}")
+                _dbg(f"WARNING: {msg}")
         # Don't trim whitespace that might be significant for the tests
         if not _is_quiet_mode():
             console.print(Panel("Preprocessing complete", style="bold green"))
@@ -178,7 +329,37 @@ def get_file_path(file_name: str) -> str:
         return os.path.join("./", file_name)
     return str(resolved)
 
-def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
+def _process_nested_includes(
+    content: str,
+    _seen: set,
+    _failed: Optional[List[str]],
+    _user_intent_paths: Optional[set],
+) -> str:
+    """Resolve include syntax from included content while preserving the include stack."""
+    nested_user_intent_paths = _user_intent_paths if _user_intent_paths is not None else set()
+    content = process_backtick_includes(
+        content,
+        recursive=False,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=nested_user_intent_paths,
+    )
+    content = process_include_tags(
+        content,
+        recursive=False,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=nested_user_intent_paths,
+    )
+    content = process_include_many_tags(
+        content,
+        recursive=False,
+        _failed=_failed,
+        _user_intent_paths=nested_user_intent_paths,
+    )
+    return content
+
+def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
     # More specific pattern that doesn't match nested > characters
@@ -193,17 +374,49 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
             console.print(f"Processing backtick include: [cyan]{full_path}[/cyan]")
             with open(full_path, 'r', encoding='utf-8') as file:
                 content = file.read()
+                child_seen = _seen | {resolved}
                 if recursive:
-                    child_seen = _seen | {resolved}
-                    content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)
+                    content = preprocess(
+                        content,
+                        recursive=True,
+                        double_curly_brackets=False,
+                        _seen=child_seen,
+                        _failed=_failed,
+                        _user_intent_paths=_user_intent_paths,
+                    )
+                else:
+                    content = _process_nested_includes(
+                        content,
+                        _seen=child_seen,
+                        _failed=_failed,
+                        _user_intent_paths=_user_intent_paths,
+                    )
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
         except FileNotFoundError:
-            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing backtick include: {file_path}")
             # First pass (recursive=True): leave the tag so a later env expansion can resolve it
-            # Second pass (recursive=False): replace with a visible placeholder
-            return match.group(0) if recursive else f"```[File not found: {file_path}]```"
+            if recursive:
+                return match.group(0)
+            # iterations > 0 means the match originated from content expanded earlier;
+            # don't warn or track those (parser false positives from included source).
+            if iterations > 0:
+                return match.group(0)
+            # Two-pass flow: when caller supplied `_user_intent_paths`, gate
+            # authoritatively on that set; otherwise fall back to the path-shape
+            # heuristic to filter parser artifacts in single-pass mode. (See
+            # the matching comment in `process_include_tags.replace_include`
+            # for the rationale on extensionless filenames.)
+            if _user_intent_paths is not None:
+                if file_path not in _user_intent_paths:
+                    return match.group(0)
+            else:
+                if not _looks_like_user_intent_path(file_path):
+                    return match.group(0)
+            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            if _failed is not None:
+                _failed.append(file_path)
+            return f"```[File not found: {file_path}]```"
         except ValueError as e:
             if "Circular include" in str(e):
                 raise
@@ -232,12 +445,29 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
         iterations += 1
     return current_text
 
-def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
+def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
+    # If the caller supplied an explicit user-intent set, use it directly
+    # (covers the production two-pass flow where pass 2 sees expanded source).
+    # Otherwise snapshot the user-intent <include-many> paths from the input
+    # text so a literal `<include-many>...</include-many>` string inside an
+    # expanded `<include>`'s content can't be treated as user intent on the
+    # subsequent process_include_many_tags pass.
+    if _user_intent_paths is not None:
+        user_intent_many_paths: Optional[set] = _user_intent_paths
+    elif _failed is not None:
+        user_intent_many_paths = set()
+        for m in re.finditer(r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', text, flags=re.DOTALL):
+            inner = m.group(1)
+            for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
+                if raw:
+                    user_intent_many_paths.add(raw)
+    else:
+        user_intent_many_paths = None
     text = process_pdd_tags(text)
-    text = process_include_tags(text, recursive, _seen=_seen)
-    text = process_include_many_tags(text, recursive)
+    text = process_include_tags(text, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
+    text = process_include_many_tags(text, recursive, _failed=_failed, _user_intent_paths=user_intent_many_paths)
     text = process_shell_tags(text, recursive)
     text = process_web_tags(text, recursive)
     return text
@@ -255,7 +485,7 @@ def _parse_attrs(attr_str: str) -> dict:
         attrs["optional"] = "true"
     return attrs
 
-def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None) -> str:
+def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
     # Support both <include>path</include> and <include path="path" attrs... />
@@ -404,26 +634,71 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                     
                     if recursive:
                         child_seen = _seen | {resolved}
-                        content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)
+                        content = preprocess(
+                            content,
+                            recursive=True,
+                            double_curly_brackets=False,
+                            _seen=child_seen,
+                            _failed=_failed,
+                            _user_intent_paths=_user_intent_paths,
+                        )
+                    else:
+                        child_seen = _seen | {resolved}
+                        content = _process_nested_includes(
+                            content,
+                            _seen=child_seen,
+                            _failed=_failed,
+                            _user_intent_paths=_user_intent_paths,
+                        )
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
         except FileNotFoundError:
-            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             _dbg(f"Missing XML include: {file_path}")
             # First pass (recursive=True): leave the tag so a later env expansion can resolve it.
-            # Second pass (recursive=False): replace with a visible placeholder, except for
-            # optional includes which should be treated as empty.
             if recursive:
+                return match.group(0)
+            # iterations > 0 means this match originated from content already expanded on
+            # an earlier pass (e.g. literal <include> syntax inside a .py docstring/regex
+            # string). User-intended includes were resolved on iteration 0, so suppress
+            # both the console warning and the failed-include tracking for these.
+            if iterations > 0:
                 return match.group(0)
 
             optional_val = attrs.get("optional")
             if optional_val is not None:
                 truthy = str(optional_val).strip().lower() not in {"", "0", "false", "no", "off"}
                 if truthy:
-                    # Keep the console warning but do not leak a "[File not found: ...]" marker
-                    # into the LLM-facing prompt.
+                    # Optional missing files are silent: no console warning, no
+                    # "[File not found: ...]" marker, no entry in _failed.
                     return ""
 
+            # Suppress matches that came from inside an already-expanded source
+            # file's docstrings/regex/comments. Two-tier gating:
+            #
+            #   * Caller supplied `_user_intent_paths` (production two-pass flow,
+            #     pre-computed from the ORIGINAL prompt via
+            #     `compute_user_intent_paths()`): use the set as the authoritative
+            #     gate. Skip the path-shape heuristic entirely so legitimate
+            #     extensionless includes (Makefile, Dockerfile, LICENSE) still
+            #     fail loudly when they're missing and the user authored them.
+            #
+            #   * No `_user_intent_paths`: fall back to the path-shape heuristic
+            #     to filter the obvious parser artifacts (multi-word fragments,
+            #     lines starting with `#`, paths without any path-y character).
+            #     This gate is conservative — it suppresses some valid filenames
+            #     like bare `Makefile`, but in single-pass callers the only
+            #     known false-positive source is parser artifacts in expanded
+            #     content, so that tradeoff is acceptable for back-compat.
+            if _user_intent_paths is not None:
+                if file_path not in _user_intent_paths:
+                    return match.group(0)
+            else:
+                if not _looks_like_user_intent_path(file_path):
+                    return match.group(0)
+
+            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            if _failed is not None:
+                _failed.append(file_path)
             return f"[File not found: {file_path}]"
         except ValueError as e:
             if "Circular include" in str(e):
@@ -601,15 +876,38 @@ def process_web_tags(text: str, recursive: bool) -> str:
         return replace_web(match)
     return re.sub(pattern, replace_web_with_spans, text, flags=re.DOTALL)
 
-def process_include_many_tags(text: str, recursive: bool) -> str:
+def process_include_many_tags(
+    text: str,
+    recursive: bool,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+) -> str:
     """Process <include-many> blocks whose inner content is a comma- or newline-separated
-    list of file paths (typically provided via variables after env expansion)."""
-    pattern = r'<include-many>(.*?)</include-many>'
+    list of file paths (typically provided via variables after env expansion).
+
+    Supports `optional` attribute: <include-many optional="true">...</include-many>.
+    When optional, missing files are silently skipped (no console warning, no marker,
+    no entry in `_failed`). Use this for tag bodies that derive from optional ${VAR}
+    placeholders that may not be bound.
+
+    `_user_intent_paths` is a set of paths captured from the ORIGINAL prompt text
+    before any <include> expansion. When supplied, FileNotFound warnings only fire
+    for paths in the set — protecting against false positives when an expanded
+    include's source contains literal `<include-many>...</include-many>` syntax in
+    a docstring or regex string.
+    """
+    pattern = r'<include-many(?P<attrs>\s+[^>]*?)?>(?P<inner>.*?)</include-many>'
     def replace_many(match):
-        inner = match.group(1)
+        attrs = _parse_attrs(match.group('attrs') or "")
+        inner = match.group('inner')
         if recursive:
             # Wait for env expansion to materialize the list
             return match.group(0)
+        optional_val = attrs.get("optional")
+        is_optional = (
+            optional_val is not None
+            and str(optional_val).strip().lower() not in {"", "0", "false", "no", "off"}
+        )
         # Split by newlines or commas
         raw_items = [s.strip() for part in inner.splitlines() for s in part.split(',')]
         paths = [p for p in raw_items if p]
@@ -622,8 +920,21 @@ def process_include_many_tags(text: str, recursive: bool) -> str:
                     contents.append(fh.read())
                 _dbg(f"Included (many): {p}")
             except FileNotFoundError:
-                console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
                 _dbg(f"Missing include-many: {p}")
+                if is_optional:
+                    continue
+                # Two-tier gating (mirrors `process_include_tags`):
+                #   * caller-supplied `_user_intent_paths`: authoritative gate.
+                #   * no `_user_intent_paths`: path-shape heuristic fallback.
+                if _user_intent_paths is not None:
+                    if p not in _user_intent_paths:
+                        continue
+                else:
+                    if not _looks_like_user_intent_path(p):
+                        continue
+                console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
+                if _failed is not None:
+                    _failed.append(p)
                 contents.append(f"[File not found: {p}]")
             except Exception as e:
                 console.print(f"[bold red]Error processing include-many:[/bold red] {str(e)}")

@@ -1271,6 +1271,7 @@ requires_cloud_e2e = pytest.mark.skipif(
 )
 
 
+@pytest.mark.e2e
 @requires_cloud_e2e
 def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     """

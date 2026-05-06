@@ -66,6 +66,28 @@ def test_parse_tags_with_all_fields():
     ]
 
 
+def test_include_query_extractor_prompt_metadata_tags_parse():
+    """Regression for malformed closing tags generated in prompt metadata."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompt_path = repo_root / "pdd" / "prompts" / "include_query_extractor_python.prompt"
+
+    result = parse_prompt_tags(prompt_path.read_text(encoding="utf-8"))
+
+    assert result['reason'] == (
+        "Handles semantic extraction from files using LLMs with persistent caching "
+        "for reproducibility."
+    )
+    assert result['interface'] is not None
+    assert result['interface']['type'] == 'module'
+    assert 'interface_parse_error' not in result
+    assert result['dependencies'] == [
+        'llm_invoke_python.prompt',
+        'load_prompt_template_python.prompt',
+        'preprocess_python.prompt',
+        'path_resolution_python.prompt',
+    ]
+
+
 def test_parse_tags_lenient_missing_fields():
     """Test lenient parsing with missing tags (only reason present)."""
     content = """

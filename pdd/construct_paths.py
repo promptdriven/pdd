@@ -16,7 +16,35 @@ from rich.theme import Theme
 
 from .get_extension import get_extension
 from .get_language import get_language
-from .generate_output_paths import generate_output_paths
+from .generate_output_paths import EXAMPLES_DIR, generate_output_paths
+
+
+def _resolve_default_examples_dir(project_root: Optional[Path] = None) -> str:
+    """Return the default examples-dir name when no `.pddrc` configures one.
+
+    Returns :data:`EXAMPLES_DIR` (canonical default). Only falls back to
+    ``"context"`` when the project root has no ``examples/`` directory AND a
+    ``context/`` directory containing at least one ``*_example.*`` file — i.e.
+    actual evidence of a legacy examples layout, not just any context content
+    (PRDs, schemas, docs are NOT a legacy-examples signal). This prevents the
+    original mismatch from staying alive on greenfield projects (#616).
+    """
+    root = project_root or Path.cwd()
+    examples = root / EXAMPLES_DIR
+    legacy = root / "context"
+    if examples.exists() or not legacy.is_dir():
+        return EXAMPLES_DIR
+    try:
+        if next(legacy.rglob("*_example.*"), None) is not None:
+            return "context"
+    except OSError:
+        pass
+    return EXAMPLES_DIR
+
+
+def _default_examples_project_root(pddrc_path: Optional[Path]) -> Path:
+    """Return the base directory used for implicit examples-dir detection."""
+    return pddrc_path.parent if pddrc_path else Path.cwd()
 
 # Assume generate_output_paths raises ValueError on unknown command
 
@@ -1120,18 +1148,18 @@ def construct_paths(
             # Determine examples_dir for auto-deps scanning
             # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
             # NOT for determining scan scope. Using it caused CSV row deletion issues.
-            # Check RAW context config for example_output_path, or default to "context".
             # Do NOT use output_paths_str since generate_output_paths always returns absolute paths.
             example_path_str = None
             if original_context_config:
                 example_path_str = original_context_config.get("example_output_path")
 
-            # Final fallback to "context" (sensible default for this project)
+            # Default via the SSOT helper (handles greenfield + legacy context/).
             if not example_path_str:
-                example_path_str = "context"
+                example_path_str = _resolve_default_examples_dir(
+                    _default_examples_project_root(pddrc_path)
+                )
 
             # Extract ROOT directory (first component) for scan scope
-            # This ensures auto-deps scans all example files, not just a subdirectory
             # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
             # Fix for Issue #332: Using full subdirectory path caused CSV truncation
             example_path = Path(example_path_str)
@@ -1139,7 +1167,9 @@ def construct_paths(
             if parts and parts[0] not in ('/', '.', '..'):
                 resolved_config["examples_dir"] = parts[0]
             else:
-                resolved_config["examples_dir"] = "context"  # Fallback for edge cases
+                resolved_config["examples_dir"] = _resolve_default_examples_dir(
+                    _default_examples_project_root(pddrc_path)
+                )
 
         except Exception as e:
             console.print(f"[error]Failed to determine initial paths for sync: {e}", style="error")
@@ -1467,18 +1497,18 @@ def construct_paths(
     # Determine examples_dir for auto-deps scanning
     # NOTE: outputs.example.path is for OUTPUT only (where to write examples),
     # NOT for determining scan scope. Using it caused CSV row deletion issues.
-    # Check RAW context config for example_output_path, or default to "context".
     # Do NOT use resolved_config since generate_output_paths sets it to absolute paths.
     example_path_str = None
     if original_context_config:
         example_path_str = original_context_config.get("example_output_path")
 
-    # Final fallback to "context" (sensible default for this project)
+    # Issue #616: single source of truth via _resolve_default_examples_dir.
     if not example_path_str:
-        example_path_str = "context"
+        example_path_str = _resolve_default_examples_dir(
+            _default_examples_project_root(pddrc_path)
+        )
 
     # Extract ROOT directory (first component) for scan scope
-    # This ensures auto-deps scans all example files, not just a subdirectory
     # e.g., "context/commands/" -> "context", "examples/foo.py" -> "examples"
     # Fix for Issue #332: Using full subdirectory path caused CSV truncation
     example_path = Path(example_path_str)
@@ -1486,7 +1516,9 @@ def construct_paths(
     if parts and parts[0] not in ('/', '.', '..'):
         resolved_config["examples_dir"] = parts[0]
     else:
-        resolved_config["examples_dir"] = "context"  # Fallback for edge cases
+        resolved_config["examples_dir"] = _resolve_default_examples_dir(
+            _default_examples_project_root(pddrc_path)
+        )
 
 
     return resolved_config, input_strings, output_file_paths_str_return, language

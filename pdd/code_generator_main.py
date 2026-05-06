@@ -760,17 +760,16 @@ def code_generator_main(
             if k not in env_vars:
                 env_vars[k] = v
 
-    # Inject resolved_config path values into env_vars.
-    # Fix for promptdriven/pdd#687: example_output_path must be available as a template
-    # variable so the LLM can construct correct _example.py include paths instead of raw
-    # source code paths.
-    # Priority: explicit -e > resolved_config (.pddrc) > front-matter default (from template)
-    if (
-        "EXAMPLE_OUTPUT_PATH" not in explicit_env_keys
-        and resolved_config
-        and resolved_config.get("example_output_path")
-    ):
-        env_vars["EXAMPLE_OUTPUT_PATH"] = str(resolved_config["example_output_path"]).rstrip("/\\")
+    # Inject EXAMPLE_OUTPUT_PATH for templates that reference ${EXAMPLE_OUTPUT_PATH}.
+    # Precedence: explicit -e > resolved_config['example_output_path'] (#687)
+    # > resolved_config['examples_dir'] (the SSOT helper's value, covering
+    # greenfield + legacy context/ projects, #616) > template front-matter default.
+    if "EXAMPLE_OUTPUT_PATH" not in explicit_env_keys and resolved_config:
+        eop = resolved_config.get("example_output_path")
+        if eop:
+            env_vars["EXAMPLE_OUTPUT_PATH"] = str(eop).rstrip("/\\")
+        elif resolved_config.get("examples_dir"):
+            env_vars["EXAMPLE_OUTPUT_PATH"] = str(resolved_config["examples_dir"]).rstrip("/\\")
 
     # Expand variables in output path if provided
     if output_path:
@@ -1040,14 +1039,22 @@ def code_generator_main(
                 if files_to_stage_for_rollback:
                     git_add_files(files_to_stage_for_rollback, verbose=verbose)
             
-            # Preprocess both prompts: expand includes, substitute vars, then double
+            # Preprocess both prompts: expand includes, substitute vars, then double.
+            # Snapshot user-intent include paths from the ORIGINAL prompt (and the
+            # post-`_expand_vars` variants for `${VAR}`-derived paths) so pass 2 can
+            # gate the unresolved-include warning on real intent — pass 2 cannot
+            # otherwise distinguish a literal `<include>` example in an expanded
+            # source file's docstring from a real failed include (#1354 codex pass-3).
+            from .preprocess import compute_user_intent_paths as _cuip
+            orig_intent = _cuip(original_prompt_content_for_incremental) | _cuip(_expand_vars(original_prompt_content_for_incremental, env_vars))
             orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False)
             orig_proc = _expand_vars(orig_proc, env_vars)
-            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True)
+            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=orig_intent)
 
+            new_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
             new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False)
             new_proc = _expand_vars(new_proc, env_vars)
-            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True)
+            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=new_intent)
 
             generated_code_content, was_incremental_operation, total_cost, model_name = incremental_code_generator_func(
                 original_prompt=orig_proc,
@@ -1094,10 +1101,15 @@ def code_generator_main(
 
             if not current_execution_is_local:
                 if verbose: console.print("Attempting cloud code generation...")
-                # Expand includes, substitute vars, then double
+                # Expand includes, substitute vars, then double. Pre-compute
+                # user-intent include paths from the ORIGINAL prompt + post-
+                # `_expand_vars` variants so pass 2 can gate the unresolved-
+                # include warning against real intent (see #1354 codex pass-3).
+                from .preprocess import compute_user_intent_paths as _cuip
+                _cloud_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
                 processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
-                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_cloud_intent)
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
 
                 # Extract and display pinned example ID if present in prompt
@@ -1214,10 +1226,16 @@ def code_generator_main(
             
             if current_execution_is_local:
                 if verbose: console.print("Executing code generator locally...")
-                # Expand includes, substitute vars, then double; pass to local generator with preprocess_prompt=False
+                # Expand includes, substitute vars, then double; pass to local
+                # generator with preprocess_prompt=False. Pre-compute user-intent
+                # include paths from the ORIGINAL prompt + post-`_expand_vars`
+                # variants so pass 2 can gate the unresolved-include warning
+                # against real intent (see #1354 codex pass-3).
+                from .preprocess import compute_user_intent_paths as _cuip
+                _local_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
                 local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
                 local_prompt = _expand_vars(local_prompt, env_vars)
-                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[])
+                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_local_intent)
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
                 

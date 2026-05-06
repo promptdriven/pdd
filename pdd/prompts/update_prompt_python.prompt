@@ -6,6 +6,9 @@
 <change>
     <include>context/change/14/initial_change.py</include>
 </change>
+<pdd.load_prompt_template>
+    <include>pdd/load_prompt_template.py</include>
+</pdd.load_prompt_template>
 
 % Here are the inputs and outputs of the function (with explicit validation and semantics):
     Inputs:
@@ -29,7 +32,7 @@
 
 % Here is how to use the internal modules:
     <internal_modules>
-        % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+        % Here is an example how to preprocess the prompt from a file: <preprocess_example><include select="def:preprocess">pdd/preprocess.py</include></preprocess_example>
 
         For loading prompt templates:
         <load_prompt_template_example>
@@ -38,7 +41,7 @@
 
         For running prompts with llm_invoke:
         <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
+            <include select="def:llm_invoke">pdd/llm_invoke.py</include>
         </llm_invoke_example>
     </internal_modules>
 

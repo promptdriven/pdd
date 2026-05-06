@@ -4,7 +4,8 @@
     "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI stored OAuth credentials.",
     "dependencies": [
       "llm_invoke_python.prompt",
-      "auth_service_python.prompt"
+      "auth_service_python.prompt",
+      "_keyring_timeout_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -948,7 +949,7 @@
   {
     "reason": "Determines output file paths for generated code.",
     "description": "Calculates where generated files should be written based on project structure and conventions.",
-    "dependencies": [],
+    "dependencies": ["auto_deps_main_python.prompt"],
     "priority": 30,
     "filename": "generate_output_paths_python.prompt",
     "filepath": "pdd/generate_output_paths.py",
@@ -2576,7 +2577,7 @@
   {
     "reason": "Generates unit tests for PDD-generated code modules.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
-    "dependencies": [],
+    "dependencies": ["bug_to_unit_test_python.prompt"],
     "priority": 68,
     "filename": "generate_test_python.prompt",
     "filepath": "pdd/generate_test.py",
@@ -5242,8 +5243,8 @@
     }
   },
   {
-    "reason": "Orchestrates the 8-step agentic architecture workflow with validation loop, state persistence, and context accumulation.",
-    "description": "Multi-step orchestrator for architecture generation from a GitHub issue PRD. Runs 8 steps sequentially (analyze PRD, deep analysis, research, design, research deps, generate, validate, fix) with a validation loop (steps 7-8, max 5 iterations). Handles state persistence for resume, context accumulation between steps, and post-processing via render_mermaid.",
+    "reason": "Orchestrates the multi-step agentic architecture workflow with gates, validation, state persistence, and context accumulation.",
+    "description": "Multi-step orchestrator for architecture generation from a GitHub issue PRD. Runs the gated Step 1-13 workflow, including complexity and codebase scans, completeness gates, architecture self-review, shared context-doc merge, prompt generation, cross-file and cross-issue consistency checks, validation/fix loops, state persistence, target-directory support, and post-processing via render_mermaid.",
     "dependencies": [],
     "priority": 152,
     "filename": "agentic_architecture_orchestrator_python.prompt",
@@ -5259,7 +5260,7 @@
         "functions": [
           {
             "name": "run_agentic_architecture_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool)",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, existing_architecture: str, related_issues: Optional[List[int]])",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
@@ -5272,9 +5273,12 @@
   },
   {
     "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
-    "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Follows the same pattern as agentic_change.py and agentic_bug.py.",
-    "dependencies": [],
-    "priority": 153,
+    "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Also wraps guarded incremental PRD-to-architecture propagation for issue URLs and local PRD files, including shell-safe target-directory validation, repo-relative status paths, subproject sync hints, and GitHub status comment redaction.",
+    "dependencies": [
+      "agentic_architecture_orchestrator_python.prompt",
+      "incremental_prd_architecture_python.prompt"
+    ],
+    "priority": 209,
     "filename": "agentic_architecture_python.prompt",
     "filepath": "pdd/agentic_architecture.py",
     "tags": [
@@ -5288,7 +5292,12 @@
         "functions": [
           {
             "name": "run_agentic_architecture",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool)",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "run_incremental_architecture",
+            "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -5307,6 +5316,120 @@
     "position": {
       "x": 21000,
       "y": 620
+    }
+  },
+  {
+    "reason": "CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.",
+    "description": "Implements the pdd generate, test, and example CLI commands. Routes standard prompt-to-code generation, legacy incremental code patching, explicit experimental incremental PRD propagation, full agentic architecture generation, context examples, and agentic/manual test generation while preserving dry-run and GitHub-state guardrails.",
+    "dependencies": [
+      "agentic_architecture_python.prompt",
+      "agentic_test_python.prompt",
+      "cmd_test_main_python.prompt",
+      "code_generator_main_python.prompt",
+      "context_generator_main_python.prompt",
+      "operation_log_python.prompt",
+      "template_registry_python.prompt",
+      "track_cost_python.prompt"
+    ],
+    "priority": 234,
+    "filename": "commands/generate_python.prompt",
+    "filepath": "pdd/commands/generate.py",
+    "tags": [
+      "module",
+      "python",
+      "cli",
+      "generation"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "generate",
+          "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+          },
+          {
+            "name": "test",
+            "description": "Generate or enhance tests through agentic issue mode or manual prompt/code mode."
+          },
+          {
+            "name": "example",
+            "description": "Generate context examples from a prompt and code file."
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21400,
+      "y": 620
+    }
+  },
+  {
+    "reason": "LLM prompt template for guarded incremental PRD architecture patches.",
+    "description": "Converts a PRD diff, current architecture.json, and validation retry feedback into a minimal structured ArchitecturePatch for deterministic application.",
+    "dependencies": [],
+    "priority": 207,
+    "filename": "incremental_prd_architecture_patch_LLM.prompt",
+    "filepath": "prompts/incremental_prd_architecture_patch_LLM.prompt",
+    "tags": [
+      "llm",
+      "architecture",
+      "incremental"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          "PRD_SOURCE",
+          "PRD_DIFF",
+          "CURRENT_ARCHITECTURE",
+          "VALIDATION_ERRORS"
+        ]
+      }
+    },
+    "position": {
+      "x": 20720,
+      "y": 1240
+    }
+  },
+  {
+    "reason": "Applies guarded incremental PRD changes to architecture.json and related prompts without full regeneration.",
+    "description": "Reads a PRD diff from hash/provenance metadata and ignored local raw-baseline cache, asks the LLM for a structured architecture patch, validates dependency, prompt filename, filepath, and file invariants deterministically, rejects unsafe or secret-like code filepaths before reads, retries invalid patches with explicit validation feedback, writes targeted architecture updates atomically, validates prompt previews under the write lock to avoid lost edits, syncs prompt metadata tags, creates prompts for new modules, deletes prompts for removed modules, updates prompt Requirements through detect_change/change, and avoids persisting raw PRD or GitHub issue/comment text in tracked metadata.",
+    "dependencies": [
+      "architecture_sync_python.prompt",
+      "change_python.prompt",
+      "detect_change_python.prompt",
+      "incremental_prd_architecture_patch_LLM.prompt"
+    ],
+    "priority": 208,
+    "filename": "incremental_prd_architecture_python.prompt",
+    "filepath": "pdd/incremental_prd_architecture.py",
+    "tags": [
+      "module",
+      "python",
+      "architecture",
+      "incremental"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_incremental_prd_propagation",
+            "signature": "(prd_source: str, *, architecture_path: Path | str, prompts_dir: Path | str, project_root: Path | str | None, issue_content: Optional[str], dry_run: bool, verbose: bool, quiet: bool, strength: float, temperature: float, time: float, max_patch_attempts: int, update_prompt_requirements: bool, generate_new_prompts: bool)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "apply_architecture_patch",
+            "signature": "(raw_architecture: Any, patch: ArchitecturePatch)",
+            "returns": "PatchApplication"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21000,
+      "y": 1240
     }
   },
   {
@@ -5453,7 +5576,8 @@
     "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
     "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
-      "architecture_sync_python.prompt"
+      "architecture_sync_python.prompt",
+      "agentic_common_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -7543,7 +7667,8 @@
       "operation_log_python.prompt",
       "agentic_sync_runner_python.prompt",
       "user_story_tests_python.prompt",
-      "agentic_common_python.prompt"
+      "agentic_common_python.prompt",
+      "auto_include_python.prompt"
     ],
     "priority": 80,
     "filename": "ci_drift_heal_python.prompt",

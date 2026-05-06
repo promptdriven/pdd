@@ -228,3 +228,52 @@ contexts:
 
     # The repo-relative prompts_dir should resolve under the config base.
     assert any(p.endswith("/prompts") for p in prompt_paths)
+
+
+def test_which_examples_default_greenfield(tmp_path, monkeypatch):
+    """Greenfield (no .pddrc, no context/) projects: `pdd which` should report
+    `examples/` as the primary examples fallback, mirroring construct_paths'
+    runtime resolution. context/ stays as a secondary candidate so users see
+    both. Closes the diagnostic/runtime mismatch on the exact tool meant to
+    diagnose path issues (#616)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_EXAMPLE_OUTPUT_PATH", raising=False)
+
+    result = _run_pdd_which([])
+    assert result.exit_code == 0, result.output
+    out = _clean_pdd_output(result.output or "")
+    examples_paths = _extract_search_paths(out, "examples.search_paths")
+    assert examples_paths, f"Expected examples.search_paths. Output:\n{out}"
+
+    # Find the indices of the conventional fallbacks.
+    examples_idx = next((i for i, p in enumerate(examples_paths) if p.endswith("/examples")), None)
+    context_idx = next((i for i, p in enumerate(examples_paths) if p.endswith("/context")), None)
+    assert examples_idx is not None, f"Expected /examples in fallbacks: {examples_paths}"
+    assert context_idx is not None, f"Expected /context as secondary: {examples_paths}"
+    assert examples_idx < context_idx, (
+        f"Greenfield: examples/ must precede context/ in fallbacks: {examples_paths}"
+    )
+
+
+def test_which_examples_default_legacy_back_compat(tmp_path, monkeypatch):
+    """Legacy projects (populated context/ with *_example.* files, no .pddrc,
+    no examples/): `pdd which` should report `context/` as primary, matching
+    construct_paths._resolve_default_examples_dir's legacy back-compat branch."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_EXAMPLE_OUTPUT_PATH", raising=False)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "foo_example.py").write_text("# legacy\n")
+
+    result = _run_pdd_which([])
+    assert result.exit_code == 0, result.output
+    out = _clean_pdd_output(result.output or "")
+    examples_paths = _extract_search_paths(out, "examples.search_paths")
+    assert examples_paths, f"Expected examples.search_paths. Output:\n{out}"
+
+    examples_idx = next((i for i, p in enumerate(examples_paths) if p.endswith("/examples")), None)
+    context_idx = next((i for i, p in enumerate(examples_paths) if p.endswith("/context")), None)
+    assert context_idx is not None, f"Expected /context in fallbacks: {examples_paths}"
+    assert examples_idx is not None, f"Expected /examples as secondary: {examples_paths}"
+    assert context_idx < examples_idx, (
+        f"Legacy: context/ must precede examples/ in fallbacks: {examples_paths}"
+    )
