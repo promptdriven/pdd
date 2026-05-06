@@ -99,27 +99,38 @@ def _run_gh_command(args: List[str]) -> Tuple[bool, str]:
         return False, "gh CLI not found"
 
 
-def _ensure_repo_context(owner: str, repo: str, current_cwd: Path, quiet: bool) -> Tuple[Path, Optional[str]]:
+def _ensure_repo_context(
+    owner: str,
+    repo: str,
+    current_cwd: Path,
+    quiet: bool,
+    project_root: Optional[Path] = None,
+) -> Tuple[Path, Optional[str]]:
     """
     Ensure the repository is available locally.
-    
+
     Logic:
     1. If current_cwd is inside the target repo (checked via remote), use it.
     2. If current_cwd is a git repo but mismatch, warn and use it (user might be in a fork).
     3. If current_cwd is NOT a git repo:
        a. Check if subdirectory {repo} exists and is a git repo -> use it.
        b. Clone {owner}/{repo} -> use it.
-       
+
     Args:
         owner: Repository owner.
         repo: Repository name.
         current_cwd: Current working directory.
         quiet: Whether to suppress non-error output.
-        
+        project_root: Optional resolved PDD project root. When the project root
+            is a strict descendant of the enclosing git toplevel, the
+            remote-vs-issue mismatch warning is suppressed (the cwd is a
+            self-contained pdd project nested inside an unrelated outer git
+            repo, so the remote of that outer repo is irrelevant).
+
     Returns:
         Tuple of (path to repo root, error message if any).
     """
-    
+
     def get_remote_url(path: Path) -> Optional[str]:
         try:
             res = subprocess.run(
@@ -139,9 +150,26 @@ def _ensure_repo_context(owner: str, repo: str, current_cwd: Path, quiet: bool) 
         # Remotes can be git@github.com:owner/repo.git or https://github.com/owner/repo.git
         if f"{owner}/{repo}" in remote or f"{owner}/{repo}.git" in remote:
             return current_cwd, None
-        
-        # Mismatch
-        if not quiet:
+
+        # Mismatch. Suppress the warning when the resolved PDD project root is
+        # a strict descendant of the enclosing git toplevel — the cwd is a
+        # self-contained pdd project nested inside an unrelated outer git repo
+        # (issue #815), so the outer remote is expected to differ from the
+        # issue's owner/repo and the warning is a false positive.
+        suppress_warning = False
+        if project_root is not None:
+            try:
+                from .architecture_registry import find_git_toplevel
+
+                git_top = find_git_toplevel(current_cwd)
+                pr_resolved = project_root.resolve()
+                if git_top is not None and pr_resolved != git_top.resolve():
+                    pr_resolved.relative_to(git_top.resolve())
+                    suppress_warning = True
+            except (ValueError, OSError):
+                suppress_warning = False
+
+        if not quiet and not suppress_warning:
             console.print(f"[yellow]Warning: Current directory is a git repo but remote '{remote}' does not match '{owner}/{repo}'. Proceeding in current directory.[/yellow]")
         return current_cwd, None
 
@@ -398,7 +426,8 @@ def run_agentic_architecture(
     use_github_state: bool = True,
     skip_prompts: bool = False,
     target_dir: Optional[str] = None,
-    force_single: bool = False
+    force_single: bool = False,
+    project_root: Optional[str] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
     Entry point for the agentic architecture workflow.
@@ -428,6 +457,17 @@ def run_agentic_architecture(
     """
     cwd = Path.cwd()
 
+    # Resolve PDD project root. Explicit --project-root wins; otherwise walk up
+    # from cwd looking for PDD-explicit / PDD-conventional / git markers
+    # (issue #815: a self-contained pdd project nested inside an unrelated
+    # outer git repo must be detected as its own root).
+    from .architecture_registry import find_project_root
+
+    if project_root is not None:
+        resolved_project_root = Path(project_root).resolve()
+    else:
+        resolved_project_root = find_project_root(cwd)
+
     # 1. Check gh CLI
     if not _check_gh_cli():
         return False, "gh CLI not found. Please install GitHub CLI.", 0.0, "", []
@@ -436,7 +476,7 @@ def run_agentic_architecture(
     parsed = _parse_github_url(issue_url)
     if not parsed:
         return False, f"Invalid GitHub URL: {issue_url}", 0.0, "", []
-    
+
     owner, repo, issue_number = parsed
 
     if not quiet:
@@ -466,8 +506,13 @@ def run_agentic_architecture(
 
     full_issue_content = f"{issue_body}{comments_text}"
 
-    # 5. Ensure Repo Context
-    repo_path, error = _ensure_repo_context(owner, repo, cwd, quiet)
+    # 5. Ensure Repo Context. Use the resolved project root as the working
+    # directory for repo discovery so a self-contained pdd project nested
+    # inside an unrelated outer git repo isn't routed through the outer
+    # repo's remote (issue #815).
+    repo_path, error = _ensure_repo_context(
+        owner, repo, resolved_project_root, quiet, project_root=resolved_project_root
+    )
     if error:
         return False, error, 0.0, "", []
 
@@ -524,11 +569,21 @@ def run_incremental_architecture(
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     time: float = DEFAULT_TIME,
+    project_root: Optional[str] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """Run guarded incremental PRD -> architecture propagation."""
     cwd = Path.cwd()
+
+    # Resolve PDD project root via explicit override or marker walk (issue #815).
+    from .architecture_registry import find_project_root
+
+    if project_root is not None:
+        resolved_project_root = Path(project_root).resolve()
+    else:
+        resolved_project_root = find_project_root(cwd)
+
     issue_content: Optional[str] = None
-    repo_path = cwd
+    repo_path = resolved_project_root
     owner = repo = ""
     issue_number: Optional[int] = None
 
@@ -564,7 +619,9 @@ def run_incremental_architecture(
         comments_text = _fetch_issue_comments_text(comments_url, verbose=verbose)
         issue_content = f"# {issue_title}\n\n{issue_body}{comments_text}".strip()
 
-        repo_path, error = _ensure_repo_context(owner, repo, cwd, quiet)
+        repo_path, error = _ensure_repo_context(
+            owner, repo, resolved_project_root, quiet, project_root=resolved_project_root
+        )
         if error:
             return False, error, 0.0, "", []
 

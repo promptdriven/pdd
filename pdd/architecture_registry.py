@@ -249,19 +249,85 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     return results
 
 
+_PRD_SPEC_GLOBS = ("prd*.md", "spec*.md", "*_prd.md", "*_spec.md")
+
+
+def _has_prd_spec_marker(directory: Path) -> bool:
+    """Return True if ``directory`` contains any PRD/spec markdown file."""
+    try:
+        for pattern in _PRD_SPEC_GLOBS:
+            for match in directory.glob(pattern):
+                if match.is_file():
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def find_project_root(start: Optional[Path] = None) -> Path:
-    """Walk up from ``start`` (default: cwd) for a directory containing ``.pddrc`` or ``.git``."""
+    """Resolve the PDD project root by walking up from ``start`` (default: cwd).
+
+    Tiered marker discovery (highest tier wins; innermost match within the
+    highest tier is preferred):
+
+    * Tier A (PDD-explicit): a directory containing ``.pddrc`` or a ``.pdd/``
+      directory.
+    * Tier B (PDD-conventional): a directory containing ``sources/`` plus PRD
+      or spec markdown (``prd*.md``, ``spec*.md``, ``*_prd.md``, ``*_spec.md``).
+    * Tier C (git fallback): a directory containing ``.git``.
+
+    This means a self-contained pdd project nested inside an unrelated outer
+    git repository is correctly identified as its own project root.
+    """
+    if start is None:
+        start = Path.cwd()
+    current = start.resolve()
+
+    tier_a: Optional[Path] = None  # innermost PDD-explicit
+    tier_b: Optional[Path] = None  # innermost PDD-conventional
+    tier_c: Optional[Path] = None  # innermost git fallback
+
+    for _ in range(20):
+        if tier_a is None and (
+            (current / ".pddrc").exists() or (current / ".pdd").is_dir()
+        ):
+            tier_a = current
+        if tier_b is None and (current / "sources").is_dir() and _has_prd_spec_marker(current):
+            tier_b = current
+        if tier_c is None and (current / ".git").exists():
+            tier_c = current
+
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    if tier_a is not None:
+        return tier_a
+    if tier_b is not None:
+        return tier_b
+    if tier_c is not None:
+        return tier_c
+    return start.resolve()
+
+
+def find_git_toplevel(start: Optional[Path] = None) -> Optional[Path]:
+    """Walk up from ``start`` (default: cwd) for the enclosing ``.git`` directory.
+
+    Returns the path containing ``.git`` or ``None`` if no git root is found
+    within 20 ancestors.
+    """
     if start is None:
         start = Path.cwd()
     current = start.resolve()
     for _ in range(20):
-        if (current / ".pddrc").exists() or (current / ".git").exists():
+        if (current / ".git").exists():
             return current
         parent = current.parent
         if parent == current:
             break
         current = parent
-    return start.resolve()
+    return None
 
 
 def load_combined_architecture_data(
