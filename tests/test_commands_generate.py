@@ -144,6 +144,7 @@ def test_cli_generate_github_issue_url_triggers_agentic_mode(mock_agentic, mock_
         skip_prompts=False,
         target_dir=None,
         force_single=False,
+        project_root=None,
     )
     assert "Architecture generated" in result.output
 
@@ -201,6 +202,7 @@ def test_cli_generate_incremental_github_issue_routes_to_guarded_prd_mode(
         strength=DEFAULT_STRENGTH,
         temperature=0.0,
         time=DEFAULT_TIME,
+        project_root=None,
     )
     assert "Applied incremental PRD propagation" in result.output
     assert "Would change files: architecture.json" in result.output
@@ -236,6 +238,7 @@ def test_cli_generate_incremental_local_prd_routes_to_guarded_prd_mode(
         strength=DEFAULT_STRENGTH,
         temperature=0.0,
         time=DEFAULT_TIME,
+        project_root=None,
     )
 
 
@@ -304,6 +307,70 @@ def test_cli_generate_incremental_forwards_strength_temperature_time(
     assert kwargs["strength"] == 0.85
     assert kwargs["temperature"] == 0.5
     assert kwargs["time"] == 0.3
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_agentic_architecture')
+def test_cli_generate_forwards_project_root_to_agentic(
+    mock_agentic,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """`--project-root <path>` must be forwarded to run_agentic_architecture
+    as the resolved absolute path so the runtime can pin the project root
+    instead of walking up from cwd (issue #815).
+    """
+    project = tmp_path / "nested-project"
+    project.mkdir()
+    mock_agentic.return_value = (True, "ok", 0.0, "model", [])
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--project-root", str(project),
+            "https://github.com/owner/repo/issues/42",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_agentic.call_args.kwargs
+    # click resolves --project-root via resolve_path=True, so compare resolved paths.
+    assert kwargs["project_root"] == str(project.resolve())
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.agentic_architecture.run_incremental_architecture')
+def test_cli_generate_forwards_project_root_to_incremental(
+    mock_incremental,
+    mock_auto_update,
+    runner,
+    tmp_path,
+):
+    """`--project-root <path>` must be forwarded to run_incremental_architecture
+    in `--incremental --experimental-prd` mode (issue #815).
+    """
+    project = tmp_path / "nested-project"
+    project.mkdir()
+    prd = tmp_path / "prd.md"
+    prd.write_text("Add audit logging.", encoding="utf-8")
+    mock_incremental.return_value = (True, "ok", 0.0, "model", [])
+
+    result = runner.invoke(
+        cli.cli,
+        [
+            "generate",
+            "--incremental",
+            "--experimental-prd",
+            "--project-root", str(project),
+            str(prd),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = mock_incremental.call_args.kwargs
+    assert kwargs["project_root"] == str(project.resolve())
 
 
 @patch('pdd.core.cli.auto_update')
