@@ -829,8 +829,35 @@ def _normalize_opencode_model_id(model: str) -> str:
     return model.replace("github_copilot/", "github-copilot/")
 
 
+# Maps the CSV ``provider`` column to the OpenCode provider id used in the
+# ``provider/model`` identifier passed to ``opencode run --model``.
+_OPENCODE_PROVIDER_BY_CSV: Dict[str, str] = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "google": "google",
+    "xai": "xai",
+    "deepseek": "deepseek",
+    "mistral": "mistral",
+    "groq": "groq",
+    "moonshot": "moonshot",
+    "ollama": "ollama",
+    "azure": "azure",
+    "meta": "meta",
+    "qwen": "qwen",
+    "cohere": "cohere",
+}
+
+
 def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Resolve OpenCode model from env or CSV defaults."""
+    """Resolve OpenCode model from env or CSV defaults.
+
+    OpenCode requires a ``provider/model`` identifier. When OPENCODE_MODEL is
+    not set we walk the CSV catalog and combine the CSV ``provider`` column
+    with the ``model`` column. Rows whose model already contains ``/`` are
+    skipped because those identifiers route through a sub-provider (e.g.
+    ``moonshotai/kimi-k2-instruct`` served on Groq) and cannot be passed to
+    OpenCode verbatim.
+    """
     source = env if env is not None else os.environ
     explicit = source.get("OPENCODE_MODEL", "").strip()
     if explicit:
@@ -839,14 +866,20 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
     if env is not None:
         return None
 
-    # Try to derive from CSV metadata if present
+    # Try to derive from CSV metadata if present, mapping CSV provider to
+    # OpenCode provider id.
     try:
         rows = _load_model_data()
         if rows:
             for row in rows:
-                model = row.get("model", "") or row.get("model_id", "")
-                if model and "/" in model:
-                    return _normalize_opencode_model_id(model)
+                provider = (row.get("provider") or "").strip().lower()
+                model = (row.get("model") or row.get("model_id") or "").strip()
+                if not provider or not model or "/" in model:
+                    continue
+                opencode_provider = _OPENCODE_PROVIDER_BY_CSV.get(provider)
+                if not opencode_provider:
+                    continue
+                return _normalize_opencode_model_id(f"{opencode_provider}/{model}")
     except Exception:
         pass
     return "anthropic/claude-sonnet-4-5"
@@ -1741,14 +1774,15 @@ def _local_state_path(
 
 
 def load_workflow_state(
-    repo_owner: str = "",
-    repo_name: str = "",
-    issue_number: int = 0,
-    workflow_id: Optional[str] = None,
     cwd: Optional[Union[str, Path]] = None,
+    issue_number: int = 0,
     workflow_type: Optional[str] = None,
     state_dir: Optional[Union[str, Path]] = None,
+    repo_owner: str = "",
+    repo_name: str = "",
     use_github_state: bool = True,
+    *,
+    workflow_id: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
     """Load workflow state from GitHub issue comments."""
     workflow = workflow_id or workflow_type or "workflow"
@@ -1847,17 +1881,18 @@ def github_save_state(
 
 
 def save_workflow_state(
+    cwd: Optional[Union[str, Path]] = None,
+    issue_number: int = 0,
+    workflow_type: Optional[str] = None,
+    state: Optional[Dict[str, Any]] = None,
+    state_dir: Optional[Union[str, Path]] = None,
     repo_owner: str = "",
     repo_name: str = "",
-    issue_number: int = 0,
-    workflow_id: Optional[str] = None,
-    state: Optional[Dict[str, Any]] = None,
-    comment_id: Optional[int] = None,
-    cwd: Optional[Union[str, Path]] = None,
-    workflow_type: Optional[str] = None,
-    state_dir: Optional[Union[str, Path]] = None,
     use_github_state: bool = True,
     github_comment_id: Optional[int] = None,
+    *,
+    workflow_id: Optional[str] = None,
+    comment_id: Optional[int] = None,
 ) -> Optional[int]:
     """Save state. Returns comment_id on success, None on GitHub failure."""
     workflow = workflow_id or workflow_type or "workflow"
@@ -1865,7 +1900,7 @@ def save_workflow_state(
     _save_local_state(workflow, state, cwd=cwd, issue_number=issue_number or None, state_dir=state_dir)
 
     if not _should_use_github_state(use_github_state):
-        return comment_id or github_comment_id
+        return comment_id if comment_id is not None else github_comment_id
 
     saved_id = github_save_state(
         repo_owner,
@@ -1882,14 +1917,15 @@ def save_workflow_state(
 
 
 def clear_workflow_state(
-    repo_owner: str = "",
-    repo_name: str = "",
-    issue_number: int = 0,
-    workflow_id: Optional[str] = None,
     cwd: Optional[Union[str, Path]] = None,
+    issue_number: int = 0,
     workflow_type: Optional[str] = None,
     state_dir: Optional[Union[str, Path]] = None,
+    repo_owner: str = "",
+    repo_name: str = "",
     use_github_state: bool = True,
+    *,
+    workflow_id: Optional[str] = None,
 ) -> None:
     """Delete the state comment and local cache."""
     workflow = workflow_id or workflow_type or "workflow"
@@ -2039,17 +2075,42 @@ def post_final_comment(
     repo_owner: str,
     repo_name: str,
     issue_number: int,
-    body: str,
-    cwd: Optional[str] = None,
+    reason: str = "",
+    cwd: Optional[Union[str, Path]] = None,
+    *,
+    total_cost: Optional[float] = None,
+    steps_completed: Optional[int] = None,
+    total_steps: Optional[int] = None,
+    body: Optional[str] = None,
 ) -> bool:
-    """Post final workflow summary comment to issue."""
+    """Post final workflow summary comment to issue.
+
+    Accepts either a pre-built ``body`` (used by simple callers/tests) or the
+    structured ``reason`` / ``total_cost`` / ``steps_completed`` / ``total_steps``
+    fields used by orchestrators that report workflow-level stop reasons.
+    """
     if not _gh_available():
         return False
+
+    if body is None:
+        if total_cost is not None or steps_completed is not None or total_steps is not None:
+            body = (
+                f"## Workflow Stopped\n\n"
+                f"**Reason:** {reason}\n\n"
+                f"**Progress:** Completed through step "
+                f"{steps_completed or 0}/{total_steps or 0}\n"
+                f"**Total cost:** ${(total_cost or 0.0):.4f}\n\n"
+                f"---\n"
+                f"*Automated status comment — pdd-fix workflow exited early.*"
+            )
+        else:
+            body = reason
+
     rc, _, _ = _gh_run(
         ["issue", "comment", str(issue_number),
          "--repo", f"{repo_owner}/{repo_name}",
          "--body", body],
-        cwd=cwd,
+        cwd=str(cwd) if cwd is not None else None,
     )
     return rc == 0
 
