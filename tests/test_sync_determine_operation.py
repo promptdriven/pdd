@@ -1359,6 +1359,48 @@ def test_get_pdd_file_paths_respects_context_override(tmp_path, monkeypatch):
             os.chdir(original_cwd)
 
 
+def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path, monkeypatch):
+    """Architecture filepaths should resolve example/test dirs from the module context."""
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context_tests").mkdir()
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '      generate_output_path: "src/"\n'
+        '  pdd_cli:\n'
+        '    paths: ["pdd/**"]\n'
+        '    defaults:\n'
+        '      test_output_path: "context_tests/"\n'
+        '      example_output_path: "context"\n'
+        '      generate_output_path: "pdd/"\n'
+    )
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "agentic_architecture_python.prompt",
+            "filepath": "pdd/agentic_architecture.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("agentic_architecture", "python", "prompts")
+
+    assert paths["code"] == tmp_path / "pdd" / "agentic_architecture.py"
+    assert paths["example"] == tmp_path / "context" / "agentic_architecture_example.py"
+    assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:
