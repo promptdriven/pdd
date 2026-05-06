@@ -15,9 +15,12 @@ _CLI_COMMANDS: dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
+    "opencode": "opencode",
 }
 
 # Maps provider name -> environment variable for API key
+# Note: opencode is multi-provider — there is no single primary key, so
+# opencode is intentionally absent here. _has_api_key() special-cases it.
 _API_KEY_ENV_VARS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
@@ -29,6 +32,7 @@ _INSTALL_COMMANDS: dict[str, str] = {
     "anthropic": "npm install -g @anthropic-ai/claude-code",
     "google": "npm install -g @google/gemini-cli",
     "openai": "npm install -g @openai/codex",
+    "opencode": "npm install -g opencode-ai",
 }
 
 # Maps provider name -> human-readable CLI name
@@ -36,13 +40,17 @@ _CLI_DISPLAY_NAMES: dict[str, str] = {
     "anthropic": "Claude CLI",
     "google": "Gemini CLI",
     "openai": "Codex CLI",
+    "opencode": "OpenCode CLI",
 }
 
 # Provider -> primary key env var name (used when saving)
-PROVIDER_PRIMARY_KEY: Dict[str, str] = {
+# OpenCode has no single primary key (it routes to whichever underlying
+# provider has credentials); represented as None.
+PROVIDER_PRIMARY_KEY: Dict[str, Optional[str]] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "opencode": None,
 }
 
 # Provider -> display name
@@ -50,17 +58,35 @@ PROVIDER_DISPLAY: Dict[str, str] = {
     "anthropic": "Anthropic",
     "google": "Google (Gemini)",
     "openai": "OpenAI",
+    "opencode": "OpenCode CLI",
 }
 
 # CLI preference order (claude first because it supports subscription auth)
-CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex"]
+CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex", "opencode"]
 
 # Ordered list for the numbered selection table: (provider, cli_name, display_name)
 _TABLE_ORDER: List[Tuple[str, str, str]] = [
     ("anthropic", "claude", "Claude CLI"),
     ("openai", "codex", "Codex CLI"),
     ("google", "gemini", "Gemini CLI"),
+    ("opencode", "opencode", "OpenCode CLI"),
 ]
+
+# OpenCode provider keys: any of these env vars makes OpenCode "configured"
+# because OpenCode is multi-provider and routes to whichever underlying
+# provider has credentials available.
+_OPENCODE_PROVIDER_KEYS: Tuple[str, ...] = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GITHUB_TOKEN",
+    "GROQ_API_KEY",
+)
+
+# Stored OpenCode auth token path (set by `opencode auth login`).
+_OPENCODE_AUTH_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 
 # Shell -> RC file path (relative to home)
 SHELL_RC_MAP: Dict[str, str] = {
@@ -85,6 +111,11 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path.home() / ".local" / "bin" / "gemini",
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
+    ],
+    "opencode": [
+        Path.home() / ".local" / "bin" / "opencode",
+        Path("/usr/local/bin/opencode"),
+        Path("/opt/homebrew/bin/opencode"),
     ],
 }
 
@@ -111,6 +142,17 @@ def _which(cmd: str) -> str | None:
 
 def _has_api_key(provider: str) -> bool:
     """Check whether the API key environment variable is set for a provider."""
+    # OpenCode is multi-provider — "configured" when any accepted provider key
+    # is set OR an OpenCode auth token file exists.
+    if provider == "opencode":
+        for key in _OPENCODE_PROVIDER_KEYS:
+            val = os.environ.get(key)
+            if val and val.strip():
+                return True
+        try:
+            return _OPENCODE_AUTH_PATH.is_file()
+        except OSError:
+            return False
     env_var = _API_KEY_ENV_VARS.get(provider, "")
     if not env_var:
         # Also check fallback keys
@@ -136,6 +178,19 @@ def _get_display_key_name(provider: str) -> str:
         if os.environ.get("GOOGLE_API_KEY", "").strip():
             return "GOOGLE_API_KEY"
         return "GEMINI_API_KEY"
+    if provider == "opencode":
+        # Display whichever accepted provider key is currently set, or fall
+        # back to a generic label when none is set.
+        for key in _OPENCODE_PROVIDER_KEYS:
+            val = os.environ.get(key)
+            if val and val.strip():
+                return key
+        try:
+            if _OPENCODE_AUTH_PATH.is_file():
+                return "opencode auth.json"
+        except OSError:
+            pass
+        return "any provider key"
     return _API_KEY_ENV_VARS.get(provider, "")
 
 def _npm_available() -> bool:
@@ -263,7 +318,19 @@ def _save_api_key(key_name: str, key_value: str, shell: str) -> bool:
 
 def _prompt_api_key(provider: str, shell: str) -> bool:
     """Prompt user for API key and save it. Prints save location on success."""
-    key_name = PROVIDER_PRIMARY_KEY.get(provider, "")
+    # OpenCode has no single primary key. Direct the user to either configure
+    # one of the accepted provider keys or run `opencode auth login`, but do
+    # not block setup on it.
+    if provider == "opencode":
+        console.print(
+            "  [dim]OpenCode is multi-provider: set any of "
+            "OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY / GOOGLE_API_KEY / "
+            "OPENROUTER_API_KEY / GITHUB_TOKEN / GROQ_API_KEY, "
+            "or run `opencode auth login` after setup.[/dim]"
+        )
+        return False
+
+    key_name = PROVIDER_PRIMARY_KEY.get(provider) or ""
     if not key_name:
         return False
 
@@ -507,8 +574,9 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
     else:
         seen: set[int] = set()
         parts = [p.strip() for p in raw.split(",")]
+        valid_numbers = {str(i + 1) for i in range(len(cli_info))}
         for part in parts:
-            if part in ("1", "2", "3"):
+            if part in valid_numbers:
                 idx = int(part) - 1
                 if idx not in seen:
                     seen.add(idx)
@@ -548,12 +616,13 @@ def detect_cli_tools() -> None:
     all_with_keys_installed = True
     
     # Use ordered providers
-    for provider in ["anthropic", "google", "openai"]:
+    for provider in ["anthropic", "google", "openai", "opencode"]:
         cli_cmd = _CLI_COMMANDS[provider]
         display_name = _CLI_DISPLAY_NAMES[provider]
         path = _which(cli_cmd)
         has_key = _has_api_key(provider)
-        key_env = _API_KEY_ENV_VARS[provider]
+        # opencode has no single primary key — display label varies.
+        key_env = _API_KEY_ENV_VARS.get(provider) or _get_display_key_name(provider)
 
         if path:
             found_any = True

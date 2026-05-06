@@ -25,7 +25,30 @@ except ImportError:
         return None
 
 # Constants
-_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
+
+# Provider API keys recognized as "OpenCode is configured" — OpenCode is
+# multi-provider and routes to whichever underlying provider has auth available.
+_OPENCODE_PROVIDER_KEYS: Tuple[str, ...] = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GITHUB_TOKEN",
+    "GROQ_API_KEY",
+)
+
+# OpenCode stored auth token path (set by `opencode auth login`).
+_OPENCODE_AUTH_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+
+# Mapping from LiteLLM/CSV-style model IDs to OpenCode provider IDs.
+# OpenCode model identifiers may contain multiple slashes (e.g.
+# "openrouter/openai/gpt-5.3-codex"); the value is passed verbatim to --model.
+_OPENCODE_MODEL_PREFIX_MAP: Dict[str, str] = {
+    # github_copilot/* (LiteLLM convention) -> github-copilot/* (OpenCode)
+    "github_copilot/": "github-copilot/",
+}
 
 # Default number of tail lines to scan for semantic regex patterns.
 # Semantic matching is restricted to the tail to prevent false positives
@@ -252,6 +275,7 @@ CLI_COMMANDS: Dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
+    "opencode": "opencode",
 }
 
 # Common installation paths for CLI tools (platform-specific)
@@ -284,6 +308,15 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
         Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
+        Path.home() / ".nvm" / "versions" / "node",
+    ],
+    "opencode": [
+        Path.home() / ".npm-global" / "bin" / "opencode",
+        Path.home() / ".local" / "bin" / "opencode",
+        Path.home() / "bin" / "opencode",
+        Path("/usr/local/bin/opencode"),
+        Path("/opt/homebrew/bin/opencode"),
+        Path("/home/linuxbrew/.linuxbrew/bin/opencode"),
         Path.home() / ".nvm" / "versions" / "node",
     ],
 }
@@ -337,6 +370,12 @@ def _is_permanent_error(error_message: str) -> bool:
         # through to OpenAI.
         r"not\s+logged\s+in",
         r"please\s+run\s+/login",
+        # OpenCode-specific permanent failures (config/auth problems that
+        # won't resolve via retry).
+        r"provider\s+not\s+configured",
+        r"invalid\s+model\s+id",
+        r"no\s+provider\s+for\s+model",
+        r"auth\.json.*(parse|invalid|malformed)",
     ]
     return any(re.search(p, msg) for p in permanent_patterns)
 
@@ -640,7 +679,7 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
     discovery still honors the current home directory.
     """
     paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini"}:
+    if name in {"claude", "codex", "gemini", "opencode"}:
         home = Path.home()
         paths.extend([
             home / ".npm-global" / "bin" / name,
@@ -729,7 +768,31 @@ def get_available_agents() -> List[str]:
     ):
         available.append("openai")
 
+    # 4. OpenCode
+    # Available if 'opencode' CLI exists AND at least one supported provider key
+    # is configured OR a stored OpenCode auth token file exists. OpenCode is
+    # provider-agnostic; "configured" means any of the underlying providers it
+    # can route to has credentials available.
+    if _find_cli_binary("opencode") and _has_opencode_auth():
+        available.append("opencode")
+
     return available
+
+
+def _has_opencode_auth() -> bool:
+    """Return True when OpenCode has any usable auth path configured.
+
+    Accepts any of the recognized provider API keys or a stored OpenCode
+    auth token file at ``~/.local/share/opencode/auth.json``.
+    """
+    for key in _OPENCODE_PROVIDER_KEYS:
+        val = os.environ.get(key)
+        if val and val.strip():
+            return True
+    try:
+        return _OPENCODE_AUTH_PATH.is_file()
+    except OSError:
+        return False
 
 
 def _has_gemini_oauth_credentials() -> bool:
@@ -791,6 +854,132 @@ def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
     output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
     
     return input_cost + cached_cost + output_cost
+
+
+def _resolve_opencode_model(env: Dict[str, str]) -> Optional[str]:
+    """Resolve the model identifier OpenCode should run with.
+
+    Precedence:
+        1. ``OPENCODE_MODEL`` env var (passed verbatim after prefix mapping).
+        2. ``None`` — let OpenCode use its own default model resolution.
+
+    Returns the model string in OpenCode's ``provider/model[/variant]`` form,
+    or ``None`` when no override is configured.
+    """
+    raw = (env.get("OPENCODE_MODEL") or "").strip()
+    if not raw:
+        return None
+    for csv_prefix, oc_prefix in _OPENCODE_MODEL_PREFIX_MAP.items():
+        if raw.startswith(csv_prefix):
+            return oc_prefix + raw[len(csv_prefix):]
+    return raw
+
+
+def _parse_opencode_jsonl(output_str: str) -> Tuple[bool, str, float, Optional[str]]:
+    """Parse OpenCode's JSONL stdout stream.
+
+    Each line is a JSON event of one of these types: ``text`` (assistant
+    text), ``tool_use``, ``step_start``, ``step_finish``, ``error``. The
+    function concatenates ``text`` events for the assistant output, sums
+    ``step_finish.part.cost`` (or ``step_finish.cost``) across events for
+    cost, and surfaces any ``error`` event message as a failure.
+
+    Returns:
+        (success, text, cost_usd, error_message)
+        ``success`` is False when an ``error`` event was seen.
+        ``error_message`` is None on success.
+    """
+    if not output_str:
+        return False, "", 0.0, "OpenCode produced no output"
+
+    text_parts: List[str] = []
+    cost = 0.0
+    error_message: Optional[str] = None
+    saw_event = False
+
+    for line in output_str.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        etype = event.get("type") or event.get("event") or ""
+        # Only count events with a recognized type — an unkeyed JSON blob
+        # falls through to the single-object fallback path below.
+        if etype in {"text", "step_finish", "error", "tool_use", "step_start"}:
+            saw_event = True
+
+        if etype == "text":
+            chunk = event.get("text") or event.get("content") or ""
+            if isinstance(chunk, str):
+                text_parts.append(chunk)
+        elif etype == "step_finish":
+            # OpenCode reports cost either at the top level or under "part"
+            part = event.get("part")
+            if isinstance(part, dict) and "cost" in part:
+                try:
+                    cost += float(part.get("cost", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    pass
+            if "cost" in event:
+                try:
+                    cost += float(event.get("cost", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    pass
+        elif etype == "error":
+            msg = event.get("message") or event.get("error") or "OpenCode reported an error"
+            error_message = str(msg)
+
+    if not saw_event:
+        # Fallback: try a single-object parse (some opencode versions emit one
+        # JSON object instead of JSONL).
+        try:
+            data = json.loads(output_str.strip())
+            if isinstance(data, dict):
+                if data.get("type") == "error" or data.get("error"):
+                    return False, "", 0.0, str(data.get("message") or data.get("error") or "OpenCode error")
+                text = data.get("text") or data.get("result") or data.get("output") or ""
+                cost_val = data.get("cost")
+                try:
+                    cost = float(cost_val) if cost_val is not None else 0.0
+                except (TypeError, ValueError):
+                    cost = 0.0
+                return True, str(text), cost, None
+        except json.JSONDecodeError:
+            pass
+        return False, "", 0.0, "OpenCode emitted no recognizable JSONL events"
+
+    if error_message is not None:
+        return False, "".join(text_parts), cost, error_message
+
+    return True, "".join(text_parts), cost, None
+
+
+_OPENCODE_PERMANENT_PATTERNS: Tuple[str, ...] = (
+    r"model\s+not\s+found",
+    r"provider\s+not\s+configured",
+    r"invalid\s+model\s+id",
+    r"no\s+provider\s+for\s+model",
+    r"permission\s+denied",
+    r"auth\.json.*(parse|invalid|malformed)",
+)
+
+
+def _is_opencode_permanent_error(msg: str) -> bool:
+    """Detect permanent OpenCode errors that should not be retried.
+
+    These match config/auth problems that won't resolve via retry: missing
+    model, missing provider config, malformed auth file, or a session
+    permission ask in non-interactive mode.
+    """
+    if not msg:
+        return False
+    lowered = msg.lower()
+    return any(re.search(p, lowered) for p in _OPENCODE_PERMANENT_PATTERNS)
 
 
 def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
@@ -1364,6 +1553,43 @@ def _run_with_provider(
         codex_model = env.get("CODEX_MODEL")
         if codex_model:
             cmd.extend(["--model", codex_model])
+    elif provider == "opencode":
+        # OpenCode CLI: `opencode run` runs a one-shot task in headless mode.
+        # JSONL is emitted on stdout (one event per line). We pass the prompt
+        # text as a positional argument; the prompt content already includes
+        # the "Read the file ... for instructions" directive that points the
+        # agent at the prompt file written by run_agentic_task().
+        cmd = [
+            cli_path,
+            "run",
+            "--dir", str(cwd),
+            "--format", "json",
+            "--dangerously-skip-permissions",
+        ]
+        # Optional model override via OPENCODE_MODEL env var. Format is
+        # "provider/model" (e.g. "anthropic/claude-sonnet-4-5"); may contain
+        # multiple slashes (e.g. "openrouter/openai/gpt-5.3-codex"). Pass
+        # verbatim — OpenCode parses the full string.
+        oc_model = _resolve_opencode_model(env)
+        if oc_model:
+            cmd.extend(["--model", oc_model])
+        # Optional agent override (e.g. "build", "plan").
+        oc_agent = (env.get("OPENCODE_AGENT") or "").strip()
+        if oc_agent:
+            cmd.extend(["--agent", oc_agent])
+        # Optional variant override (e.g. "high", "max") when the selected
+        # provider supports tiered variants.
+        oc_variant = (env.get("OPENCODE_VARIANT") or "").strip()
+        if oc_variant:
+            cmd.extend(["--variant", oc_variant])
+        if reasoning_effort and not quiet:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but OpenCode CLI "
+                "has no reasoning-effort flag; applies to llm_invoke steps only, "
+                "not this subprocess.[/dim]"
+            )
+        # Final positional argument: the instruction the agent should execute.
+        cmd.append(prompt_content)
     else:
         return False, f"Unknown provider {provider}", 0.0
 
@@ -1420,12 +1646,20 @@ def _run_with_provider(
             f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
         )
 
+    # OpenCode emits JSONL events — parse the whole stream directly rather
+    # than going through the single-object _parse_provider_json path.
+    if provider == "opencode":
+        success, text, cost, err = _parse_opencode_jsonl(result.stdout or "")
+        if not success:
+            return False, err or text or "OpenCode parse error", cost
+        return True, text, cost
+
     # Parse JSON Output
     try:
         # Handle JSONL output (Codex sometimes streams)
         output_str = result.stdout.strip()
         data = {}
-        
+
         if provider == "openai" and "\n" in output_str:
             # Parse NDJSON, collecting both the agent response and usage stats
             lines = output_str.splitlines()

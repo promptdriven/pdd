@@ -217,7 +217,12 @@ def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock
     assert "anthropic" in agents
     assert "google" in agents
     assert "openai" in agents
-    assert len(agents) == 3
+    # OpenCode is now a fourth provider; it's available when its CLI exists
+    # AND any provider key is set (or an OpenCode auth file exists). The mock
+    # makes the binary discoverable and the API keys above satisfy the auth
+    # requirement, so opencode is included alongside the other three.
+    assert "opencode" in agents
+    assert len(agents) == 4
 
 def test_get_available_agents_mixed(mock_env, mock_load_model_data, mock_shutil_which):
     """Test mixed availability."""
@@ -1030,7 +1035,8 @@ def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock
     mock_env["OPENAI_API_KEY"] = "key"
 
     agents = get_available_agents()
-    assert agents == ["anthropic", "google", "openai"]
+    # OpenCode is appended after the legacy three providers.
+    assert agents == ["anthropic", "google", "openai", "opencode"]
 
 # --- Tests for Cost Calculation ---
 
@@ -3003,7 +3009,7 @@ def test_post_pr_comment_no_gh_cli(tmp_path):
 def test_get_agent_provider_preference_default(mock_env):
     """Default preference when PDD_AGENTIC_PROVIDER is not set."""
     mock_env.pop("PDD_AGENTIC_PROVIDER", None)
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 def test_get_agent_provider_preference_single(mock_env):
@@ -3027,7 +3033,7 @@ def test_get_agent_provider_preference_with_spaces(mock_env):
 def test_get_agent_provider_preference_empty_string(mock_env):
     """Empty string falls back to default."""
     mock_env["PDD_AGENTIC_PROVIDER"] = ""
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 # ---------------------------------------------------------------------------
@@ -4668,9 +4674,13 @@ def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mo
     """
     mock_shutil_which.return_value = "/bin/claude"
     os.environ["ANTHROPIC_API_KEY"] = "key"
-    # Remove google/openai creds so only anthropic is the candidate
+    # Remove google/openai creds so anthropic is the only API-key-gated provider
     for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
         os.environ.pop(k, None)
+    # Pin the preference list to anthropic-only so the single-provider retry
+    # path is exercised (opencode would otherwise be a second candidate
+    # because ANTHROPIC_API_KEY satisfies opencode's multi-provider auth).
+    os.environ["PDD_AGENTIC_PROVIDER"] = "anthropic"
 
     empty_response = json.dumps({
         "type": "result",
@@ -5694,3 +5704,213 @@ class TestIssue1232NotLoggedInPermanent:
     def test_login_unrelated_words_do_not_match(self):
         """Unrelated mentions of 'login' must not trigger permanent classification."""
         assert _is_permanent_error("login flow timed out, retrying") is False
+
+
+# ---------------------------------------------------------------------------
+# OpenCode Provider Tests (Issue #798 follow-up)
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    CLI_COMMANDS,
+    _has_opencode_auth,
+    _resolve_opencode_model,
+    _parse_opencode_jsonl,
+    _is_opencode_permanent_error,
+)
+
+
+class TestOpenCodeProviderRegistration:
+    """OpenCode is a fourth first-class agentic backend (Issue #798)."""
+
+    def test_opencode_in_default_preference(self):
+        """The default preference order ends with opencode."""
+        from pdd.agentic_common import _DEFAULT_PROVIDER_PREFERENCE
+        assert _DEFAULT_PROVIDER_PREFERENCE == ["anthropic", "google", "openai", "opencode"]
+
+    def test_opencode_in_cli_commands(self):
+        """CLI_COMMANDS routes the opencode provider to the opencode binary."""
+        assert CLI_COMMANDS.get("opencode") == "opencode"
+
+    def test_pdd_agentic_provider_opencode_yields_opencode_preference(self, mock_env):
+        """Reviewer repro: PDD_AGENTIC_PROVIDER=opencode resolves cleanly."""
+        mock_env["PDD_AGENTIC_PROVIDER"] = "opencode"
+        assert get_agent_provider_preference() == ["opencode"]
+
+
+class TestOpenCodeAvailability:
+    """get_available_agents() lists opencode when binary + auth are present."""
+
+    def test_opencode_available_with_opencode_auth_file(
+        self, monkeypatch, tmp_path, mock_load_model_data, mock_shutil_which,
+    ):
+        """An opencode auth.json file alone is sufficient (no provider key needed)."""
+        mock_shutil_which.return_value = "/bin/opencode"
+        # Strip every recognized provider key so auth.json is the only signal.
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                  "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN", "GROQ_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        # Redirect the auth path to a tmp file we control.
+        auth_path = tmp_path / "auth.json"
+        auth_path.write_text("{}")
+        monkeypatch.setattr("pdd.agentic_common._OPENCODE_AUTH_PATH", auth_path)
+        assert "opencode" in get_available_agents()
+
+    def test_opencode_available_with_provider_key(
+        self, monkeypatch, mock_env, mock_load_model_data, mock_shutil_which,
+    ):
+        """Any of the recognized provider keys flips opencode to available."""
+        mock_shutil_which.return_value = "/bin/opencode"
+        # Wipe other auth paths so we can test the OPENROUTER_API_KEY one in
+        # isolation. The auth.json fallback gets pointed at a non-existent file.
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                  "GOOGLE_API_KEY", "GITHUB_TOKEN", "GROQ_API_KEY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-test")
+        monkeypatch.setattr(
+            "pdd.agentic_common._OPENCODE_AUTH_PATH",
+            Path("/nonexistent/opencode/auth.json"),
+        )
+        assert "opencode" in get_available_agents()
+
+    def test_opencode_unavailable_without_auth_or_binary(
+        self, monkeypatch, mock_env, mock_load_model_data,
+    ):
+        """No opencode binary + no auth = opencode is not listed."""
+        # Wipe every accepted credential so neither claude nor opencode pass.
+        for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                  "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN",
+                  "GROQ_API_KEY", "PDD_CODEX_AUTH_AVAILABLE"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setattr("pdd.agentic_common._find_cli_binary", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "pdd.agentic_common._OPENCODE_AUTH_PATH",
+            Path("/nonexistent/opencode/auth.json"),
+        )
+        assert "opencode" not in get_available_agents()
+
+
+class TestOpenCodeRunWithProvider:
+    """_run_with_provider must accept opencode as a known provider (no
+    'Unknown provider opencode' regression)."""
+
+    def test_opencode_is_not_unknown_provider(self, tmp_path):
+        """The reviewer repro: _run_with_provider('opencode', ...) must not
+        return 'Unknown provider opencode'."""
+        prompt = tmp_path / "prompt.txt"
+        prompt.write_text("hi")
+        # Force binary discovery to fail so we exercise routing without
+        # actually launching opencode. The error message must NOT be
+        # 'Unknown provider opencode' — that was the symptom.
+        with patch("pdd.agentic_common._find_cli_binary", return_value=None):
+            success, msg, cost = _run_with_provider(
+                "opencode", prompt, tmp_path, timeout=1.0, quiet=True,
+            )
+        assert not success
+        assert "Unknown provider opencode" not in msg
+        assert "opencode" in msg or "not found" in msg
+
+
+class TestOpenCodeModelResolution:
+    """OPENCODE_MODEL is passed verbatim with a github_copilot/ -> github-copilot/ rewrite."""
+
+    def test_no_model_returns_none(self):
+        assert _resolve_opencode_model({}) is None
+
+    def test_explicit_model_passed_through(self):
+        assert _resolve_opencode_model({"OPENCODE_MODEL": "anthropic/claude-sonnet-4-5"}) \
+            == "anthropic/claude-sonnet-4-5"
+
+    def test_multi_slash_model_preserved(self):
+        """OpenCode IDs may contain multiple slashes (openrouter/openai/...)."""
+        assert _resolve_opencode_model({"OPENCODE_MODEL": "openrouter/openai/gpt-5.3-codex"}) \
+            == "openrouter/openai/gpt-5.3-codex"
+
+    def test_github_copilot_prefix_rewritten(self):
+        """LiteLLM uses github_copilot/, OpenCode uses github-copilot/."""
+        assert _resolve_opencode_model({"OPENCODE_MODEL": "github_copilot/gpt-5"}) \
+            == "github-copilot/gpt-5"
+
+
+class TestOpenCodeJsonlParsing:
+    """OpenCode JSONL output: text events concatenate, step_finish.part.cost
+    sums, error events surface as failures."""
+
+    def test_text_events_concatenate(self):
+        jsonl = (
+            '{"type": "text", "text": "Hello "}\n'
+            '{"type": "text", "text": "world"}\n'
+            '{"type": "step_finish", "part": {"cost": 0.0123}}\n'
+        )
+        ok, text, cost, err = _parse_opencode_jsonl(jsonl)
+        assert ok is True
+        assert text == "Hello world"
+        assert cost == pytest.approx(0.0123)
+        assert err is None
+
+    def test_step_finish_top_level_cost_also_sums(self):
+        jsonl = (
+            '{"type": "text", "text": "ok"}\n'
+            '{"type": "step_finish", "cost": 0.01}\n'
+            '{"type": "step_finish", "part": {"cost": 0.02}}\n'
+        )
+        ok, _text, cost, err = _parse_opencode_jsonl(jsonl)
+        assert ok is True
+        assert cost == pytest.approx(0.03)
+        assert err is None
+
+    def test_error_event_surfaces_as_failure(self):
+        jsonl = '{"type": "error", "message": "model not found"}'
+        ok, _text, _cost, err = _parse_opencode_jsonl(jsonl)
+        assert ok is False
+        assert err == "model not found"
+
+    def test_empty_stream_is_failure(self):
+        ok, text, cost, err = _parse_opencode_jsonl("")
+        assert ok is False
+        assert text == ""
+        assert cost == 0.0
+
+    def test_non_jsonl_garbage_is_failure(self):
+        """Random text with no JSON events does not crash; flagged as failure."""
+        ok, _text, _cost, err = _parse_opencode_jsonl("foo bar baz\nnot json")
+        assert ok is False
+        assert err
+
+    def test_single_object_fallback(self):
+        """Some opencode versions emit a single JSON object instead of JSONL."""
+        ok, text, cost, err = _parse_opencode_jsonl(
+            '{"text": "all done", "cost": 0.005}'
+        )
+        assert ok is True
+        assert text == "all done"
+        assert cost == pytest.approx(0.005)
+        assert err is None
+
+
+class TestOpenCodePermanentErrors:
+    """OpenCode config/auth errors should not be retried."""
+
+    @pytest.mark.parametrize("msg", [
+        "model not found",
+        "MODEL NOT FOUND",
+        "provider not configured",
+        "invalid model id 'foo'",
+        "no provider for model claude-sonnet",
+        "permission denied",
+        "auth.json: parse error",
+        "auth.json invalid",
+    ])
+    def test_permanent_pattern_detected(self, msg):
+        assert _is_opencode_permanent_error(msg) is True
+
+    def test_transient_message_not_permanent(self):
+        assert _is_opencode_permanent_error("rate limit exceeded, please retry") is False
+
+    @pytest.mark.parametrize("msg", [
+        "provider not configured",
+        "invalid model id",
+        "no provider for model x",
+    ])
+    def test_top_level_is_permanent_error_includes_opencode(self, msg):
+        """Generic _is_permanent_error must also catch opencode-specific patterns."""
+        assert _is_permanent_error(msg) is True

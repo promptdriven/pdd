@@ -84,11 +84,12 @@ from pdd.cli_detector import (
 # Module-level constants — realistic scenarios for test fixtures
 # ---------------------------------------------------------------------------
 
-# Provider/CLI status: all three CLIs installed with keys
+# Provider/CLI status: all four CLIs installed with keys
 ALL_INSTALLED = {
     "claude": "/usr/local/bin/claude",
     "codex": "/usr/local/bin/codex",
     "gemini": "/usr/local/bin/gemini",
+    "opencode": "/usr/local/bin/opencode",
 }
 
 ALL_KEYS = {
