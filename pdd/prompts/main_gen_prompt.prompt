@@ -16,5 +16,8 @@
 <pdd.bug_to_unit_test>
     <include>context/bug_to_unit_test_example.py</include>
 </pdd.bug_to_unit_test>
+<pdd.bug_to_unit_test_failure>
+    <include>context/bug_to_unit_test_failure_example.py</include>
+</pdd.bug_to_unit_test_failure>
 
 % Generate the prompt of the `bug_main` function.

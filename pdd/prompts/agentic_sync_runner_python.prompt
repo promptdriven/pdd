@@ -64,7 +64,8 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - `warnings: List[str]` — human-readable issues that did **not** prevent building the subgraph; operators use these to see silent omissions
 
 % Function: `build_dep_graph_from_architecture(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult`
-- Load architecture.json, map prompt filename -> basename via `_basename_from_architecture_filename`
+- Load architecture.json and match target basenames against architecture entries using both prompt `filename` aliases and code `filepath` aliases. This is required for branch-diff targets such as `src/config`, where `filename` may be only `config_Python.prompt` but `filepath` is `src/config.py`.
+- Preserve the original `target_basenames` strings as graph keys/dependencies; do not normalize `src/config` to `config` before scheduling, because those path-qualified strings are needed for .pddrc context routing.
 - Build subgraph: only include edges where **both** endpoints resolve to basenames in `target_basenames` (partial sync: edges to modules outside the target set are **omitted** from `graph`, not added as fake nodes)
 - Exclude self-dependencies
 - Return empty deps for basenames not found in architecture.json
@@ -79,6 +80,16 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 % Helper: `_basename_from_architecture_filename(filename: str) -> Optional[str]`
 - Convert an architecture `filename` to a sync basename while preserving subdirectory prefixes.
 - Examples: `agentic_sync_python.prompt` -> `agentic_sync`; `commands/maintenance_python.prompt` -> `commands/maintenance`; `_LLM.prompt` entries return `None`.
+
+% Helper: `_basename_from_architecture_filepath(filepath: str) -> Optional[str]`
+- Convert an architecture `filepath` to a sync basename by removing the final file extension and preserving directories.
+- Examples: `src/config.py` -> `src/config`; `src/clients/firestore_client.py` -> `src/clients/firestore_client`.
+
+% Helper: `_architecture_entry_aliases(entry: Dict[str, Any]) -> set[str]`
+- Return every basename that can identify an architecture entry, including `_basename_from_architecture_filename(entry["filename"])` and `_basename_from_architecture_filepath(entry["filepath"])` when present.
+
+% Helper: `_target_basename_aliases(target_basename: str) -> set[str]`
+- Return aliases for a requested sync target, including the original target and the language-suffix-stripped variant while preserving directories (for example `src/config_Python` -> `src/config`).
 
 % Helper Functions
 - `_find_pdd_executable() -> Optional[str]`: find pdd binary (same pattern as `server/jobs.py`)

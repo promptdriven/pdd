@@ -86,6 +86,7 @@ class DriftInfo:
     reason: str
     code_path: Optional[str] = None  # resolved code file path for pdd update
     prompt_path: Optional[str] = None  # resolved prompt file path for churn gate
+    example_path: Optional[str] = None  # resolved example file path for example drift policy
     diff_base: Optional[str] = None  # git diff base, used by change-magnitude gate
 
 
@@ -118,6 +119,9 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     # If a heal subprocess times out or fails in CI, restore tracked metadata/cache
     # files so the repo doesn't stay stuck in a half-mutated state.
     env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] = "1"
+    # Existing examples are reviewable artifacts. In PR auto-heal, do not spend
+    # a full LLM call rewriting them by default; missing examples still heal.
+    env.setdefault("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT", "1")
     return env
 
 
@@ -344,7 +348,22 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 code_changed = bool(code_file_paths & git_changed)
                 prompt_changed = bool(prompt_file_paths & git_changed)
 
-                if code_changed and not prompt_changed:
+                if code_changed and prompt_changed and decision.operation == "generate":
+                    console.print(
+                        f"[blue]↔ Reclassifying {basename}: code and prompt "
+                        "changed together → example drift[/blue]"
+                    )
+                    decision = type(decision)(
+                        operation="example",
+                        reason=(
+                            "Code and prompt changed together; regenerate example "
+                            "without re-running code generation"
+                        ),
+                        confidence=getattr(decision, "confidence", 0.85),
+                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
+                        details=getattr(decision, "details", {}),
+                    )
+                elif code_changed and not prompt_changed:
                     console.print(
                         f"[blue]↑ Reclassifying {basename}: code changed but prompt "
                         f"unchanged → prompt (update) drift[/blue]"
@@ -393,15 +412,19 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
             # `pdd sync` so sync_determine_operation can do its smart dispatch.
             example_prompt_path: Optional[str] = None
             example_code_path: Optional[str] = None
+            example_file_path: Optional[str] = None
             if decision.operation in {"example", "auto-deps"}:
                 try:
                     paths = get_pdd_file_paths(basename, language)
                     prompt_file_abs = paths.get("prompt")
                     code_file_abs = paths.get("code")
+                    example_file_abs = paths.get("example")
                     if prompt_file_abs is not None:
                         example_prompt_path = str(prompt_file_abs)
                     if code_file_abs is not None:
                         example_code_path = str(code_file_abs)
+                    if example_file_abs is not None:
+                        example_file_path = str(example_file_abs)
                 except Exception:
                     pass
             example_drifts.append(
@@ -412,6 +435,7 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                     reason=getattr(decision, "reason", "Drift detected"),
                     prompt_path=example_prompt_path,
                     code_path=example_code_path,
+                    example_path=example_file_path,
                 )
             )
 
@@ -1031,6 +1055,16 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
                 f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
                 f"{skip_reason}. This module can be regenerated in a separate "
                 "follow-up run without blocking the PR auto-heal build.[/yellow]"
+            )
+            return None
+        if (
+            env.get("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT") == "1"
+            and drift.example_path
+            and Path(drift.example_path).exists()
+        ):
+            console.print(
+                f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
+                f"existing example {drift.example_path} is left for PR review.[/yellow]"
             )
             return None
         return _run_pdd_command(

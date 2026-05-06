@@ -167,7 +167,7 @@ def mock_construct_paths_fixture(monkeypatch):
 @pytest.fixture
 def mock_pdd_preprocess_fixture(monkeypatch):
     # Default mock returns the input unchanged to allow tests to assert substitution behavior when needed
-    def passthrough(prompt_text, recursive=False, double_curly_brackets=True, exclude_keys=None):
+    def passthrough(prompt_text, recursive=False, double_curly_brackets=True, exclude_keys=None, **kwargs):
         return prompt_text
     mock = MagicMock(side_effect=passthrough)
     monkeypatch.setattr("pdd.code_generator_main.pdd_preprocess", mock)
@@ -3194,6 +3194,45 @@ class TestIssue687ExampleOutputPath:
         )
         assert "examples/shared" in cloud_prompt
 
+    def test_examples_dir_fallback_when_example_output_path_unset(
+        self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+        mock_env_vars
+    ):
+        """When `example_output_path` is unset but `examples_dir` is populated
+        by construct_paths, EXAMPLE_OUTPUT_PATH falls back to `examples_dir` so
+        the LLM template gets the right value ('examples' for greenfield,
+        'context' for legacy back-compat). Issue #616."""
+        mock_ctx.obj['local'] = False
+        mock_ctx.obj['force'] = True
+        prompt_file_path = temp_dir_setup["prompts_dir"] / "gap_prompt.prompt"
+        prompt_content = "Dep at ${EXAMPLE_OUTPUT_PATH}/foo_example.py"
+        create_file(prompt_file_path, prompt_content)
+        output_file_path_str = str(temp_dir_setup["output_dir"] / "out.py")
+
+        # Simulate construct_paths' return when there's no .pddrc:
+        # example_output_path is None, examples_dir = EXAMPLES_DIR (= "examples").
+        mock_construct_paths_fixture.return_value = (
+            {"examples_dir": "examples"},  # no example_output_path key
+            {"prompt_file": prompt_content},
+            {"output": output_file_path_str},
+            "python",
+        )
+
+        code_generator_main(
+            mock_ctx, str(prompt_file_path), output_file_path_str, None, False,
+        )
+
+        from pdd.code_generator_main import requests
+        call_kwargs = requests.post.call_args
+        payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json", {})
+        cloud_prompt = payload.get("promptContent", "")
+        assert "${EXAMPLE_OUTPUT_PATH}" not in cloud_prompt, (
+            "Variable not expanded — examples_dir fallback failed (#616)"
+        )
+        assert "examples/foo_example.py" in cloud_prompt, (
+            f"Expected 'examples/foo_example.py' in cloud prompt; got:\n{cloud_prompt}"
+        )
+
     def test_explicit_env_var_overrides_resolved_config(
         self, mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
         mock_env_vars
@@ -3241,8 +3280,10 @@ class TestIssue687ExampleOutputPath:
         )
 
     def test_real_template_has_example_output_path_default(self):
-        """The template front-matter must define EXAMPLE_OUTPUT_PATH with
-        default 'context' so missing .pddrc doesn't leave the variable empty."""
+        """The template front-matter defines EXAMPLE_OUTPUT_PATH with default
+        EXAMPLES_DIR ('examples') so missing .pddrc doesn't leave the variable
+        empty. Runtime injection in code_generator_main normally flows the
+        right value through; the front-matter default is a safety net."""
         import yaml
 
         template_path = (
@@ -3260,8 +3301,10 @@ class TestIssue687ExampleOutputPath:
         )
         eop_spec = variables["EXAMPLE_OUTPUT_PATH"]
         assert isinstance(eop_spec, dict), "EXAMPLE_OUTPUT_PATH must be a dict spec"
-        assert eop_spec.get("default") == "context", (
-            "EXAMPLE_OUTPUT_PATH must default to 'context' for projects without .pddrc"
+        # Template default must match generate_output_paths.EXAMPLES_DIR (#616).
+        from pdd.generate_output_paths import EXAMPLES_DIR
+        assert eop_spec.get("default") == EXAMPLES_DIR, (
+            f"EXAMPLE_OUTPUT_PATH must default to '{EXAMPLES_DIR}' for projects without .pddrc"
         )
 
     def test_resolved_config_overwrites_front_matter_default(

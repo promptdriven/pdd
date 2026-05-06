@@ -4529,6 +4529,58 @@ def test_get_pdd_file_paths_architecture_json_nested_subdir(tmp_path, monkeypatc
     assert "firestore_client.py" in str(paths['code'])
 
 
+def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path, monkeypatch):
+    """Architecture filepath resolution should still honor the module context.
+
+    The architecture branch used to detect context from cwd, so root-level PDD
+    modules defaulted examples to examples/ even when .pddrc mapped them to
+    context/. CI auto-heal then tried to generate wrong new example files.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / ".pddrc").write_text(json.dumps({
+        "contexts": {
+            "default": {
+                "defaults": {
+                    "example_output_path": "examples/",
+                    "test_output_path": "tests/",
+                }
+            },
+            "pdd_cli": {
+                "paths": ["pdd/**", "prompts/**", "tests/**"],
+                "defaults": {
+                    "prompts_dir": "prompts",
+                    "generate_output_path": "pdd",
+                    "test_output_path": "tests",
+                    "example_output_path": "context",
+                    "default_language": "python",
+                },
+            },
+        }
+    }))
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "context").mkdir()
+
+    (tmp_path / "prompts" / "agentic_architecture_python.prompt").write_text("prompt")
+    (tmp_path / "pdd" / "agentic_architecture.py").write_text("# code")
+    (tmp_path / "context" / "agentic_architecture_example.py").write_text("# example")
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "agentic_architecture_python.prompt",
+            "filepath": "pdd/agentic_architecture.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("agentic_architecture", "python", "prompts")
+
+    assert paths["code"].resolve() == (tmp_path / "pdd" / "agentic_architecture.py").resolve()
+    assert paths["example"].resolve() == (tmp_path / "context" / "agentic_architecture_example.py").resolve()
+    assert paths["test"].resolve() == (tmp_path / "tests" / "test_agentic_architecture.py").resolve()
+
+
 def test_get_pdd_file_paths_nested_subdir_logging_shows_exists_true(tmp_path, monkeypatch, caplog):
     """Bug #1169: Logging must show exists=True when prompt is in nested subdir.
 

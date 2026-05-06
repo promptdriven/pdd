@@ -14,6 +14,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 
 # Requirements
 1. **Path Orchestration**: Resolve input and output paths using `construct_paths`, ensuring that CLI flags, front-matter overrides, and `.pddrc` defaults are applied in the correct precedence (CLI > Front-matter > Config).
+    - Inject `EXAMPLE_OUTPUT_PATH` into `env_vars` for templates that reference `${EXAMPLE_OUTPUT_PATH}`. Precedence: explicit `-e EXAMPLE_OUTPUT_PATH=…` > `resolved_config["example_output_path"]` > `resolved_config["examples_dir"]` > template front-matter default. The fallback to `examples_dir` is required to keep generated `<include>` paths aligned with where `pdd example` writes files (#616). Strip a single trailing `/` or `\` before injection.
 2. **Incremental Generation**: 
     - Detect if an output file already exists.
     - Implement a Git-based "time travel" mechanism: if a file is unchanged in HEAD, search up to 10 previous commits to find a different version of the prompt to use as the "original" for a diff-based update.

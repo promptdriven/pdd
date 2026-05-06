@@ -2609,3 +2609,550 @@ def test_two_pass_backtick_include_oserror_preserves_content(tmp_path, monkeypat
     pass2 = preprocess(pass1, recursive=False, double_curly_brackets=False)
     assert "[Error processing include:" not in pass2
     assert padding in pass2
+
+
+# ---------------------------------------------------------------------------
+# Issue #616 — unresolved-include surfacing (loud-failure)
+# ---------------------------------------------------------------------------
+
+
+def test_unresolved_include_warning_surfaced(tmp_path, monkeypatch, capsys) -> None:
+    """Final non-recursive pass: [File not found:] placeholders trigger a loud
+    warning naming each unresolved path."""
+    monkeypatch.chdir(tmp_path)
+    out = preprocess(
+        "<x><include>context/missing_example.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    assert "[File not found: context/missing_example.py]" in out
+    captured = capsys.readouterr().out
+    assert "Unresolved include" in captured
+    assert "context/missing_example.py" in captured
+    assert "example_output_path" in captured
+
+
+def _normalize(s: str) -> str:
+    """Collapse whitespace — Rich console may wrap long lines mid-word."""
+    return " ".join(s.split())
+
+
+def test_unresolved_include_warning_includes_actionable_alt_location(tmp_path, monkeypatch, capsys) -> None:
+    """When the missing file's first component is context/examples and the swap
+    location has the file, the warning names that alternative path."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "examples" / "prisma").mkdir(parents=True)
+    (tmp_path / "examples" / "prisma" / "schema_example.prisma").write_text("// here\n")
+    preprocess(
+        "<x><include>context/prisma/schema_example.prisma</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = _normalize(capsys.readouterr().out)
+    assert "Unresolved include" in captured
+    assert "Found at:" in captured
+    assert "examples/prisma/schema_example.prisma" in captured
+
+
+def test_unresolved_include_actionable_inverse(tmp_path, monkeypatch, capsys) -> None:
+    """Inverse: <include>examples/...</include> missing, file under context/."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context" / "shared").mkdir(parents=True)
+    (tmp_path / "context" / "shared" / "thing.py").write_text("# here\n")
+    preprocess(
+        "<x><include>examples/shared/thing.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = _normalize(capsys.readouterr().out)
+    assert "Found at:" in captured
+    assert "context/shared/thing.py" in captured
+
+
+def test_unresolved_include_warning_not_emitted_when_resolved(tmp_path, monkeypatch, capsys) -> None:
+    """When the include file exists, no unresolved-include warning fires."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "real.py").write_text("# real\n")
+    out = preprocess(
+        "<x><include>examples/real.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    assert "[File not found:" not in out
+    assert "Unresolved include" not in capsys.readouterr().out
+
+
+def test_unresolved_include_warning_silenced_in_quiet_mode(tmp_path, monkeypatch, capsys) -> None:
+    """PDD_QUIET=1 suppresses the unresolved-include console warning."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    preprocess(
+        "<x><include>context/missing.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    assert "Unresolved include" not in capsys.readouterr().out
+
+
+def test_unresolved_include_no_warning_on_recursive_pass(tmp_path, monkeypatch, capsys) -> None:
+    """Recursive passes must not warn — placeholders may resolve later."""
+    monkeypatch.chdir(tmp_path)
+    preprocess(
+        "<x><include>context/missing.py</include></x>",
+        recursive=True, double_curly_brackets=False,
+    )
+    assert "Unresolved include" not in capsys.readouterr().out
+
+
+def test_unresolved_include_warning_emits_via_logger(tmp_path, monkeypatch, caplog) -> None:
+    """The unresolved-include warning must also reach the standard logger so
+    callers that capture logs (CI, log-aggregation pipelines) see the signal,
+    not just Rich console output (#616)."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(logging.WARNING, logger="pdd.preprocess"):
+        preprocess(
+            "<x><include>context/missing_example.py</include></x>",
+            recursive=False, double_curly_brackets=False,
+        )
+    matches = [r for r in caplog.records if "Unresolved include" in r.getMessage()]
+    assert matches, "expected logger.warning for unresolved include"
+    assert matches[0].levelno == logging.WARNING
+    assert "context/missing_example.py" in matches[0].getMessage()
+
+
+def test_unresolved_include_warning_logger_fires_in_quiet_mode(tmp_path, monkeypatch, caplog, capsys) -> None:
+    """PDD_QUIET=1 silences Rich console output but the logger warning still
+    fires — quiet mode is for terminal noise, not for hiding signals from
+    log capture."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    with caplog.at_level(logging.WARNING, logger="pdd.preprocess"):
+        preprocess(
+            "<x><include>context/missing.py</include></x>",
+            recursive=False, double_curly_brackets=False,
+        )
+    assert "Unresolved include" not in capsys.readouterr().out
+    assert any("Unresolved include" in r.getMessage() for r in caplog.records)
+
+
+def test_unresolved_include_warning_no_false_positive_on_documentation(tmp_path, monkeypatch, caplog, capsys) -> None:
+    """The unresolved-include warning must NOT fire when the literal text
+    `[File not found: ...]` appears in documentation, prompt specs, or other
+    non-include content. Greg's #1354 review repro: running preprocess on
+    `pdd/prompts/preprocess_python.prompt` (which documents the warning's
+    behavior using `[File not found: path]` and `[File not found: ...]` as
+    illustrative examples) used to emit false-positive warnings for `path`
+    and `...`. The fix tracks include-processor failures directly rather
+    than regex-scanning the final prompt."""
+    import logging
+    monkeypatch.chdir(tmp_path)
+    # A prompt that documents the warning marker as content, with no actual
+    # failing <include>/<include-many> tags. This must NOT trip the warning.
+    doc_prompt = (
+        "Documentation example:\n"
+        "When an include fails, preprocess emits a placeholder like\n"
+        "`[File not found: path]` or `[File not found: ...]` for missing files.\n"
+        "End of doc.\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="pdd.preprocess"):
+        out = preprocess(doc_prompt, recursive=False, double_curly_brackets=False)
+    captured = capsys.readouterr().out
+    assert "Unresolved include" not in captured, (
+        f"False-positive warning fired on documentation content. Output:\n{captured}"
+    )
+    assert not any("Unresolved include" in r.getMessage() for r in caplog.records), (
+        "False-positive warning logged on documentation content."
+    )
+    # The documentation text must pass through unchanged (no mutation).
+    assert "[File not found: path]" in out
+    assert "[File not found: ...]" in out
+
+
+def test_unresolved_include_warning_no_false_positive_on_real_prompt_spec(tmp_path, monkeypatch, capsys) -> None:
+    """End-to-end repro of Greg's #1354 review: preprocess the actual
+    preprocess_python.prompt spec — which contains documented `[File not
+    found: ...]` examples in its Error Handling section — and assert no
+    Unresolved-include warnings fire on its non-include content."""
+    monkeypatch.chdir(tmp_path)
+    from pathlib import Path as _P
+    spec_path = _P(__file__).resolve().parent.parent / "pdd" / "prompts" / "preprocess_python.prompt"
+    if not spec_path.exists():
+        import pytest
+        pytest.skip(f"spec not present at {spec_path}")
+    text = spec_path.read_text(encoding="utf-8")
+    preprocess(text, recursive=False, double_curly_brackets=False)
+    captured = capsys.readouterr().out
+    # The spec genuinely <include>s context/python_preamble.prompt etc; those
+    # may fail when run from tmp_path. We assert specifically that the
+    # documented placeholder examples (`path`, `...`) do NOT generate warnings.
+    for fake in ("Unresolved include in preprocessed prompt: path.",
+                 "Unresolved include in preprocessed prompt: ...."):
+        assert fake not in captured, (
+            f"False-positive warning fired for documented example '{fake}'. "
+            f"Output:\n{captured}"
+        )
+
+
+def test_split_prompt_include_selectors_resolve_without_fallback(monkeypatch, capsys, recwarn) -> None:
+    """The split prompt's selected includes must resolve cleanly.
+
+    Regression for Greg's #1354 review: `split_python.prompt` selected
+    `def:preprocess` from `context/preprocess_example.py`, which only defines
+    `main()`. The failed selector fell back to full-file inclusion and caused
+    literal example `<include>` / `<shell>` tags in that source to be processed.
+    """
+    from pathlib import Path as _P
+
+    repo_root = _P(__file__).resolve().parent.parent
+    monkeypatch.chdir(repo_root)
+    text = (repo_root / "pdd" / "prompts" / "split_python.prompt").read_text(
+        encoding="utf-8"
+    )
+    preprocess(text, recursive=False, double_curly_brackets=False)
+    captured = capsys.readouterr().out
+    selector_warnings = [
+        warning for warning in recwarn if "ContentSelector failed" in str(warning.message)
+    ]
+    assert selector_warnings == []
+    assert "ContentSelector failed" not in captured
+    assert "Executing shell command" not in captured
+
+
+def test_prompt_files_do_not_select_implementation_symbols_from_example_files() -> None:
+    """Symbol selectors must target files that actually define the symbol."""
+    from pathlib import Path as _P
+
+    repo_root = _P(__file__).resolve().parent.parent
+    forbidden_selectors = (
+        '<include select="def:preprocess">context/preprocess_example.py',
+        '<include select="def:llm_invoke">context/llm_invoke_example.py',
+        '<include select="class:ContentSelector">context/content_selector_example.py',
+        '<include select="class:IncludeQueryExtractor">context/include_query_extractor_example.py',
+    )
+    offenders = [
+        str(path.relative_to(repo_root))
+        for path in (repo_root / "pdd" / "prompts").glob("*.prompt")
+        if any(
+            forbidden in path.read_text(encoding="utf-8")
+            for forbidden in forbidden_selectors
+        )
+    ]
+
+    assert offenders == []
+
+
+def test_changed_prompt_selected_includes_resolve() -> None:
+    """Selected includes in touched prompt specs must not fall back to full files."""
+    from pathlib import Path as _P
+
+    from pdd.content_selector import ContentSelector
+
+    repo_root = _P(__file__).resolve().parent.parent
+    prompt_paths = [
+        "pdd/prompts/agentic_change_orchestrator_python.prompt",
+        "pdd/prompts/agentic_common_python.prompt",
+        "pdd/prompts/agentic_split_orchestrator_python.prompt",
+        "pdd/prompts/change_python.prompt",
+        "pdd/prompts/code_generator_main_python.prompt",
+        "pdd/prompts/commands/which_python.prompt",
+        "pdd/prompts/construct_paths_python.prompt",
+        "pdd/prompts/context_generator_main_python.prompt",
+        "pdd/prompts/detect_change_python.prompt",
+        "pdd/prompts/fix_errors_from_unit_tests_python.prompt",
+        "pdd/prompts/generate_output_paths_python.prompt",
+        "pdd/prompts/generate_test_python.prompt",
+        "pdd/prompts/include_query_extractor_python.prompt",
+        "pdd/prompts/insert_includes_python.prompt",
+        "pdd/prompts/main_gen_prompt.prompt",
+        "pdd/prompts/one_session_sync_python.prompt",
+        "pdd/prompts/preprocess_main_python.prompt",
+        "pdd/prompts/preprocess_python.prompt",
+        "pdd/prompts/split_python.prompt",
+        "pdd/prompts/sync_determine_operation_python.prompt",
+        "pdd/prompts/trace_python.prompt",
+        "pdd/prompts/update_prompt_python.prompt",
+    ]
+    include_pattern = re.compile(r'<include\s+([^>]*)>(.*?)</include>', re.DOTALL)
+    select_pattern = re.compile(r'select="([^"]+)"')
+    failures: list[str] = []
+
+    for prompt_rel in prompt_paths:
+        prompt_text = (repo_root / prompt_rel).read_text(encoding="utf-8")
+        for match in include_pattern.finditer(prompt_text):
+            select_match = select_pattern.search(match.group(1))
+            if select_match is None:
+                continue
+            include_target = match.group(2).strip()
+            if include_target in {"file", "..."} or "{" in include_target:
+                continue
+            include_path = (repo_root / include_target).resolve()
+            selectors = [
+                selector.strip()
+                for selector in select_match.group(1).split(",")
+                if selector.strip()
+            ]
+            try:
+                include_text = include_path.read_text(encoding="utf-8")
+                ContentSelector.select(
+                    include_text,
+                    selectors,
+                    file_path=str(include_path),
+                )
+            except Exception as exc:  # noqa: BLE001 - report all selector failures together
+                failures.append(
+                    f"{prompt_rel}: {include_target} select={selectors!r}: {exc}"
+                )
+
+    assert failures == []
+
+
+def test_unresolved_include_warning_still_fires_on_real_failure(tmp_path, monkeypatch, capsys) -> None:
+    """Sanity check that direct-failure tracking didn't break the positive
+    case: the warning MUST still fire when an include genuinely fails."""
+    monkeypatch.chdir(tmp_path)
+    preprocess(
+        "<x><include>context/genuinely_missing_example.py</include></x>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "Unresolved include" in captured
+    assert "context/genuinely_missing_example.py" in captured
+
+
+def test_unresolved_include_no_false_positive_on_included_source_with_literal_tags(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Regression for #1354 codex pass-2: when an include resolves to a Python
+    source file that contains literal `<include>` syntax in docstrings, regex
+    patterns, or comments, those nested matches must NOT be reported as
+    unresolved-include failures. Only user-intent includes from the original
+    prompt should trigger warnings.
+    """
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "decoy.py"
+    src.write_text(
+        '"""Module docstring referencing literal <include>some/path.py</include>.\n'
+        "Pattern: r'<include(?P<attrs>\\\\s+[^>]*?)?>(?P<content>.*?)</include>'\n"
+        "Backtick: ```<another/path.py>``` and <include-many>blob</include-many>.\n"
+        '"""\n'
+        "x = 1\n"
+    )
+    preprocess(
+        f"<wrap><include>{src.name}</include></wrap>",
+        recursive=False, double_curly_brackets=False,
+    )
+    captured_out = capsys.readouterr().out
+    assert "Unresolved include" not in captured_out
+    assert "File not found: some/path.py" not in captured_out
+    assert "File not found: another/path.py" not in captured_out
+    assert "File not found: blob" not in captured_out
+
+
+def test_optional_include_missing_file_is_silent(tmp_path, monkeypatch, capsys) -> None:
+    """Regression for #1354 codex pass-2: <include optional="true"> with a
+    missing path must NOT print a `File not found` console warning, must NOT
+    leak a `[File not found: ...]` marker into the output, and must NOT
+    surface as an unresolved-include warning.
+    """
+    monkeypatch.chdir(tmp_path)
+    out = preprocess(
+        '<wrap><include optional="true">${UNSET_OPTIONAL_FILE}</include></wrap>',
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "File not found" not in captured
+    assert "Unresolved include" not in captured
+    assert "[File not found:" not in out
+
+
+def test_optional_include_many_missing_files_are_silent(tmp_path, monkeypatch, capsys) -> None:
+    """Regression for #1354 codex pass-2: <include-many optional="true"> with
+    paths that don't resolve (e.g. an unset ${VAR} placeholder) must be silent
+    and must not leak `[File not found: ...]` markers.
+    """
+    monkeypatch.chdir(tmp_path)
+    out = preprocess(
+        '<wrap><include-many optional="true">${UNSET_LIST}</include-many></wrap>',
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "File not found" not in captured
+    assert "Unresolved include" not in captured
+    assert "[File not found:" not in out
+
+
+def test_required_include_missing_still_warns(tmp_path, monkeypatch, capsys) -> None:
+    """Sanity: removing the optional flag must still produce a real
+    File-not-found warning so users notice required-but-missing includes."""
+    monkeypatch.chdir(tmp_path)
+    preprocess(
+        '<wrap><include>required_but_missing.txt</include></wrap>',
+        recursive=False, double_curly_brackets=False,
+    )
+    captured = capsys.readouterr().out
+    assert "File not found: required_but_missing.txt" in captured
+
+
+def test_unresolved_include_no_false_positive_in_two_pass_production_flow(
+    tmp_path, monkeypatch, capsys, caplog
+) -> None:
+    """Regression for #1354 codex pass-3: production callers (e.g.
+    `code_generator_main`) preprocess in two passes — `recursive=True`,
+    then variable expansion, then `recursive=False`. When pass 1 expands
+    a raw `.py` source whose docstrings or regex strings contain literal
+    `<include>` syntax, pass 2 sees those as iteration-0 matches in its
+    own input. The path-shape heuristic must keep the warning silent for
+    those parser artifacts.
+    """
+    monkeypatch.chdir(tmp_path)
+    decoy = tmp_path / "decoy_source.py"
+    decoy.write_text(
+        '"""Module that documents include syntax in its docstring.\n'
+        "Pattern: r'<include(?P<attrs>\\\\s+[^>]*?)?>(?P<content>.*?)</include>'\n"
+        "Examples:\n"
+        "    <include>some/example.py</include>\n"
+        "    <include path=\"explicit/path.py\" />\n"
+        "    <include-many>list, of, things</include-many>\n"
+        '"""\n'
+        "x = 1\n"
+    )
+    original_prompt = f"<wrap><include>{decoy.name}</include></wrap>"
+
+    from pdd.preprocess import compute_user_intent_paths
+    intent = compute_user_intent_paths(original_prompt)
+    pass1 = preprocess(original_prompt, recursive=True, double_curly_brackets=False)
+    # No env var expansion needed — the decoy include resolved fully on pass 1.
+    pass2 = preprocess(pass1, recursive=False, double_curly_brackets=True, _user_intent_paths=intent)
+
+    captured_out = capsys.readouterr().out
+    # No false positives from the decoy's docstring contents.
+    for fragment in (
+        "some/example.py",
+        "explicit/path.py",
+        "list",
+        "of",
+        "things",
+    ):
+        assert f"File not found: {fragment}" not in captured_out, (
+            f"unexpected warning for parser-artifact '{fragment}' in two-pass output"
+        )
+    assert "Unresolved include in preprocessed prompt" not in captured_out, (
+        "unresolved-include warning leaked from expanded source"
+    )
+    # logger.warning path also clean.
+    assert not any(
+        rec.levelname == "WARNING" and "Unresolved include" in rec.message
+        for rec in caplog.records
+    )
+    # Sanity: the decoy contents made it through (proves we processed, not skipped).
+    assert "x = 1" in pass2
+
+
+def test_compute_user_intent_paths_handles_path_attribute_and_self_closing(
+    tmp_path,
+) -> None:
+    """Regression for #1354 codex pass-4 finding 1: `compute_user_intent_paths`
+    must walk the same `<include>` grammar that `process_include_tags` accepts —
+    body form, body form with `path=`, and self-closing `<include path="..." />`.
+    Otherwise pass-2 silently swallows real failures of `path=`-style includes
+    because the user-intent set is empty.
+    """
+    from pdd.preprocess import compute_user_intent_paths
+    text = (
+        '<a><include>body_only.py</include></a>\n'
+        '<b><include path="attr_with_body.py">ignored</include></b>\n'
+        '<c><include path="self_closing.py" /></c>\n'
+        '<d><include-many>list_a.py, list_b.py</include-many></d>\n'
+        '<e>```<backtick.py>```</e>\n'
+    )
+    paths = compute_user_intent_paths(text)
+    assert paths == {
+        "body_only.py",
+        "attr_with_body.py",
+        "self_closing.py",
+        "list_a.py",
+        "list_b.py",
+        "backtick.py",
+    }
+
+
+def test_path_attribute_missing_file_warns_in_two_pass_flow(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Regression for #1354 codex pass-4 finding 1: a real missing
+    `<include path="..." />` in user-authored prompt content must still
+    produce a `File not found` warning when the caller supplies an intent
+    set computed via `compute_user_intent_paths()`.
+    """
+    from pdd.preprocess import compute_user_intent_paths
+    monkeypatch.chdir(tmp_path)
+    original = '<wrap><include path="user_authored_missing.py" /></wrap>'
+    intent = compute_user_intent_paths(original)
+    assert "user_authored_missing.py" in intent, (
+        "compute_user_intent_paths must extract path= attribute"
+    )
+    pass1 = preprocess(original, recursive=True, double_curly_brackets=False)
+    pass2 = preprocess(
+        pass1, recursive=False, double_curly_brackets=False, _user_intent_paths=intent
+    )
+    captured = capsys.readouterr().out
+    assert "File not found: user_authored_missing.py" in captured
+    assert "[File not found: user_authored_missing.py]" in pass2
+
+
+def test_extensionless_required_include_warns_with_intent_set(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """Regression for #1354 codex pass-4 finding 2: when the caller supplies
+    an authoritative `_user_intent_paths` set, extensionless filenames like
+    `Makefile`, `Dockerfile`, `LICENSE` must still fail loudly when the user
+    authored them and they're missing. The path-shape heuristic must NOT
+    layer on top of the caller-supplied set.
+    """
+    from pdd.preprocess import compute_user_intent_paths
+    # Use clearly synthetic extensionless names that don't exist in the repo or
+    # any well-known location. Real names like `Makefile` collide with files in
+    # the package/repo root that PathResolver finds.
+    monkeypatch.chdir(tmp_path)
+    for bare in (
+        "DefinitelyMissingMakefile",
+        "BogusDockerfile",
+        "NonexistentLICENSE",
+    ):
+        original = f'<wrap><include>{bare}</include></wrap>'
+        intent = compute_user_intent_paths(original)
+        assert bare in intent, (
+            f"compute_user_intent_paths must extract bare name {bare!r}"
+        )
+        out = preprocess(
+            original,
+            recursive=False,
+            double_curly_brackets=False,
+            _user_intent_paths=intent,
+        )
+        captured = capsys.readouterr().out
+        assert f"File not found: {bare}" in captured, (
+            f"required missing extensionless include {bare!r} must warn loudly "
+            f"when caller supplied an authoritative intent set"
+        )
+        assert f"[File not found: {bare}]" in out
+
+
+def test_looks_like_user_intent_path_heuristic() -> None:
+    """Direct unit-test of the heuristic that gates warning emission for
+    parser-artifact include matches.
+    """
+    from pdd.preprocess import _looks_like_user_intent_path as f
+    # Real paths
+    assert f("context/foo_example.py")
+    assert f("README.md")
+    assert f("pdd/preprocess.py")
+    assert f("${PRD_FILE}")
+    assert f("./relative/path.txt")
+    # Parser artifacts that have appeared in real false-positive reports
+    assert not f("path")  # bare word, no path-y characters
+    assert not f("blob")
+    assert not f("path set from the original prompt")  # has spaces
+    assert not f("# comment line that mentions <include>x</include>")  # starts with #
+    assert not f("in a docstring).")  # has space
+    assert not f("")
+    assert not f("\n")
+    assert not f("a" * 300)  # too long

@@ -12,6 +12,7 @@ sync_order.sh
 
 staging_data_dump.json
 .pdd/core_dumps/*
+.pdd/cache/
 *_fixed.*
 
 .vscode/settings.json
@@ -174,6 +175,8 @@ ENV/
 env.bak/
 venv.bak/
 *.py.bak
+*.json.bak
+*.prompt.bak
 
 # Spyder project settings
 .spyderproject

@@ -74,5 +74,5 @@
     6. Print success messages and cost/model information if not in `quiet` mode.
     7. Handle exceptions gracefully and exit with a non-zero status code if an error occurs.
    <cli_command_readme>
-   <include>./README.md</include>
+   <include select="section:5. preprocess">./README.md</include>
    </cli_command_readme>

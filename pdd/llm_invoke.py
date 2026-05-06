@@ -314,6 +314,193 @@ def _pydantic_to_json_schema(pydantic_class: Type[BaseModel]) -> Dict[str, Any]:
     return schema
 
 
+def _unwrap_parameter_envelope(obj: Any) -> Any:
+    """Unwrap Vertex AI Anthropic's tool-call envelope.
+
+    Vertex AI serves Anthropic structured outputs through tool-calling, which
+    returns the schema fields wrapped as ``{"parameter": {<schema fields>}}``.
+    The validators below gate this unwrap so it never silently reshapes a
+    legitimate caller schema that itself accepts a top-level ``parameter`` key.
+    Non-matching inputs are returned unchanged.
+    """
+    if (
+        isinstance(obj, dict)
+        and len(obj) == 1
+        and "parameter" in obj
+        and isinstance(obj["parameter"], dict)
+    ):
+        return obj["parameter"]
+    return obj
+
+
+def _pydantic_schema_accepts_parameter_key(cls: Type[BaseModel]) -> bool:
+    """Return True if ``cls`` could validate a top-level ``"parameter"`` key.
+
+    Walks declared fields and checks the field name, ``Field(alias=...)``, and
+    ``Field(validation_alias=...)`` (string, ``AliasChoices``, or first segment
+    of ``AliasPath``). When any of those equals ``"parameter"``, the envelope
+    unwrap must be skipped — otherwise a payload like
+    ``{"parameter": {"parameter": "inner"}}`` could be silently reshaped.
+    """
+    try:
+        from pydantic import AliasChoices, AliasPath
+    except ImportError:  # pragma: no cover — pydantic is a hard dep
+        AliasChoices = AliasPath = None  # type: ignore
+
+    def _path_first_is_parameter(path_obj: Any) -> bool:
+        if AliasPath is None or not isinstance(path_obj, AliasPath):
+            return False
+        path = getattr(path_obj, "path", None)
+        return bool(path) and path[0] == "parameter"
+
+    for name, info in cls.model_fields.items():
+        if name == "parameter":
+            return True
+        if getattr(info, "alias", None) == "parameter":
+            return True
+        va = getattr(info, "validation_alias", None)
+        if va is None:
+            continue
+        if isinstance(va, str):
+            if va == "parameter":
+                return True
+            continue
+        if _path_first_is_parameter(va):
+            return True
+        if AliasChoices is not None and isinstance(va, AliasChoices):
+            for choice in getattr(va, "choices", ()):
+                if isinstance(choice, str) and choice == "parameter":
+                    return True
+                if _path_first_is_parameter(choice):
+                    return True
+    return False
+
+
+def _jsonschema_eligible_for_envelope_unwrap(schema: Any) -> bool:
+    """Return True if ``schema`` is an explicit object schema safe to unwrap into.
+
+    Greg's review on PR #1365: only unwrap when the caller's schema is an
+    explicit object whose top-level ``properties`` map exists and does not
+    declare ``parameter``. Composed (``allOf``/``anyOf``/``oneOf``/``$ref``)
+    or otherwise flexible (no top-level ``properties``) schemas are skipped
+    rather than risk silently reshaping a payload that the composed schema
+    might accept after unwrap.
+    """
+    if not isinstance(schema, dict):
+        return False
+    for composition_key in ("allOf", "anyOf", "oneOf", "$ref"):
+        if composition_key in schema:
+            return False
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        return False
+    return "parameter" not in properties
+
+
+def _validate_pydantic_with_unwrap(
+    payload: Any,
+    pydantic_class: Type[BaseModel],
+) -> BaseModel:
+    """Validate ``payload`` against ``pydantic_class`` with envelope-unwrap fallback.
+
+    Tries direct validation first. On ``ValidationError``, retries once after
+    unwrapping a ``{"parameter": {...}}`` envelope. The original error is
+    re-raised if both attempts fail, so existing diagnostics stay accurate.
+
+    Gating (PR #1365 review): if ``pydantic_class`` could validate a
+    top-level ``parameter`` key — by field name, ``Field(alias=...)``, or
+    ``Field(validation_alias=...)`` (string, ``AliasChoices``, or first
+    segment of ``AliasPath``) — the unwrap retry would silently reshape
+    legitimate user payloads (e.g. ``{"parameter": {"parameter": "x"}}``
+    would be accepted as ``{"parameter": "x"}``). Skip the unwrap branch in
+    that case and let direct-validation errors propagate unchanged.
+    """
+    schema_uses_parameter = _pydantic_schema_accepts_parameter_key(pydantic_class)
+    if isinstance(payload, str):
+        try:
+            return pydantic_class.model_validate_json(payload)
+        except ValidationError as original_err:
+            if schema_uses_parameter:
+                raise
+            try:
+                obj = json.loads(payload)
+            except (json.JSONDecodeError, ValueError):
+                raise original_err
+            unwrapped = _unwrap_parameter_envelope(obj)
+            if unwrapped is obj:
+                raise original_err
+            try:
+                return pydantic_class.model_validate(unwrapped)
+            except ValidationError:
+                raise original_err
+    if isinstance(payload, dict):
+        try:
+            return pydantic_class.model_validate(payload)
+        except ValidationError as original_err:
+            if schema_uses_parameter:
+                raise
+            unwrapped = _unwrap_parameter_envelope(payload)
+            if unwrapped is payload:
+                raise original_err
+            try:
+                return pydantic_class.model_validate(unwrapped)
+            except ValidationError:
+                raise original_err
+    if isinstance(payload, pydantic_class):
+        return payload
+    return pydantic_class.model_validate(payload)
+
+
+def _validate_jsonschema_with_unwrap(
+    instance: Any,
+    schema: Dict[str, Any],
+) -> Any:
+    """Validate ``instance`` against a raw ``output_schema`` with envelope-unwrap fallback.
+
+    Mirrors ``_validate_pydantic_with_unwrap`` for the ``output_schema``/jsonschema
+    code path: tries direct validation first; on ``jsonschema.ValidationError``,
+    retries once after stripping a single-key ``{"parameter": {...}}`` envelope.
+    Vertex AI Anthropic serves structured outputs through tool-calling, and the
+    same envelope shape reaches the jsonschema branch when callers pass
+    ``output_schema`` instead of ``output_pydantic``. The original error is
+    re-raised on second failure so diagnostics keep pointing at real schema
+    fields, never at the synthetic ``parameter`` wrapper.
+
+    Returns the validated payload — either ``instance`` itself when direct
+    validation succeeds, or the unwrapped inner dict when the envelope-unwrap
+    retry succeeds. Callers MUST use the returned value for any downstream
+    serialization; using the original wrapped ``instance`` would leak the
+    ``{"parameter": {...}}`` envelope into the caller's response shape (see
+    PR #1365 review pass 3).
+
+    Gating (PR #1365 review): unwrap only when ``schema`` is an explicit
+    object schema whose top-level ``properties`` map exists and does not
+    declare ``parameter``. Composed (``allOf``/``anyOf``/``oneOf``/``$ref``)
+    or otherwise flexible schemas (e.g. ``additionalProperties`` without
+    explicit ``properties``) are skipped rather than risk silently reshaping
+    a payload the composed schema might accept after unwrap.
+
+    Raises ``jsonschema.ValidationError`` (the original) if neither form
+    validates. Raises ``ImportError`` if ``jsonschema`` is not installed.
+    """
+    import jsonschema
+    eligible = _jsonschema_eligible_for_envelope_unwrap(schema)
+    try:
+        jsonschema.validate(instance=instance, schema=schema)
+        return instance
+    except jsonschema.ValidationError as original_err:
+        if not eligible or not isinstance(instance, dict):
+            raise
+        unwrapped = _unwrap_parameter_envelope(instance)
+        if unwrapped is instance:
+            raise
+        try:
+            jsonschema.validate(instance=unwrapped, schema=schema)
+            return unwrapped
+        except jsonschema.ValidationError:
+            raise original_err
+
+
 def _validate_with_pydantic(
     result: Any,
     pydantic_class: Type[BaseModel]
@@ -330,10 +517,8 @@ def _validate_with_pydantic(
     Raises:
         ValidationError: If validation fails
     """
-    if isinstance(result, dict):
-        return pydantic_class.model_validate(result)
-    elif isinstance(result, str):
-        return pydantic_class.model_validate_json(result)
+    if isinstance(result, dict) or isinstance(result, str):
+        return _validate_pydantic_with_unwrap(result, pydantic_class)
     elif isinstance(result, pydantic_class):
         # Already validated
         return result
@@ -795,6 +980,18 @@ def _litellm_success_callback(
         # Attempt 1: Use the response object directly (works for most single calls)
         cost_val = litellm.completion_cost(completion_response=completion_response)
         calculated_cost = cost_val if cost_val is not None else 0.0
+        # LiteLLM may silently return 0.0 (no exception) for models missing from
+        # its bundled pricing DB. Fall back to CSV rates when tokens were
+        # exchanged but cost came back zero.
+        if calculated_cost == 0.0 and (input_tokens or output_tokens):
+            model_name = kwargs.get("model")
+            rates = _MODEL_RATE_MAP.get(str(model_name)) if model_name else None
+            if rates is not None:
+                in_rate, out_rate = rates
+                calculated_cost = (
+                    float(input_tokens or 0) * in_rate
+                    + float(output_tokens or 0) * out_rate
+                ) / 1_000_000.0
     except Exception as e1:
         # Attempt 2: Compute via tokens and model mapping. If LiteLLM mapping is
         # missing or API differs, fall back to CSV rates in _MODEL_RATE_MAP.
@@ -872,6 +1069,32 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
         }
     except Exception:
         _MODEL_RATE_MAP = {}
+    _register_csv_models_with_litellm()
+
+
+def _register_csv_models_with_litellm() -> None:
+    """Register CSV-defined models with LiteLLM so completion_cost works for
+    models LiteLLM doesn't ship pricing for (e.g., new Fireworks aliases). CSV
+    rates are per million tokens; LiteLLM expects per-token."""
+    if not _MODEL_RATE_MAP:
+        return
+    try:
+        existing = getattr(litellm, "model_cost", {}) or {}
+        registrations: Dict[str, Dict[str, Any]] = {}
+        for model_name, (in_rate, out_rate) in _MODEL_RATE_MAP.items():
+            if not model_name or model_name in existing:
+                continue
+            provider = model_name.split("/", 1)[0] if "/" in model_name else "openai"
+            registrations[model_name] = {
+                "input_cost_per_token": in_rate / 1_000_000.0,
+                "output_cost_per_token": out_rate / 1_000_000.0,
+                "litellm_provider": provider,
+                "mode": "chat",
+            }
+        if registrations:
+            litellm.register_model(registrations)
+    except Exception as exc:
+        logger.debug(f"Skipped registering CSV models with LiteLLM: {exc}")
 
 # --- LLM Attribution Logging ---
 
@@ -3280,7 +3503,7 @@ def llm_invoke(
                         final_result = None
                         if output_pydantic and result_text:
                             try:
-                                final_result = output_pydantic.model_validate_json(result_text)
+                                final_result = _validate_pydantic_with_unwrap(result_text, output_pydantic)
                             except Exception as e:
                                 # With structured output, parsing should succeed
                                 # But if it fails, try JSON repair as fallback
@@ -3309,7 +3532,7 @@ def llm_invoke(
                                 parse_succeeded = False
                                 for cand in candidates:
                                     try:
-                                        final_result = output_pydantic.model_validate_json(cand)
+                                        final_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
                                         parse_succeeded = True
                                         logger.info(f"[SUCCESS] JSON repair succeeded for Responses output")
                                         break
@@ -3669,13 +3892,16 @@ def llm_invoke(
                                 # Attempt 2: Check if raw_result is dict-like and validate
                                 elif isinstance(raw_result, dict):
                                     if output_pydantic:
-                                        parsed_result = output_pydantic.model_validate(raw_result)
+                                        parsed_result = _validate_pydantic_with_unwrap(raw_result, output_pydantic)
                                     else:
-                                        # Validate against JSON schema
+                                        # Validate against JSON schema (with envelope unwrap for Vertex Anthropic).
+                                        # The helper returns the validated payload — either ``raw_result``
+                                        # itself or the inner dict when the ``{"parameter": {...}}`` envelope
+                                        # was peeled off. Serializing ``raw_result`` directly would leak the
+                                        # wrapper into the caller's response.
                                         try:
-                                            import jsonschema
-                                            jsonschema.validate(instance=raw_result, schema=output_schema)
-                                            parsed_result = json.dumps(raw_result) # Return as JSON string for consistency
+                                            validated = _validate_jsonschema_with_unwrap(raw_result, output_schema)
+                                            parsed_result = json.dumps(validated)  # Return as JSON string for consistency
                                         except ImportError:
                                             logger.warning("jsonschema not installed, skipping validation")
                                             parsed_result = json.dumps(raw_result)
@@ -3706,16 +3932,20 @@ def llm_invoke(
                                                     logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
                                                 
                                                 if output_pydantic:
-                                                    parsed_result = output_pydantic.model_validate_json(cand)
+                                                    parsed_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
                                                 else:
-                                                    # Parse JSON and validate against schema
+                                                    # Parse JSON and validate against schema (with envelope unwrap).
+                                                    # Use the validated payload returned by the helper: when the
+                                                    # ``{"parameter": {...}}`` envelope was peeled, ``cand`` still
+                                                    # carries the wrapper, so we must re-serialize the unwrapped
+                                                    # form. When no unwrap was needed, keep ``cand`` byte-for-byte
+                                                    # to preserve the original whitespace/key order.
                                                     loaded = json.loads(cand)
                                                     try:
-                                                        import jsonschema
-                                                        jsonschema.validate(instance=loaded, schema=output_schema)
+                                                        validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                        parsed_result = cand if validated is loaded else json.dumps(validated)
                                                     except ImportError:
-                                                        pass # Skip validation if lib missing
-                                                    parsed_result = cand # Return string if valid
+                                                        parsed_result = cand # Skip validation if lib missing
 
                                                 json_string_to_parse = cand
                                                 parse_err = None
@@ -3757,15 +3987,16 @@ def llm_invoke(
                                             json_string_to_parse = cleaned_result_str
 
                                             if output_pydantic:
-                                                parsed_result = output_pydantic.model_validate_json(json_string_to_parse)
+                                                parsed_result = _validate_pydantic_with_unwrap(json_string_to_parse, output_pydantic)
                                             else:
+                                                # Use the validated payload from the helper so the unwrapped
+                                                # form is what callers see — see helper docstring.
                                                 loaded = json.loads(json_string_to_parse)
                                                 try:
-                                                    import jsonschema
-                                                    jsonschema.validate(instance=loaded, schema=output_schema)
+                                                    validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                    parsed_result = json_string_to_parse if validated is loaded else json.dumps(validated)
                                                 except ImportError:
-                                                    pass
-                                                parsed_result = json_string_to_parse
+                                                    parsed_result = json_string_to_parse
                                         elif cleaned_result_str.startswith('{') or cleaned_result_str.startswith('['):
                                             # Attempt to repair truncated JSON (e.g., missing closing braces)
                                             # This can happen when Gemini generates excessive trailing content
@@ -3811,15 +4042,17 @@ def llm_invoke(
                                                 for attempt in repair_attempts:
                                                     try:
                                                         if output_pydantic:
-                                                            parsed_result = output_pydantic.model_validate_json(attempt)
+                                                            parsed_result = _validate_pydantic_with_unwrap(attempt, output_pydantic)
                                                         else:
+                                                            # Use the validated payload from the helper — see
+                                                            # helper docstring on why ``attempt`` cannot be used
+                                                            # directly when an unwrap occurred.
                                                             loaded = json.loads(attempt)
                                                             try:
-                                                                import jsonschema
-                                                                jsonschema.validate(instance=loaded, schema=output_schema)
+                                                                validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                                parsed_result = attempt if validated is loaded else json.dumps(validated)
                                                             except ImportError:
-                                                                pass
-                                                            parsed_result = attempt
+                                                                parsed_result = attempt
 
                                                         if verbose:
                                                             logger.info(f"[INFO] Successfully repaired truncated JSON response")
@@ -3910,10 +4143,8 @@ def llm_invoke(
                                             if output_pydantic:
                                                 if isinstance(retry_raw_result, output_pydantic):
                                                     retry_parsed = retry_raw_result
-                                                elif isinstance(retry_raw_result, dict):
-                                                    retry_parsed = output_pydantic.model_validate(retry_raw_result)
-                                                elif isinstance(retry_raw_result, str):
-                                                    retry_parsed = output_pydantic.model_validate_json(retry_raw_result)
+                                                elif isinstance(retry_raw_result, (dict, str)):
+                                                    retry_parsed = _validate_pydantic_with_unwrap(retry_raw_result, output_pydantic)
                                             elif output_schema and isinstance(retry_raw_result, str):
                                                 retry_parsed = retry_raw_result  # Keep as string for schema validation
 

@@ -97,3 +97,41 @@ def test_sync_deletions_remove_stale_gitlinks_under_directory_patterns(tmp_path)
     assert (dest / "utils/mcp/prompts/generate_prompt.prompt").is_file()
     assert not (dest / "examples/hello/old.txt").exists()
     assert "examples/hello/repo_root" not in _git(dest, "ls-files", "-s").stdout
+
+
+def test_sync_deletions_prune_generated_destination_dirs(tmp_path):
+    module = _load_module()
+    source = tmp_path / "source"
+    dest = tmp_path / "dest"
+
+    (source / "examples/hello/src").mkdir(parents=True)
+    (source / "examples/hello/src/hello.py").write_text("print('hello')\n")
+
+    stale_file = dest / "examples/hello/old.txt"
+    stale_file.parent.mkdir(parents=True)
+    stale_file.write_text("stale\n")
+
+    generated_file = (
+        dest
+        / "examples/hello/repo_root/staging/case_1/node_modules/pkg/keep.txt"
+    )
+    generated_file.parent.mkdir(parents=True)
+    generated_file.write_text("generated junk\n")
+
+    copied, deleted = module.copy_from_sync_config(
+        {
+            "shared": ["examples/"],
+            "exclude": [],
+        },
+        sections=["shared"],
+        exclude_section="exclude",
+        dest=str(dest),
+        project_root=str(source),
+        sync_deletions=True,
+    )
+
+    assert copied == 1
+    assert deleted == 1
+    assert (dest / "examples/hello/src/hello.py").is_file()
+    assert not stale_file.exists()
+    assert generated_file.is_file()

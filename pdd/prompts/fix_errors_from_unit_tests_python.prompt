@@ -27,7 +27,7 @@
 
 % Here are examples of how to use internal modules:
     <internal_modules>
-        % Here is an example how to preprocess the prompt from a file: <preprocess_example><include>context/preprocess_example.py</include></preprocess_example>
+        % Here is an example how to preprocess the prompt from a file: <preprocess_example><include select="def:preprocess">pdd/preprocess.py</include></preprocess_example>
 
         For loading prompt templates:
         <load_prompt_template_example>
@@ -36,13 +36,21 @@
 
         For running prompts with llm_invoke:
         <llm_invoke_example>
-            <include>context/llm_invoke_example.py</include>
+            <include select="def:llm_invoke">pdd/llm_invoke.py</include>
         </llm_invoke_example>
 
         For using edit_file to make changes:
         <edit_file_example>
-            <include>context/edit_file_example.py</include>
+            <include select="def:edit_file">pdd/edit_file.py</include>
         </edit_file_example>
+
+        <utils.fix_errors>
+            <include select="def:fix_errors_from_unit_tests">context/change/10/initial_fix_errors_from_unit_tests.py</include>
+        </utils.fix_errors>
+
+        <utils.fix_error_loop>
+            <include select="def:extract_test_results,def:fix_error_loop">context/change/16/fix_error_loop.py</include>
+        </utils.fix_error_loop>
     </internal_modules>
 
 % This program will do the following:

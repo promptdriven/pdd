@@ -8,7 +8,7 @@ import json # Added for Pydantic parsing tests
 import stat
 from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from collections import namedtuple
 from pdd.llm_invoke import (
     llm_invoke,
@@ -2434,6 +2434,456 @@ def test_validate_with_pydantic_invalid_type():
     """Test that invalid types raise ValueError."""
     with pytest.raises(ValueError, match="Cannot validate result type"):
         _validate_with_pydantic(12345, CloudSampleModel)
+
+
+# --- Issue #1364: jsonschema (output_schema) envelope unwrap ---
+# The Vertex Anthropic 'parameter' envelope reaches the raw output_schema /
+# jsonschema.validate path too — not just output_pydantic. These tests cover
+# _validate_jsonschema_with_unwrap and assert the same direct→unwrap→original-
+# error contract as _validate_pydantic_with_unwrap.
+
+def test_validate_jsonschema_with_unwrap_unwraps_envelope():
+    """Wrapped dict from Vertex Anthropic should validate AND return the unwrapped inner dict.
+
+    Regression for PR #1365 review pass 3: callers serialize the helper's
+    return value, so the helper MUST return the unwrapped payload — returning
+    nothing leaks the ``{"parameter": {...}}`` wrapper into downstream
+    consumers of ``llm_invoke(output_schema=...)``.
+    """
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "value": {"type": "integer"},
+        },
+        "required": ["name", "value"],
+        "additionalProperties": False,
+    }
+    wrapped = {"parameter": {"name": "test", "value": 42}}
+
+    validated = _validate_jsonschema_with_unwrap(wrapped, schema)
+
+    # The returned object is the inner unwrapped dict, NOT the wrapper.
+    assert validated == {"name": "test", "value": 42}
+    assert "parameter" not in validated
+
+
+def test_validate_jsonschema_with_unwrap_passes_legitimate_payload():
+    """Bare valid payload must validate without triggering the unwrap branch.
+
+    Returns the input unchanged (same identity), so callers can keep using
+    the original byte representation when no unwrap was needed.
+    """
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "value": {"type": "integer"}},
+        "required": ["name", "value"],
+    }
+    bare = {"name": "test", "value": 42}
+    validated = _validate_jsonschema_with_unwrap(bare, schema)
+    # Identity preserved when no unwrap fired — lets callers detect "untouched"
+    # and skip re-serialization to keep original whitespace/key order.
+    assert validated is bare
+
+
+def test_validate_jsonschema_with_unwrap_preserves_original_error():
+    """If neither direct nor unwrap validates, the ORIGINAL error is raised."""
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "value": {"type": "integer"},
+        },
+        "required": ["name", "value"],
+        "additionalProperties": False,
+    }
+    # Inner payload is missing 'value' — unwrap succeeds but inner is invalid.
+    wrapped_bad = {"parameter": {"name": "test"}}
+    with pytest.raises(jsonschema.ValidationError) as exc_info:
+        _validate_jsonschema_with_unwrap(wrapped_bad, schema)
+
+    # Original error reflects the OUTER (wrapped) instance, not the unwrap-
+    # inner one — that's the contract: stay anchored to the real input shape
+    # so logs/diagnostics don't blame the synthetic 'parameter' wrapper.
+    err_text = str(exc_info.value)
+    # Either the additionalProperties violation on outer OR the missing key
+    # on inner is acceptable as long as we re-raise the FIRST (direct) error.
+    assert "parameter" in err_text or "Additional properties" in err_text
+
+
+def test_validate_jsonschema_with_unwrap_passthrough_on_non_dict():
+    """Non-dict instances must propagate jsonschema's normal error unchanged."""
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {"type": "object", "required": ["x"]}
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap("not-a-dict", schema)
+
+
+def test_llm_invoke_output_schema_unwraps_envelope_in_returned_result(
+    mock_load_models, mock_set_llm_cache
+):
+    """End-to-end: llm_invoke(output_schema=...) must return the UNWRAPPED payload.
+
+    Regression for PR #1365 review pass 3. Before the fix, the helper validated
+    but returned nothing, so the four jsonschema parse sites kept serializing
+    the original wrapped object — meaning users of ``output_schema`` got
+    back ``{"parameter": {"name": "test", "value": 42}}`` instead of
+    ``{"name": "test", "value": 42}``. This test reproduces that scenario via
+    a mocked litellm response and asserts the wrapper does NOT appear in the
+    final ``response['result']`` string.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "value": {"type": "integer"},
+        },
+        "required": ["name", "value"],
+        "additionalProperties": False,
+    }
+    wrapped_json = '{"parameter": {"name": "test", "value": 42}}'
+
+    with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key_value"}):
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_completion.return_value = create_mock_litellm_response(
+                wrapped_json, model_name="gemini-pro"
+            )
+            with patch(
+                "pdd.llm_invoke._LAST_CALLBACK_DATA",
+                {"cost": 0.0, "input_tokens": 10, "output_tokens": 10},
+            ):
+                response = llm_invoke(
+                    prompt="Give me an object.",
+                    input_json={"q": "Give me an object."},
+                    strength=0.5,
+                    temperature=0.0,
+                    verbose=False,
+                    output_schema=schema,
+                )
+
+    result_str = response["result"]
+    # The returned result MUST be the unwrapped form. Loading it must give
+    # exactly {"name": "test", "value": 42} — no synthetic 'parameter' key.
+    parsed = json.loads(result_str)
+    assert parsed == {"name": "test", "value": 42}
+    assert "parameter" not in parsed
+
+
+# --- Issue #1364 (PR #1365 review): gating the envelope unwrap ---
+# Greg's review on PR #1365: the unwrap must NOT fire when the caller's
+# target schema declares `parameter` as a top-level field, otherwise a
+# legitimate payload like {"parameter": {"parameter": "inner"}} would be
+# silently reshaped to {"parameter": "inner"}. The gating check is
+# `"parameter" not in pydantic_class.model_fields` (Pydantic) and
+# `"parameter" not in schema["properties"]` (raw JSON Schema).
+
+def test_validate_pydantic_with_unwrap_gated_when_schema_has_parameter_field():
+    """Pydantic schema with top-level `parameter` field must skip the unwrap branch.
+
+    Wrapped-shadow scenario: payload `{"parameter": {"parameter": "x"}}`
+    fails direct validation (the inner dict is not a string). The unwrap
+    branch would peel the outer wrapper and silently accept it as
+    `{"parameter": "x"}` — wrong. The gate must keep the original error.
+    """
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class ParamString(BaseModel):
+        parameter: str
+
+    bad = {"parameter": {"parameter": "x"}}
+    with pytest.raises(ValidationError):
+        _validate_pydantic_with_unwrap(bad, ParamString)
+
+
+def test_validate_pydantic_with_unwrap_legitimate_parameter_payload_passes():
+    """Pydantic schema with `parameter` field validates legitimate payloads directly.
+
+    Sanity check that gating doesn't break the normal happy path: a real
+    payload `{"parameter": "x"}` for a schema that declares `parameter`
+    must validate as-is.
+    """
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class ParamString(BaseModel):
+        parameter: str
+
+    obj = _validate_pydantic_with_unwrap({"parameter": "real-value"}, ParamString)
+    assert obj.parameter == "real-value"
+
+
+def test_validate_pydantic_with_unwrap_gated_for_json_string_input():
+    """Same gate must apply to JSON-string payloads, not just dicts."""
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class ParamString(BaseModel):
+        parameter: str
+
+    bad_json = '{"parameter": {"parameter": "x"}}'
+    with pytest.raises(ValidationError):
+        _validate_pydantic_with_unwrap(bad_json, ParamString)
+
+
+def test_validate_jsonschema_with_unwrap_gated_when_schema_has_parameter_property():
+    """Raw output_schema with `properties.parameter` must skip the unwrap branch.
+
+    Mirror of the Pydantic gating test: an output_schema declaring
+    `parameter` as a top-level property must NOT have the unwrap branch
+    silently reshape `{"parameter": {"parameter": "x"}}` to
+    `{"parameter": "x"}` after a direct-validation failure.
+    """
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "type": "object",
+        "properties": {"parameter": {"type": "string"}},
+        "required": ["parameter"],
+        "additionalProperties": False,
+    }
+    bad = {"parameter": {"parameter": "x"}}
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(bad, schema)
+
+
+def test_validate_jsonschema_with_unwrap_legitimate_parameter_property_passes():
+    """Schema with `properties.parameter` validates legitimate string payload directly."""
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "type": "object",
+        "properties": {"parameter": {"type": "string"}},
+        "required": ["parameter"],
+        "additionalProperties": False,
+    }
+    bare = {"parameter": "real-value"}
+    validated = _validate_jsonschema_with_unwrap(bare, schema)
+    assert validated is bare
+
+
+# --- Issue #1364 (PR #1365 round 2): aliased Pydantic + composed/flexible JSON Schema ---
+# Greg's second review: the round-1 gate missed two false-positive families.
+# (a) Pydantic field aliases — e.g. `Field(alias="parameter")` — let "parameter"
+#     reach the model under a different attribute name, so checking `model_fields`
+#     alone is not enough. The gate must also walk `.alias` and `.validation_alias`
+#     (string, AliasChoices, AliasPath-first-segment).
+# (b) JSON Schema composition (`allOf`/`anyOf`/`oneOf`/`$ref`) and flexible
+#     schemas (no top-level `properties` map) can still silently reshape after
+#     direct-validation failure. The gate must require an explicit object schema
+#     whose top-level `properties` map exists and does not declare `parameter`.
+
+
+def test_validate_pydantic_with_unwrap_gated_when_field_uses_alias():
+    """Pydantic schema with `Field(alias='parameter')` must skip the unwrap branch.
+
+    Round-2 regression: round-1 only checked `model_fields` (which contains the
+    Python attribute name), so a model declaring `param: str = Field(alias="parameter")`
+    was still silently reshaped. The gate now also inspects `.alias`.
+    """
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class AliasParam(BaseModel):
+        param: str = Field(alias="parameter")
+
+    bad = {"parameter": {"parameter": "inner"}}
+    with pytest.raises(ValidationError):
+        _validate_pydantic_with_unwrap(bad, AliasParam)
+
+
+def test_validate_pydantic_with_unwrap_gated_when_field_uses_validation_alias_str():
+    """`Field(validation_alias="parameter")` (string form) must trigger the gate."""
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class VAParam(BaseModel):
+        param: str = Field(validation_alias="parameter")
+
+    bad = {"parameter": {"parameter": "inner"}}
+    with pytest.raises(ValidationError):
+        _validate_pydantic_with_unwrap(bad, VAParam)
+
+
+def test_validate_pydantic_with_unwrap_gated_when_field_uses_alias_choices():
+    """`AliasChoices(..., 'parameter', ...)` must trigger the gate."""
+    from pydantic import AliasChoices
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class ACParam(BaseModel):
+        param: str = Field(validation_alias=AliasChoices("p", "parameter"))
+
+    bad = {"parameter": {"parameter": "inner"}}
+    with pytest.raises(ValidationError):
+        _validate_pydantic_with_unwrap(bad, ACParam)
+
+
+def test_validate_pydantic_with_unwrap_gated_when_field_uses_alias_path_first_parameter():
+    """`AliasPath('parameter', ...)` (first segment is `parameter`) must trigger the gate."""
+    from pydantic import AliasPath
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class APParam(BaseModel):
+        param: str = Field(validation_alias=AliasPath("parameter", 0))
+
+    bad = {"parameter": {"parameter": "inner"}}
+    with pytest.raises(ValidationError):
+        _validate_pydantic_with_unwrap(bad, APParam)
+
+
+def test_validate_pydantic_with_unwrap_alias_path_unrelated_first_segment_unwraps():
+    """`AliasPath('data', 'parameter', ...)` does NOT bind the top-level key, so
+    the gate stays open and the canary envelope still unwraps correctly."""
+    from pydantic import AliasPath
+    from pdd.llm_invoke import _validate_pydantic_with_unwrap
+
+    class NestedParam(BaseModel):
+        deep: str = Field(validation_alias=AliasPath("data", "parameter"))
+
+    # Unwrapped form satisfies the AliasPath; envelope must be peeled.
+    wrapped = {"parameter": {"data": {"parameter": "found"}}}
+    obj = _validate_pydantic_with_unwrap(wrapped, NestedParam)
+    assert obj.deep == "found"
+
+
+def test_validate_jsonschema_with_unwrap_gated_for_allof():
+    """Composed `allOf` schema with nested `parameter` must skip the unwrap.
+
+    Round-2 regression: round-1 only checked the top-level `properties` map,
+    so an `allOf`-composed schema declaring `parameter` in a sub-schema was
+    silently reshaped after direct-validation failure.
+    """
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "allOf": [
+            {
+                "type": "object",
+                "properties": {"parameter": {"type": "string"}},
+                "required": ["parameter"],
+                "additionalProperties": False,
+            }
+        ]
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(
+            {"parameter": {"parameter": "inner"}}, schema
+        )
+
+
+def test_validate_jsonschema_with_unwrap_gated_for_anyof():
+    """Composed `anyOf` schema must skip the unwrap branch.
+
+    Branches restrict ``additionalProperties: False`` so the wrapped payload
+    actually fails direct validation — without the gate, the unwrap retry
+    would silently accept the inner ``{"parameter": "inner"}`` against
+    branch 1 and reshape the user's input.
+    """
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "anyOf": [
+            {
+                "type": "object",
+                "properties": {"parameter": {"type": "string"}},
+                "required": ["parameter"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}},
+                "required": ["x"],
+                "additionalProperties": False,
+            },
+        ]
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(
+            {"parameter": {"parameter": "inner"}}, schema
+        )
+
+
+def test_validate_jsonschema_with_unwrap_gated_for_oneof():
+    """Composed `oneOf` schema must skip the unwrap branch."""
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "oneOf": [
+            {"type": "object", "properties": {"parameter": {"type": "string"}}},
+        ]
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(
+            {"parameter": {"parameter": "inner"}}, schema
+        )
+
+
+def test_validate_jsonschema_with_unwrap_gated_for_ref():
+    """Top-level `$ref` schema must skip the unwrap branch."""
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "$ref": "#/$defs/Inner",
+        "$defs": {
+            "Inner": {
+                "type": "object",
+                "properties": {"parameter": {"type": "string"}},
+                "required": ["parameter"],
+                "additionalProperties": False,
+            }
+        },
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(
+            {"parameter": {"parameter": "inner"}}, schema
+        )
+
+
+def test_validate_jsonschema_with_unwrap_gated_for_additionalproperties_without_properties():
+    """Flexible schema (no explicit `properties`) must skip the unwrap branch.
+
+    Round-2 regression: a schema like
+    ``{"type": "object", "additionalProperties": {"type": "string"}}``
+    has no top-level `properties` map, but the round-1 gate fell through to
+    unwrap and silently accepted ``{"parameter": "inner"}`` from a wrapped
+    payload that originally failed direct validation.
+    """
+    import jsonschema
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {"type": "object", "additionalProperties": {"type": "string"}}
+    with pytest.raises(jsonschema.ValidationError):
+        _validate_jsonschema_with_unwrap(
+            {"parameter": {"parameter": "inner"}}, schema
+        )
+
+
+def test_validate_jsonschema_with_unwrap_explicit_object_schema_still_unwraps():
+    """Explicit object schema without `parameter` keeps unwrapping the canary.
+
+    Sanity check for the gate-positive predicate: schemas matching the safe
+    shape (top-level `properties` dict, no composition, `parameter` absent)
+    keep peeling the Vertex envelope.
+    """
+    from pdd.llm_invoke import _validate_jsonschema_with_unwrap
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "value": {"type": "integer"}},
+        "required": ["name", "value"],
+    }
+    wrapped = {"parameter": {"name": "x", "value": 1}}
+    out = _validate_jsonschema_with_unwrap(wrapped, schema)
+    assert out == {"name": "x", "value": 1}
 
 
 # --- Tests for cloud execution path ---
@@ -5924,3 +6374,536 @@ class TestIssue796TypeScriptPythonValidation:
             "_has_invalid_python_code() should return True for a CodeFix containing "
             "TypeScript code, because TypeScript looks like Python but fails ast.parse()"
         )
+
+
+# =============================================================================
+# Issue #1364: Vertex Anthropic 'parameter' envelope unwrap
+# Vertex AI's Anthropic Claude models return structured output wrapped in a
+# {"parameter": {<schema fields>}} tool-call envelope. PDD's parser at
+# pdd/llm_invoke.py:_validate_with_pydantic and the parallel parse paths in
+# the litellm/Responses code path call model_validate(...) directly on the
+# wrapped dict, so validation fails with `Field required` for the schema's
+# first required field. PDD then walks the entire model fallback chain,
+# hitting the identical wrap on every model.
+#
+# These tests verify that an unwrap of the {"parameter": {...}} envelope is
+# applied at every model_validate*/model_validate_json call site identified
+# in Step 6, and that the unwrap is a no-op for legitimate inputs.
+# =============================================================================
+
+class _Issue1364Helpers:
+    """Helpers and shared data for Issue #1364 envelope-unwrap tests."""
+
+    # Captured wrapped AutoIncludeResult payload (shape from issue's failure trace)
+    WRAPPED_AUTO_INCLUDE = {
+        "parameter": {
+            "reasoning": "The candidate file declares the public API.",
+            "new_includes": [],
+            "existing_include_annotations": [],
+        }
+    }
+
+    # Wrapped CodeFix payload with all schema fields populated
+    WRAPPED_CODEFIX = {
+        "parameter": {
+            "update_program": True,
+            "update_code": True,
+            "fixed_program": "def foo(): pass",
+            "fixed_code": "def bar(): pass",
+        }
+    }
+
+
+def _make_simple_model():
+    """A small pydantic schema with the same shape as AutoIncludeResult."""
+    from pydantic import BaseModel as _BM, Field as _F
+    from typing import List as _L
+
+    class SimpleEnvelopeTarget(_BM):
+        reasoning: str
+        new_includes: _L[str] = _F(default_factory=list)
+
+    return SimpleEnvelopeTarget
+
+
+# -----------------------------------------------------------------------------
+# Unit tests directly exercising _validate_with_pydantic (and the parsing
+# helper) with shapes that match each remote model_validate* call site
+# identified in Step 6.
+# -----------------------------------------------------------------------------
+
+def test_issue1364_unwrap_dict_envelope_succeeds():
+    """Site pdd/llm_invoke.py:3672 — litellm dict raw_result.
+
+    `_validate_with_pydantic` must accept a dict shaped like
+    `{"parameter": {<schema fields>}}` and return a validated instance.
+    On current buggy code, `model_validate` raises `Field required`.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    payload = _Issue1364Helpers.WRAPPED_AUTO_INCLUDE
+
+    obj = _validate_with_pydantic(payload, AutoIncludeResult)
+
+    assert isinstance(obj, AutoIncludeResult)
+    assert obj.reasoning == "The candidate file declares the public API."
+    assert obj.new_includes == []
+    assert obj.existing_include_annotations == []
+
+
+def test_issue1364_unwrap_json_string_envelope_succeeds():
+    """Sites 3283, 3312, 3709, 3814, 3916 — JSON-string parse paths.
+
+    `_validate_with_pydantic` must accept a JSON *string* containing a
+    `{"parameter": {...}}` envelope and return a validated instance.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    payload = json.dumps(_Issue1364Helpers.WRAPPED_AUTO_INCLUDE)
+
+    obj = _validate_with_pydantic(payload, AutoIncludeResult)
+
+    assert isinstance(obj, AutoIncludeResult)
+    assert obj.reasoning == "The candidate file declares the public API."
+
+
+def test_issue1364_unwrap_is_noop_for_already_valid_dict():
+    """Unwrap must NOT fire for inputs that already validate.
+
+    A dict that already matches the schema must be returned as a normal
+    validated instance — same behavior as today.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    direct = {"reasoning": "ok", "new_includes": [], "existing_include_annotations": []}
+
+    obj = _validate_with_pydantic(direct, AutoIncludeResult)
+
+    assert isinstance(obj, AutoIncludeResult)
+    assert obj.reasoning == "ok"
+
+
+# Scope addition: covers expansion item "Add unit test that unwrap helper is no-op for multi-key dicts and dicts where parameter value is not a dict"
+def test_issue1364_unwrap_is_noop_for_multikey_dict_with_parameter_field():
+    """Unwrap must only fire when `parameter` is the SOLE top-level key.
+
+    A multi-key dict that happens to include a `parameter` field must not
+    be silently unwrapped — that would mask real schema mismatches. Behavior
+    must match today: a ValidationError is raised.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    bad = {
+        "parameter": {"reasoning": "x"},
+        "extra_field": "should-prevent-unwrap",
+    }
+
+    with pytest.raises(ValidationError):
+        _validate_with_pydantic(bad, AutoIncludeResult)
+
+
+# Scope addition: covers expansion item "...dicts where parameter value is not a dict"
+def test_issue1364_unwrap_is_noop_when_parameter_value_is_not_dict():
+    """Unwrap must only fire when the `parameter` value is itself a dict.
+
+    Some third-party schemas legitimately have a single top-level
+    `parameter` key whose value is a primitive — unwrap must not apply.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    bad = {"parameter": "not a dict"}
+
+    with pytest.raises(ValidationError):
+        _validate_with_pydantic(bad, AutoIncludeResult)
+
+
+# Scope addition: covers expansion item "Add assertion that on final failure the original ValidationError (not the unwrap attempt's error) is raised"
+def test_issue1364_original_error_preserved_when_unwrapped_also_fails():
+    """On second failure, the ORIGINAL error must be raised — not the unwrapped one.
+
+    Existing diagnostics depend on the exception's input_value pointing at the
+    full wrapped dict (so the operator can see the envelope shape in logs).
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    # Inner dict is also invalid (missing required `reasoning`).
+    bad = {"parameter": {"new_includes": []}}
+
+    with pytest.raises(ValidationError) as exc_info:
+        _validate_with_pydantic(bad, AutoIncludeResult)
+
+    # The reported error must reference the wrapped dict (the original input),
+    # not the inner dict — so production logs continue to show the envelope.
+    err_text = str(exc_info.value)
+    assert "parameter" in err_text, (
+        "Original ValidationError should reference the wrapped input "
+        "(its input_value should contain the 'parameter' key) — "
+        f"got:\n{err_text}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Integration tests via llm_invoke that exercise specific remote call sites.
+# -----------------------------------------------------------------------------
+
+def test_issue1364_litellm_dict_path_unwraps_envelope(mock_load_models, mock_set_llm_cache):
+    """Site pdd/llm_invoke.py:3672 — litellm returns a dict raw_result.
+
+    When LiteLLM has already parsed the structured output into a dict and
+    that dict is the Vertex Anthropic envelope, the unwrap must run and
+    no SchemaValidationError-driven fallback must occur.
+    """
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            wrapped_dict = _Issue1364Helpers.WRAPPED_CODEFIX
+            mock_response = create_mock_litellm_response(
+                wrapped_dict, model_name='gpt-5-nano'
+            )
+            mock_completion.return_value = mock_response
+
+            with patch(
+                'pdd.llm_invoke._LAST_CALLBACK_DATA',
+                {"cost": 0.0, "input_tokens": 10, "output_tokens": 10},
+            ):
+                response = llm_invoke(
+                    prompt="Fix the code.",
+                    input_json={"code": "x"},
+                    strength=0.5,
+                    temperature=0.0,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=False,
+                )
+
+            # No fallback should have happened — the very first response was
+            # parseable once we unwrap the envelope.
+            assert mock_completion.call_count == 1, (
+                f"Envelope should unwrap on the first response without "
+                f"triggering fallback; got {mock_completion.call_count} calls."
+            )
+            assert isinstance(response['result'], CodeFixLikeModel), (
+                f"Expected CodeFixLikeModel, got {type(response['result'])}: "
+                f"{response['result']!r}"
+            )
+            assert response['result'].fixed_code == "def bar(): pass"
+
+
+def test_issue1364_litellm_string_path_unwraps_envelope(mock_load_models, mock_set_llm_cache):
+    """Site pdd/llm_invoke.py:3709 — litellm balanced/fenced JSON candidate parse.
+
+    This is the EXACT site of the failure-trace log line in the issue:
+    > [DEBUG] Attempting to parse candidate JSON block: {"parameter": {...}}
+    Reproduces the wrapped JSON-string path used by Vertex Anthropic and asserts
+    the parse succeeds without falling back through the model chain.
+    """
+    with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            wrapped_str = json.dumps(_Issue1364Helpers.WRAPPED_CODEFIX)
+            mock_response = create_mock_litellm_response(
+                wrapped_str, model_name='gemini-pro'
+            )
+            mock_completion.return_value = mock_response
+
+            with patch(
+                'pdd.llm_invoke._LAST_CALLBACK_DATA',
+                {"cost": 0.0, "input_tokens": 10, "output_tokens": 10},
+            ):
+                response = llm_invoke(
+                    prompt="Fix the code.",
+                    input_json={"code": "x"},
+                    strength=0.3,
+                    temperature=0.0,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=False,
+                )
+
+            assert mock_completion.call_count == 1, (
+                f"Envelope wrapper string should parse on first try; "
+                f"got {mock_completion.call_count} calls."
+            )
+            assert isinstance(response['result'], CodeFixLikeModel)
+            assert response['result'].fixed_code == "def bar(): pass"
+
+
+def test_issue1364_litellm_fence_cleaning_path_unwraps_envelope(mock_load_models, mock_set_llm_cache):
+    """Site pdd/llm_invoke.py:~3760 — fence-cleaning fallback path.
+
+    Wrapped envelope content delivered with markdown fences must still be
+    parsed (this exercises both the candidate loop at 3709 and the fence
+    cleaning fallback at 3760 — whichever the fix wires up).
+    """
+    with patch.dict(os.environ, {"GOOGLE_API_KEY": "fake_key"}):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            fenced = "```json\n" + json.dumps(_Issue1364Helpers.WRAPPED_CODEFIX) + "\n```"
+            mock_response = create_mock_litellm_response(
+                fenced, model_name='gemini-pro'
+            )
+            mock_completion.return_value = mock_response
+
+            with patch(
+                'pdd.llm_invoke._LAST_CALLBACK_DATA',
+                {"cost": 0.0, "input_tokens": 10, "output_tokens": 10},
+            ):
+                response = llm_invoke(
+                    prompt="Fix the code.",
+                    input_json={"code": "x"},
+                    strength=0.3,
+                    temperature=0.0,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=False,
+                )
+
+            assert isinstance(response['result'], CodeFixLikeModel), (
+                f"Fenced wrapped JSON failed to unwrap: {response['result']!r}"
+            )
+            assert response['result'].fixed_program == "def foo(): pass"
+
+
+# Scope addition: covers expansion item "Apply unwrap to pdd/llm_invoke.py:3814 (truncation-repair attempts)"
+def test_issue1364_truncation_repair_envelope_via_helper():
+    """Site pdd/llm_invoke.py:3814 — truncation-repair `model_validate_json(attempt)`.
+
+    After the truncation-repair branch repairs a truncated wrapped envelope,
+    the resulting JSON string is fed through the parsing helper. This unit
+    test directly verifies the helper handles the repaired-envelope shape
+    that site 3814 would produce.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    # Shape of a truncation-repair "attempt" string after closures are added:
+    repaired_wrapped = json.dumps({
+        "parameter": {
+            "reasoning": "truncated-then-repaired",
+            "new_includes": [],
+            "existing_include_annotations": [],
+        }
+    })
+
+    obj = _validate_with_pydantic(repaired_wrapped, AutoIncludeResult)
+
+    assert isinstance(obj, AutoIncludeResult)
+    assert obj.reasoning == "truncated-then-repaired"
+
+
+# Scope addition: covers expansion item "Apply unwrap to pdd/llm_invoke.py:3914 and 3916 (cache-bypass invalid-Python retry parse)"
+def test_issue1364_cache_bypass_retry_envelope_via_helper():
+    """Sites pdd/llm_invoke.py:3914 (dict) and 3916 (str) — cache-bypass retry parse.
+
+    Both shapes (dict and JSON string) flow through `_validate_with_pydantic`
+    (or its underlying unwrap helper). This unit test verifies both shapes
+    work after the fix — regardless of whether the production path lands a
+    dict-shaped or string-shaped retry response.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+
+    # Site 3914 (dict path).
+    obj_dict = _validate_with_pydantic(
+        _Issue1364Helpers.WRAPPED_CODEFIX, CodeFixLikeModel
+    )
+    assert isinstance(obj_dict, CodeFixLikeModel)
+    assert obj_dict.fixed_code == "def bar(): pass"
+
+    # Site 3916 (str path).
+    obj_str = _validate_with_pydantic(
+        json.dumps(_Issue1364Helpers.WRAPPED_CODEFIX), CodeFixLikeModel
+    )
+    assert isinstance(obj_str, CodeFixLikeModel)
+    assert obj_str.fixed_code == "def bar(): pass"
+
+
+# Scope addition: covers expansion items 3283 (Responses-API primary parse) and 3312 (Responses-API JSON-repair candidates)
+def test_issue1364_responses_api_envelope_via_helper():
+    """Sites pdd/llm_invoke.py:3283 and 3312 — Responses API parse paths.
+
+    Both Responses-API call sites pass a JSON string into
+    `output_pydantic.model_validate_json(...)`. After the fix, the unwrap
+    helper must let the Vertex Anthropic envelope shape parse successfully.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+
+    wrapped_json = json.dumps(_Issue1364Helpers.WRAPPED_CODEFIX)
+
+    obj = _validate_with_pydantic(wrapped_json, CodeFixLikeModel)
+
+    assert isinstance(obj, CodeFixLikeModel)
+    assert obj.update_program is True
+
+
+# -----------------------------------------------------------------------------
+# End-to-end fallback-chain regression: with the envelope, the chain must NOT walk.
+# -----------------------------------------------------------------------------
+
+def test_issue1364_fallback_chain_does_not_walk_when_envelope_received(
+    mock_load_models, mock_set_llm_cache
+):
+    """End-to-end: a single wrapped response should resolve in ONE LLM call.
+
+    Today, the wrap forces `_validate_with_pydantic` to fail, which raises
+    SchemaValidationError, which walks every model in the fallback chain
+    (4-8 minutes per sync, per the issue). After the fix, the very first
+    response parses correctly and no fallback is taken.
+    """
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key",
+        "ANTHROPIC_API_KEY": "fake_key",
+        "GOOGLE_API_KEY": "fake_key",
+    }
+    with patch.dict(os.environ, all_keys):
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            wrapped = _Issue1364Helpers.WRAPPED_CODEFIX
+            mock_response = create_mock_litellm_response(
+                wrapped, model_name='gpt-5-nano'
+            )
+            # Force every fallback target to ALSO return wrapped data.
+            mock_completion.side_effect = [mock_response] * 6
+
+            with patch(
+                'pdd.llm_invoke._LAST_CALLBACK_DATA',
+                {"cost": 0.0, "input_tokens": 10, "output_tokens": 10},
+            ):
+                response = llm_invoke(
+                    prompt="Fix the code.",
+                    input_json={"code": "x"},
+                    strength=0.5,
+                    temperature=0.0,
+                    output_pydantic=CodeFixLikeModel,
+                    verbose=False,
+                )
+
+            assert mock_completion.call_count == 1, (
+                "After the fix, one wrapped envelope should resolve immediately. "
+                f"Got {mock_completion.call_count} calls — fallback chain walked."
+            )
+            assert isinstance(response['result'], CodeFixLikeModel)
+
+
+# -----------------------------------------------------------------------------
+# Production-schema canary: AutoIncludeResult (canary from the issue) and
+# parametrization across all 20 affected production schemas.
+# -----------------------------------------------------------------------------
+
+def test_issue1364_autoincude_result_canary_unwraps_envelope():
+    """Issue's primary canary: a captured wrapped AutoIncludeResult payload.
+
+    Acceptance criterion from the issue:
+    > Regression test in tests/test_llm_invoke.py covers a captured wrapped
+    > AutoIncludeResult payload and asserts unwrap success.
+    """
+    from pdd.llm_invoke import _validate_with_pydantic
+    from pdd.auto_include import AutoIncludeResult
+
+    payload = _Issue1364Helpers.WRAPPED_AUTO_INCLUDE
+
+    obj = _validate_with_pydantic(payload, AutoIncludeResult)
+
+    assert isinstance(obj, AutoIncludeResult)
+    assert obj.reasoning == "The candidate file declares the public API."
+    # Both list fields default to [] so they should round-trip empty.
+    assert obj.new_includes == []
+    assert obj.existing_include_annotations == []
+
+
+def _build_minimum_required_payload(model_cls):
+    """Construct a minimal valid payload for any pydantic model.
+
+    Used by the parametrized 20-schema canary. Walks `model_fields` and
+    fabricates a value for each REQUIRED field based on its annotation.
+    Optional/default fields are skipped.
+    """
+    from typing import get_origin, get_args, Union
+
+    payload = {}
+    for name, field in model_cls.model_fields.items():
+        # Skip optional fields with defaults.
+        if not field.is_required():
+            continue
+        ann = field.annotation
+        origin = get_origin(ann)
+
+        # Handle Optional[X] / Union[X, None] by picking the first non-None arg.
+        if origin is Union:
+            non_none = [a for a in get_args(ann) if a is not type(None)]
+            if non_none:
+                ann = non_none[0]
+                origin = get_origin(ann)
+
+        if ann is str:
+            # Use a placeholder long enough to satisfy reasonable `min_length`
+            # constraints (e.g. PromptUpdate.modified_prompt has min_length=10).
+            payload[name] = "placeholder_string_value"
+        elif ann is int:
+            payload[name] = 0
+        elif ann is float:
+            payload[name] = 0.0
+        elif ann is bool:
+            payload[name] = False
+        elif origin in (list, tuple, set) or ann is list:
+            payload[name] = []
+        elif origin is dict or ann is dict:
+            payload[name] = {}
+        else:
+            # For nested BaseModel fields, recurse.
+            try:
+                from pydantic import BaseModel as _BM
+                if isinstance(ann, type) and issubclass(ann, _BM):
+                    payload[name] = _build_minimum_required_payload(ann)
+                    continue
+            except Exception:
+                pass
+            payload[name] = None
+    return payload
+
+
+# Parametrize across the 20 production schemas listed in the issue.
+@pytest.mark.parametrize("import_path,class_name", [
+    ("pdd.auto_include", "AutoIncludeResult"),
+    ("pdd.detect_change", "ChangesList"),
+    ("pdd.fix_code_module_errors", "CodeFix"),
+    ("pdd.incremental_code_generator", "CodePatchResult"),
+    ("pdd.conflicts_in_prompts", "ConflictResponse"),
+    ("pdd.incremental_code_generator", "DiffAnalysis"),
+    ("pdd.postprocess", "ExtractedCode"),
+    ("pdd.change", "ExtractedPrompt"),
+    ("pdd.summarize_directory", "FileSummary"),
+    ("pdd.fix_verification_errors", "FixerOutput"),
+    ("pdd.insert_includes", "InsertIncludesOutput"),
+    ("pdd.unfinished_prompt", "PromptAnalysis"),
+    ("pdd.trace", "PromptLineOutput"),
+    ("pdd.split", "PromptSplit"),
+    ("pdd.update_prompt", "PromptUpdate"),
+    ("pdd.continue_generation", "TrimResultsOutput"),
+    ("pdd.continue_generation", "TrimResultsStartOutput"),
+    ("pdd.fix_verification_errors", "VerificationOutput"),
+    ("pdd.xml_tagger", "XMLOutput"),
+    # JokeStructure is defined inline inside llm_invoke.py's __main__ example,
+    # so we exercise the equivalent shape via fix_errors_from_unit_tests.CodeFix.
+    ("pdd.fix_errors_from_unit_tests", "CodeFix"),
+])
+def test_issue1364_all_20_schemas_unwrap_envelope_parametrized(import_path, class_name):
+    """Every one of the 20 production schemas must accept the envelope.
+
+    The issue documented all 20 schemas as affected. This parametrized test
+    verifies the fix is genuinely scope-correct: a wrapped envelope built
+    from minimal-required values must validate for every one of them.
+    """
+    import importlib
+    from pdd.llm_invoke import _validate_with_pydantic
+
+    mod = importlib.import_module(import_path)
+    model_cls = getattr(mod, class_name)
+
+    inner = _build_minimum_required_payload(model_cls)
+    wrapped = {"parameter": inner}
+
+    obj = _validate_with_pydantic(wrapped, model_cls)
+
+    assert isinstance(obj, model_cls), (
+        f"Envelope unwrap failed for {import_path}.{class_name}; "
+        f"input was {wrapped!r}"
+    )

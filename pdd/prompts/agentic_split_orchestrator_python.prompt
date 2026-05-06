@@ -155,18 +155,18 @@ Use rich console output (unless `quiet`). Key markers:
 
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `set_agentic_progress`, `clear_agentic_progress`
-Import from `agentic_common_worktree`: `setup_worktree`, `check_target_file_unchanged`, `revert_out_of_scope_changes_with_dirs`, `extract_block_marker`, `save_state`, `load_state`
+Import from `agentic_common_worktree`: `setup_worktree`, `check_target_file_unchanged`, `revert_out_of_scope_changes_with_dirs`, `extract_block_marker`
 Import from `split_validation`: `validate_extraction`, `get_test_command`, `get_lint_commands`
 Import from `split`: `split` (the prompt-splitting primitive for step 6)
 Import from `architecture_sync`: `sync_all_prompts_to_architecture`
 Import from `pdd.preprocess`: `preprocess`
-<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:set_agentic_progress,def:clear_agentic_progress">context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.agentic_common_worktree><include optional>examples/agentic_common_worktree_example.py</include></pdd.agentic_common_worktree>
-<pdd.split_validation><include optional>examples/split_validation_example.py</include></pdd.split_validation>
+<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
+<pdd.agentic_common_worktree><include select="def:setup_worktree,def:check_target_file_unchanged,def:revert_out_of_scope_changes_with_dirs,def:extract_block_marker">pdd/agentic_common_worktree.py</include></pdd.agentic_common_worktree>
+<pdd.split_validation><include select="def:validate_extraction,def:get_test_command,def:get_lint_commands">pdd/split_validation.py</include></pdd.split_validation>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 <pdd.split><include>context/split_example.py</include></pdd.split>
-<pdd.architecture_sync><include select="def:sync_all_prompts_to_architecture">context/architecture_sync_example.py</include></pdd.architecture_sync>
+<pdd.architecture_sync><include select="def:sync_all_prompts_to_architecture">pdd/architecture_sync.py</include></pdd.architecture_sync>
 
 % Deliverables
 - Code: `pdd/agentic_split_orchestrator.py`

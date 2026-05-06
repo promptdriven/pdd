@@ -113,6 +113,7 @@ class TestDetectDrift:
         fake_paths = {
             "prompt": Path("/repo/prompts/api_python.prompt"),
             "code": Path("/repo/api.py"),
+            "example": Path("/repo/context/api_example.py"),
         }
 
         with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
@@ -126,6 +127,7 @@ class TestDetectDrift:
         assert d.operation == "example"
         assert d.prompt_path == "/repo/prompts/api_python.prompt"
         assert d.code_path == "/repo/api.py"
+        assert d.example_path == "/repo/context/api_example.py"
 
     def test_non_example_ops_preserve_original_operation(self):
         """verify/generate/auto-deps/test/crash decisions keep their operation name.
@@ -336,6 +338,31 @@ class TestDetectDriftWithDiffBase:
         assert len(prompt_drifts) == 1
         assert prompt_drifts[0].operation == "update"
         assert len(example_drifts) == 0
+
+    def test_generate_with_code_and_prompt_changed_reclassified_as_example(self):
+        """When both code and prompt changed, clean-CI generate drift is example-only.
+
+        In a checkout without fingerprints, sync_determine_operation can report
+        "generate" even when the PR already updated both sides. Auto-heal should
+        refresh the example without invoking full code generation again.
+        """
+        decision = MagicMock(operation="generate", reason="New prompt ready for code generation")
+        files, infer, sync = self._setup_mocks({"api": decision})
+        changed_files = {"pdd/api.py", "pdd/prompts/api_python.prompt"}
+        mock_paths = {"code": Path("pdd/api.py"), "prompt": Path("prompts/api_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 0
+        assert len(example_drifts) == 1
+        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].prompt_path == "prompts/api_python.prompt"
+        assert example_drifts[0].code_path == "pdd/api.py"
 
     def test_only_prompt_changed_stays_as_example(self):
         """When only prompt changed (not code), stays as example drift."""
@@ -698,6 +725,30 @@ class TestHealModule:
             "/repo/prompts/api_python.prompt",
             "/repo/api.py",
         ]
+
+    def test_example_drift_existing_example_can_be_skipped(self, tmp_path):
+        """CI policy can skip existing examples while still healing missing ones."""
+        existing_example = tmp_path / "api_example.py"
+        existing_example.write_text("print('already reviewed')", encoding="utf-8")
+        drift = DriftInfo(
+            "api",
+            "python",
+            "example",
+            "stale",
+            code_path="/repo/api.py",
+            prompt_path="/repo/prompts/api_python.prompt",
+            example_path=str(existing_example),
+        )
+        env = {
+            **self._make_env(),
+            "PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT": "1",
+        }
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, env)
+
+        assert result is None
+        mock_run.assert_not_called()
 
     def test_verify_drift_runs_pdd_sync_to_preserve_semantics(self):
         """operation=='verify' (user-edited example needs validation) must NOT run pdd example.

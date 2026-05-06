@@ -16,8 +16,20 @@ from typing import List, Optional, Tuple
 from rich.console import Console
 
 # Internal imports
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .agentic_architecture_orchestrator import run_agentic_architecture_orchestrator
 from .architecture_registry import extract_modules
+from .incremental_prd_architecture import INCREMENTAL_STATUS_MARKER
+
+# Backwards-compatible alias for any code that imported the leading-underscore name.
+_INCREMENTAL_STATUS_MARKER = INCREMENTAL_STATUS_MARKER
+
+_SAFE_PATH_SEGMENT = r"[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?"
+_TARGET_DIR_PATTERN = re.compile(rf"{_SAFE_PATH_SEGMENT}(/{_SAFE_PATH_SEGMENT})*")
+_UNQUOTED_TARGET_RE = re.compile(
+    rf"\bin\s+({_TARGET_DIR_PATTERN.pattern})(?=$|[\s`\"'),.:!?])",
+    re.IGNORECASE,
+)
 
 console = Console()
 
@@ -300,6 +312,46 @@ def _read_existing_architecture(cwd: Path, target_dir: Optional[str]) -> str:
     return ""
 
 
+def _is_safe_target_dir(target_dir: str) -> bool:
+    """Return True for shell-safe repo-relative target dirs."""
+    if not isinstance(target_dir, str):
+        return False
+    value = target_dir.strip().rstrip("/")
+    if not value or value == ".":
+        return True
+    path = Path(value)
+    return not (
+        path.is_absolute()
+        or "\\" in value
+        or ".." in path.parts
+    ) and bool(_TARGET_DIR_PATTERN.fullmatch(value))
+
+
+def _resolve_target_dir(repo_path: Path, target_dir: Optional[str]) -> Tuple[Path, Optional[str], Optional[str]]:
+    """Validate and resolve a target_dir under repo_path.
+
+    Returns (base_dir, normalized_target_dir, error). The normalized target is
+    safe to pass to downstream orchestrators; base_dir is guaranteed to resolve
+    inside repo_path.
+    """
+    repo_root = repo_path.resolve()
+    if target_dir is None:
+        return repo_root, None, None
+
+    normalized = target_dir.strip().rstrip("/")
+    if normalized in ("", "."):
+        return repo_root, None, None
+    if not _is_safe_target_dir(normalized):
+        return repo_root, None, f"Invalid target directory: {target_dir!r}"
+
+    base_dir = (repo_root / normalized).resolve()
+    try:
+        base_dir.relative_to(repo_root)
+    except ValueError:
+        return repo_root, None, f"Invalid target directory: {target_dir!r}"
+    return base_dir, normalized, None
+
+
 def _extract_target_dir(issue_body: str) -> Optional[str]:
     """
     Parse target directory from issue body.
@@ -313,15 +365,27 @@ def _extract_target_dir(issue_body: str) -> Optional[str]:
     Uses tight patterns to avoid matching natural English like "in Python",
     "in the", "in a new directory", etc.
     """
-    # Pattern 1: backtick or double-quote wrapped — any alphanumeric+slash
-    quoted = re.compile(r'\bin\s+[`"]([a-zA-Z0-9_\-/]+/?)[`"]', re.IGNORECASE)
-    # Pattern 2: unquoted but MUST contain an underscore or slash (directory-like)
-    unquoted = re.compile(r'\bin\s+([a-zA-Z0-9_\-]*[_/][a-zA-Z0-9_\-/]*)', re.IGNORECASE)
+    # Pattern 1: backtick or double-quote wrapped. Capture broadly enough to
+    # detect explicit unsafe paths like `../outside` and fail instead of falling
+    # back to the repo root.
+    quoted = re.compile(r'\bin\s+[`"]([^`"]+)[`"]', re.IGNORECASE)
+    match = quoted.search(issue_body)
+    if match:
+        candidate = match.group(1).strip().rstrip("/")
+        if candidate in ("", "."):
+            return None
+        if not _is_safe_target_dir(candidate):
+            raise ValueError(f"Invalid target directory: {candidate!r}")
+        return candidate
 
-    for pattern in (quoted, unquoted):
-        match = pattern.search(issue_body)
-        if match:
-            return match.group(1).rstrip("/")
+    match = _UNQUOTED_TARGET_RE.search(issue_body)
+    if match:
+        candidate = match.group(1).strip().rstrip("/")
+        if not ("/" in candidate or "_" in candidate or "." in candidate):
+            return None
+        if not _is_safe_target_dir(candidate):
+            raise ValueError(f"Invalid target directory: {candidate!r}")
+        return candidate
     return None
 
 
@@ -394,23 +458,11 @@ def run_agentic_architecture(
     issue_author = issue_data.get("user", {}).get("login", "unknown")
     comments_url = issue_data.get("comments_url", "")
 
-    # 4. Fetch Comments
-    comments_text = ""
-    if comments_url:
-        c_success, c_output = _run_gh_command(["api", comments_url, "--paginate"])
-        if c_success:
-            try:
-                comments = json.loads(c_output)
-                if isinstance(comments, list) and comments:
-                    formatted_comments = []
-                    for c in comments:
-                        user = c.get("user", {}).get("login", "unknown")
-                        body = c.get("body", "")
-                        formatted_comments.append(f"User: {user}\n{body}")
-                    comments_text = "\n\n--- Comments ---\n" + "\n\n".join(formatted_comments)
-            except json.JSONDecodeError:
-                if verbose:
-                    console.print("[yellow]Warning: Failed to parse comments JSON[/yellow]")
+    # 4. Fetch Comments. Reuse the shared filter so pdd's own
+    # PDD-INCREMENTAL-STATUS comments are excluded from PRD content on the
+    # full-agentic path too — otherwise a later non-incremental regenerate
+    # would feed prior status output back in as part of the PRD.
+    comments_text = _fetch_issue_comments_text(comments_url, verbose=verbose) if comments_url else ""
 
     full_issue_content = f"{issue_body}{comments_text}"
 
@@ -421,9 +473,15 @@ def run_agentic_architecture(
 
     # Parse target_dir from issue body if not provided via CLI
     if target_dir is None:
-        target_dir = _extract_target_dir(issue_body)
+        try:
+            target_dir = _extract_target_dir(issue_body)
+        except ValueError as exc:
+            return False, str(exc), 0.0, "", []
         if target_dir and not quiet:
             console.print(f"[blue]Detected subproject directory: {target_dir}[/blue]")
+    base_dir, target_dir, error = _resolve_target_dir(repo_path, target_dir)
+    if error:
+        return False, error, 0.0, "", []
 
     # 6. Discover sibling architectures and related context
     related_issues = _parse_related_issues(issue_body)
@@ -453,3 +511,245 @@ def run_agentic_architecture(
         existing_architecture=existing_arch_context,
         related_issues=related_issues,
     )
+
+
+def run_incremental_architecture(
+    prd_source: str,
+    *,
+    dry_run: bool = False,
+    verbose: bool = False,
+    quiet: bool = False,
+    use_github_state: bool = True,
+    target_dir: Optional[str] = None,
+    strength: float = DEFAULT_STRENGTH,
+    temperature: float = 0.0,
+    time: float = DEFAULT_TIME,
+) -> Tuple[bool, str, float, str, List[str]]:
+    """Run guarded incremental PRD -> architecture propagation."""
+    cwd = Path.cwd()
+    issue_content: Optional[str] = None
+    repo_path = cwd
+    owner = repo = ""
+    issue_number: Optional[int] = None
+
+    if _is_github_issue_url(prd_source):
+        if not _check_gh_cli():
+            return False, "gh CLI not found. Please install GitHub CLI.", 0.0, "", []
+
+        parsed = _parse_github_url(prd_source)
+        if not parsed:
+            return False, f"Invalid GitHub URL: {prd_source}", 0.0, "", []
+        owner, repo, issue_number = parsed
+
+        if not quiet:
+            console.print(
+                "[bold blue]Fetching issue "
+                f"#{issue_number} from {owner}/{repo} "
+                "for incremental update...[/bold blue]"
+            )
+
+        success, output = _run_gh_command(
+            ["api", f"repos/{owner}/{repo}/issues/{issue_number}"]
+        )
+        if not success:
+            return False, f"Issue not found: {output}", 0.0, "", []
+        try:
+            issue_data = json.loads(output)
+        except json.JSONDecodeError:
+            return False, "Failed to parse GitHub API response", 0.0, "", []
+
+        issue_title = issue_data.get("title", "") or ""
+        issue_body = issue_data.get("body", "") or ""
+        comments_url = issue_data.get("comments_url", "") or ""
+        comments_text = _fetch_issue_comments_text(comments_url, verbose=verbose)
+        issue_content = f"# {issue_title}\n\n{issue_body}{comments_text}".strip()
+
+        repo_path, error = _ensure_repo_context(owner, repo, cwd, quiet)
+        if error:
+            return False, error, 0.0, "", []
+
+        if target_dir is None:
+            try:
+                target_dir = _extract_target_dir(issue_body)
+            except ValueError as exc:
+                return False, str(exc), 0.0, "", []
+            if target_dir and not quiet:
+                console.print(f"[blue]Detected subproject directory: {target_dir}[/blue]")
+    else:
+        prd_path = Path(prd_source)
+        if not prd_path.is_absolute():
+            prd_path = cwd / prd_path
+        if not prd_path.is_file():
+            return False, f"PRD file not found: {prd_path}", 0.0, "", []
+
+    base_dir, target_dir, error = _resolve_target_dir(repo_path, target_dir)
+    if error:
+        return False, error, 0.0, "", []
+    architecture_path = base_dir / "architecture.json"
+    prompts_dir = base_dir / "prompts"
+    state_root = base_dir if issue_content is not None else repo_path
+
+    try:
+        from .incremental_prd_architecture import run_incremental_prd_propagation
+
+        result = run_incremental_prd_propagation(
+            prd_source=prd_source,
+            architecture_path=architecture_path,
+            prompts_dir=prompts_dir,
+            project_root=state_root,
+            issue_content=issue_content,
+            dry_run=dry_run,
+            verbose=verbose,
+            quiet=quiet,
+            strength=strength,
+            temperature=temperature,
+            time=time,
+        )
+    except Exception as exc:
+        result = (False, f"Incremental architecture error: {exc}", 0.0, "", [])
+
+    if issue_content is not None:
+        result = _prefix_target_changed_files(result, target_dir)
+    if result[0] and target_dir and not dry_run and result[4]:
+        result = _append_target_sync_hint(result, target_dir)
+
+    if (
+        use_github_state
+        and issue_number is not None
+        and owner
+        and repo
+        and not dry_run
+    ):
+        _post_incremental_status_comment(owner, repo, issue_number, result, quiet=quiet)
+
+    return result
+
+
+def _prefix_target_changed_files(
+    result: Tuple[bool, str, float, str, List[str]],
+    target_dir: Optional[str],
+) -> Tuple[bool, str, float, str, List[str]]:
+    """Convert subproject-relative issue results to repo-relative paths."""
+    if not target_dir:
+        return result
+    success, message, cost, model, changed_files = result
+    prefix = target_dir.strip().rstrip("/")
+    if not prefix:
+        return result
+
+    prefixed: List[str] = []
+    for path in changed_files:
+        if (
+            not path
+            or path.startswith("/")
+            or path == prefix
+            or path.startswith(f"{prefix}/")
+        ):
+            prefixed.append(path)
+        else:
+            prefixed.append(f"{prefix}/{path}")
+    return success, message, cost, model, prefixed
+
+
+def _append_target_sync_hint(
+    result: Tuple[bool, str, float, str, List[str]],
+    target_dir: str,
+) -> Tuple[bool, str, float, str, List[str]]:
+    """Add the subproject sync working-directory hint for target-dir writes."""
+    success, message, cost, model, changed_files = result
+    hint = (
+        f"\nNext: run `cd {target_dir} && pdd sync` for follow-up sync validation "
+        "because generated prompt includes are target-directory relative."
+    )
+    if "pdd sync" not in message:
+        message = f"{message.rstrip()}{hint}"
+    return success, message, cost, model, changed_files
+
+
+def _fetch_issue_comments_text(comments_url: str, *, verbose: bool) -> str:
+    if not comments_url:
+        return ""
+    success, output = _run_gh_command(["api", comments_url, "--paginate"])
+    if not success:
+        return ""
+    try:
+        comments = json.loads(output)
+    except json.JSONDecodeError:
+        if verbose:
+            console.print("[yellow]Warning: Failed to parse comments JSON[/yellow]")
+        return ""
+    if not isinstance(comments, list) or not comments:
+        return ""
+
+    formatted_comments = []
+    for comment in comments:
+        body = comment.get("body", "") or ""
+        if not body:
+            continue
+        if _INCREMENTAL_STATUS_MARKER in body:
+            # Skip pdd's own incremental status comments so they don't feed back
+            # into the next run as a PRD change.
+            continue
+        user = comment.get("user", {}).get("login", "unknown")
+        formatted_comments.append(f"User: {user}\n{body}")
+    if not formatted_comments:
+        return ""
+    return "\n\n--- Comments ---\n" + "\n\n".join(formatted_comments)
+
+
+def _post_incremental_status_comment(
+    owner: str,
+    repo: str,
+    issue_number: int,
+    result: Tuple[bool, str, float, str, List[str]],
+    *,
+    quiet: bool,
+) -> None:
+    success, message, cost, model, changed_files = result
+    status = "successful" if success else "failed"
+    files = (
+        "\n".join(f"- `{_sanitize_status_message(path)}`" for path in changed_files)
+        or "- No files changed"
+    )
+    safe_message = _sanitize_status_message(message)
+    body = (
+        f"{_INCREMENTAL_STATUS_MARKER}\n"
+        f"pdd incremental architecture update {status}.\n\n"
+        f"Result: {safe_message}\n\n"
+        f"Model: {model or 'n/a'}\n"
+        f"Estimated cost: ${cost:.4f}\n\n"
+        f"Changed files:\n{files}"
+    )
+    ok, output = _run_gh_command(
+        [
+            "api",
+            f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+            "-f",
+            f"body={body}",
+        ]
+    )
+    if not ok and not quiet:
+        console.print(
+            "[yellow]Warning: failed to post incremental status comment: "
+            f"{output}[/yellow]"
+        )
+
+
+def _sanitize_status_message(message: str) -> str:
+    """Remove local absolute paths before posting public GitHub status comments."""
+    if not message:
+        return message
+
+    # Redact common POSIX absolute paths while leaving URLs and command names intact.
+    sanitized = re.sub(
+        r"(?<![\w:])/(?:Users|home|root|workspace|workspaces|mnt|private|tmp|var|Volumes)/[^\s`'\"),]+",
+        "<local-path>",
+        message,
+    )
+    # Redact Windows absolute paths for users running the workflow from Windows.
+    sanitized = re.sub(
+        r"\b[A-Za-z]:\\[^\s`'\"),]+",
+        "<local-path>",
+        sanitized,
+    )
+    return sanitized
