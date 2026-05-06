@@ -204,7 +204,7 @@ def test_anthropic_is_error_is_failure() -> None:
 
 
 def test_opencode_jsonl_parses_text_cost_and_errors() -> None:
-    ok, text, cost, error = _parse_opencode_jsonl(
+    ok, text, cost, error, info = _parse_opencode_jsonl(
         '{"type":"text","part":{"text":"Hello "}}\n'
         '{"type":"text","part":{"text":"world"}}\n'
         '{"type":"step_finish","part":{"cost":0.01}}\n'
@@ -214,12 +214,16 @@ def test_opencode_jsonl_parses_text_cost_and_errors() -> None:
     assert text == "Hello world"
     assert cost == pytest.approx(0.03)
     assert error is None
+    assert info["cost_reported"] is True
 
-    ok, text, cost, error = _parse_opencode_jsonl('{"type":"error","message":"model not found"}')
+    ok, text, cost, error, info = _parse_opencode_jsonl(
+        '{"type":"error","message":"model not found"}'
+    )
     assert ok is False
     assert text == ""
     assert cost == 0.0
     assert error == "model not found"
+    assert info["cost_reported"] is False
 
     assert _parse_provider_json("opencode", "") == (False, "", 0.0)
 

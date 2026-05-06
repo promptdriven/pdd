@@ -323,11 +323,38 @@ def _load_agentic_config() -> Dict[str, Any]:
     return config
 
 
+def _resolve_model_csv_path() -> Path:
+    """Return the active llm_model.csv path using PDD's catalog precedence.
+
+    Mirrors ``llm_invoke``'s resolution: prefer ``~/.pdd/llm_model.csv``,
+    then ``<cwd>/.pdd/llm_model.csv``, otherwise fall back to the bundled
+    ``pdd/data/llm_model.csv``. This lets users who ran ``pdd setup`` or who
+    maintain custom pricing/provider rows have those models considered when
+    PDD resolves an OpenCode model.
+    """
+    user_csv = Path.home() / ".pdd" / "llm_model.csv"
+    if user_csv.is_file():
+        return user_csv
+    try:
+        project_csv = Path.cwd() / ".pdd" / "llm_model.csv"
+    except Exception:
+        project_csv = None  # type: ignore[assignment]
+    if project_csv is not None and project_csv.is_file():
+        return project_csv
+    return Path(__file__).parent / "data" / "llm_model.csv"
+
+
 def _load_model_data(path: Optional[Union[str, Path]] = None) -> Optional[List[Dict[str, str]]]:
-    """Load model CSV metadata when available."""
+    """Load model CSV metadata when available.
+
+    When ``path`` is ``None`` the catalog is resolved using
+    :func:`_resolve_model_csv_path` so that user/project overrides at
+    ``~/.pdd/llm_model.csv`` or ``<cwd>/.pdd/llm_model.csv`` win over the
+    bundled default, matching ``llm_invoke``'s precedence.
+    """
     try:
         import csv
-        csv_path = Path(path) if path is not None else Path(__file__).parent / "data" / "llm_model.csv"
+        csv_path = Path(path) if path is not None else _resolve_model_csv_path()
         if not csv_path.is_file():
             return None
         with open(csv_path, "r", encoding="utf-8") as f:
@@ -845,11 +872,15 @@ _OPENCODE_PROVIDER_BY_CSV: Dict[str, str] = {
     "meta": "meta",
     "qwen": "qwen",
     "cohere": "cohere",
+    "openrouter": "openrouter",
+    "github-copilot": "github-copilot",
 }
 
 
 # Env vars that, when set, make a CSV provider routable through OpenCode.
-# Keys are the lowercased CSV ``provider`` column.
+# Keys are the lowercased CSV ``provider`` column. Values include OpenCode
+# providers that don't have a CSV row of their own (e.g. ``github-copilot``)
+# but are nonetheless documented as valid OpenCode auth paths.
 _OPENCODE_PROVIDER_AUTH_ENV: Dict[str, Tuple[str, ...]] = {
     "openai": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
@@ -862,6 +893,8 @@ _OPENCODE_PROVIDER_AUTH_ENV: Dict[str, Tuple[str, ...]] = {
     "cohere": ("COHERE_API_KEY",),
     "ollama": ("OLLAMA_API_KEY",),
     "azure": ("AZURE_OPENAI_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "github-copilot": ("GITHUB_TOKEN", "GH_TOKEN"),
 }
 
 
@@ -940,6 +973,9 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
         pass
 
     # Last-resort defaults keyed off whichever provider the user can reach.
+    # ``openrouter`` and ``github-copilot`` don't have CSV rows in the bundled
+    # catalog, so a default is the only way to produce a routable model id
+    # for users whose only auth is ``OPENROUTER_API_KEY`` or ``GITHUB_TOKEN``.
     default_by_provider: Dict[str, str] = {
         "anthropic": "anthropic/claude-sonnet-4-5",
         "openai": "openai/gpt-5.1",
@@ -947,8 +983,13 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
         "xai": "xai/grok-4-0709",
         "deepseek": "deepseek/deepseek-chat",
         "groq": "groq/llama-3.3-70b-versatile",
+        "openrouter": "openrouter/anthropic/claude-sonnet-4.5",
+        "github-copilot": "github-copilot/claude-sonnet-4.5",
     }
-    for provider in ("anthropic", "openai", "google", "xai", "deepseek", "groq"):
+    for provider in (
+        "anthropic", "openai", "google", "xai", "deepseek", "groq",
+        "openrouter", "github-copilot",
+    ):
         if provider in authed and provider in default_by_provider:
             return default_by_provider[provider]
     return "anthropic/claude-sonnet-4-5"
@@ -1144,14 +1185,43 @@ def _parse_openai_output(stdout: str) -> Tuple[bool, str, float]:
 
 
 def _parse_opencode_output(stdout: str) -> Tuple[bool, str, float]:
-    """Parse OpenCode JSONL events."""
-    ok, text, cost, error_msg = _parse_opencode_jsonl(stdout)
+    """Parse OpenCode JSONL events.
+
+    Backwards-compatible 3-tuple wrapper around :func:`_parse_opencode_jsonl`.
+    Used by :func:`_parse_provider_json`; ``_run_with_provider`` calls the
+    underlying parser directly so it can apply CSV-based pricing for the
+    resolved OpenCode model.
+    """
+    ok, text, cost, error_msg, info = _parse_opencode_jsonl(stdout)
     if not ok:
         return False, error_msg or text, cost
+    # When no cost was reported and we have token counts, fall back to a
+    # generic per-million estimate so this convenience wrapper still produces
+    # a non-zero cost. The richer CSV-based fallback runs in
+    # ``_run_with_provider``.
+    if cost == 0 and not info.get("cost_reported"):
+        in_tok = int(info.get("input_tokens") or 0)
+        out_tok = int(info.get("output_tokens") or 0)
+        cache_tok = int(info.get("cached_tokens") or 0)
+        if in_tok or out_tok:
+            cost = _estimate_cost(in_tok, out_tok, CODEX_PRICING,
+                                  cached_tokens=cache_tok)
     return True, text, cost
 
 
-def _parse_opencode_jsonl(stdout: str) -> Tuple[bool, str, float, Optional[str]]:
+def _parse_opencode_jsonl(
+    stdout: str,
+) -> Tuple[bool, str, float, Optional[str], Dict[str, Any]]:
+    """Parse an ``opencode run --format json`` JSONL stream.
+
+    Returns ``(ok, text, cost, error_msg, info)`` where ``info`` carries the
+    extra signals ``_run_with_provider`` needs to apply a CSV-based cost
+    fallback for the resolved OpenCode model:
+
+    * ``cost_reported`` — ``True`` if any event surfaced a numeric ``cost``.
+    * ``input_tokens`` / ``output_tokens`` / ``cached_tokens`` — accumulated
+      usage counts; zero when OpenCode emitted only text events.
+    """
     text_parts: List[str] = []
     cost = 0.0
     error_msg: Optional[str] = None
@@ -1222,17 +1292,94 @@ def _parse_opencode_jsonl(stdout: str) -> Tuple[bool, str, float, Optional[str]]
         elif evt_type == "error":
             error_msg = str(evt.get("message") or evt.get("error") or "OpenCode error")
 
+    info: Dict[str, Any] = {
+        "cost_reported": saw_cost,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
+    }
+
     if error_msg:
-        return False, "", cost, error_msg
+        return False, "", cost, error_msg, info
 
     if not saw_event or not saw_text_or_step:
-        return False, "", 0.0, None
+        return False, "", 0.0, None, info
 
     text = "".join(text_parts)
-    if not saw_cost and cost == 0 and (input_tokens or output_tokens):
-        cost = _estimate_cost(input_tokens, output_tokens, CODEX_PRICING,
-                              cached_tokens=cached_tokens)
-    return True, text, cost, None
+    return True, text, cost, None, info
+
+
+def _opencode_pricing_for_model(model: Optional[str]) -> Optional[Pricing]:
+    """Resolve a :class:`Pricing` for an OpenCode ``provider/model`` id.
+
+    Reads the active model catalog (user/project/package, in that order) and
+    returns ``None`` when the model isn't priced in any catalog. ``input``/
+    ``output`` columns are interpreted as USD per million tokens, matching
+    the rest of PDD.
+    """
+    if not model or "/" not in model:
+        return None
+    try:
+        rows = _load_model_data()
+    except Exception:
+        rows = None
+    if not rows:
+        return None
+
+    opencode_provider, _, model_name = model.partition("/")
+    opencode_provider = opencode_provider.strip().lower()
+    model_name = model_name.strip()
+    if not opencode_provider or not model_name:
+        return None
+
+    for row in rows:
+        csv_provider = (row.get("provider") or "").strip().lower()
+        csv_model = (row.get("model") or "").strip()
+        if not csv_provider or not csv_model:
+            continue
+        mapped = _OPENCODE_PROVIDER_BY_CSV.get(csv_provider)
+        if mapped != opencode_provider:
+            continue
+        if csv_model != model_name:
+            continue
+        try:
+            input_per_million = float(row.get("input") or 0.0)
+            output_per_million = float(row.get("output") or 0.0)
+        except (TypeError, ValueError):
+            return None
+        if input_per_million <= 0 and output_per_million <= 0:
+            return None
+        return Pricing(input_per_million, output_per_million)
+    return None
+
+
+def _estimate_opencode_cost(
+    info: Dict[str, Any],
+    *,
+    model: Optional[str],
+    prompt_text: str,
+    response_text: str,
+) -> float:
+    """Estimate an OpenCode invocation cost when the CLI didn't report one.
+
+    Prefers CSV pricing for the resolved OpenCode model. Falls back to
+    ``CODEX_PRICING`` only when the catalog has no entry. When OpenCode emits
+    only ``text`` events (no ``usage`` block), token counts are estimated
+    from prompt and response text length so subscription-style auth paths
+    still produce a non-zero cost approximation.
+    """
+    pricing = _opencode_pricing_for_model(model) or CODEX_PRICING
+
+    in_tok = int(info.get("input_tokens") or 0)
+    out_tok = int(info.get("output_tokens") or 0)
+    cache_tok = int(info.get("cached_tokens") or 0)
+    if not (in_tok or out_tok):
+        in_tok = _estimate_tokens_from_text(prompt_text or "")
+        out_tok = _estimate_tokens_from_text(response_text or "")
+        cache_tok = 0
+    if not (in_tok or out_tok):
+        return 0.0
+    return _estimate_cost(in_tok, out_tok, pricing, cached_tokens=cache_tok)
 
 
 def _parse_provider_json(provider: str, data_or_stdout: Union[str, Dict[str, Any]]) -> Tuple[bool, str, float]:
@@ -1437,7 +1584,33 @@ def _run_with_provider(
             err_snippet = (stderr or stdout or f"Exit code {rc}")[-MAX_ERROR_SNIPPET_LENGTH:]
             return False, f"Exit code {rc}: {err_snippet}", 0.0
 
-        success, text, cost = _parse_provider_json(provider, stdout)
+        if provider == "opencode":
+            ok, parsed_text, parsed_cost, error_msg, opencode_info = _parse_opencode_jsonl(stdout)
+            success = ok
+            text = parsed_text if ok else (error_msg or parsed_text)
+            cost = parsed_cost
+            # When OpenCode succeeded but didn't surface a cost (e.g. text-only
+            # events or subscription auth), price the call against the
+            # resolved OpenCode model's CSV pricing. Fall back to a
+            # prompt/output text estimate when no usage tokens are present so
+            # we still record a non-zero cost.
+            if ok and not opencode_info.get("cost_reported") and cost == 0:
+                resolved_model = _resolve_opencode_model()
+                try:
+                    prompt_text = (
+                        prompt_file.read_text(encoding="utf-8")
+                        if prompt_file.exists() else ""
+                    )
+                except OSError:
+                    prompt_text = ""
+                cost = _estimate_opencode_cost(
+                    opencode_info,
+                    model=resolved_model,
+                    prompt_text=prompt_text,
+                    response_text=parsed_text,
+                )
+        else:
+            success, text, cost = _parse_provider_json(provider, stdout)
 
         if provider == "opencode" and not success and _is_opencode_permanent_error(text):
             text = (
