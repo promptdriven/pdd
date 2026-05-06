@@ -896,7 +896,11 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             if pddrc_path:
                 try:
                     config = _load_pddrc_config(pddrc_path)
-                    context_name = context_override or _detect_context(Path.cwd(), config, None)
+                    context_name = (
+                        context_override
+                        or resolved_context_name
+                        or _detect_context(Path.cwd(), config, None)
+                    )
                     context_config = config.get('contexts', {}).get(context_name or '', {})
                     prompts_dir_config = context_config.get('defaults', {}).get('prompts_dir', '')
                     if prompts_dir_config:
@@ -941,7 +945,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 if pddrc_path:
                     try:
                         config = _load_pddrc_config(pddrc_path)
-                        context_name = context_override or _detect_context(Path.cwd(), config, None)
+                        context_name = context_override or resolved_context_name
+                        if not context_name:
+                            arch_context_path = project_root / arch_filepath
+                            context_name = (
+                                _detect_context(arch_context_path, config, None)
+                                or _detect_context(Path.cwd(), config, None)
+                            )
                         context_config = config.get('contexts', {}).get(context_name or '', {})
                         defaults = context_config.get('defaults', {})
                         example_dir = defaults.get('example_output_path', 'examples/')
