@@ -116,6 +116,49 @@ def _basename_from_architecture_filename(filename: str) -> Optional[str]:
     return str(path.parent / basename)
 
 
+def _basename_from_architecture_filepath(filepath: str) -> Optional[str]:
+    """Return a sync basename from an architecture filepath."""
+    if not filepath:
+        return None
+
+    path = Path(filepath)
+    if path.suffix:
+        path = path.with_suffix("")
+    return path.as_posix()
+
+
+def _architecture_entry_aliases(entry: Dict[str, Any]) -> set[str]:
+    """Return all sync basenames that may identify an architecture entry."""
+    aliases: set[str] = set()
+
+    filename_basename = _basename_from_architecture_filename(
+        str(entry.get("filename", "") or "")
+    )
+    if filename_basename:
+        aliases.add(filename_basename)
+
+    filepath_basename = _basename_from_architecture_filepath(
+        str(entry.get("filepath", "") or "")
+    )
+    if filepath_basename:
+        aliases.add(filepath_basename)
+
+    return aliases
+
+
+def _target_basename_aliases(target_basename: str) -> set[str]:
+    """Return aliases that should match a requested sync target."""
+    aliases = {target_basename}
+    path = Path(target_basename)
+    stripped_name = extract_module_from_include(path.name + ".prompt")
+    if stripped_name:
+        if path.parent == Path("."):
+            aliases.add(stripped_name)
+        else:
+            aliases.add((path.parent / stripped_name).as_posix())
+    return aliases
+
+
 def build_dep_graph_from_architecture(
     arch_path: Path, target_basenames: List[str]
 ) -> DepGraphFromArchitectureResult:
@@ -163,52 +206,56 @@ def build_dep_graph_from_architecture_data(
     if not modules:
         return empty
 
-    # Map prompt filename -> stripped basename (e.g., "crm_models_Python.prompt" -> "crm_models")
-    filename_to_basename: Dict[str, str] = {}
+    target_aliases_by_target = {
+        target: _target_basename_aliases(target) for target in target_basenames
+    }
+
+    # Map architecture filename -> original requested target basename. Architecture
+    # entries commonly store bare prompt filenames (config_Python.prompt) while
+    # branch-diff sync targets may be path-qualified for .pddrc context routing
+    # (src/config). Match via both filename-derived and filepath-derived aliases,
+    # but keep graph keys as the original target strings the runner must execute.
+    filename_to_target: Dict[str, str] = {}
+    filename_to_aliases: Dict[str, set[str]] = {}
     for entry in modules:
-        filename = entry.get("filename", "")
-        basename = _basename_from_architecture_filename(filename)
-        if basename:
-            filename_to_basename[filename] = basename
-
-    # Target basenames may include a language suffix (e.g., "crm_models_Python")
-    # that extract_module_from_include strips. Build a lookup from stripped name
-    # to the original target basename so we can match architecture entries.
-    stripped_to_target: Dict[str, str] = {}
-    for tb in target_basenames:
-        stripped_to_target[tb] = tb  # exact match first
-        stripped = extract_module_from_include(tb + ".prompt")
-        if stripped:
-            stripped_to_target[stripped] = tb
-
-    target_set = set(stripped_to_target.keys())
+        filename = str(entry.get("filename", "") or "")
+        aliases = _architecture_entry_aliases(entry)
+        if not filename or not aliases:
+            continue
+        filename_to_aliases[filename] = aliases
+        for target in target_basenames:
+            if aliases & target_aliases_by_target[target]:
+                filename_to_target[filename] = target
+                break
 
     warnings: List[str] = []
     # Build graph using original target basenames
     graph: Dict[str, List[str]] = {}
     for entry in modules:
-        basename = filename_to_basename.get(entry.get("filename", ""))
-        if basename and basename in target_set:
-            target_name = stripped_to_target[basename]
+        filename = str(entry.get("filename", "") or "")
+        target_name = filename_to_target.get(filename)
+        if target_name:
             deps = []
             for dep_filename in entry.get("dependencies", []):
-                dep_basename = filename_to_basename.get(dep_filename)
-                if dep_basename is None:
+                dep_aliases = filename_to_aliases.get(dep_filename)
+                if dep_aliases is None:
                     warnings.append(
                         f"Orphan dependency {dep_filename!r} on architecture entry "
                         f"{entry.get('filename', '')!r}: no matching module entry in {source_name}"
                     )
                     continue
-                if dep_basename == basename:
+                dep_target = filename_to_target.get(dep_filename)
+                if dep_target == target_name:
                     continue
-                if dep_basename not in target_set:
+                if dep_target is None:
+                    dep_display = sorted(dep_aliases)[0]
                     warnings.append(
-                        f"Partial sync: module {target_name!r} depends on {dep_basename!r} "
+                        f"Partial sync: module {target_name!r} depends on {dep_display!r} "
                         f"(via {dep_filename!r}), which is not in the sync target set; "
                         "dependency edge omitted from graph"
                     )
                     continue
-                deps.append(stripped_to_target[dep_basename])
+                deps.append(dep_target)
             graph[target_name] = deps
 
     # Ensure all target basenames are in graph
