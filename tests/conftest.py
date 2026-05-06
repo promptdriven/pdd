@@ -2,6 +2,8 @@
 
 import os
 import sys
+import importlib.machinery
+import importlib.util
 from typing import Any
 
 import pytest
@@ -139,6 +141,28 @@ collect_ignore_glob = [
     "csv/*",
     "fixtures/*",
 ]
+
+
+class CsvPythonModule(pytest.Module):
+    """Collect the PDD-generated .csv test deliverable as Python source."""
+
+    def _getobj(self):
+        module_name = f"{self.path.stem}_csv"
+        loader = importlib.machinery.SourceFileLoader(module_name, str(self.path))
+        spec = importlib.util.spec_from_loader(module_name, loader)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        loader.exec_module(module)
+        return module
+
+
+def pytest_collect_file(file_path, parent):
+    """Allow pytest to execute tests/test_llm_model.csv as a Python test file."""
+
+    path = Path(str(file_path))
+    if path.name == "test_llm_model.csv":
+        return CsvPythonModule.from_parent(parent, path=path)
+    return None
 
 
 # --- Common fixtures for CLI tests ---

@@ -1,775 +1,645 @@
-"""Tests for pdd/cli_detector.py
-
-Behavioral tests driven through the two public entry points:
-  - detect_and_bootstrap_cli()
-  - detect_cli_tools()
+"""Tests for pdd.cli_detector.
 
 Test plan
 ---------
-
-1. CliBootstrapResult data model
-   1.1 Defaults to empty strings and False flags
-   1.2 Skipped result has skipped=True, rest defaults
-
-2. detect_and_bootstrap_cli — Selection table & input parsing
-   2.1 Table shows all three CLIs with install/key status
-   2.2 Selecting "1" picks Claude CLI
-   2.3 Comma-separated input "1,3" selects multiple CLIs
-   2.4 Spaces in input "1, 3" are tolerated
-   2.5 Duplicate input "1,1,3" is deduplicated
-   2.6 Empty input defaults to best available (installed+key)
-   2.7 Empty input defaults to installed-only when no keys set
-   2.8 Invalid input falls back to default
-   2.9 "q" quits with skipped result
-   2.10 "n" quits with skipped result
-
-3. detect_and_bootstrap_cli — Install flow
-   3.1 Already-installed CLI skips install prompt
-   3.2 Not-installed CLI prompts for install, user accepts, npm succeeds
-   3.3 Not-installed CLI, user accepts install but npm missing
-   3.4 Not-installed CLI, install fails (non-zero exit)
-   3.5 Not-installed CLI, user declines install → skipped
-   3.6 Install succeeds but binary not found on PATH afterwards
-
-4. detect_and_bootstrap_cli — API key flow
-   4.1 Key already set skips prompt
-   4.2 Key not set, user provides key → saved to file and os.environ
-   4.3 Key not set, user skips (Enter) → api_key_configured=False
-   4.4 Anthropic skip shows subscription auth note
-   4.5 Non-anthropic skip shows limited functionality note
-   4.6 Google provider checks both GOOGLE_API_KEY and GEMINI_API_KEY
-
-5. detect_and_bootstrap_cli — CLI test step
-   5.1 CLI test always runs after install+key steps
-   5.2 --version success shows version output
-   5.3 --version fails, falls back to --help
-
-6. detect_and_bootstrap_cli — Interrupt handling
-   6.1 KeyboardInterrupt on selection prompt → skipped
-   6.2 EOFError on selection prompt → skipped
-   6.3 KeyboardInterrupt during per-CLI processing → stops remaining
-
-7. detect_and_bootstrap_cli — API key persistence
-   7.1 Key saved to ~/.pdd/api-env.{shell} with correct export syntax
-   7.2 Source line added to shell RC file
-   7.3 Fish shell uses set -gx syntax and fish source line
-   7.4 Duplicate keys are deduplicated in api-env file
-
-8. detect_cli_tools — Legacy detection
-   8.1 Shows header with command context
-   8.2 Found CLI shows checkmark and path
-   8.3 Missing CLI shows X
-   8.4 Key set but CLI missing → suggests install
-   8.5 All CLIs installed with keys → success message
-   8.6 No CLIs found → quick start message
+1. Dataclass contract: defaults, skipped result, populated result.
+2. Exposed constants: provider key/display mappings, CLI preference, shell RC map,
+   and OpenCode package configuration.
+3. CLI detection: table order covers Claude, Codex, Gemini, OpenCode; shutil.which
+   is preferred; fallback paths include ~/.local/bin and nvm node version bins.
+4. Bootstrap selection: comma-separated input, spaces, deduplication, default
+   installed+key > installed > Claude, invalid fallback, q/n skip, banner call.
+5. Install flow: installed CLIs skip install, missing CLIs prompt, npm availability
+   is checked, npm install receives the right package, failures/declines mark only
+   that CLI skipped and continue to later selections.
+6. API key flow: existing keys skip prompts, new keys are saved and exported,
+   Google checks GEMINI_API_KEY before GOOGLE_API_KEY and saves GEMINI_API_KEY,
+   OpenCode accepts any supported provider key or auth.json and can save a chosen
+   provider key when no auth exists.
+7. API key persistence: bash/zsh/fish files use spec syntax, RC source lines are
+   added once, and repeated saves deduplicate by key name.
+8. CLI verification: --version runs, --help is fallback, and selected CLIs always
+   reach the verification branch even if no binary is available after skip/failure.
+9. Interrupt handling: KeyboardInterrupt/EOFError at selection and later prompts
+   return graceful skipped or partial results.
+10. Legacy detection: each CLI reports found/not-found plus key status and offers
+    installation only when a matching key/auth is present.
 """
 
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest import mock
 
 import pytest
 
+import pdd.cli_detector as cli_detector
 from pdd.cli_detector import (
+    CLI_PREFERENCE,
+    PROVIDER_DISPLAY,
+    PROVIDER_PRIMARY_KEY,
+    SHELL_RC_MAP,
     CliBootstrapResult,
     detect_and_bootstrap_cli,
     detect_cli_tools,
 )
 
 
-# ---------------------------------------------------------------------------
-# Module-level constants — realistic scenarios for test fixtures
-# ---------------------------------------------------------------------------
-
-# Provider/CLI status: all four CLIs installed with keys
-ALL_INSTALLED = {
-    "claude": "/usr/local/bin/claude",
-    "codex": "/usr/local/bin/codex",
-    "gemini": "/usr/local/bin/gemini",
-    "opencode": "/usr/local/bin/opencode",
+ALL_CLI_PATHS = {
+    "claude": "/mock/bin/claude",
+    "codex": "/mock/bin/codex",
+    "gemini": "/mock/bin/gemini",
+    "opencode": "/mock/bin/opencode",
 }
 
 ALL_KEYS = {
     "ANTHROPIC_API_KEY": "sk-ant-test",
-    "OPENAI_API_KEY": "sk-oai-test",
-    "GEMINI_API_KEY": "gm-test",
-    "GOOGLE_API_KEY": "gm-test",
+    "OPENAI_API_KEY": "sk-openai-test",
+    "GEMINI_API_KEY": "sk-gemini-test",
 }
 
-# Only Claude installed with key
-CLAUDE_ONLY = {"claude": "/usr/local/bin/claude"}
-CLAUDE_KEY = {"ANTHROPIC_API_KEY": "sk-ant-test"}
+ENV_KEYS = [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GITHUB_TOKEN",
+    "GROQ_API_KEY",
+]
 
-# No CLIs installed, no keys
-NOTHING = {}
+
+def _prepare_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, shell: str = "/bin/bash") -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHELL", shell)
+    monkeypatch.setattr(cli_detector.Path, "home", staticmethod(lambda: tmp_path))
+    if shell.endswith("fish"):
+        rc_file = tmp_path / ".config" / "fish" / "config.fish"
+    elif shell.endswith("zsh"):
+        rc_file = tmp_path / ".zshrc"
+    else:
+        rc_file = tmp_path / ".bashrc"
+    rc_file.parent.mkdir(parents=True, exist_ok=True)
+    rc_file.write_text("# existing rc\n")
 
 
-# ---------------------------------------------------------------------------
-# Helper: capture output from detect_and_bootstrap_cli
-# ---------------------------------------------------------------------------
+def _clear_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
 
 def _run_bootstrap_capture(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    user_inputs: list[str],
+    inputs: list[str | BaseException],
     *,
     cli_paths: dict[str, str] | None = None,
     env_keys: dict[str, str] | None = None,
+    shell: str = "/bin/bash",
     npm_available: bool = False,
     install_succeeds: bool = False,
-    install_then_found: str | None = None,
-    version_output: str = "1.0.0",
+    install_then_found: dict[str, str] | None = None,
     version_returncode: int = 0,
-) -> tuple[str, list[CliBootstrapResult]]:
-    """Run detect_and_bootstrap_cli with mocked boundaries.
+    version_output: str = "cli 1.0.0",
+    help_returncode: int = 0,
+    help_output: str = "usage: cli",
+) -> tuple[str, list[CliBootstrapResult], list[list[str]]]:
+    cli_paths = dict(cli_paths or {})
+    env_keys = dict(env_keys or {})
+    install_then_found = dict(install_then_found or {})
+    _clear_keys(monkeypatch)
+    _prepare_home(monkeypatch, tmp_path, shell)
+    for key, value in env_keys.items():
+        monkeypatch.setenv(key, value)
 
-    Args:
-        monkeypatch: pytest monkeypatch fixture
-        tmp_path: temporary directory for home
-        user_inputs: sequence of strings for _prompt_input
-        cli_paths: mapping of cli_name -> path (None = not found)
-        env_keys: environment variables to set
-        npm_available: whether npm is on PATH
-        install_succeeds: whether subprocess install returns 0
-        install_then_found: path to return after install succeeds (None = not found)
-        version_output: stdout from --version
-        version_returncode: exit code from --version
+    input_iter = iter(inputs)
 
-    Returns:
-        (captured_output, results) tuple
-    """
-    cli_paths = cli_paths or {}
-    env_keys = env_keys or {}
+    def fake_input(_prompt: str = "") -> str:
+        try:
+            value = next(input_iter)
+        except StopIteration as exc:
+            raise AssertionError("Unexpected input prompt") from exc
+        if isinstance(value, BaseException):
+            raise value
+        return value
 
-    # Clean environment
-    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY", "SHELL"):
-        monkeypatch.delenv(var, raising=False)
-    for k, v in env_keys.items():
-        monkeypatch.setenv(k, v)
-    monkeypatch.setenv("SHELL", "/bin/bash")
+    which_calls: dict[str, int] = {}
 
-    # Mock Path.home to tmp_path
-    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-
-    # Create shell RC file
-    rc_file = tmp_path / ".bashrc"
-    if not rc_file.exists():
-        rc_file.write_text("# existing\n")
-
-    # Mock user input
-    input_iter = iter(user_inputs)
-    monkeypatch.setattr(
-        "pdd.cli_detector._prompt_input",
-        lambda _prompt="": next(input_iter),
-    )
-
-    # Track _find_cli_binary calls to simulate post-install discovery
-    find_call_count = {}
-
-    def mock_find_cli_binary(name):
-        find_call_count[name] = find_call_count.get(name, 0) + 1
-        if name in cli_paths:
-            return cli_paths[name]
-        # After install, return install_then_found for the CLI being installed
-        if install_then_found and find_call_count[name] > 1:
-            return install_then_found
+    def fake_which(command: str) -> str | None:
+        which_calls[command] = which_calls.get(command, 0) + 1
+        if command == "npm":
+            return "/mock/bin/npm" if npm_available else None
+        if command in cli_paths:
+            return cli_paths[command]
+        if command in install_then_found and which_calls[command] > 1 and install_succeeds:
+            return install_then_found[command]
         return None
 
-    # Mock subprocess.run for both install and --version/--help
-    def mock_subprocess_run(cmd, **kwargs):
-        result = mock.MagicMock()
-        if kwargs.get("shell"):
-            # Install command
-            result.returncode = 0 if install_succeeds else 1
-            result.stdout = ""
-            result.stderr = ""
-        else:
-            # CLI test (--version or --help)
-            result.returncode = version_returncode
-            result.stdout = version_output
-            result.stderr = ""
-        return result
+    subprocess_calls: list[list[str]] = []
 
-    # Mock npm availability
-    def mock_shutil_which(cmd):
-        if cmd == "npm":
-            return "/usr/bin/npm" if npm_available else None
-        return cli_paths.get(cmd)
+    def fake_run(command: list[str], **_: object) -> CompletedProcess[str]:
+        subprocess_calls.append(command)
+        if command[:3] == ["npm", "install", "-g"]:
+            return CompletedProcess(command, 0 if install_succeeds else 1, "", "")
+        if command[-1] == "--version":
+            return CompletedProcess(command, version_returncode, version_output, "")
+        return CompletedProcess(command, help_returncode, help_output, "")
 
-    # Capture console output
-    printed = []
+    printed: list[str] = []
 
-    def capture_print(*args, **kwargs):
-        printed.append(" ".join(str(a) for a in args))
+    def capture_print(*args: object, **_: object) -> None:
+        printed.append(" ".join(str(arg) for arg in args))
 
-    # Apply mocks
-    with mock.patch("pdd.cli_detector._find_cli_binary", side_effect=mock_find_cli_binary), \
-         mock.patch("pdd.cli_detector.console") as mock_console, \
-         mock.patch("subprocess.run", side_effect=mock_subprocess_run), \
-         mock.patch("shutil.which", side_effect=mock_shutil_which), \
-         mock.patch("pdd.setup_tool._print_step_banner"):
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(cli_detector.shutil, "which", fake_which)
+    monkeypatch.setattr(cli_detector.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_detector, "console", mock.Mock(print=capture_print))
+    monkeypatch.setattr(cli_detector, "_print_step_banner", lambda title: printed.append(f"BANNER:{title}"))
 
-        mock_console.print.side_effect = capture_print
-        results = detect_and_bootstrap_cli()
+    results = detect_and_bootstrap_cli()
+    return "\n".join(printed), results, subprocess_calls
 
-    output = "\n".join(printed)
-    return output, results
-
-
-# ---------------------------------------------------------------------------
-# Helper: capture output from detect_cli_tools
-# ---------------------------------------------------------------------------
 
 def _run_legacy_capture(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    inputs: list[str] | None = None,
+    *,
     cli_paths: dict[str, str] | None = None,
     env_keys: dict[str, str] | None = None,
-) -> str:
-    """Run detect_cli_tools with mocked boundaries, return captured output."""
-    cli_paths = cli_paths or {}
-    env_keys = env_keys or {}
+    npm_available: bool = True,
+    install_succeeds: bool = True,
+) -> tuple[str, list[list[str]]]:
+    cli_paths = dict(cli_paths or {})
+    env_keys = dict(env_keys or {})
+    _clear_keys(monkeypatch)
+    _prepare_home(monkeypatch, tmp_path)
+    for key, value in env_keys.items():
+        monkeypatch.setenv(key, value)
 
-    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY"):
-        monkeypatch.delenv(var, raising=False)
-    for k, v in env_keys.items():
-        monkeypatch.setenv(k, v)
+    input_iter = iter(inputs or [])
 
-    def mock_which(cmd):
-        return cli_paths.get(cmd)
+    def fake_input(_prompt: str = "") -> str:
+        return next(input_iter, "n")
 
-    printed = []
+    def fake_which(command: str) -> str | None:
+        if command == "npm":
+            return "/mock/bin/npm" if npm_available else None
+        return cli_paths.get(command)
 
-    def capture_print(*args, **kwargs):
-        printed.append(" ".join(str(a) for a in args))
+    subprocess_calls: list[list[str]] = []
 
-    with mock.patch("pdd.cli_detector._which", side_effect=mock_which), \
-         mock.patch("pdd.cli_detector.console") as mock_console, \
-         mock.patch("pdd.cli_detector._npm_available", return_value=False):
-        mock_console.print.side_effect = capture_print
-        detect_cli_tools()
+    def fake_run(command: list[str], **_: object) -> CompletedProcess[str]:
+        subprocess_calls.append(command)
+        return CompletedProcess(command, 0 if install_succeeds else 1, "", "")
 
-    return "\n".join(printed)
+    printed: list[str] = []
 
+    def capture_print(*args: object, **_: object) -> None:
+        printed.append(" ".join(str(arg) for arg in args))
 
-# ===================================================================
-# 1. CliBootstrapResult data model
-# ===================================================================
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(cli_detector.shutil, "which", fake_which)
+    monkeypatch.setattr(cli_detector.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli_detector, "console", mock.Mock(print=capture_print))
+
+    detect_cli_tools()
+    return "\n".join(printed), subprocess_calls
 
 
 class TestCliBootstrapResult:
-    """Pure contract tests for the result dataclass."""
+    def test_defaults_to_empty_values(self) -> None:
+        result = CliBootstrapResult()
+        assert result.cli_name == ""
+        assert result.provider == ""
+        assert result.cli_path == ""
+        assert result.api_key_configured is False
+        assert result.skipped is False
 
-    def test_defaults_to_empty(self):
-        r = CliBootstrapResult()
-        assert r.cli_name == ""
-        assert r.provider == ""
-        assert r.cli_path == ""
-        assert r.api_key_configured is False
-        assert r.skipped is False
+    def test_skipped_result_preserves_defaults(self) -> None:
+        result = CliBootstrapResult(skipped=True)
+        assert result.skipped is True
+        assert result.cli_name == ""
+        assert result.provider == ""
 
-    def test_skipped_result(self):
-        r = CliBootstrapResult(skipped=True)
-        assert r.skipped is True
-        assert r.cli_name == ""
+    def test_populated_result(self) -> None:
+        result = CliBootstrapResult("claude", "anthropic", "/mock/bin/claude", True)
+        assert result.cli_name == "claude"
+        assert result.provider == "anthropic"
+        assert result.cli_path == "/mock/bin/claude"
+        assert result.api_key_configured is True
+        assert result.skipped is False
 
-    def test_populated_result(self):
-        r = CliBootstrapResult(
-            cli_name="claude", provider="anthropic",
-            cli_path="/usr/local/bin/claude", api_key_configured=True,
+
+class TestConstants:
+    def test_provider_constants_include_opencode(self) -> None:
+        assert PROVIDER_PRIMARY_KEY["anthropic"] == "ANTHROPIC_API_KEY"
+        assert PROVIDER_PRIMARY_KEY["openai"] == "OPENAI_API_KEY"
+        assert PROVIDER_PRIMARY_KEY["google"] == "GEMINI_API_KEY"
+        assert PROVIDER_PRIMARY_KEY["opencode"] is None
+        assert PROVIDER_DISPLAY["opencode"] == "OpenCode CLI"
+        assert CLI_PREFERENCE == ["claude", "codex", "gemini", "opencode"]
+        assert SHELL_RC_MAP["fish"] == "~/.config/fish/config.fish"
+
+    def test_opencode_npm_package_is_opencode_ai(self) -> None:
+        assert cli_detector._CLI_NPM_PACKAGE["opencode"] == "opencode-ai"
+
+
+class TestCliDetection:
+    def test_table_shows_all_four_clis_in_spec_order(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["q"],
+            cli_paths=ALL_CLI_PATHS,
+            env_keys=ALL_KEYS,
         )
-        assert r.cli_name == "claude"
-        assert r.provider == "anthropic"
-        assert r.cli_path == "/usr/local/bin/claude"
-        assert r.api_key_configured is True
-        assert r.skipped is False
+        assert "BANNER:Step: Detect & bootstrap agentic CLI" in output
+        assert output.index("Claude CLI") < output.index("Codex CLI") < output.index("Gemini CLI") < output.index("OpenCode CLI")
+        assert results == [CliBootstrapResult(skipped=True)]
+
+    def test_find_cli_uses_shutil_which_first(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cli_detector.shutil, "which", lambda command: f"/which/{command}")
+        assert cli_detector._find_cli("claude") == "/which/claude"
+
+    def test_find_cli_uses_local_bin_fallback(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _prepare_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(cli_detector.shutil, "which", lambda _command: None)
+        binary = tmp_path / ".local" / "bin" / "codex"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+        assert cli_detector._find_cli("codex") == str(binary)
+
+    def test_find_cli_uses_nvm_version_fallback(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _prepare_home(monkeypatch, tmp_path)
+        monkeypatch.setattr(cli_detector.shutil, "which", lambda _command: None)
+        binary = tmp_path / ".nvm" / "versions" / "node" / "v22.0.0" / "bin" / "gemini"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+        assert cli_detector._find_cli("gemini") == str(binary)
 
 
-# ===================================================================
-# 2. detect_and_bootstrap_cli — Selection table & input parsing
-# ===================================================================
-
-
-class TestBootstrapSelectionTable:
-    """Tests for the numbered table display and user input parsing."""
-
-    def test_table_shows_all_three_clis(self, monkeypatch, tmp_path):
-        output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+class TestBootstrapSelection:
+    def test_select_single_cli(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1"],
+            cli_paths=ALL_CLI_PATHS,
+            env_keys=ALL_KEYS,
         )
-        assert "Claude CLI" in output
-        assert "Codex CLI" in output
-        assert "Gemini CLI" in output
-
-    def test_table_shows_install_and_key_status(self, monkeypatch, tmp_path):
-        output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
-        )
-        # Claude is installed with key
-        assert "Found at" in output
-        assert "ANTHROPIC_API_KEY" in output
-        # Others are not installed
-        assert "Not found" in output
-
-    def test_select_single_cli(self, monkeypatch, tmp_path):
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
-        )
-        assert len(results) == 1
-        assert results[0].cli_name == "claude"
+        assert [result.cli_name for result in results] == ["claude"]
         assert results[0].provider == "anthropic"
         assert results[0].api_key_configured is True
 
-    def test_multi_select_comma_separated(self, monkeypatch, tmp_path):
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1,3"],
-            cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
+    def test_multi_select_with_spaces_and_deduplication(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1, 1, 3"],
+            cli_paths=ALL_CLI_PATHS,
+            env_keys=ALL_KEYS,
         )
-        assert len(results) == 2
-        assert results[0].cli_name == "claude"
-        assert results[1].cli_name == "gemini"
+        assert [result.cli_name for result in results] == ["claude", "gemini"]
 
-    def test_multi_select_with_spaces(self, monkeypatch, tmp_path):
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1, 3"],
-            cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
-        )
-        assert len(results) == 2
-        assert results[0].cli_name == "claude"
-        assert results[1].cli_name == "gemini"
-
-    def test_duplicate_input_deduplicated(self, monkeypatch, tmp_path):
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1,1,3"],
-            cli_paths=ALL_INSTALLED, env_keys=ALL_KEYS,
-        )
-        assert len(results) == 2
-        assert results[0].cli_name == "claude"
-        assert results[1].cli_name == "gemini"
-
-    def test_empty_input_defaults_to_installed_with_key(self, monkeypatch, tmp_path):
-        """Empty input → default to first CLI that is installed AND has a key."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, [""],
-            cli_paths={"gemini": "/usr/bin/gemini"},
+    def test_empty_input_defaults_to_installed_with_key_by_preference(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            [""],
+            cli_paths={"gemini": "/mock/bin/gemini", "codex": "/mock/bin/codex"},
             env_keys={"GEMINI_API_KEY": "gm-test"},
         )
-        assert len(results) == 1
-        assert results[0].cli_name == "gemini"
-        assert "Defaulting" in output
+        assert [result.cli_name for result in results] == ["gemini"]
 
-    def test_empty_input_defaults_to_installed_when_no_keys(self, monkeypatch, tmp_path):
-        """No keys set → default to first installed CLI."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["", ""],  # selection + key prompt skip
-            cli_paths={"codex": "/usr/bin/codex"},
+    def test_empty_input_defaults_to_installed_without_key(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["", "n"],
+            cli_paths={"codex": "/mock/bin/codex"},
         )
-        assert len(results) == 1
-        assert results[0].cli_name == "codex"
+        assert [result.cli_name for result in results] == ["codex"]
+        assert results[0].api_key_configured is False
 
-    def test_invalid_input_falls_back_to_default(self, monkeypatch, tmp_path):
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["xyz"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
-        )
-        assert len(results) == 1
-        assert "Invalid input" in output or "Defaulting" in output
-
-    @pytest.mark.parametrize("quit_input", ["q", "n"])
-    def test_quit_returns_skipped(self, monkeypatch, tmp_path, quit_input):
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, [quit_input],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
-        )
-        assert len(results) == 1
+    def test_empty_input_defaults_to_claude_when_nothing_available(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(monkeypatch, tmp_path, ["", "n"])
+        assert [result.cli_name for result in results] == ["claude"]
         assert results[0].skipped is True
+        assert "Cannot test Claude CLI" in output
 
-
-# ===================================================================
-# 3. detect_and_bootstrap_cli — Install flow
-# ===================================================================
-
-
-class TestBootstrapInstallFlow:
-    """Tests for CLI installation behavior."""
-
-    def test_installed_cli_skips_install_prompt(self, monkeypatch, tmp_path):
-        """If CLI is already found, no install prompt is shown."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+    def test_invalid_input_defaults_to_default(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["invalid"],
+            cli_paths={"claude": "/mock/bin/claude"},
+            env_keys={"ANTHROPIC_API_KEY": "sk-ant-test"},
         )
-        assert results[0].cli_name == "claude"
-        assert "Install now?" not in output
+        assert "Defaulting to 1" in output
+        assert [result.cli_name for result in results] == ["claude"]
 
-    def test_not_installed_user_accepts_npm_succeeds(self, monkeypatch, tmp_path):
-        """User accepts install, npm present, install succeeds."""
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "y", ""],  # select, accept install, skip key
+    @pytest.mark.parametrize("selection", ["q", "n"])
+    def test_q_or_n_returns_skipped(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, selection: str) -> None:
+        _, results, _ = _run_bootstrap_capture(monkeypatch, tmp_path, [selection])
+        assert results == [CliBootstrapResult(skipped=True)]
+
+
+class TestInstallFlow:
+    def test_installed_cli_skips_npm_install(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, calls = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1"],
+            cli_paths={"claude": "/mock/bin/claude"},
+            env_keys={"ANTHROPIC_API_KEY": "sk-ant-test"},
+        )
+        assert results[0].cli_path == "/mock/bin/claude"
+        assert ["npm", "install", "-g", "@anthropic-ai/claude-code"] not in calls
+
+    def test_missing_cli_installs_with_npm_package(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, calls = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["4", "y", "n"],
             npm_available=True,
             install_succeeds=True,
-            install_then_found="/usr/local/bin/claude",
+            install_then_found={"opencode": "/mock/bin/opencode"},
         )
-        assert len(results) == 1
-        assert results[0].cli_name == "claude"
-        assert results[0].cli_path == "/usr/local/bin/claude"
-        assert results[0].skipped is False
+        assert ["npm", "install", "-g", "opencode-ai"] in calls
+        assert results[0].cli_name == "opencode"
+        assert results[0].cli_path == "/mock/bin/opencode"
+        assert results[0].api_key_configured is False
 
-    def test_not_installed_npm_missing(self, monkeypatch, tmp_path):
-        """User accepts install but npm is not available."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "y"],  # select, accept install
-            npm_available=False,
-        )
+    def test_npm_missing_marks_current_cli_skipped(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, calls = _run_bootstrap_capture(monkeypatch, tmp_path, ["1", "y"])
         assert results[0].skipped is True
-        assert "npm" in output.lower()
+        assert "npm is not installed" in output
+        assert not calls
+        assert "Cannot test Claude CLI" in output
 
-    def test_not_installed_install_fails(self, monkeypatch, tmp_path):
-        """Install command exits non-zero."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "y"],  # select, accept install
+    def test_install_failure_continues_to_later_selection(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, calls = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1,2", "y"],
+            cli_paths={"codex": "/mock/bin/codex"},
+            env_keys={"OPENAI_API_KEY": "sk-openai-test"},
             npm_available=True,
             install_succeeds=False,
         )
+        assert ["npm", "install", "-g", "@anthropic-ai/claude-code"] in calls
+        assert [result.cli_name for result in results] == ["claude", "codex"]
         assert results[0].skipped is True
-        assert "failed" in output.lower() or "manually" in output.lower()
+        assert results[1].skipped is False
 
-    def test_not_installed_user_declines(self, monkeypatch, tmp_path):
-        """User declines install."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "n"],  # select, decline install
-        )
+    def test_user_declines_install_marks_skipped(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(monkeypatch, tmp_path, ["1", "n"])
         assert results[0].skipped is True
-        assert "not configured" in output.lower()
+        assert "Skipping Claude CLI" in output
+        assert "Cannot test Claude CLI" in output
 
-    def test_install_succeeds_but_binary_not_found(self, monkeypatch, tmp_path):
-        """Install exits 0 but binary still not on PATH."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "y"],  # select, accept install
+    def test_install_success_but_binary_not_found_is_skipped(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1", "y"],
             npm_available=True,
             install_succeeds=True,
-            install_then_found=None,  # not found after install
         )
         assert results[0].skipped is True
-        assert "not found on PATH" in output or "not configured" in output.lower()
+        assert "not found on PATH" in output
 
 
-# ===================================================================
-# 4. detect_and_bootstrap_cli — API key flow
-# ===================================================================
-
-
-class TestBootstrapApiKeyFlow:
-    """Tests for API key configuration behavior."""
-
-    def test_key_already_set_skips_prompt(self, monkeypatch, tmp_path):
-        """If key is already in env, no prompt for it."""
-        output, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
+class TestApiKeyFlow:
+    def test_existing_key_skips_key_prompt(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1"],
+            cli_paths={"claude": "/mock/bin/claude"},
+            env_keys={"ANTHROPIC_API_KEY": "sk-ant-test"},
         )
         assert results[0].api_key_configured is True
-        assert "Enter your" not in output
+        assert "ANTHROPIC_API_KEY is set" in output
 
-    def test_key_not_set_user_provides(self, monkeypatch, tmp_path):
-        """User provides key when prompted."""
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "sk-new-key"],  # select, provide key
-            cli_paths=CLAUDE_ONLY,
+    def test_new_key_is_saved_to_env_file_and_process_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1", "y", "sk-new-key"],
+            cli_paths={"claude": "/mock/bin/claude"},
         )
         assert results[0].api_key_configured is True
-        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-new-key"
+        assert os.environ["ANTHROPIC_API_KEY"] == "sk-new-key"
+        assert (tmp_path / ".pdd" / "api-env.bash").read_text() == "export ANTHROPIC_API_KEY=sk-new-key\n"
+        assert f"source {tmp_path / '.pdd' / 'api-env.bash'}" in (tmp_path / ".bashrc").read_text()
 
-    def test_key_saved_to_file(self, monkeypatch, tmp_path):
-        """Provided key is written to ~/.pdd/api-env.bash."""
-        _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "sk-saved-key"],
-            cli_paths=CLAUDE_ONLY,
-        )
-        api_env = tmp_path / ".pdd" / "api-env.bash"
-        assert api_env.exists()
-        content = api_env.read_text()
-        assert "export ANTHROPIC_API_KEY=sk-saved-key" in content
-
-    def test_source_line_added_to_rc(self, monkeypatch, tmp_path):
-        """Source line is added to ~/.bashrc."""
-        _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", "sk-test"],
-            cli_paths=CLAUDE_ONLY,
-        )
-        rc_content = (tmp_path / ".bashrc").read_text()
-        api_env_path = str(tmp_path / ".pdd" / "api-env.bash")
-        assert f"source {api_env_path}" in rc_content
-
-    def test_key_not_set_user_skips(self, monkeypatch, tmp_path):
-        """User presses Enter to skip key."""
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", ""],  # select, skip key
-            cli_paths=CLAUDE_ONLY,
+    def test_user_declines_key_configuration(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["2", "n"],
+            cli_paths={"codex": "/mock/bin/codex"},
         )
         assert results[0].api_key_configured is False
 
-    def test_anthropic_skip_shows_subscription_note(self, monkeypatch, tmp_path):
-        """Skipping Anthropic key mentions subscription auth."""
-        output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["1", ""],  # select, skip key
-            cli_paths=CLAUDE_ONLY,
-        )
-        assert "subscription" in output.lower()
-
-    def test_non_anthropic_skip_shows_limited_note(self, monkeypatch, tmp_path):
-        """Skipping non-Anthropic key mentions limited functionality."""
-        output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path,
-            ["2", ""],  # select codex, skip key
-            cli_paths={"codex": "/usr/bin/codex"},
-        )
-        assert "limited functionality" in output.lower()
-
-    def test_google_checks_gemini_key(self, monkeypatch, tmp_path):
-        """Google provider recognizes GEMINI_API_KEY."""
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["3"],
-            cli_paths={"gemini": "/usr/bin/gemini"},
-            env_keys={"GEMINI_API_KEY": "gm-test"},
+    def test_google_prefers_gemini_key_over_google_key(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["3"],
+            cli_paths={"gemini": "/mock/bin/gemini"},
+            env_keys={"GOOGLE_API_KEY": "google-test", "GEMINI_API_KEY": "gemini-test"},
         )
         assert results[0].api_key_configured is True
+        assert "GEMINI_API_KEY is set" in output
 
-    def test_google_checks_google_api_key(self, monkeypatch, tmp_path):
-        """Google provider recognizes GOOGLE_API_KEY."""
-        _, results = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["3"],
-            cli_paths={"gemini": "/usr/bin/gemini"},
-            env_keys={"GOOGLE_API_KEY": "gm-test"},
+    def test_google_falls_back_to_google_api_key_display(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["3"],
+            cli_paths={"gemini": "/mock/bin/gemini"},
+            env_keys={"GOOGLE_API_KEY": "google-test"},
         )
         assert results[0].api_key_configured is True
+        assert "GOOGLE_API_KEY is set" in output
 
-
-# ===================================================================
-# 5. detect_and_bootstrap_cli — CLI test step
-# ===================================================================
-
-
-class TestBootstrapCliTest:
-    """Tests for the forced CLI verification step."""
-
-    def test_cli_test_runs_after_setup(self, monkeypatch, tmp_path):
-        """CLI test always runs, output includes version info."""
-        output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
-            cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
-            version_output="2.5.0",
+    def test_google_saves_primary_gemini_key(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["3", "y", "gemini-new"],
+            cli_paths={"gemini": "/mock/bin/gemini"},
         )
-        assert "Testing" in output
-        assert "2.5.0" in output or "version" in output.lower()
+        assert results[0].api_key_configured is True
+        assert (tmp_path / ".pdd" / "api-env.bash").read_text() == "export GEMINI_API_KEY=gemini-new\n"
 
-
-# ===================================================================
-# 6. detect_and_bootstrap_cli — Interrupt handling
-# ===================================================================
-
-
-class TestBootstrapInterrupts:
-    """Tests for graceful interrupt handling."""
-
-    def test_keyboard_interrupt_on_selection(self, monkeypatch, tmp_path):
-        """KeyboardInterrupt at selection prompt → skipped result."""
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
-            monkeypatch.delenv(var, raising=False)
-        monkeypatch.setenv("SHELL", "/bin/bash")
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-
-        monkeypatch.setattr(
-            "pdd.cli_detector._prompt_input",
-            mock.MagicMock(side_effect=KeyboardInterrupt),
+    def test_opencode_accepts_any_provider_key(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["4"],
+            cli_paths={"opencode": "/mock/bin/opencode"},
+            env_keys={"GROQ_API_KEY": "groq-test"},
         )
+        assert results[0].api_key_configured is True
+        assert "GROQ_API_KEY" in output
 
-        with mock.patch("pdd.cli_detector._find_cli_binary", return_value=None), \
-             mock.patch("pdd.cli_detector.console"), \
-             mock.patch("pdd.setup_tool._print_step_banner"):
-            results = detect_and_bootstrap_cli()
-
-        assert len(results) == 1
-        assert results[0].skipped is True
-
-    def test_eof_on_selection(self, monkeypatch, tmp_path):
-        """EOFError at selection prompt → skipped result."""
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
-            monkeypatch.delenv(var, raising=False)
-        monkeypatch.setenv("SHELL", "/bin/bash")
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-
-        monkeypatch.setattr(
-            "pdd.cli_detector._prompt_input",
-            mock.MagicMock(side_effect=EOFError),
+    def test_opencode_accepts_auth_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        auth_file = tmp_path / ".local" / "share" / "opencode" / "auth.json"
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text("{}")
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["4"],
+            cli_paths={"opencode": "/mock/bin/opencode"},
         )
+        assert results[0].api_key_configured is True
+        assert "auth file" in output
 
-        with mock.patch("pdd.cli_detector._find_cli_binary", return_value=None), \
-             mock.patch("pdd.cli_detector.console"), \
-             mock.patch("pdd.setup_tool._print_step_banner"):
-            results = detect_and_bootstrap_cli()
+    def test_opencode_can_save_chosen_provider_key(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["4", "y", "2", "sk-ant-opencode"],
+            cli_paths={"opencode": "/mock/bin/opencode"},
+        )
+        assert results[0].api_key_configured is True
+        assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-opencode"
+        assert (tmp_path / ".pdd" / "api-env.bash").read_text() == "export ANTHROPIC_API_KEY=sk-ant-opencode\n"
 
-        assert len(results) == 1
-        assert results[0].skipped is True
-
-
-# ===================================================================
-# 7. detect_and_bootstrap_cli — API key persistence (shell variants)
-# ===================================================================
+    def test_opencode_decline_mentions_auth_login(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, results, _ = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["4", "n"],
+            cli_paths={"opencode": "/mock/bin/opencode"},
+        )
+        assert results[0].api_key_configured is False
+        assert "opencode auth login" in output
 
 
 class TestApiKeyPersistence:
-    """Tests for key file format across shell types."""
-
-    def test_fish_shell_syntax(self, monkeypatch, tmp_path):
-        """Fish shell uses set -gx and fish source syntax."""
-        monkeypatch.setenv("SHELL", "/usr/bin/fish")
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-
-        # Create fish config
-        fish_config = tmp_path / ".config" / "fish" / "config.fish"
-        fish_config.parent.mkdir(parents=True)
-        fish_config.write_text("")
-
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
-            monkeypatch.delenv(var, raising=False)
-
-        input_iter = iter(["1", "sk-fish-key"])
-        monkeypatch.setattr(
-            "pdd.cli_detector._prompt_input",
-            lambda _prompt="": next(input_iter),
+    def test_zsh_uses_zshrc_and_export_syntax(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1", "y", "sk-zsh"],
+            cli_paths={"claude": "/mock/bin/claude"},
+            shell="/bin/zsh",
         )
+        assert (tmp_path / ".pdd" / "api-env.zsh").read_text() == "export ANTHROPIC_API_KEY=sk-zsh\n"
+        assert f"source {tmp_path / '.pdd' / 'api-env.zsh'}" in (tmp_path / ".zshrc").read_text()
 
-        with mock.patch("pdd.cli_detector._find_cli_binary") as mock_find, \
-             mock.patch("pdd.cli_detector.console"), \
-             mock.patch("subprocess.run") as mock_run, \
-             mock.patch("shutil.which", return_value=None), \
-             mock.patch("pdd.setup_tool._print_step_banner"):
-            mock_find.side_effect = lambda n: "/usr/bin/claude" if n == "claude" else None
-            mock_run.return_value = mock.MagicMock(returncode=0, stdout="1.0", stderr="")
-            detect_and_bootstrap_cli()
-
-        api_env = tmp_path / ".pdd" / "api-env.fish"
-        assert api_env.exists()
-        content = api_env.read_text()
-        assert "set -gx ANTHROPIC_API_KEY sk-fish-key" in content
-
-        rc_content = fish_config.read_text()
-        assert "test -f" in rc_content
-        assert "and source" in rc_content
-
-    def test_duplicate_key_deduplicated(self, monkeypatch, tmp_path):
-        """Saving the same key twice doesn't create duplicate lines."""
-        monkeypatch.setenv("SHELL", "/bin/bash")
-        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
-        (tmp_path / ".bashrc").write_text("")
-
-        for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                     "GEMINI_API_KEY"):
-            monkeypatch.delenv(var, raising=False)
-
-        # First save
-        input_iter = iter(["1", "sk-first"])
-        monkeypatch.setattr(
-            "pdd.cli_detector._prompt_input",
-            lambda _prompt="": next(input_iter),
+    def test_fish_uses_set_gx_and_fish_source_line(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1", "y", "sk-fish"],
+            cli_paths={"claude": "/mock/bin/claude"},
+            shell="/usr/bin/fish",
         )
-        with mock.patch("pdd.cli_detector._find_cli_binary") as mock_find, \
-             mock.patch("pdd.cli_detector.console"), \
-             mock.patch("subprocess.run") as mock_run, \
-             mock.patch("shutil.which", return_value=None), \
-             mock.patch("pdd.setup_tool._print_step_banner"):
-            mock_find.side_effect = lambda n: "/usr/bin/claude" if n == "claude" else None
-            mock_run.return_value = mock.MagicMock(returncode=0, stdout="1.0", stderr="")
-            detect_and_bootstrap_cli()
+        assert (tmp_path / ".pdd" / "api-env.fish").read_text() == "set -gx ANTHROPIC_API_KEY sk-fish\n"
+        rc_text = (tmp_path / ".config" / "fish" / "config.fish").read_text()
+        assert f"test -f {tmp_path / '.pdd' / 'api-env.fish'} ; and source {tmp_path / '.pdd' / 'api-env.fish'}" in rc_text
 
-        # Second save (overwrite key)
+    def test_duplicate_key_lines_are_deduplicated(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _run_bootstrap_capture(monkeypatch, tmp_path, ["1", "y", "sk-first"], cli_paths={"claude": "/mock/bin/claude"})
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        input_iter2 = iter(["1", "sk-second"])
-        monkeypatch.setattr(
-            "pdd.cli_detector._prompt_input",
-            lambda _prompt="": next(input_iter2),
+        _run_bootstrap_capture(monkeypatch, tmp_path, ["1", "y", "sk-second"], cli_paths={"claude": "/mock/bin/claude"})
+        lines = (tmp_path / ".pdd" / "api-env.bash").read_text().splitlines()
+        assert lines == ["export ANTHROPIC_API_KEY=sk-second"]
+        assert (tmp_path / ".bashrc").read_text().count("source ") == 1
+
+
+class TestCliVerification:
+    def test_version_success_is_reported(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, _, calls = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1"],
+            cli_paths={"claude": "/mock/bin/claude"},
+            env_keys={"ANTHROPIC_API_KEY": "sk-ant-test"},
+            version_output="claude 2.5.0",
         )
-        with mock.patch("pdd.cli_detector._find_cli_binary") as mock_find, \
-             mock.patch("pdd.cli_detector.console"), \
-             mock.patch("subprocess.run") as mock_run, \
-             mock.patch("shutil.which", return_value=None), \
-             mock.patch("pdd.setup_tool._print_step_banner"):
-            mock_find.side_effect = lambda n: "/usr/bin/claude" if n == "claude" else None
-            mock_run.return_value = mock.MagicMock(returncode=0, stdout="1.0", stderr="")
-            detect_and_bootstrap_cli()
+        assert ["/mock/bin/claude", "--version"] in calls
+        assert "claude 2.5.0" in output
 
-        api_env = tmp_path / ".pdd" / "api-env.bash"
-        content = api_env.read_text()
-        # Should have only one export line for ANTHROPIC_API_KEY
-        export_lines = [l for l in content.splitlines()
-                        if "ANTHROPIC_API_KEY" in l]
-        assert len(export_lines) == 1
-        assert "sk-second" in export_lines[0]
+    def test_help_is_used_when_version_fails(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, _, calls = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["2"],
+            cli_paths={"codex": "/mock/bin/codex"},
+            env_keys={"OPENAI_API_KEY": "sk-openai-test"},
+            version_returncode=1,
+            help_output="codex help",
+        )
+        assert ["/mock/bin/codex", "--version"] in calls
+        assert ["/mock/bin/codex", "--help"] in calls
+        assert "codex help" in output
 
 
-# ===================================================================
-# 8. detect_cli_tools — Legacy detection
-# ===================================================================
+class TestInterruptHandling:
+    @pytest.mark.parametrize("error", [KeyboardInterrupt(), EOFError()])
+    def test_selection_interrupt_returns_skipped(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: BaseException) -> None:
+        _, results, _ = _run_bootstrap_capture(monkeypatch, tmp_path, [error])
+        assert results == [CliBootstrapResult(skipped=True)]
+
+    def test_eof_during_key_prompt_is_graceful(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, results, calls = _run_bootstrap_capture(
+            monkeypatch,
+            tmp_path,
+            ["1", "y", EOFError()],
+            cli_paths={"claude": "/mock/bin/claude"},
+        )
+        assert results[0].api_key_configured is False
+        assert ["/mock/bin/claude", "--version"] in calls
 
 
 class TestDetectCliToolsLegacy:
-    """Tests for the legacy detect_cli_tools function."""
-
-    def test_shows_header(self, monkeypatch):
-        output = _run_legacy_capture(monkeypatch)
-        assert "Agentic CLI Tool Detection" in output
-        assert "pdd fix" in output
-
-    def test_found_cli_shows_checkmark_and_path(self, monkeypatch):
-        output = _run_legacy_capture(
+    def test_reports_all_four_clis_and_key_status(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, _ = _run_legacy_capture(
             monkeypatch,
-            cli_paths={"claude": "/usr/local/bin/claude"},
-            env_keys=CLAUDE_KEY,
-        )
-        assert "Claude CLI" in output
-        assert "Found at" in output or "/usr/local/bin/claude" in output
-
-    def test_missing_cli_shows_not_found(self, monkeypatch):
-        output = _run_legacy_capture(monkeypatch)
-        assert "Not found" in output
-
-    def test_key_set_but_cli_missing_suggests_install(self, monkeypatch):
-        output = _run_legacy_capture(
-            monkeypatch,
-            env_keys={"OPENAI_API_KEY": "sk-test"},
-        )
-        assert "OPENAI_API_KEY" in output
-        assert "not installed" in output.lower() or "install" in output.lower()
-
-    def test_all_installed_with_keys_shows_success(self, monkeypatch):
-        output = _run_legacy_capture(
-            monkeypatch,
-            cli_paths=ALL_INSTALLED,
+            tmp_path,
+            cli_paths=ALL_CLI_PATHS,
             env_keys=ALL_KEYS,
         )
-        assert "All CLI tools" in output
+        assert "Detecting agentic CLI tools" in output
+        for display in ("Claude CLI", "Codex CLI", "Gemini CLI", "OpenCode CLI"):
+            assert display in output
+        assert "ANTHROPIC_API_KEY is set" in output
+        assert "GEMINI_API_KEY is set" in output
+        assert "OpenCode auth via OPENAI_API_KEY" in output
 
-    def test_no_clis_found_shows_quick_start(self, monkeypatch):
-        output = _run_legacy_capture(monkeypatch)
-        assert "No CLI tools found" in output or "Quick start" in output
+    def test_missing_cli_with_matching_key_offers_install(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, calls = _run_legacy_capture(
+            monkeypatch,
+            tmp_path,
+            ["y"],
+            env_keys={"OPENAI_API_KEY": "sk-openai-test"},
+        )
+        assert "Codex CLI not found" in output
+        assert ["npm", "install", "-g", "@openai/codex"] in calls
+
+    def test_missing_cli_without_key_does_not_install(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        output, calls = _run_legacy_capture(monkeypatch, tmp_path, inputs=["y"])
+        assert "Claude CLI not found" in output
+        assert "ANTHROPIC_API_KEY not set" in output
+        assert calls == []
+
+    def test_opencode_missing_with_provider_key_installs_opencode_ai(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _, calls = _run_legacy_capture(
+            monkeypatch,
+            tmp_path,
+            ["y"],
+            env_keys={"GITHUB_TOKEN": "ghp-test"},
+        )
+        assert ["npm", "install", "-g", "opencode-ai"] in calls

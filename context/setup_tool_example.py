@@ -14,7 +14,7 @@ def main() -> None:
     """
     Demonstrates how to use the setup_tool module to:
     1. Launch the two-phase pdd setup flow
-    2. Phase 1: Bootstrap agentic CLIs (Claude/Gemini/Codex)
+    2. Phase 1: Bootstrap agentic CLIs (Claude/Gemini/Codex/OpenCode)
     3. Phase 2: Auto-configure API keys, models, and .pddrc
 
     The setup flow is mostly automatic. Phase 1 asks 0-2 questions
@@ -39,7 +39,7 @@ def main() -> None:
     #     ✓ ANTHROPIC_API_KEY   shell environment
     #     ✓ GEMINI_API_KEY      shell environment
     #
-    #     2 API key(s) found.
+    #     Found 2 API key(s).
     #     You can edit your global API keys in ~/.pdd/api-env.zsh
     #
     #   Press Enter to continue to the next step...
@@ -47,41 +47,46 @@ def main() -> None:
     #   ────────────────────────────────────────
     #   Configuring models...
     #   ────────────────────────────────────────
-    #     ✓ 3 new model(s) added to ~/.pdd/llm_model.csv
-    #     ✓ 4 model(s) configured
-    #       Anthropic: 3 models
-    #       Google: 1 model
-    #     ✓ .pddrc detected at /path/to/project/.pddrc
+    #     ✓ Added 3 new model(s) to ~/.pdd/llm_model.csv
+    #
+    #     Total: 4 model(s) configured
+    #       Anthropic: 3
+    #       Google: 1
+    #     ✓ .pddrc detected in this project
     #
     #   Press Enter to continue to the next step...
     #
     #   ────────────────────────────────────────
     #   Testing and summarizing...
     #   ────────────────────────────────────────
-    #     Testing anthropic/claude-sonnet-4-5-20250929......
-    #     ✓ claude-sonnet-4-5-20250929 responded OK (1.2s)
+    #     Selected model: anthropic/claude-sonnet-4-5-20250929
+    #     Testing......
+    #     ✓ anthropic/claude-sonnet-4-5-20250929 responded OK (1.2s, $0.0001)
     #
     #     PDD Setup Complete!
     #
-    #       CLI:       ✓ claude configured
-    #       API Keys:  ✓ 2 found
-    #       Models:    4 configured (Anthropic: 3, Google: 1) in ~/.pdd/llm_model.csv
-    #       .pddrc:    ✓ exists
-    #       Test:      ✓ claude-sonnet-4-5-20250929 responded OK (1.2s)
+    #       ✓ CLI: claude
+    #       ✓ API Keys: 2 found
+    #       ✓ Models: 4 (Anthropic: 3, Google: 1)
+    #           ~/.pdd/llm_model.csv
+    #       ✓ .pddrc: exists
+    #       ✓ Test: anthropic/claude-sonnet-4-5-20250929 OK
     #
     #   Press Enter to finish, or 'm' for more options:
     #
     #   (user presses Enter)
     #
     #   ────────────────────────────────────────────────────────────────────────────────
-    #   QUICK START:
-    #   1. Generate code from the sample prompt:
-    #      pdd generate success_python.prompt
-    #   ────────────────────────────────────────────────────────────────────────────────
-    #   LEARN MORE:
-    #   • PDD documentation: pdd --help
-    #   • PDD website: https://promptdriven.ai/
-    #   • Discord community: https://discord.gg/Yp4RTh8bG7
+    #   QUICK START
+    #     pdd generate success_python.prompt
+    #
+    #   LEARN MORE
+    #     • pdd --help
+    #     • https://promptdriven.ai
+    #     • Discord: https://discord.gg/Yp4RTh8bG7
+    #
+    #   Important: To load your API keys into this terminal session, run:
+    #     source ~/.pdd/api-env.zsh
     #
     #   Full summary saved to PDD-SETUP-SUMMARY.txt
     #
@@ -91,7 +96,7 @@ def main() -> None:
     #     1. Add a provider
     #     2. Test a model
     #
-    #   Select an option (Enter to finish):
+    #   Choose (Enter to exit):
     pass
 
 

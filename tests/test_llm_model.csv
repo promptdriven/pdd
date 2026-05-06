@@ -1,0 +1,206 @@
+# Test plan for pdd/data/llm_model.csv
+# 1. test_header_matches_spec: exact required CSV columns in spec order.
+# 2. test_rows_are_well_formed: valid CSV row shape with no parser overflow.
+# 3. test_required_providers_are_present: comprehensive provider coverage.
+# 4. test_provider_and_model_values_are_nonempty_unique_strings: provider/model constraints and no duplicate entries.
+# 5. test_price_columns_are_usd_per_million_token_numbers: input/output numeric ranges and selected current prices.
+# 6. test_nullable_integer_columns: coding_arena_elo and max_reasoning_tokens are integer-or-blank.
+# 7. test_api_key_column_contains_environment_variable_names: api_key names concrete env vars.
+# 8. test_base_urls_are_optional_http_urls: provider base URLs are blank or HTTP(S).
+# 9. test_structured_output_is_boolean_text_and_covers_both_branches: True/False only, both values covered.
+# 10. test_reasoning_models_have_reasoning_token_limits: reasoning-capable rows include expected limits.
+# 11. test_local_ollama_rows_are_free_and_unstructured: local model branch has zero costs and False structured output.
+# 12. test_example_script_runs_from_any_working_directory: example has visible output and does not depend on cwd.
+# 13. test_catalog_can_be_loaded_as_package_data_resource: CSV is reachable in the package data location.
+# 14. Parameter forwarding: not applicable because the deliverable is a static CSV resource and calls no dependencies.
+# 15. Error cases: malformed headers, non-numeric prices, invalid booleans, duplicate model rows, and bad URLs fail the tests above.
+
+import csv
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CATALOG_PATH = ROOT / "pdd" / "data" / "llm_model.csv"
+EXAMPLE_PATH = ROOT / "context" / "llm_model_example.csv"
+EXPECTED_HEADER = [
+    "provider",
+    "model",
+    "input",
+    "output",
+    "coding_arena_elo",
+    "api_key",
+    "base_url",
+    "max_reasoning_tokens",
+    "structured_output",
+]
+REQUIRED_PROVIDERS = {
+    "OpenAI",
+    "Anthropic",
+    "Google",
+    "xAI",
+    "DeepSeek",
+    "Mistral",
+    "Meta",
+    "Qwen",
+    "Cohere",
+    "Groq",
+    "Moonshot",
+    "Ollama",
+    "Azure",
+}
+
+
+def load_rows():
+    with CATALOG_PATH.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    return reader.fieldnames, rows
+
+
+def row_for(provider, model):
+    _, rows = load_rows()
+    matches = [row for row in rows if row["provider"] == provider and row["model"] == model]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def assert_price(provider, model, input_price, output_price):
+    row = row_for(provider, model)
+    assert float(row["input"]) == pytest.approx(input_price)
+    assert float(row["output"]) == pytest.approx(output_price)
+
+
+def test_header_matches_spec():
+    header, _ = load_rows()
+    assert header == EXPECTED_HEADER
+
+
+def test_rows_are_well_formed():
+    _, rows = load_rows()
+    assert len(rows) >= 60
+    assert all(set(row.keys()) == set(EXPECTED_HEADER) for row in rows)
+    assert all(None not in row.values() for row in rows)
+
+
+def test_required_providers_are_present():
+    _, rows = load_rows()
+    providers = {row["provider"] for row in rows}
+    assert REQUIRED_PROVIDERS <= providers
+
+
+def test_provider_and_model_values_are_nonempty_unique_strings():
+    _, rows = load_rows()
+    keys = [(row["provider"], row["model"]) for row in rows]
+    assert len(keys) == len(set(keys))
+    assert all(row["provider"] == row["provider"].strip() and row["provider"] for row in rows)
+    assert all(row["model"] == row["model"].strip() and row["model"] for row in rows)
+    assert row_for("OpenAI", "gpt-5.1")["model"] == "gpt-5.1"
+    assert row_for("Anthropic", "claude-opus-4-5")["model"] == "claude-opus-4-5"
+    assert row_for("Google", "gemini-3-pro-preview")["model"] == "gemini-3-pro-preview"
+
+
+def test_price_columns_are_usd_per_million_token_numbers():
+    _, rows = load_rows()
+    assert all(float(row["input"]) >= 0 for row in rows)
+    assert all(float(row["output"]) >= 0 for row in rows)
+    assert_price("OpenAI", "gpt-5.1", 1.25, 10.00)
+    assert_price("OpenAI", "gpt-5-nano", 0.05, 0.40)
+    assert_price("OpenAI", "gpt-5-pro", 15.00, 120.00)
+    assert_price("Anthropic", "claude-opus-4-5", 5.00, 25.00)
+    assert_price("Anthropic", "claude-sonnet-4-5", 3.00, 15.00)
+    assert_price("Anthropic", "claude-haiku-4-5", 1.00, 5.00)
+    assert_price("Google", "gemini-3-pro-preview", 2.00, 12.00)
+    assert_price("Google", "gemini-2.5-flash", 0.30, 2.50)
+    assert_price("xAI", "grok-4-0709", 3.00, 15.00)
+    assert_price("xAI", "grok-4-fast-reasoning", 0.20, 0.50)
+    assert_price("DeepSeek", "deepseek-chat", 0.28, 0.42)
+    assert_price("DeepSeek", "deepseek-reasoner", 0.28, 0.42)
+    assert_price("Qwen", "qwen3-max", 1.20, 6.00)
+    assert_price("Qwen", "qwen3-coder-plus", 1.00, 5.00)
+    assert_price("Moonshot", "kimi-k2.6", 0.95, 4.00)
+    assert_price("Groq", "llama-3.3-70b-versatile", 0.59, 0.79)
+
+
+def test_nullable_integer_columns():
+    _, rows = load_rows()
+    assert any(row["coding_arena_elo"] == "" for row in rows)
+    assert any(row["coding_arena_elo"] for row in rows)
+    assert any(row["max_reasoning_tokens"] == "" for row in rows)
+    assert any(row["max_reasoning_tokens"] for row in rows)
+    for row in rows:
+        if row["coding_arena_elo"]:
+            assert int(row["coding_arena_elo"]) > 0
+        if row["max_reasoning_tokens"]:
+            assert int(row["max_reasoning_tokens"]) > 0
+
+
+def test_api_key_column_contains_environment_variable_names():
+    _, rows = load_rows()
+    keys = {row["api_key"] for row in rows}
+    assert "OPENAI_API_KEY" in keys
+    assert "ANTHROPIC_API_KEY" in keys
+    assert "GEMINI_API_KEY" in keys
+    assert "OLLAMA_API_KEY" in keys
+    assert all(key.endswith("_API_KEY") and key.upper() == key for key in keys)
+
+
+def test_base_urls_are_optional_http_urls():
+    _, rows = load_rows()
+    assert row_for("OpenAI", "gpt-5.1")["base_url"] == ""
+    assert row_for("xAI", "grok-4-0709")["base_url"] == "https://api.x.ai/v1"
+    assert row_for("Ollama", "llama3.3")["base_url"] == "http://localhost:11434/v1"
+    for row in rows:
+        if row["base_url"]:
+            assert row["base_url"].startswith(("http://", "https://"))
+
+
+def test_structured_output_is_boolean_text_and_covers_both_branches():
+    _, rows = load_rows()
+    values = {row["structured_output"] for row in rows}
+    assert values == {"True", "False"}
+    assert row_for("OpenAI", "gpt-5.1")["structured_output"] == "True"
+    assert row_for("Ollama", "deepseek-r1")["structured_output"] == "False"
+
+
+def test_reasoning_models_have_reasoning_token_limits():
+    assert row_for("OpenAI", "gpt-5.1")["max_reasoning_tokens"] == "128000"
+    assert row_for("OpenAI", "o1-mini")["max_reasoning_tokens"] == "65536"
+    assert row_for("DeepSeek", "deepseek-reasoner")["max_reasoning_tokens"] == "64000"
+    assert row_for("Moonshot", "kimi-k2-thinking")["max_reasoning_tokens"] == "32000"
+
+
+def test_local_ollama_rows_are_free_and_unstructured():
+    _, rows = load_rows()
+    ollama_rows = [row for row in rows if row["provider"] == "Ollama"]
+    assert {row["model"] for row in ollama_rows} == {"llama3.3", "qwen2.5-coder", "deepseek-r1"}
+    assert all(float(row["input"]) == 0.0 for row in ollama_rows)
+    assert all(float(row["output"]) == 0.0 for row in ollama_rows)
+    assert all(row["structured_output"] == "False" for row in ollama_rows)
+    assert all(row["base_url"] == "http://localhost:11434/v1" for row in ollama_rows)
+
+
+def test_example_script_runs_from_any_working_directory(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(EXAMPLE_PATH)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "Loaded LLM model catalog" in result.stdout
+    assert "Rows: 71" in result.stdout
+    assert "Estimated 250K input + 50K output cost: $0.8125" in result.stdout
+    assert "No live API calls were made." in result.stdout
+
+
+def test_catalog_can_be_loaded_as_package_data_resource():
+    assert CATALOG_PATH.is_file()
+    assert CATALOG_PATH.read_text(encoding="utf-8").startswith(
+        "provider,model,input,output,coding_arena_elo,api_key,base_url,max_reasoning_tokens,structured_output"
+    )
+    assert row_for("Azure", "gpt-4o")["base_url"] == "https://YOUR-RESOURCE.openai.azure.com"

@@ -18,6 +18,7 @@ from pdd.agentic_common import (
     get_agent_provider_preference,
     github_load_state,
     github_save_state,
+    post_final_comment,
     post_pr_comment,
     post_step_comment,
     run_agentic_task,
@@ -30,7 +31,9 @@ console = Console()
 def example_provider_preference() -> None:
     """Show the default provider order and an env override."""
     console.print("[bold blue]Provider Preference[/bold blue]")
-    console.print(f"Default: {get_agent_provider_preference()}")
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("PDD_AGENTIC_PROVIDER", None)
+        console.print(f"Default: {get_agent_provider_preference()}")
 
     with patch.dict(os.environ, {"PDD_AGENTIC_PROVIDER": "google,anthropic"}, clear=False):
         console.print(f"Override: {get_agent_provider_preference()}")
@@ -44,7 +47,16 @@ def example_run_agentic_task(cwd: Path) -> None:
         "total_cost_usd": 0.12,
     }
 
-    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/local/bin/claude"), \
+    with patch.dict(
+        os.environ,
+        {
+            "PDD_AGENTIC_PROVIDER": "anthropic",
+            "PDD_REASONING_EFFORT": "",
+            "CODEX_REASONING_EFFORT": "",
+        },
+        clear=False,
+    ), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/local/bin/claude"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
             args=["claude"],
@@ -127,7 +139,28 @@ def _example_post_pr_comment(cwd: Path) -> None:
     console.print(f"PR comment posted: {posted}")
 
 
-def example_post_pr_comment():
+def example_post_final_comment(cwd: Path) -> None:
+    """Show the final issue summary comment helper with a mocked gh CLI."""
+    console.print("\n[bold blue]post_final_comment()[/bold blue]")
+    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_common.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        posted = post_final_comment(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            issue_number=822,
+            body="Workflow completed. All requested files are aligned.",
+            cwd=cwd,
+        )
+    console.print(f"Final comment posted: {posted}")
+
+
+def example_post_pr_comment() -> None:
     """Compatibility wrapper retained for prompt-level example assertions."""
     _example_post_pr_comment(Path.cwd())
 
@@ -152,7 +185,7 @@ def example_github_state_helpers(cwd: Path) -> None:
             repo_owner="example-owner",
             repo_name="example-repo",
             issue_number=822,
-            workflow_type="agentic_sync",
+            workflow_id="agentic_sync",
             state={"last_completed_step": 2, "step_outputs": {"1": "ok", "2": "ok"}},
             cwd=cwd,
         )
@@ -160,7 +193,7 @@ def example_github_state_helpers(cwd: Path) -> None:
             repo_owner="example-owner",
             repo_name="example-repo",
             issue_number=822,
-            workflow_type="agentic_sync",
+            workflow_id="agentic_sync",
             cwd=cwd,
         )
 
@@ -178,6 +211,7 @@ def main() -> None:
         example_validate_cached_state()
         example_post_step_comment(cwd)
         _example_post_pr_comment(cwd)
+        example_post_final_comment(cwd)
         example_github_state_helpers(cwd)
 
 

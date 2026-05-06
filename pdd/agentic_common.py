@@ -1,108 +1,532 @@
 from __future__ import annotations
 
 import os
-import signal
 import sys
 import json
-import shutil
-import subprocess
-import tempfile
 import time
-import uuid
-import re
 import random
-from datetime import datetime
+import signal
+import uuid
+
+import shutil
+import socket
+import subprocess
+import re
+import glob
+import hashlib
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any, Union
-from dataclasses import dataclass
+from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, Tuple, Union, Set
 
 from rich.console import Console
 
-try:
-    from pdd.llm_invoke import _load_model_data
-except ImportError:
-    def _load_model_data(*args, **kwargs):
-        return None
+from .reasoning import time_to_effort_level
 
+console = Console()
+
+# -----------------------------------------------------------------------------
 # Constants
+# -----------------------------------------------------------------------------
+
+DEFAULT_TIMEOUT_SECONDS: float = 600.0
+MIN_VALID_OUTPUT_LENGTH: int = 50
+DEFAULT_MAX_RETRIES: int = 3
+DEFAULT_RETRY_DELAY: float = 5.0
+MAX_RETRY_DELAY: float = 120.0
+JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0
+MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0
+MAX_ERROR_SNIPPET_LENGTH: int = 2000
+MAX_ERROR_RESPONSE_NEWLINES: int = 3
+_SEMANTIC_TAIL_LINES: int = 30
+AGENTIC_LOG_DIR: str = ".pdd/agentic-logs"
+
 _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
 
-# Provider API keys recognized as "OpenCode is configured" — OpenCode is
-# multi-provider and routes to whichever underlying provider has auth available.
-_OPENCODE_PROVIDER_KEYS: Tuple[str, ...] = (
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "OPENROUTER_API_KEY",
-    "GITHUB_TOKEN",
-    "GROQ_API_KEY",
-)
+_PROVIDER_TO_CLI: Dict[str, str] = {
+    "anthropic": "claude",
+    "google": "gemini",
+    "openai": "codex",
+    "opencode": "opencode",
+}
+CLI_COMMANDS: Dict[str, str] = dict(_PROVIDER_TO_CLI)
 
-# OpenCode stored auth token path (set by `opencode auth login`).
+_AUTH_KEY_HINTS: Tuple[str, ...] = ("TOKEN", "API_KEY")
+
+class _CliPathRegistry(list):
+    """List-like common path registry with per-CLI test override support."""
+
+    def __init__(self, paths: List[str]) -> None:
+        super().__init__(paths)
+        self._overrides: Dict[str, List[str]] = {}
+
+    def get(self, name: str, default: Optional[List[str]] = None) -> List[str]:
+        if name in self._overrides:
+            return list(self._overrides[name])
+        if isinstance(default, list):
+            return list(default)
+        return list(self)
+
+    def __setitem__(self, key: Union[int, slice, str], value: Any) -> None:
+        if isinstance(key, str):
+            vals = value if isinstance(value, list) else [value]
+            self._overrides[key] = [str(v) for v in vals]
+            return
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: Union[int, slice, str]) -> None:
+        if isinstance(key, str):
+            self._overrides.pop(key, None)
+            return
+        super().__delitem__(key)
+
+    def paths_for(self, name: str) -> List[str]:
+        return self.get(name, list(self))
+
+
+_COMMON_CLI_PATHS: _CliPathRegistry = _CliPathRegistry([
+    "/usr/local/bin",
+    "/usr/bin",
+    "/opt/homebrew/bin",
+    str(Path.home() / ".local" / "bin"),
+    str(Path.home() / ".npm-global" / "bin"),
+    str(Path.home() / "node_modules" / ".bin"),
+])
 _OPENCODE_AUTH_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
 
-# Mapping from LiteLLM/CSV-style model IDs to OpenCode provider IDs.
-# OpenCode model identifiers may contain multiple slashes (e.g.
-# "openrouter/openai/gpt-5.3-codex"); the value is passed verbatim to --model.
-_OPENCODE_MODEL_PREFIX_MAP: Dict[str, str] = {
-    # github_copilot/* (LiteLLM convention) -> github-copilot/* (OpenCode)
-    "github_copilot/": "github-copilot/",
+# Add nvm bin paths via glob
+try:
+    _COMMON_CLI_PATHS.extend(
+        sorted(glob.glob(str(Path.home() / ".nvm" / "versions" / "node" / "*" / "bin")))
+    )
+except Exception:
+    pass
+
+
+# -----------------------------------------------------------------------------
+# Pricing
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Pricing:
+    input_per_million: float
+    output_per_million: float
+    cached_input_multiplier: float = 1.0
+
+
+GEMINI_PRICING: Dict[str, Pricing] = {
+    "flash": Pricing(0.35, 1.05, 0.5),
+    "pro": Pricing(3.50, 10.50, 0.5),
 }
-
-# Default number of tail lines to scan for semantic regex patterns.
-# Semantic matching is restricted to the tail to prevent false positives
-# when LLMs quote/discuss a status without declaring it (Issue #865).
-_SEMANTIC_TAIL_LINES = 30
-
-# Semantic fallback patterns for when LLMs paraphrase instead of emitting exact tokens.
-# Each token maps to a list of regex patterns that capture common paraphrases.
-# Patterns are checked only after exact and case-insensitive matching fail,
-# and only in the tail of the output.
-SEMANTIC_PATTERNS: Dict[str, List[str]] = {
-    "ALL_TESTS_PASS": [
-        r"\ball\b.*\btests?\b.*\bpass",         # "all tests pass", "all 18 tests pass"
-        r"\d+/\d+\s+pass",                     # "18/18 passing"
-        r"both\s+passed",                       # "both passed"
-        r"all\s+tests?\s+(are\s+)?green",       # "all tests are green"
-        r"all\s+tests?\s+passed\s+successfully", # "all tests passed successfully"
-        r"tests?\s+suite\s+passed",             # "test suite passed"
-        r"100%\s+pass",                         # "100% passing"
-        r"\b\d+\s+passed\b(?!.*\b\d+\s+failed\b)", # "788 passed" (no failures mentioned)
-        r"\bfix\b.*\bcomplete\b",               # "fix is complete"
-        r"\bverif(?:ied|ication)\b.*\bcleanly\b", # "verification completed cleanly"
-    ],
-    "NOT_A_BUG": [
-        r"\bnot\s+(?:actually\s+)?(?:a\s+)?(?:real\s+)?bug\b", # "not a bug", "not a real bug", "not actually a bug"
-        r"(it\s+is\s+|already\s+)fixed",        # "it is already fixed", "already fixed"
-        r"expected\s+behavio[u]?r",             # "expected behavior"
-        r"working\s+(as\s+)?(designed|intended|correctly|expected)", # "working correctly"
-        r"not\s+(actually\s+)?a\s+(code\s+)?issue", # "not actually an issue"
-    ],
-    "CONTINUE_CYCLE": [
-        r"tests?\s+still\s+fail",              # "tests still failing"
-        r"more\s+work\s+needed",                # "more work needed"
-        r"not\s+yet\s+(fixed|resolved|passing)", # "not yet fixed"
-        r"continue\s+(to\s+)?(next\s+)?cycle",  # "continue to next cycle"
-    ],
-    "MAX_CYCLES_REACHED": [
-        r"max(imum)?\s+cycles?\s+(reached|exceeded|limit)", # "max cycles reached"
-        r"cycle\s+limit\s+(reached|exceeded)",  # "cycle limit reached"
-    ],
-    "STOP_CONDITION": [
-        r"awaiting\s+(architectural\s+)?decisions", # "awaiting decisions"
-        r"clarification\s+(is\s+)?needed",      # "clarification is needed"
-        r"need[s]?\s+clarification\s+(from|before)", # "needs clarification from/before"
-        r"need[s]?\s+more\s+info(rmation)?\s+(from|before)", # "needs more info from"
-    ],
+CODEX_PRICING: Pricing = Pricing(1.50, 6.00, 0.25)
+ANTHROPIC_PRICING: Dict[str, Pricing] = {
+    "opus": Pricing(15.0, 75.0, 0.1),
+    "sonnet": Pricing(3.0, 15.0, 0.1),
+    "haiku": Pricing(0.8, 4.0, 0.1),
 }
+GEMINI_PRICING_BY_FAMILY: Dict[str, Pricing] = GEMINI_PRICING
+ANTHROPIC_PRICING_BY_FAMILY: Dict[str, Pricing] = ANTHROPIC_PRICING
 
+
+def _estimate_cost(input_tokens: int, output_tokens: int, pricing: Pricing,
+                   cached_tokens: int = 0, cache_write_tokens: int = 0,
+                   anthropic: bool = False) -> float:
+    if anthropic:
+        new_input = max(0, input_tokens - cached_tokens - cache_write_tokens)
+        cost = (
+            new_input * pricing.input_per_million / 1_000_000
+            + cached_tokens * pricing.input_per_million * pricing.cached_input_multiplier / 1_000_000
+            + cache_write_tokens * pricing.input_per_million * 1.25 / 1_000_000
+            + output_tokens * pricing.output_per_million / 1_000_000
+        )
+    else:
+        new_input = max(0, input_tokens - cached_tokens)
+        cost = (
+            new_input * pricing.input_per_million / 1_000_000
+            + cached_tokens * pricing.input_per_million * pricing.cached_input_multiplier / 1_000_000
+            + output_tokens * pricing.output_per_million / 1_000_000
+        )
+    return cost
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    """Crude estimation: ~4 chars per token."""
+    return max(1, len(text) // 4)
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _first_int(mapping: Dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        if key in mapping:
+            return _coerce_int(mapping.get(key))
+    return 0
+
+
+def _pricing_family(model_name: str, pricing_table: Dict[str, Pricing], default: str) -> Pricing:
+    lower = (model_name or "").lower()
+    for family, pricing in pricing_table.items():
+        if family in lower:
+            return pricing
+    return pricing_table[default]
+
+
+def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
+    models = stats.get("models") if isinstance(stats, dict) else None
+    if not isinstance(models, dict):
+        return 0.0
+    cost = 0.0
+    for model_name, model_stats in models.items():
+        if not isinstance(model_stats, dict):
+            continue
+        explicit_cost = model_stats.get("cost")
+        if explicit_cost is not None:
+            try:
+                cost += float(explicit_cost)
+                continue
+            except (TypeError, ValueError):
+                pass
+        tokens = model_stats.get("tokens") or {}
+        if not isinstance(tokens, dict):
+            continue
+        input_tokens = int(tokens.get("input", tokens.get("prompt", 0)) or 0)
+        output_tokens = int(tokens.get("output", tokens.get("candidates", 0)) or 0)
+        cached_tokens = int(tokens.get("cached", tokens.get("cached_input_tokens", 0)) or 0)
+        pricing = _pricing_family(str(model_name), GEMINI_PRICING, "flash")
+        cost += _estimate_cost(input_tokens, output_tokens, pricing, cached_tokens=cached_tokens)
+    return cost
+
+
+def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
+    if not isinstance(usage, dict):
+        return 0.0
+    input_tokens = _first_int(usage, "input_tokens", "prompt_tokens", "input")
+    output_tokens = _first_int(usage, "output_tokens", "completion_tokens", "output")
+    cached_tokens = _first_int(usage, "cached_input_tokens", "cached_tokens", "cached")
+    return _estimate_cost(input_tokens, output_tokens, CODEX_PRICING, cached_tokens=cached_tokens)
+
+
+def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
+    if not isinstance(data, dict):
+        return 0.0
+    direct_cost = data.get("total_cost_usd")
+    if direct_cost is not None:
+        try:
+            parsed_direct_cost = float(direct_cost)
+            # Claude subscription auth reports 0 even when token usage is present.
+            if parsed_direct_cost > 0:
+                return parsed_direct_cost
+        except (TypeError, ValueError):
+            pass
+
+    model_usage = data.get("modelUsage") or {}
+    model_family = "sonnet"
+    cost = 0.0
+    estimated_model_usage_cost = 0.0
+    saw_model_usage_tokens = False
+    if isinstance(model_usage, dict):
+        for model_name, usage in model_usage.items():
+            model_text = str(model_name).lower()
+            model_family = "opus" if "opus" in model_text else (
+                "haiku" if "haiku" in model_text else model_family
+            )
+            if not isinstance(usage, dict):
+                continue
+
+            explicit = usage.get("costUSD", usage.get("cost"))
+            if explicit is not None:
+                try:
+                    cost += float(explicit)
+                    continue
+                except (TypeError, ValueError):
+                    pass
+
+            input_tokens = _first_int(usage, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens")
+            output_tokens = _first_int(usage, "outputTokens", "output_tokens", "completionTokens", "completion_tokens")
+            cache_read = _first_int(
+                usage,
+                "cacheReadInputTokens",
+                "cache_read_input_tokens",
+                "cache_read_tokens",
+            )
+            cache_write = _first_int(
+                usage,
+                "cacheCreationInputTokens",
+                "cache_creation_input_tokens",
+                "cache_write_tokens",
+            )
+            if input_tokens or output_tokens or cache_read or cache_write:
+                saw_model_usage_tokens = True
+                pricing = _pricing_family(str(model_name), ANTHROPIC_PRICING, "sonnet")
+                estimated_model_usage_cost += _estimate_cost(
+                    input_tokens,
+                    output_tokens,
+                    pricing,
+                    cached_tokens=cache_read,
+                    cache_write_tokens=cache_write,
+                    anthropic=True,
+                )
+        if cost:
+            return cost
+
+    usage = data.get("usage") or {}
+    if isinstance(usage, dict):
+        input_tokens = _first_int(usage, "input_tokens", "inputTokens")
+        output_tokens = _first_int(usage, "output_tokens", "outputTokens")
+        cache_read = _first_int(usage, "cache_read_input_tokens", "cacheReadInputTokens")
+        cache_write = _first_int(usage, "cache_creation_input_tokens", "cacheCreationInputTokens")
+        if input_tokens or output_tokens or cache_read or cache_write:
+            pricing = ANTHROPIC_PRICING[model_family]
+            return _estimate_cost(
+                input_tokens,
+                output_tokens,
+                pricing,
+                cached_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                anthropic=True,
+            )
+
+    if saw_model_usage_tokens:
+        return estimated_model_usage_cost
+    return 0.0
+
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+
+def _load_agentic_config() -> Dict[str, Any]:
+    """Load .pddrc agentic section if present."""
+    config: Dict[str, Any] = {}
+    pddrc_path = Path.cwd() / ".pddrc"
+    if not pddrc_path.exists():
+        pddrc_path = Path.home() / ".pddrc"
+    if not pddrc_path.exists():
+        return config
+    try:
+        try:
+            import yaml  # type: ignore
+            with open(pddrc_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except ImportError:
+            with open(pddrc_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        if isinstance(data, dict):
+            config = data.get("agentic", {}) or {}
+    except Exception:
+        pass
+    return config
+
+
+def _load_model_data(path: Optional[Union[str, Path]] = None) -> Optional[List[Dict[str, str]]]:
+    """Load model CSV metadata when available."""
+    try:
+        import csv
+        csv_path = Path(path) if path is not None else Path(__file__).parent / "data" / "llm_model.csv"
+        if not csv_path.is_file():
+            return None
+        with open(csv_path, "r", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+    except Exception:
+        return None
+
+
+def get_agent_provider_preference() -> List[str]:
+    """Read PDD_AGENTIC_PROVIDER env or default."""
+    env = os.environ.get("PDD_AGENTIC_PROVIDER", "").strip()
+    if env:
+        items = [p.strip().lower() for p in env.split(",") if p.strip()]
+        items = [p for p in items if p in _PROVIDER_TO_CLI]
+        if items:
+            return items
+    return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+# -----------------------------------------------------------------------------
+# CLI Discovery
+# -----------------------------------------------------------------------------
+
+def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Locate CLI binary via .pddrc override, PATH, or common paths."""
+    config = config if config is not None else _load_agentic_config()
+    override = config.get(f"{name}_path")
+    if override and Path(override).is_file() and os.access(override, os.X_OK):
+        return str(override)
+
+    found = shutil.which(name)
+    if found:
+        return found
+
+    for base in _COMMON_CLI_PATHS.paths_for(name):
+        base_path = Path(base).expanduser()
+        if base_path.is_file() and base_path.name == name and os.access(base_path, os.X_OK):
+            return str(base_path)
+
+        candidates: List[Path] = []
+        if "*" in str(base_path):
+            candidates.extend(Path(p) / name for p in glob.glob(str(base_path)))
+        elif base_path.name == "node":
+            candidates.extend(Path(p) / name for p in glob.glob(str(base_path / "*" / "bin")))
+        else:
+            candidates.append(base_path / name)
+
+        for candidate in candidates:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
+
+
+def _get_cli_diagnostic_info(name: str) -> str:
+    """Diagnostic string for missing CLI."""
+    paths_checked = [shutil.which(name) or "(PATH miss)"] + _COMMON_CLI_PATHS.paths_for(name)
+    override_key = f"agentic.{name}_path"
+    return (
+        f"CLI '{name}' not found. Run `which {name}` to verify installation, "
+        f"or set `{override_key}` in .pddrc. Checked: {paths_checked[:8]}"
+    )
+
+
+# -----------------------------------------------------------------------------
+# Availability
+# -----------------------------------------------------------------------------
+
+def _has_gemini_oauth() -> bool:
+    return (Path.home() / ".gemini" / "oauth_creds.json").is_file()
+
+
+def _has_gemini_oauth_credentials() -> bool:
+    return _has_gemini_oauth()
+
+
+def _has_opencode_auth() -> bool:
+    return Path(_OPENCODE_AUTH_PATH).is_file()
+
+
+def _has_any_provider_key() -> bool:
+    keys = (
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
+        "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN", "GROQ_API_KEY",
+    )
+    return any(os.environ.get(k) for k in keys)
+
+
+def _is_provider_available(provider: str) -> bool:
+    cli_name = _PROVIDER_TO_CLI.get(provider)
+    if not cli_name:
+        return False
+    if not _find_cli_binary(cli_name):
+        return False
+
+    if provider == "anthropic":
+        return True
+    if provider == "google":
+        vertex_enabled = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").lower() in {"1", "true", "yes"}
+        if (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+                or vertex_enabled or _has_gemini_oauth_credentials()):
+            return True
+        return False
+    if provider == "openai":
+        if os.environ.get("OPENAI_API_KEY") or os.environ.get("PDD_CODEX_AUTH_AVAILABLE"):
+            return True
+        return False
+    if provider == "opencode":
+        if _has_any_provider_key() or _has_opencode_auth():
+            return True
+        return False
+    return False
+
+
+def get_available_agents() -> List[str]:
+    """Return list of available providers in preference order."""
+    preference = get_agent_provider_preference()
+    return [p for p in preference if _is_provider_available(p)]
+
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+
+_SESSION_LOG_PATH: Optional[Path] = None
+_SESSION_LOG_BASE_CWD: Optional[Path] = None
+_AGENTIC_SESSION_ID: Optional[str] = None
+
+
+def _get_session_log_path(cwd: Optional[Union[str, Path]] = None) -> Path:
+    global _SESSION_LOG_PATH, _SESSION_LOG_BASE_CWD, _AGENTIC_SESSION_ID
+    base_cwd = Path(cwd or ".").resolve()
+    if _AGENTIC_SESSION_ID is None:
+        _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _SESSION_LOG_PATH = None
+
+    if _SESSION_LOG_PATH is None or _SESSION_LOG_BASE_CWD != base_cwd:
+        log_dir = base_cwd / AGENTIC_LOG_DIR
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            log_dir = Path("/tmp")
+        _SESSION_LOG_BASE_CWD = base_cwd
+        _SESSION_LOG_PATH = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
+    return _SESSION_LOG_PATH
+
+
+def _log_agentic_interaction(
+    record: Optional[Dict[str, Any]] = None,
+    force: bool = False,
+    verbose: bool = False,
+    **kwargs: Any,
+) -> None:
+    """Log to JSONL. Success logging is verbose-only; failures may be forced."""
+    if record is None:
+        record = {}
+    if kwargs:
+        prompt = str(kwargs.get("prompt", ""))
+        response = str(kwargs.get("response", ""))
+        record.update({
+            "label": kwargs.get("label", ""),
+            "prompt": prompt,
+            "response": response,
+            "cost_usd": kwargs.get("cost", kwargs.get("cost_usd", 0.0)),
+            "provider": kwargs.get("provider", ""),
+            "success": kwargs.get("success", True),
+            "duration_seconds": kwargs.get("duration", kwargs.get("duration_seconds", 0.0)),
+            "prompt_length": len(prompt),
+            "response_length": len(response),
+            "cwd": str(kwargs.get("cwd", ".")),
+        })
+
+    success = bool(record.get("success", True))
+    should_log = force or verbose or not success
+    if not should_log:
+        return
+    try:
+        path = _get_session_log_path(record.get("cwd"))
+        record.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _collect_auth_env_keys() -> List[str]:
+    return sorted(
+        k for k, v in os.environ.items()
+        if v and any(h in k for h in _AUTH_KEY_HINTS)
+    )
+
+
+# -----------------------------------------------------------------------------
+# Control Token Detection
+# -----------------------------------------------------------------------------
 
 @dataclass
 class TokenMatch:
-    """Result of control token detection with tier and pattern info."""
-    tier: str  # "exact", "case_insensitive", "semantic", "llm_classification"
-    token: Optional[str] = None  # The classified token (e.g., "NOT_A_BUG", "ALL_TESTS_PASS")
+    tier: str
+    token: Optional[str] = None
     pattern: Optional[str] = None
     cost: Optional[float] = None
 
@@ -110,931 +534,916 @@ class TokenMatch:
         return True
 
 
-def detect_control_token(
-    output: Optional[str],
-    token: str,
-    tail_lines: int = _SEMANTIC_TAIL_LINES,
-) -> Optional[TokenMatch]:
-    """Detect a control token in LLM output with three-tier fallback.
+SEMANTIC_PATTERNS: Dict[str, List[str]] = {
+    "ALL_TESTS_PASS": [
+        r"\ball\s+(\d+\s+)?tests?\s+pass(ed|ing)?\b",
+        r"\ball\s+tests?\s+(are\s+)?passing\b",
+        r"\bboth\s+pass(ed|ing)?\b",
+        r"\b\d+\s+passed,?\s+0\s+failed\b",
+        r"\btest\s+suite\s+pass(ed|es)\b",
+    ],
+    "NOT_A_BUG": [
+        r"\bnot\s+a\s+bug\b",
+        r"\bworking\s+as\s+intended\b",
+        r"\bexpected\s+behavior\b",
+        r"\bno\s+bug\s+found\b",
+    ],
+    "MAX_CYCLES_REACHED": [
+        r"\bmax(imum)?\s+cycles?\s+reached\b",
+        r"\bcycle\s+limit\s+(reached|exceeded)\b",
+    ],
+    "CONTINUE_CYCLE": [
+        r"\btests?\s+still\s+failing\b",
+        r"\bcontinue\s+cycle\b",
+        r"\bneed(s)?\s+(another|more)\s+(iteration|cycle)\b",
+    ],
+    "TASK_COMPLETE": [
+        r"\btask\s+complete(d)?\b",
+        r"\bdone\b",
+        r"\bfinished\s+successfully\b",
+    ],
+    "NEEDS_REVIEW": [
+        r"\bneeds?\s+review\b",
+        r"\bhuman\s+review\s+required\b",
+    ],
+}
 
-    Tier 1: Exact substring match (fastest, most reliable) — full output.
-    Tier 2: Case-insensitive substring match — full output.
-    Tier 3: Semantic regex patterns for common LLM paraphrases — tail only.
 
-    Restricting tier 3 to the tail prevents false positives when LLMs
-    quote or discuss a status in the middle of analysis without declaring it.
-
-    Args:
-        output: The raw LLM step output text.
-        token: The control token to detect (e.g., 'ALL_TESTS_PASS').
-        tail_lines: Number of lines from the end to scan for semantic patterns.
-
-    Returns:
-        TokenMatch if detected (truthy), None if not (falsy).
-    """
-    if not output:
+def detect_control_token(output: str, token: str,
+                         tail_lines: int = _SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]:
+    """3-tier detection: exact, case-insensitive, semantic."""
+    if not output or not token:
         return None
 
-    # Tier 1: exact match (full output)
+    # Tier 1: exact substring
     if token in output:
         return TokenMatch(tier="exact", token=token)
 
-    # Tier 2: case-insensitive (full output)
-    output_upper = output.upper()
-    if token.upper() in output_upper:
+    # Tier 2: case-insensitive
+    if token.lower() in output.lower():
         return TokenMatch(tier="case_insensitive", token=token)
 
-    # Tier 3: semantic regex fallback (tail only for long outputs)
+    # Tier 3: semantic regex on tail (use splitlines for portability)
     patterns = SEMANTIC_PATTERNS.get(token, [])
-    if patterns:
-        lines = output.splitlines()
-        if len(lines) > tail_lines:
-            tail_text = '\n'.join(lines[-tail_lines:])
-        else:
-            tail_text = output
-        for pattern in patterns:
-            if re.search(pattern, tail_text, re.IGNORECASE):
+    if not patterns:
+        return None
+
+    lines = output.splitlines()
+    tail = "\n".join(lines[-tail_lines:]) if lines else ""
+    for pattern in patterns:
+        try:
+            if re.search(pattern, tail, re.IGNORECASE):
                 return TokenMatch(tier="semantic", token=token, pattern=pattern)
-
+        except re.error:
+            continue
     return None
 
 
-def classify_step_output(
-    output: str,
-    expected_tokens: List[str],
-    model: str = "gemini/gemini-3-flash",
-) -> Optional[TokenMatch]:
-    """Classify step output via LLM when regex-based detection fails.
+def classify_step_output(output: str, tokens: List[str],
+                         quiet: bool = False) -> Optional[str]:
+    """Tier-4: cheap LLM classification. Returns matched token or None."""
+    if not output or not tokens:
+        return None
 
-    Makes a single cheap API call with structured output to classify
-    the step output into one of the expected control tokens.
-    Only call this as a tier-4 fallback after detect_control_token returns None.
+    for token in tokens:
+        match = detect_control_token(output, token)
+        if match:
+            return match.token
 
-    Args:
-        output: The raw step output text.
-        expected_tokens: List of valid tokens (e.g., ["ALL_TESTS_PASS", "CONTINUE_CYCLE"]).
-        model: LiteLLM model identifier for classification.
-
-    Returns:
-        TokenMatch when classified to a known token.
-        None when the classifier confidently returns NONE.
-        TokenMatch(token="CLASSIFICATION_ERROR") when classification fails
-        (timeout/rate-limit/provider error/parse failure), allowing callers to
-        distinguish "no token" from "classifier unavailable".
-    """
     try:
-        from pdd.llm_invoke import llm_invoke
+        # Local relative import assumes this is part of a larger package
+        from .llm_invoke import llm_invoke
     except ImportError:
-        return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
-
-    token_list = ", ".join(expected_tokens)
-    prompt = (
-        "Classify the following step output into exactly one of these statuses: "
-        "{token_list}, or NONE if none apply.\n\n"
-        "Step output (last 3000 chars):\n{step_output}\n\n"
-        "Return a JSON object with status, confidence (0-1 float), and reasoning (brief string)."
-    )
-
-    schema = {
-        "type": "object",
-        "properties": {
-            "status": {"type": "string", "enum": expected_tokens + ["NONE"]},
-            "confidence": {"type": "number"},
-            "reasoning": {"type": "string"},
-        },
-        "required": ["status", "confidence", "reasoning"],
-    }
+        if not quiet:
+            console.print("[yellow]LLM classification unavailable[/yellow]")
+        return None
 
     try:
-        result = llm_invoke(
+        from pydantic import BaseModel  # type: ignore
+
+        class ClassificationResult(BaseModel):
+            token: Optional[str]
+            confidence: float
+
+        prompt = (
+            "Classify the following agentic output by selecting the single best matching control token "
+            "from this list (or null if none match):\n{tokens}\n\nOutput:\n{output}\n\n"
+            "Return JSON: {\"token\": \"<one of the tokens or null>\", \"confidence\": 0.0-1.0}"
+        )
+        # Truncate output for classification
+        snippet = output[-4000:] if len(output) > 4000 else output
+        response = llm_invoke(
             prompt=prompt,
-            input_json={"token_list": token_list, "step_output": output[-3000:]},
-            output_schema=schema,
-            strength=0.0,
+            input_json={"tokens": ", ".join(tokens), "output": snippet},
+            strength=0.2,
             temperature=0.0,
+            output_pydantic=ClassificationResult,
         )
-        # llm_invoke returns content in "result" key, not "output"
-        raw = result.get("result") or result.get("output", "")
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        if not parsed:
-            return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
-        status = parsed.get("status", "NONE")
-        if status == "NONE" or status not in expected_tokens:
-            return None
-        cost = result.get("cost")
-        return TokenMatch(tier="llm_classification", token=status, cost=cost)
-    except Exception:
-        return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
-
-
-def substitute_template_variables(
-    template: Any,
-    context: Dict[str, Any],
-    *, 
-    strict_unresolved: bool = False,
-) -> str:
-    """Safely substitute known {placeholders} without raising on unknown keys.
-
-    This intentionally uses iterative ``str.replace`` instead of ``str.format``
-    so unknown placeholders remain intact and context values containing braces
-    (e.g. JSON) are preserved verbatim.
-    """
-    # Compatibility path for tests/mocks that provide template objects with a
-    # .format(**context) method rather than a raw string prompt.
-    if not isinstance(template, str) and hasattr(template, "format") and callable(template.format):
-        return str(template.format(**context))
-
-    if strict_unresolved:
-        for match in re.finditer(r"(?<![{])[{]([A-Za-z_][A-Za-z0-9_]*)[}](?![}])", template):
-            key = match.group(1)
-            if key not in context:
-                raise KeyError(key)
-
-    rendered = template
-    for key, value in context.items():
-        rendered = rendered.replace("{" + str(key) + "}", str(value))
-
-    return rendered
-
-
-def get_agent_provider_preference() -> List[str]:
-    """Return provider preference order, overridable via PDD_AGENTIC_PROVIDER env var.
-
-    Examples:
-        PDD_AGENTIC_PROVIDER=google,anthropic,openai  ->  ["google", "anthropic", "openai"]
-        PDD_AGENTIC_PROVIDER=google                    ->  ["google"]
-        (unset)                                        ->  ["anthropic", "google", "openai"]
-    """
-    env_val = os.environ.get("PDD_AGENTIC_PROVIDER", "")
-    if env_val:
-        return [p.strip() for p in env_val.split(",") if p.strip()]
-    return _DEFAULT_PROVIDER_PREFERENCE
-
-# CLI command mapping for each provider
-CLI_COMMANDS: Dict[str, str] = {
-    "anthropic": "claude",
-    "google": "gemini",
-    "openai": "codex",
-    "opencode": "opencode",
-}
-
-# Common installation paths for CLI tools (platform-specific)
-# Used as fallback when shutil.which() fails to find the binary
-_COMMON_CLI_PATHS: Dict[str, List[Path]] = {
-    "claude": [
-        Path.home() / ".npm-global" / "bin" / "claude",
-        Path.home() / ".local" / "bin" / "claude",
-        Path.home() / "bin" / "claude",
-        Path("/usr/local/bin/claude"),
-        Path("/opt/homebrew/bin/claude"),
-        Path("/home/linuxbrew/.linuxbrew/bin/claude"),
-        # nvm base path - glob-expanded in _find_cli_binary() to search
-        # ~/.nvm/versions/node/*/bin/ for all installed node versions
-        Path.home() / ".nvm" / "versions" / "node",
-    ],
-    "codex": [
-        Path.home() / ".npm-global" / "bin" / "codex",
-        Path.home() / ".local" / "bin" / "codex",
-        Path.home() / "bin" / "codex",
-        Path("/usr/local/bin/codex"),
-        Path("/opt/homebrew/bin/codex"),
-        Path("/home/linuxbrew/.linuxbrew/bin/codex"),
-        Path.home() / ".nvm" / "versions" / "node",
-    ],
-    "gemini": [
-        Path.home() / ".npm-global" / "bin" / "gemini",
-        Path.home() / ".local" / "bin" / "gemini",
-        Path.home() / "bin" / "gemini",
-        Path("/usr/local/bin/gemini"),
-        Path("/opt/homebrew/bin/gemini"),
-        Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
-        Path.home() / ".nvm" / "versions" / "node",
-    ],
-    "opencode": [
-        Path.home() / ".npm-global" / "bin" / "opencode",
-        Path.home() / ".local" / "bin" / "opencode",
-        Path.home() / "bin" / "opencode",
-        Path("/usr/local/bin/opencode"),
-        Path("/opt/homebrew/bin/opencode"),
-        Path("/home/linuxbrew/.linuxbrew/bin/opencode"),
-        Path.home() / ".nvm" / "versions" / "node",
-    ],
-}
-
-# Maximum depth to search for .pddrc file
-MAX_PDDRC_SEARCH_DEPTH: int = 10
-
-DEFAULT_TIMEOUT_SECONDS: float = 600.0  # Increased from 240s; Claude needs time for complex verify tasks
-MIN_VALID_OUTPUT_LENGTH: int = 50
-DEFAULT_MAX_RETRIES: int = 3
-DEFAULT_RETRY_DELAY: float = 5.0
-MAX_RETRY_DELAY: float = 120.0
-MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic messages
-MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
-# Issue #1232: max newlines allowed in a leading-"Error:" provider error response.
-# Genuine terse provider errors have 0-2 newlines (single status line, or
-# "Error: ...\nDetails: ..."). Multi-paragraph findings docs have many more
-# newlines — this gate prevents demoting substantive docs that happen to start
-# with "Error:" while preserving the long-single-line error case from #902.
-MAX_ERROR_RESPONSE_NEWLINES: int = 3
-
-
-def _is_permanent_error(error_message: str) -> bool:
-    """Detect permanent provider errors that should NOT be retried.
-
-    Includes authentication failures, invalid parameters (like temperature),
-    and model access/not found errors.
-    """
-    msg = error_message.lower()
-    permanent_patterns = [
-        r"authentication[_\s]error",
-        r"authentication\s+failed",
-        r"failed\s+to\s+authenticate",
-        r"invalid\s+bearer",
-        r"invalid\s+api\s+key",
-        r"invalid\s+key",
-        r"invalid\s+parameter",
-        r"invalid.*temperature|temperature.*(?:not supported|out of range)",
-        r"\b401\b",
-        r"not\s+supported\s+for\s+this\s+model",
-        r"model\s+not\s+found",
-        r"access\s+denied",
-        r"permission\s+denied",
-        # Issue #1072: Quota exhaustion patterns
-        r"quota\s+(exhausted|exceeded)",
-        r"daily\s+quota",
-        r"terminal\s*quota\s*error",
-        # Issue #1232: Anthropic CLI OAuth/login failure on cloud workers
-        # ("Not logged in - Please run /login"). Without this, every cloud
-        # one-session run burns its first attempt on Anthropic before falling
-        # through to OpenAI.
-        r"not\s+logged\s+in",
-        r"please\s+run\s+/login",
-        # OpenCode-specific permanent failures (config/auth problems that
-        # won't resolve via retry).
-        r"provider\s+not\s+configured",
-        r"invalid\s+model\s+id",
-        r"no\s+provider\s+for\s+model",
-        r"auth\.json.*(parse|invalid|malformed)",
-    ]
-    return any(re.search(p, msg) for p in permanent_patterns)
-
-
-def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
-    """Return a concise user-facing message for stale Codex CLI auth."""
-    msg = error_detail.lower()
-    auth_patterns = [
-        "access token could not be refreshed",
-        "please sign in again",
-        "codex/responses",
-        "chatgpt.com/backend-api/codex",
-    ]
-    if not any(pattern in msg for pattern in auth_patterns):
-        return None
-    if "401" not in msg and "unauthorized" not in msg and "sign in" not in msg:
-        return None
-
-    return (
-        "Codex CLI authentication failed: the stored ChatGPT/Codex login token "
-        "could not be refreshed. Run `codex login` (or `codex login --device-auth`; "
-        "use `codex login --with-api-key` for API-key auth) and retry. "
-        "To avoid Codex for this run, unset `PDD_CODEX_AUTH_AVAILABLE` or set "
-        "`PDD_AGENTIC_PROVIDER=anthropic,google`."
-    )
-
-
-# Interrupt context: set by agentic orchestrators so KeyboardInterrupt handling
-# can report how far the workflow progressed (console + core dumps).
-_agentic_interrupt_context: Optional[Dict[str, Any]] = None
-
-
-def set_agentic_progress(
-    workflow: str,
-    current_step: int,
-    total_steps: int,
-    step_name: str,
-    completed_steps: Optional[List[int]] = None,
-) -> None:
-    """Record current step progress for KeyboardInterrupt reporting and core dumps."""
-    global _agentic_interrupt_context
-    _agentic_interrupt_context = {
-        "workflow": workflow,
-        "current_step": current_step,
-        "total_steps": total_steps,
-        "step_name": step_name,
-        "completed_steps": completed_steps or [],
-    }
-
-
-def clear_agentic_progress() -> None:
-    """Clear progress context (call at start of workflow or on normal completion)."""
-    global _agentic_interrupt_context
-    _agentic_interrupt_context = None
-
-
-def get_and_clear_agentic_interrupt_context() -> Optional[Dict[str, Any]]:
-    """Return current progress and clear it (used by error handler on KeyboardInterrupt)."""
-    global _agentic_interrupt_context
-    ctx = _agentic_interrupt_context
-    _agentic_interrupt_context = None
-    return ctx
-
-
-# Job deadline constants — prevent agentic retry loops from consuming the full job timeout
-JOB_TIMEOUT_MARGIN_SECONDS: float = 120.0   # Reserve for cleanup/reporting after last attempt
-MIN_ATTEMPT_TIMEOUT_SECONDS: float = 60.0   # Don't start an attempt if less than this remains
-
-def get_job_deadline() -> Optional[float]:
-    """Return the absolute Unix timestamp deadline from PDD_JOB_DEADLINE env var.
-
-    Set by the server (jobs.py) when launching subprocess jobs so that
-    the agentic retry loop can budget its attempts within the job timeout.
-
-    Returns:
-        Float deadline timestamp, or None if unset / invalid.
-    """
-    val = os.environ.get("PDD_JOB_DEADLINE")
-    if val:
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            return None
+        result = response.get("result")
+        if result and getattr(result, "token", None) in tokens and getattr(result, "confidence", 0) >= 0.6:
+            return result.token
+    except Exception as e:
+        if not quiet:
+            console.print(f"[yellow]LLM classification failed: {e}[/yellow]")
     return None
 
 
-# GitHub State Markers
-GITHUB_STATE_MARKER_START = "<!-- PDD_WORKFLOW_STATE:"
-GITHUB_STATE_MARKER_END = "-->"
-
-@dataclass
-class Pricing:
-    input_per_million: float
-    output_per_million: float
-    cached_input_multiplier: float = 1.0
-
-# Pricing Configuration
-# Gemini: Based on test expectations (Flash: $0.35/$1.05, Cached 50%)
-GEMINI_PRICING_BY_FAMILY = {
-    "flash": Pricing(0.35, 1.05, 0.5),
-    "pro": Pricing(3.50, 10.50, 0.5), # Placeholder for Pro
-}
-
-# Codex: Based on test expectations ($1.50/$6.00, Cached 25%)
-CODEX_PRICING = Pricing(1.50, 6.00, 0.25)
-
-# Anthropic Claude: Token-based fallback pricing when total_cost_usd is unavailable
-# Cache read is 90% discount, cache write is 25% premium over input
-ANTHROPIC_PRICING_BY_FAMILY = {
-    "opus": Pricing(15.0, 75.0, 0.1),       # Claude Opus 4
-    "sonnet": Pricing(3.0, 15.0, 0.1),      # Claude Sonnet 4
-    "haiku": Pricing(0.80, 4.0, 0.1),       # Claude Haiku 3.5
-}
-
-console = Console()
-
-
-# ---------------------------------------------------------------------------
-# Agentic Debug Logging
-# ---------------------------------------------------------------------------
-
-AGENTIC_LOG_DIR = ".pdd/agentic-logs"
-_AGENTIC_SESSION_ID: Optional[str] = None
-
-
-def _log_agentic_interaction(
-    label: str,
-    prompt: str,
-    response: str,
-    cost: float,
-    provider: str,
-    success: bool,
-    duration: float,
-    cwd: Path
-) -> None:
-    """
-    Log full prompt and response to JSONL file in .pdd/agentic-logs/.
-
-    Each workflow run generates a single session file with all step interactions.
-    Logs are only written when --verbose flag is enabled.
-
-    Args:
-        label: Step identifier (e.g., "step1", "step5_5")
-        prompt: Full prompt text sent to the agent
-        response: Full response text from the agent
-        cost: Cost in USD for this interaction
-        provider: Provider name (anthropic, google, openai)
-        success: Whether the interaction succeeded
-        duration: Duration in seconds
-        cwd: Working directory for the task
-    """
-    global _AGENTIC_SESSION_ID
-
-    try:
-        # Ensure log directory exists
-        log_dir = Path(cwd) / AGENTIC_LOG_DIR
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        # Initialize session ID on first call (one file per workflow run)
-        if _AGENTIC_SESSION_ID is None:
-            _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
-
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "label": label,
-            "cwd": str(cwd),
-            "provider": provider,
-            "success": success,
-            "cost_usd": cost,
-            "duration_seconds": round(duration, 2),
-            "prompt_length": len(prompt),
-            "response_length": len(response),
-            "prompt": prompt,
-            "response": response,
-        }
-
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception:
-        pass  # Don't break workflow for logging errors
-
-
-# ---------------------------------------------------------------------------
-# CLI Discovery (addresses GitHub issue #234: Claude not found during agentic fallback)
-# ---------------------------------------------------------------------------
-
-
-def _load_agentic_config() -> Dict[str, Any]:
-    """
-    Load agentic CLI configuration from .pddrc.
-
-    Looks for an 'agentic' section in .pddrc with CLI path overrides:
-
-        agentic:
-          claude_path: /path/to/claude
-          codex_path: /path/to/codex
-          gemini_path: /path/to/gemini
-
-    Returns empty dict if no config found.
-    """
-    import yaml
-
-    # Search for .pddrc in current dir and parent dirs
-    search_path = Path.cwd()
-    pddrc_path: Optional[Path] = None
-    for _ in range(MAX_PDDRC_SEARCH_DEPTH):
-        candidate = search_path / ".pddrc"
-        if candidate.is_file():
-            pddrc_path = candidate
-            break
-        parent = search_path.parent
-        if parent == search_path:
-            break
-        search_path = parent
-
-    # Also check home directory
-    if not pddrc_path:
-        home_pddrc = Path.home() / ".pddrc"
-        if home_pddrc.is_file():
-            pddrc_path = home_pddrc
-
-    if not pddrc_path:
-        return {}
-
-    try:
-        with open(pddrc_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        if isinstance(config, dict):
-            return config.get("agentic", {}) or {}
-    except Exception:
-        pass
-
-    return {}
-
-
-def _find_cli_binary(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """
-    Find a CLI binary using multiple strategies.
-
-    This function addresses a common issue where CLI tools like 'claude' are
-    installed and runnable from the user's shell, but not found by shutil.which()
-    when pdd runs. This happens because shell profiles (.bashrc, .zshrc) may add
-    directories to PATH that aren't available in the pdd process environment.
-
-    Strategies (in order):
-        1. Check for explicit path override in .pddrc agentic config
-        2. Try shutil.which() for standard PATH lookup
-        3. Search common installation directories
-
-    Args:
-        name: CLI binary name (e.g., "claude", "codex", "gemini")
-        config: Optional pre-loaded agentic config dict (avoids repeated file reads)
-
-    Returns:
-        Full path to the binary if found, None otherwise
-    """
-    # Strategy 1: Check .pddrc config override
-    if config is None:
-        config = _load_agentic_config()
-
-    config_key = f"{name}_path"
-    if config_key in config:
-        custom_path = Path(config[config_key])
-        if custom_path.exists() and os.access(custom_path, os.X_OK):
-            return str(custom_path)
-
-    # Strategy 2: Standard PATH lookup
-    path_result = shutil.which(name)
-    if path_result:
-        return path_result
-
-    # Strategy 3: Search common installation directories. Home-relative paths
-    # are added at runtime because tests and embedding environments may patch
-    # Path.home() after this module has already been imported.
-    for path in _iter_common_cli_paths(name):
-        # Handle nvm-style paths that need glob expansion
-        # nvm installs to ~/.nvm/versions/node/vX.Y.Z/bin/
-        if "nvm" in str(path) and path.name == "node":
-            # Glob for all node versions and check for the CLI in each
-            try:
-                for version_dir in path.glob("*/bin"):
-                    cli_path = version_dir / name
-                    if cli_path.exists() and os.access(cli_path, os.X_OK):
-                        return str(cli_path)
-            except Exception:
-                pass
-        elif path.exists() and os.access(path, os.X_OK):
-            return str(path)
-
-    return None
-
-
-def _iter_common_cli_paths(name: str) -> List[Path]:
-    """Return common CLI paths, including runtime-expanded home paths.
-
-    ``_COMMON_CLI_PATHS`` is intentionally kept as a mutable module-level table
-    for tests and .pddrc-style overrides, but entries containing ``Path.home()``
-    are evaluated when the module is imported. Add an equivalent runtime set so
-    discovery still honors the current home directory.
-    """
-    paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini", "opencode"}:
-        home = Path.home()
-        paths.extend([
-            home / ".npm-global" / "bin" / name,
-            home / ".local" / "bin" / name,
-            home / "bin" / name,
-            home / ".nvm" / "versions" / "node",
-        ])
-
-    seen: set[str] = set()
-    unique_paths: List[Path] = []
-    for path in paths:
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_paths.append(path)
-    return unique_paths
-
-
-def _get_cli_diagnostic_info(name: str) -> str:
-    """
-    Generate diagnostic information for CLI discovery failures.
-
-    Returns a helpful message for troubleshooting when a CLI binary cannot be found.
-    """
-    lines = [
-        f"CLI '{name}' not found. Troubleshooting steps:",
-        "",
-        f"1. Check installation: which {name}",
-        f"2. Common installation paths searched:",
-    ]
-
-    for path in _iter_common_cli_paths(name):
-        lines.append(f"   - {path}")
-
-    lines.extend([
-        "",
-        "3. Configure custom path in .pddrc:",
-        f"   agentic:",
-        f"     {name}_path: /path/to/{name}",
-        "",
-        f"4. Current PATH: {os.environ.get('PATH', 'not set')[:MAX_PATH_DISPLAY_LENGTH]}...",
-    ])
-
-    return "\n".join(lines)
-
-
-def get_available_agents() -> List[str]:
-    """
-    Returns list of available provider names based on CLI existence and API key configuration.
-
-    Uses _find_cli_binary() for robust CLI discovery that searches:
-    1. .pddrc config overrides
-    2. Standard PATH (shutil.which)
-    3. Common installation directories
-    """
-    available = []
-
-    # 1. Anthropic (Claude)
-    # Available if 'claude' CLI exists. API key not strictly required (subscription auth).
-    if _find_cli_binary("claude"):
-        available.append("anthropic")
-
-    # 2. Google (Gemini)
-    # Available if 'gemini' CLI exists AND any supported non-interactive auth
-    # path is configured. The Gemini CLI can run headless from its stored OAuth
-    # credentials even when GOOGLE_API_KEY/GEMINI_API_KEY are unset.
-    has_gemini_cli = _find_cli_binary("gemini") is not None
-    has_google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    has_vertex_auth = (
-        os.environ.get("GOOGLE_GENAI_USE_VERTEXAI") == "true"
-        and (
-            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-            or os.environ.get("GOOGLE_CLOUD_PROJECT")  # ADC on GCP VMs
-        )
-    )
-    has_gemini_oauth = _has_gemini_oauth_credentials()
-
-    if has_gemini_cli and (has_google_key or has_vertex_auth or has_gemini_oauth):
-        available.append("google")
-
-    # 3. OpenAI (Codex)
-    # Available if 'codex' CLI exists AND (OPENAI_API_KEY is set OR codex auth signaled)
-    if _find_cli_binary("codex") and (
-        os.environ.get("OPENAI_API_KEY") or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
-    ):
-        available.append("openai")
-
-    # 4. OpenCode
-    # Available if 'opencode' CLI exists AND at least one supported provider key
-    # is configured OR a stored OpenCode auth token file exists. OpenCode is
-    # provider-agnostic; "configured" means any of the underlying providers it
-    # can route to has credentials available.
-    if _find_cli_binary("opencode") and _has_opencode_auth():
-        available.append("opencode")
-
-    return available
-
-
-def _has_opencode_auth() -> bool:
-    """Return True when OpenCode has any usable auth path configured.
-
-    Accepts any of the recognized provider API keys or a stored OpenCode
-    auth token file at ``~/.local/share/opencode/auth.json``.
-    """
-    for key in _OPENCODE_PROVIDER_KEYS:
-        val = os.environ.get(key)
-        if val and val.strip():
-            return True
-    try:
-        return _OPENCODE_AUTH_PATH.is_file()
-    except OSError:
-        return False
-
-
-def _has_gemini_oauth_credentials() -> bool:
-    """Return True when Gemini CLI stored OAuth credentials are present.
-
-    Gemini CLI supports first-party OAuth auth stored under ~/.gemini. Treating
-    API keys and Vertex env as the only available auth paths makes PDD skip a
-    working local Gemini CLI and fall into broken providers.
-    """
-    creds_path = Path.home() / ".gemini" / "oauth_creds.json"
-    try:
-        data = json.loads(creds_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(data, dict):
-        return False
-    return bool(data.get("refresh_token") or data.get("access_token"))
-
-def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
-    """Calculates cost for Gemini based on token stats."""
-    total_cost = 0.0
-    models = stats.get("models", {})
-    
-    for model_name, data in models.items():
-        tokens = data.get("tokens", {})
-        prompt = tokens.get("prompt", 0)
-        candidates = tokens.get("candidates", 0)
-        cached = tokens.get("cached", 0)
-        
-        # Determine pricing family
-        family = "flash" if "flash" in model_name.lower() else "pro"
-        pricing = GEMINI_PRICING_BY_FAMILY.get(family, GEMINI_PRICING_BY_FAMILY["flash"])
-        
-        # Logic: new_input = max(0, prompt - cached)
-        # Assuming 'prompt' is total input tokens
-        new_input = max(0, prompt - cached)
-        
-        input_cost = (new_input / 1_000_000) * pricing.input_per_million
-        cached_cost = (cached / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
-        output_cost = (candidates / 1_000_000) * pricing.output_per_million
-        
-        total_cost += input_cost + cached_cost + output_cost
-        
-    return total_cost
-
-def _calculate_codex_cost(usage: Dict[str, Any]) -> float:
-    """Calculates cost for Codex based on usage stats."""
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cached_tokens = usage.get("cached_input_tokens", 0)
-    
-    pricing = CODEX_PRICING
-    
-    # Logic: new_input = max(0, input - cached)
-    new_input = max(0, input_tokens - cached_tokens)
-    
-    input_cost = (new_input / 1_000_000) * pricing.input_per_million
-    cached_cost = (cached_tokens / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
-    output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
-    
-    return input_cost + cached_cost + output_cost
-
-
-def _resolve_opencode_model(env: Dict[str, str]) -> Optional[str]:
-    """Resolve the model identifier OpenCode should run with.
-
-    Precedence:
-        1. ``OPENCODE_MODEL`` env var (passed verbatim after prefix mapping).
-        2. ``None`` — let OpenCode use its own default model resolution.
-
-    Returns the model string in OpenCode's ``provider/model[/variant]`` form,
-    or ``None`` when no override is configured.
-    """
-    raw = (env.get("OPENCODE_MODEL") or "").strip()
-    if not raw:
-        return None
-    for csv_prefix, oc_prefix in _OPENCODE_MODEL_PREFIX_MAP.items():
-        if raw.startswith(csv_prefix):
-            return oc_prefix + raw[len(csv_prefix):]
-    return raw
-
-
-def _parse_opencode_jsonl(output_str: str) -> Tuple[bool, str, float, Optional[str]]:
-    """Parse OpenCode's JSONL stdout stream.
-
-    Each line is a JSON event of one of these types: ``text`` (assistant
-    text), ``tool_use``, ``step_start``, ``step_finish``, ``error``. The
-    function concatenates ``text`` events for the assistant output, sums
-    ``step_finish.part.cost`` (or ``step_finish.cost``) across events for
-    cost, and surfaces any ``error`` event message as a failure.
-
-    Returns:
-        (success, text, cost_usd, error_message)
-        ``success`` is False when an ``error`` event was seen.
-        ``error_message`` is None on success.
-    """
-    if not output_str:
-        return False, "", 0.0, "OpenCode produced no output"
-
-    text_parts: List[str] = []
-    cost = 0.0
-    error_message: Optional[str] = None
-    saw_event = False
-
-    for line in output_str.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(event, dict):
-            continue
-        etype = event.get("type") or event.get("event") or ""
-        # Only count events with a recognized type — an unkeyed JSON blob
-        # falls through to the single-object fallback path below.
-        if etype in {"text", "step_finish", "error", "tool_use", "step_start"}:
-            saw_event = True
-
-        if etype == "text":
-            chunk = event.get("text") or event.get("content") or ""
-            if isinstance(chunk, str):
-                text_parts.append(chunk)
-        elif etype == "step_finish":
-            # OpenCode reports cost either at the top level or under "part"
-            part = event.get("part")
-            if isinstance(part, dict) and "cost" in part:
-                try:
-                    cost += float(part.get("cost", 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    pass
-            if "cost" in event:
-                try:
-                    cost += float(event.get("cost", 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    pass
-        elif etype == "error":
-            msg = event.get("message") or event.get("error") or "OpenCode reported an error"
-            error_message = str(msg)
-
-    if not saw_event:
-        # Fallback: try a single-object parse (some opencode versions emit one
-        # JSON object instead of JSONL).
-        try:
-            data = json.loads(output_str.strip())
-            if isinstance(data, dict):
-                if data.get("type") == "error" or data.get("error"):
-                    return False, "", 0.0, str(data.get("message") or data.get("error") or "OpenCode error")
-                text = data.get("text") or data.get("result") or data.get("output") or ""
-                cost_val = data.get("cost")
-                try:
-                    cost = float(cost_val) if cost_val is not None else 0.0
-                except (TypeError, ValueError):
-                    cost = 0.0
-                return True, str(text), cost, None
-        except json.JSONDecodeError:
-            pass
-        return False, "", 0.0, "OpenCode emitted no recognizable JSONL events"
-
-    if error_message is not None:
-        return False, "".join(text_parts), cost, error_message
-
-    return True, "".join(text_parts), cost, None
-
-
-_OPENCODE_PERMANENT_PATTERNS: Tuple[str, ...] = (
+# -----------------------------------------------------------------------------
+# Error classification
+# -----------------------------------------------------------------------------
+
+_PERMANENT_ERROR_PATTERNS: List[str] = [
+    r"authentication\s+fail",
+    r"authentication[_\s-]*error",
+    r"access\s+token\s+could\s+not\s+be\s+refreshed",
+    r"please\s+sign\s+in\s+again",
+    r"not\s+logged\s+in",
+    r"please\s+run\s+/login",
+    r"invalid\s+bearer\s+token",
+    r"invalid\s+(api[_\s]?key|token|credential)",
+    r"unauthorized",
+    r"401\b",
+    r"403\b",
     r"model\s+not\s+found",
+    r"unknown\s+model",
+    r"unsupported\s+(feature|parameter|model)",
+    r"invalid\s+parameter",
+    r"quota\s+(exhausted|exceeded)",
+    r"daily\s+quota",
+    r"TerminalQuotaError",
     r"provider\s+not\s+configured",
     r"invalid\s+model\s+id",
     r"no\s+provider\s+for\s+model",
     r"permission\s+denied",
-    r"auth\.json.*(parse|invalid|malformed)",
-)
+    r"auth\.json",
+    r"temperature.*(not\s+supported|invalid|unsupported)",
+    r"invalid\s+value\s+for\s+temperature",
+]
 
 
-def _is_opencode_permanent_error(msg: str) -> bool:
-    """Detect permanent OpenCode errors that should not be retried.
-
-    These match config/auth problems that won't resolve via retry: missing
-    model, missing provider config, malformed auth file, or a session
-    permission ask in non-interactive mode.
-    """
-    if not msg:
+def _is_permanent_error(error_msg: str) -> bool:
+    if not error_msg:
         return False
-    lowered = msg.lower()
-    return any(re.search(p, lowered) for p in _OPENCODE_PERMANENT_PATTERNS)
+    low = error_msg.lower()
+    for pat in _PERMANENT_ERROR_PATTERNS:
+        try:
+            if re.search(pat, low, re.IGNORECASE):
+                return True
+        except re.error:
+            continue
+    return False
 
 
-def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
-    """Calculate cost from Claude Code JSON when total_cost_usd is missing.
+def _is_opencode_permanent_error(error_msg: str) -> bool:
+    return _is_permanent_error(error_msg)
 
-    Tries modelUsage per-model costUSD first, then falls back to token-based
-    estimation from the usage field.
-    """
-    # Try 1: Sum costUSD from modelUsage (most accurate)
-    model_usage = data.get("modelUsage", {})
-    if model_usage:
-        total = sum(
-            float(info.get("costUSD", 0.0))
-            for info in model_usage.values()
-            if isinstance(info, dict)
+
+def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
+    """Detect Codex stale-login errors and return user-friendly guidance."""
+    if not error_detail:
+        return None
+    text = error_detail.lower()
+    auth_signals = (
+        "access token could not be refreshed",
+        "please sign in again",
+        "chatgpt.com/backend-api/codex",
+        "codex/responses",
+    )
+    has_auth_signal = any(sig in text for sig in auth_signals)
+    has_unauth = ("401" in text or "unauthorized" in text or "sign in" in text or "sign-in" in text)
+    if has_auth_signal and has_unauth:
+        return (
+            "Codex CLI authentication failed (stale ChatGPT login). "
+            "Please run `codex login` (or `codex login --device-auth`) to refresh your session. "
+            "For API-key auth, run `codex login --with-api-key`."
         )
-        if total > 0:
-            return total
+    return None
 
-    # Try 2: Token-based estimation from usage field
-    usage = data.get("usage", {})
-    if not usage:
-        return 0.0
 
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
+# -----------------------------------------------------------------------------
+# Subprocess
+# -----------------------------------------------------------------------------
 
-    # Determine pricing family from modelUsage keys or default to sonnet
-    family = "sonnet"  # default
-    for model_name in model_usage.keys():
-        name_lower = model_name.lower()
-        if "opus" in name_lower:
-            family = "opus"
-            break
-        elif "haiku" in name_lower:
-            family = "haiku"
-            break
+def _sanitize_env(cwd: Optional[Union[str, Path]] = None) -> Dict[str, str]:
+    env = os.environ.copy()
+    env["TERM"] = "dumb"
+    env["NO_COLOR"] = "1"
+    env["CI"] = "1"
+    if cwd is not None:
+        env["GIT_WORK_TREE"] = str(cwd)
+    env.pop("PDD_OUTPUT_COST_PATH", None)
+    return env
 
-    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
 
-    # new_input = total input minus cached reads and cache creation (those tokens are billed separately)
-    new_input = max(0, input_tokens - cache_read - cache_creation)
-    input_cost = (new_input / 1_000_000) * pricing.input_per_million
-    cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
-    cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25
-    output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
+def _subprocess_run(cmd: List[str], cwd: Optional[Union[str, Path]] = None,
+                    timeout: Optional[float] = None,
+                    env: Optional[Dict[str, str]] = None,
+                    stdin_data: Optional[str] = None,
+                    input: Optional[str] = None,
+                    start_new_session: bool = True,
+                    capture_output: bool = True,
+                    text: bool = True,
+                    **_: Any) -> Tuple[int, str, str]:
+    """Run subprocess with process-group kill on timeout."""
+    env = env or _sanitize_env(cwd)
+    stdin_payload = stdin_data if stdin_data is not None else input
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd) if cwd is not None else None,
+            env=env,
+            stdin=subprocess.PIPE if stdin_payload is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=start_new_session,
+            text=text,
+        )
+    except FileNotFoundError as e:
+        return 127, "", f"File not found: {e}"
+    except Exception as e:
+        return 1, "", f"Failed to start process: {e}"
 
-    return input_cost + cache_read_cost + cache_write_cost + output_cost
+    try:
+        stdout, stderr = proc.communicate(input=stdin_payload, timeout=timeout)
+        return proc.returncode, stdout or "", stderr or ""
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        return 1, "", f"Subprocess error: {e}"
 
+
+def _normalize_subprocess_result(result: Any) -> Tuple[int, str, str]:
+    if isinstance(result, tuple) and len(result) >= 3:
+        return int(result[0]), str(result[1] or ""), str(result[2] or "")
+    return (
+        int(getattr(result, "returncode", 1) or 0),
+        str(getattr(result, "stdout", "") or ""),
+        str(getattr(result, "stderr", "") or ""),
+    )
+
+
+# -----------------------------------------------------------------------------
+# Reasoning effort resolution
+# -----------------------------------------------------------------------------
+
+_VALID_REASONING_LEVELS = {"low", "medium", "high"}
+_VALID_CODEX_REASONING_LEVELS = {"low", "medium", "high", "xhigh"}
+
+
+def _resolve_reasoning_effort(reasoning_time: Optional[float],
+                              codex: bool = False) -> Optional[str]:
+    if codex:
+        codex_env = os.environ.get("CODEX_REASONING_EFFORT", "").strip().lower()
+        if codex_env in _VALID_CODEX_REASONING_LEVELS:
+            return codex_env
+
+    if reasoning_time is not None:
+        return time_to_effort_level(reasoning_time)
+
+    env = os.environ.get("PDD_REASONING_EFFORT", "").strip().lower()
+    if env in _VALID_REASONING_LEVELS:
+        return env
+    return None
+
+
+# -----------------------------------------------------------------------------
+# Model resolution
+# -----------------------------------------------------------------------------
+
+def _normalize_opencode_model_id(model: str) -> str:
+    return model.replace("github_copilot/", "github-copilot/")
+
+
+def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Resolve OpenCode model from env or CSV defaults."""
+    source = env if env is not None else os.environ
+    explicit = source.get("OPENCODE_MODEL", "").strip()
+    if explicit:
+        return _normalize_opencode_model_id(explicit)
+
+    if env is not None:
+        return None
+
+    # Try to derive from CSV metadata if present
+    try:
+        rows = _load_model_data()
+        if rows:
+            for row in rows:
+                model = row.get("model", "") or row.get("model_id", "")
+                if model and "/" in model:
+                    return _normalize_opencode_model_id(model)
+    except Exception:
+        pass
+    return "anthropic/claude-sonnet-4-5"
+
+
+# -----------------------------------------------------------------------------
+# Provider JSON parsing
+# -----------------------------------------------------------------------------
+
+def _extract_json_from_output(raw: str) -> Dict[str, Any]:
+    """Extract the first JSON object from noisy CLI output."""
+    if not raw:
+        raise json.JSONDecodeError("No JSON object found", raw, 0)
+
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(raw):
+        if char != "{":
+            continue
+        try:
+            data, _ = decoder.raw_decode(raw[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    raise json.JSONDecodeError("No JSON object found", raw, 0)
+
+
+def _parse_anthropic_output(stdout: str) -> Tuple[bool, str, float]:
+    text = ""
+    success = True
+    try:
+        data = _extract_json_from_output(stdout)
+    except json.JSONDecodeError:
+        return True, stdout, 0.0
+
+    if isinstance(data, dict):
+        if data.get("is_error"):
+            text = str(data.get("result") or data.get("response") or stdout)
+            return False, text, _calculate_anthropic_cost(data)
+
+        text = str(data.get("result") or data.get("response") or "")
+        cost = _calculate_anthropic_cost(data)
+    return success, text, cost
+
+
+def _parse_google_output(stdout: str) -> Tuple[bool, str, float]:
+    try:
+        data = _extract_json_from_output(stdout)
+    except json.JSONDecodeError:
+        return True, stdout, 0.0
+
+    text = ""
+    cost = 0.0
+    if isinstance(data, dict):
+        text = str(data.get("result") or data.get("response") or data.get("output") or "")
+        stats = data.get("stats") or {}
+        cost = _calculate_gemini_cost(stats)
+    return True, text, cost
+
+
+def _extract_openai_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: List[str] = []
+        for part in value:
+            text = _extract_openai_text(part)
+            if text:
+                parts.append(text)
+        return "".join(parts)
+    if isinstance(value, dict):
+        for key in ("text", "output_text", "content", "result", "output"):
+            if key in value:
+                text = _extract_openai_text(value.get(key))
+                if text:
+                    return text
+        message = value.get("message")
+        if isinstance(message, dict):
+            return _extract_openai_text(message)
+    return ""
+
+
+def _usage_counts(usage: Dict[str, Any]) -> Tuple[int, int, int]:
+    return (
+        _first_int(usage, "input_tokens", "prompt_tokens", "input"),
+        _first_int(usage, "output_tokens", "completion_tokens", "output"),
+        _first_int(usage, "cached_input_tokens", "cached_tokens", "cached"),
+    )
+
+
+def _parse_openai_output(stdout: str) -> Tuple[bool, str, float]:
+    text_parts: List[str] = []
+    cost = 0.0
+    last_text = ""
+    input_tokens = 0
+    output_tokens = 0
+    cached_tokens = 0
+    saw_ndjson = False
+    session_usage: Optional[Tuple[int, int, int]] = None
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(evt, dict):
+            continue
+
+        evt_type = evt.get("type") or ""
+        if not evt_type:
+            continue
+        saw_ndjson = True
+        item = evt.get("item") or {}
+
+        if evt_type == "item.completed" and isinstance(item, dict):
+            if item.get("type") == "agent_message":
+                t = _extract_openai_text(item)
+                if t:
+                    last_text = str(t)
+                    text_parts.append(str(t))
+
+        if evt_type == "message" and evt.get("role") == "assistant":
+            t = _extract_openai_text(evt)
+            if t:
+                last_text = str(t)
+                text_parts.append(str(t))
+
+        if evt_type == "result":
+            t = _extract_openai_text(evt)
+            if t:
+                last_text = str(t)
+                text_parts.append(str(t))
+            usage = evt.get("usage") or {}
+            if isinstance(usage, dict):
+                in_tok, out_tok, cache_tok = _usage_counts(usage)
+                input_tokens += in_tok
+                output_tokens += out_tok
+                cached_tokens += cache_tok
+
+        if evt_type in ("session.end", "turn.completed"):
+            usage = evt.get("usage") or {}
+            if isinstance(usage, dict):
+                counts = _usage_counts(usage)
+                if evt_type == "session.end":
+                    session_usage = counts
+                else:
+                    in_tok, out_tok, cache_tok = counts
+                    input_tokens += in_tok
+                    output_tokens += out_tok
+                    cached_tokens += cache_tok
+            c = evt.get("cost") or evt.get("total_cost_usd")
+            if c is not None:
+                try:
+                    cost += float(c)
+                except (TypeError, ValueError):
+                    pass
+
+    if not saw_ndjson:
+        try:
+            data = _extract_json_from_output(stdout)
+            if isinstance(data, dict):
+                item = data.get("item") or {}
+                if isinstance(item, dict) and item.get("type") == "agent_message":
+                    last_text = _extract_openai_text(item)
+                else:
+                    last_text = _extract_openai_text(data)
+                usage = data.get("usage") or {}
+                if isinstance(usage, dict):
+                    input_tokens, output_tokens, cached_tokens = _usage_counts(usage)
+        except json.JSONDecodeError:
+            last_text = stdout
+
+    text = last_text or "\n".join(text_parts)
+
+    if session_usage is not None:
+        input_tokens, output_tokens, cached_tokens = session_usage
+
+    if cost == 0 and (input_tokens or output_tokens):
+        cost = _estimate_cost(input_tokens, output_tokens, CODEX_PRICING,
+                              cached_tokens=cached_tokens)
+
+    return True, text, cost
+
+
+def _parse_opencode_output(stdout: str) -> Tuple[bool, str, float]:
+    """Parse OpenCode JSONL events."""
+    ok, text, cost, error_msg = _parse_opencode_jsonl(stdout)
+    if not ok:
+        return False, error_msg or text, cost
+    return True, text, cost
+
+
+def _parse_opencode_jsonl(stdout: str) -> Tuple[bool, str, float, Optional[str]]:
+    text_parts: List[str] = []
+    cost = 0.0
+    error_msg: Optional[str] = None
+    saw_event = False
+    saw_text_or_step = False
+    saw_cost = False
+    input_tokens = 0
+    output_tokens = 0
+    cached_tokens = 0
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(evt, dict):
+            continue
+        saw_event = True
+        evt_type = evt.get("type") or ""
+
+        if evt_type == "text":
+            t = evt.get("text") or evt.get("content") or ""
+            if t:
+                text_parts.append(str(t))
+                saw_text_or_step = True
+        elif evt_type == "step_finish":
+            saw_text_or_step = True
+            part = evt.get("part") or {}
+            if isinstance(part, dict):
+                c = part.get("cost")
+                if c is not None:
+                    saw_cost = True
+                    try:
+                        cost += float(c)
+                    except (TypeError, ValueError):
+                        pass
+                usage = part.get("usage") or part.get("tokens") or {}
+                if isinstance(usage, dict):
+                    in_tok, out_tok, cache_tok = _usage_counts(usage)
+                    input_tokens += in_tok
+                    output_tokens += out_tok
+                    cached_tokens += cache_tok
+            c = evt.get("cost")
+            if c is not None:
+                saw_cost = True
+                try:
+                    cost += float(c)
+                except (TypeError, ValueError):
+                    pass
+            usage = evt.get("usage") or evt.get("tokens") or {}
+            if isinstance(usage, dict):
+                in_tok, out_tok, cache_tok = _usage_counts(usage)
+                input_tokens += in_tok
+                output_tokens += out_tok
+                cached_tokens += cache_tok
+        elif evt_type == "error":
+            error_msg = str(evt.get("message") or evt.get("error") or "OpenCode error")
+
+    if error_msg:
+        return False, "", cost, error_msg
+
+    if not saw_event or not saw_text_or_step:
+        return False, "", 0.0, None
+
+    text = "".join(text_parts)
+    if not saw_cost and cost == 0 and (input_tokens or output_tokens):
+        cost = _estimate_cost(input_tokens, output_tokens, CODEX_PRICING,
+                              cached_tokens=cached_tokens)
+    return True, text, cost, None
+
+
+def _parse_provider_json(provider: str, data_or_stdout: Union[str, Dict[str, Any]]) -> Tuple[bool, str, float]:
+    """Parse one provider JSON object/string into success, text, cost."""
+    if provider == "anthropic":
+        if isinstance(data_or_stdout, dict):
+            return _parse_anthropic_output(json.dumps(data_or_stdout))
+        return _parse_anthropic_output(data_or_stdout)
+    if provider == "google":
+        if isinstance(data_or_stdout, dict):
+            return _parse_google_output(json.dumps(data_or_stdout))
+        return _parse_google_output(data_or_stdout)
+    if provider == "openai":
+        if isinstance(data_or_stdout, dict):
+            return _parse_openai_output(json.dumps(data_or_stdout))
+        return _parse_openai_output(data_or_stdout)
+    if provider == "opencode":
+        if isinstance(data_or_stdout, dict):
+            return _parse_opencode_output(json.dumps(data_or_stdout))
+        return _parse_opencode_output(data_or_stdout)
+    if isinstance(data_or_stdout, str):
+        return True, data_or_stdout, 0.0
+    return True, str(data_or_stdout), 0.0
+
+
+# -----------------------------------------------------------------------------
+# False positive detection
+# -----------------------------------------------------------------------------
+
+def _is_false_positive(output: str, cost: float) -> bool:
+    if not output or not output.strip():
+        return True
+    stripped = output.strip()
+    length = len(stripped)
+    if cost == 0 and length < MIN_VALID_OUTPUT_LENGTH:
+        return True
+    if cost > 0 and stripped.startswith("Error:"):
+        newlines = stripped.count("\n")
+        if newlines < MAX_ERROR_RESPONSE_NEWLINES and length < 4000:
+            return True
+    return False
+
+
+# -----------------------------------------------------------------------------
+# Provider invocation builders
+# -----------------------------------------------------------------------------
+
+def _build_agent_instruction(prompt_file: Union[str, Path]) -> str:
+    return (
+        f"Read the file {prompt_file} for instructions. "
+        "You have full file access to explore and modify files as needed."
+    )
+
+
+def _build_anthropic_cmd(cli_path: str, instruction: str, use_playwright: bool) -> Tuple[List[str], Optional[str]]:
+    cmd = [cli_path, "-p", "-"]
+    if use_playwright:
+        cmd.extend(["--allowedTools", "Bash", "Read", "Write", "--max-turns", "30"])
+    else:
+        cmd.append("--dangerously-skip-permissions")
+    cmd.extend(["--output-format", "json"])
+    model = os.environ.get("CLAUDE_MODEL")
+    if model:
+        cmd.extend(["--model", model])
+    return cmd, instruction
+
+
+def _build_google_cmd(cli_path: str, instruction: str) -> List[str]:
+    cmd = [cli_path, instruction, "--yolo", "--output-format", "json"]
+    model = os.environ.get("GEMINI_MODEL")
+    if model:
+        cmd.extend(["--model", model])
+    return cmd
+
+
+def _build_openai_cmd(cli_path: str, instruction_arg: str,
+                      reasoning_effort: Optional[str]) -> List[str]:
+    sandbox = os.environ.get("CODEX_SANDBOX", "danger-full-access")
+    cmd = [cli_path]
+    if reasoning_effort:
+        cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+    cmd.extend(["exec", "--sandbox", sandbox, "--json", instruction_arg])
+    model = os.environ.get("CODEX_MODEL")
+    if model:
+        cmd.extend(["--model", model])
+    return cmd
+
+
+def _build_opencode_cmd(cli_path: str, instruction: str, cwd: str) -> List[str]:
+    model = _resolve_opencode_model()
+    cmd = [cli_path, "run", "--dir", cwd, "--format", "json",
+           "--dangerously-skip-permissions"]
+    if model:
+        cmd.extend(["--model", model])
+    agent = os.environ.get("OPENCODE_AGENT", "").strip()
+    if agent:
+        cmd.extend(["--agent", agent])
+    variant = os.environ.get("OPENCODE_VARIANT", "").strip()
+    if variant:
+        cmd.extend(["--variant", variant])
+    cmd.append(instruction)
+    return cmd
+
+
+def _coerce_prompt_file(
+    instruction: Optional[Union[str, Path]],
+    cwd: Union[str, Path],
+    prompt_path: Optional[Union[str, Path]],
+) -> Tuple[Path, bool]:
+    cwd_path = Path(cwd)
+    if prompt_path is not None:
+        return Path(prompt_path), False
+    if isinstance(instruction, Path):
+        return instruction, False
+    if isinstance(instruction, str):
+        maybe_path = Path(instruction)
+        if maybe_path.exists():
+            return maybe_path, False
+
+    prompt_file = cwd_path / f".agentic_prompt_{uuid.uuid4().hex}.txt"
+    prompt_text = str(instruction or "")
+    prompt_file.write_text(prompt_text, encoding="utf-8")
+    return prompt_file, True
+
+
+def _run_with_provider(
+    provider: str,
+    instruction: Optional[Union[str, Path]] = None,
+    cwd: Union[str, Path] = ".",
+    *,
+    prompt_path: Optional[Union[str, Path]] = None,
+    verbose: bool = False,
+    quiet: bool = False,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    use_playwright: bool = False,
+    reasoning_time: Optional[float] = None,
+    cli_path: Optional[str] = None,
+) -> Tuple[bool, str, float]:
+    """Run a single attempt with the given provider."""
+    cli_name = _PROVIDER_TO_CLI.get(provider)
+    if not cli_name:
+        return False, f"Unknown provider: {provider}", 0.0
+
+    resolved_cli_path = cli_path or _find_cli_binary(cli_name)
+    if not resolved_cli_path:
+        return False, _get_cli_diagnostic_info(cli_name), 0.0
+
+    cwd_path = Path(cwd)
+    env = _sanitize_env(cwd_path)
+
+    stdin_data: Optional[str] = None
+    cmd: List[str] = []
+    owned_prompt = False
+
+    try:
+        prompt_file, owned_prompt = _coerce_prompt_file(instruction, cwd_path, prompt_path)
+        agent_instruction = _build_agent_instruction(prompt_file)
+
+        if provider == "anthropic":
+            cmd, stdin_data = _build_anthropic_cmd(resolved_cli_path, agent_instruction, use_playwright)
+        elif provider == "google":
+            cmd = _build_google_cmd(resolved_cli_path, agent_instruction)
+        elif provider == "openai":
+            effort = _resolve_reasoning_effort(reasoning_time, codex=True)
+            cmd = _build_openai_cmd(resolved_cli_path, str(prompt_file), effort)
+        elif provider == "opencode":
+            cmd = _build_opencode_cmd(resolved_cli_path, agent_instruction, str(cwd_path))
+        else:
+            return False, f"Unsupported provider: {provider}", 0.0
+
+        if provider in ("anthropic", "google") and not quiet:
+            effort_notice = _resolve_reasoning_effort(reasoning_time)
+            if effort_notice is not None:
+                console.print(
+                    f"[dim]PDD_REASONING_EFFORT={effort_notice} requested, "
+                    f"but {provider} CLI has no reasoning-effort flag; ignoring.[/dim]"
+                )
+
+        if verbose and not quiet:
+            console.print(f"[dim]Running {provider}: {resolved_cli_path}[/dim]")
+
+        try:
+            result = _subprocess_run(
+                cmd,
+                cwd=cwd_path,
+                timeout=timeout,
+                env=env,
+                input=stdin_data,
+                stdin_data=stdin_data,
+                start_new_session=True,
+            )
+            rc, stdout, stderr = _normalize_subprocess_result(result)
+        except subprocess.TimeoutExpired as exc:
+            return False, f"Timeout after {exc.timeout}s", 0.0
+
+        if rc != 0:
+            combined = (stderr or "") + "\n" + (stdout or "")
+            if provider == "openai":
+                auth_msg = _codex_auth_failure_message(combined)
+                if auth_msg:
+                    return False, auth_msg, 0.0
+            err_snippet = (stderr or stdout or f"Exit code {rc}")[-MAX_ERROR_SNIPPET_LENGTH:]
+            return False, f"Exit code {rc}: {err_snippet}", 0.0
+
+        success, text, cost = _parse_provider_json(provider, stdout)
+
+        if provider == "opencode" and not success and _is_opencode_permanent_error(text):
+            text = (
+                f"OpenCode configuration error: {text}. "
+                "Check OPENCODE_MODEL and run `opencode auth login` or `opencode models`."
+            )
+
+        # Detect blank output success artifacts
+        if not (text or "").strip():
+            auth_keys = _collect_auth_env_keys()
+            prompt_size = prompt_file.stat().st_size if prompt_file.exists() else 0
+            msg = (
+                f"[yellow]Provider {provider} returned empty output (rc=0). "
+                f"stderr_tail={stderr[-500:]!r} prompt_size={prompt_size} "
+                f"auth_keys={auth_keys} cwd={cwd_path}[/yellow]"
+            )
+            console.print(msg)
+            _log_agentic_interaction({
+                "provider": provider,
+                "event": "empty_success",
+                "success": False,
+                "stderr_tail": (stderr or "")[-500:],
+                "prompt_size": prompt_size,
+                "auth_keys": auth_keys,
+                "cwd": str(cwd_path),
+            }, force=True)
+
+        if not success:
+            return False, text or "Provider reported failure", cost
+
+        if _is_false_positive(text, cost):
+            if not quiet:
+                console.print(f"[yellow]Provider '{provider}' returned false positive[/yellow]")
+            return False, text or "False positive (empty/error-like response)", cost
+
+        return True, text, cost
+    finally:
+        if owned_prompt:
+            try:
+                prompt_file.unlink()
+            except Exception:
+                pass
+
+
+# -----------------------------------------------------------------------------
+# Deadline Management
+# -----------------------------------------------------------------------------
+
+def get_job_deadline() -> Optional[float]:
+    val = os.environ.get("PDD_JOB_DEADLINE", "").strip()
+    if not val:
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+
+def _remaining_time(deadline: Optional[float]) -> Optional[float]:
+    if deadline is None:
+        return None
+    return deadline - time.time()
+
+
+# -----------------------------------------------------------------------------
+# Template substitution
+# -----------------------------------------------------------------------------
+
+def substitute_template_variables(template: str, variables: Dict[str, Any]) -> str:
+    """Safe substitution that doesn't fail on unmatched braces."""
+    if not template:
+        return template
+    result = template
+    for key, val in variables.items():
+        result = result.replace("{" + key + "}", str(val))
+    return result
+
+
+# -----------------------------------------------------------------------------
+# Progress tracking (Ctrl+C UX)
+# -----------------------------------------------------------------------------
+
+_PROGRESS_STATE: Optional[Dict[str, Any]] = None
+
+
+def set_agentic_progress(workflow: str, current_step: int, total_steps: int,
+                         step_name: str, completed_steps: List[str]) -> None:
+    global _PROGRESS_STATE
+    _PROGRESS_STATE = {
+        "workflow": workflow,
+        "current_step": current_step,
+        "total_steps": total_steps,
+        "step_name": step_name,
+        "completed_steps": list(completed_steps),
+        "timestamp": time.time(),
+    }
+
+
+def clear_agentic_progress() -> None:
+    global _PROGRESS_STATE
+    _PROGRESS_STATE = None
+
+
+def get_and_clear_agentic_interrupt_context() -> Optional[Dict[str, Any]]:
+    global _PROGRESS_STATE
+    state = _PROGRESS_STATE
+    _PROGRESS_STATE = None
+    return state
+
+
+# -----------------------------------------------------------------------------
+# Main Entry: run_agentic_task
+# -----------------------------------------------------------------------------
 
 def run_agentic_task(
     instruction: str,
-    cwd: Path,
+    cwd: Union[str, Path],
     *,
     verbose: bool = False,
     quiet: bool = False,
@@ -1046,1114 +1455,541 @@ def run_agentic_task(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str]:
-    """
-    Runs an agentic task using available providers in preference order.
+    """Run an agentic task across configured providers with retries."""
+    if not instruction or not instruction.strip():
+        return False, "Empty instruction", 0.0, ""
 
-    Args:
-        instruction: The task instruction
-        cwd: Working directory
-        verbose: Show detailed output
-        quiet: Suppress all non-error output
-        label: Task label for logging
-        timeout: Optional timeout override
-        max_retries: Number of attempts per provider before fallback (default: 1 = no retries)
-        retry_delay: Base delay in seconds for exponential backoff (default: DEFAULT_RETRY_DELAY)
-        deadline: Optional Unix timestamp for job-level time budgeting
-        use_playwright: Enable constrained tool access mode for browser-based testing
-        time: Reasoning-allocation float in [0.0, 1.0] forwarded from the
-            top-level ``pdd --time`` flag. When provided, overrides the
-            ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
-            means "fall back to env" so unplumbed call sites keep working.
+    cwd_path = Path(cwd)
+    prompt_body = instruction
+    user_feedback = os.environ.get("PDD_USER_FEEDBACK", "").strip()
+    if user_feedback:
+        prompt_body = f"{instruction.rstrip()}\n\nUser Feedback:\n{user_feedback}\n"
 
-    Returns:
-        (success, output_text, cost_usd, provider_used)
-    """
-    agents = get_available_agents()
+    effective_timeout = timeout or DEFAULT_TIMEOUT_SECONDS
+    job_deadline = deadline if deadline is not None else get_job_deadline()
+    using_job_deadline = job_deadline is not None
+    step_deadline: Optional[float]
+    if using_job_deadline:
+        step_deadline = job_deadline
+    else:
+        step_deadline = time.time() + (2.0 * effective_timeout)
 
-    # Filter agents based on preference order
-    candidates = [p for p in get_agent_provider_preference() if p in agents]
-
+    candidates = get_available_agents()
     if not candidates:
-        msg = "No agent providers are available (check CLI installation and API keys)"
+        msg = "No agentic providers available. Install at least one: claude, gemini, codex, or opencode."
         if not quiet:
-            console.print(f"[bold red]{msg}[/bold red]")
+            console.print(f"[red]{msg}[/red]")
         return False, msg, 0.0, ""
 
-    effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
-    effective_deadline = deadline if deadline is not None else get_job_deadline()
-    task_start_time = time.time()
-    # Issue #902: Cap total time across all providers to prevent 150min burn
-    aggregate_deadline = task_start_time + (2 * effective_timeout)
+    if not quiet and verbose:
+        console.print(f"[dim]Available providers: {candidates}[/dim]")
 
-    # Create a unique temp file for the prompt
-    prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
-    prompt_path = cwd / prompt_filename
-
-    # Inject user feedback from GitHub issue comments (set by GitHub App executor)
-    user_feedback = os.environ.get("PDD_USER_FEEDBACK")
-    feedback_section = ""
-    if user_feedback:
-        feedback_section = (
-            "\n\n## User Feedback\n"
-            "The user provided the following feedback from a previous execution attempt. "
-            "Factor this into your response:\n"
-            f"{user_feedback}\n"
-        )
-
-    full_instruction = (
-        f"{instruction}{feedback_section}\n\n"
-        f"Read the file {prompt_filename} for instructions. "
-        "You have full file access to explore and modify files as needed."
-    )
+    last_error = ""
+    last_provider = ""
+    prompt_file = cwd_path / f".agentic_prompt_{uuid.uuid4().hex}.txt"
 
     try:
-        # Write prompt to file
-        with open(prompt_path, "w", encoding="utf-8") as f:
-            f.write(full_instruction)
-
-        provider_errors: List[str] = []
-
+        prompt_file.write_text(prompt_body, encoding="utf-8")
         for provider in candidates:
-            if verbose:
-                console.print(f"[dim]Attempting provider: {provider} for task '{label}'[/dim]")
+            last_provider = provider
+            is_single_provider = (len(candidates) == 1)
 
-            # Issue #902: Check aggregate budget before starting new provider
-            if time.time() > aggregate_deadline:
-                if verbose:
-                    console.print(f"[yellow]Aggregate step timeout exceeded. Skipping {provider}.[/yellow]")
-                break
-
-            last_output = ""
-            deadline_exhausted = False
             for attempt in range(1, max_retries + 1):
-                # Deadline-aware budget check before each attempt
-                now = time.time()
-                budgets = []
-                if effective_deadline is not None:
-                    budgets.append(effective_deadline - now - JOB_TIMEOUT_MARGIN_SECONDS)
-                # Issue #902: Honor aggregate step budget
-                budgets.append(aggregate_deadline - now)
-                
-                remaining = min(budgets)
-                if remaining < MIN_ATTEMPT_TIMEOUT_SECONDS:
-                    if verbose:
-                        console.print(
-                            f"[yellow]Budget exhausted "
-                            f"({remaining:.0f}s remaining < {MIN_ATTEMPT_TIMEOUT_SECONDS}s min). "
-                            f"Skipping attempt {attempt}.[/yellow]"
-                        )
-                    deadline_exhausted = True
-                    break
-                
-                attempt_timeout = min(effective_timeout, remaining)
-
-                if verbose and attempt > 1:
-                    console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
-
-                success, output, cost = _run_with_provider(
-                    provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
-                    use_playwright=use_playwright,
-                    reasoning_time=reasoning_time,
-                )
-                last_output = output
-
-                # False Positive Detection
-                # Issue #249: Empty output should ALWAYS be detected as false positive,
-                # regardless of cost. Claude may consume tokens running tools but produce
-                # no text response, which means the task wasn't actually completed.
-                # Issue #902: Error-like content with cost > 0 is also a false positive,
-                # but only when the output STARTS with "Error:" (genuine terse provider
-                # error response, e.g., "Error: rate limit exceeded" or a long
-                # single-line CLI error).
-                # Issue #1232: Substantive output that merely mentions "Error:" mid-text
-                # (e.g., describing error-raising functions) must NOT be demoted. A
-                # multi-paragraph findings doc that happens to start with "Error:"
-                # also survives via the newline-count gate (`MAX_ERROR_RESPONSE_NEWLINES`).
-                if success:
-                    stripped_output = output.strip()
-                    output_length = len(stripped_output)
-                    is_false_positive = (
-                        output_length == 0 or  # Empty output is always a false positive
-                        (cost == 0.0 and output_length < MIN_VALID_OUTPUT_LENGTH) or  # Zero cost with short output
-                        (
-                            cost > 0.0
-                            and stripped_output.startswith("Error:")
-                            and stripped_output.count("\n") < MAX_ERROR_RESPONSE_NEWLINES
-                            and output_length < 4000
-                        )  # Issue #902/#1232: leading "Error:" with few newlines (terse error, not findings doc)
-                    )
-
-                    if is_false_positive:
+                # Check deadline and adjust timeout budget
+                remaining = _remaining_time(step_deadline)
+                if remaining is not None:
+                    budget = remaining - JOB_TIMEOUT_MARGIN_SECONDS if using_job_deadline else remaining
+                    if budget < MIN_ATTEMPT_TIMEOUT_SECONDS:
                         if not quiet:
-                            console.print(f"[yellow]Provider '{provider}' returned false positive (attempt {attempt}/{max_retries})[/yellow]")
-                        # Multi-provider configs (default): fall through to the
-                        # next provider instead of burning retries on the same
-                        # known-broken one.
-                        # Single-provider configs (cloud one-session sync runs
-                        # anthropic-only) have nowhere to fall through to —
-                        # an immediate `break` means zero retries and one
-                        # transient empty response fails the whole sync. Retry
-                        # on the same provider with backoff up to max_retries.
-                        if len(candidates) == 1 and attempt < max_retries:
-                            base_backoff = retry_delay * (2 ** (attempt - 1))
-                            jitter = random.uniform(0, retry_delay)
-                            backoff = min(base_backoff + jitter, MAX_RETRY_DELAY)
-                            if not quiet:
-                                console.print(f"[dim]Single-provider config: retrying in {backoff:.0f}s...[/dim]")
-                            time.sleep(backoff)
-                            continue
+                            console.print(f"[yellow]Skipping {provider}: insufficient time ({budget:.0f}s)[/yellow]")
+                        last_error = "Deadline exceeded"
                         break
+                    attempt_timeout = min(effective_timeout, budget)
+                else:
+                    attempt_timeout = effective_timeout
+
+                if not quiet:
+                    tag = f"[{label}] " if label else ""
+                    console.print(f"[cyan]{tag}Attempt {attempt}/{max_retries} with {provider}[/cyan]")
+
+                started = time.time()
+                try:
+                    success, output, cost = _run_with_provider(
+                        provider,
+                        prompt_path=prompt_file,
+                        cwd=cwd_path,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout=attempt_timeout,
+                        use_playwright=use_playwright,
+                        reasoning_time=reasoning_time,
+                    )
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    success, output, cost = False, f"Exception: {e}", 0.0
+
+                duration = time.time() - started
+                if success:
+                    if _is_false_positive(output, cost):
+                        if not quiet:
+                            console.print(f"[yellow]Provider '{provider}' returned false positive[/yellow]")
+                        success = False
+                        output = output or "False positive (empty/error-like response)"
                     else:
-                        # Check for suspicious files (C, E, T)
-                        suspicious = []
-                        for name in ["C", "E", "T"]:
-                            if (cwd / name).exists():
-                                suspicious.append(name)
-
-                        if suspicious:
-                            console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
-
-                        # Real success — only log when verbose (success is not diagnostic)
                         if verbose:
                             _log_agentic_interaction(
                                 label=label,
-                                prompt=full_instruction,
+                                prompt=prompt_body,
                                 response=output,
                                 cost=cost,
                                 provider=provider,
                                 success=True,
-                                duration=time.time() - task_start_time,
-                                cwd=cwd
+                                duration=duration,
+                                cwd=cwd_path,
                             )
+                        _detect_single_letter_files(str(cwd_path), quiet=quiet)
                         return True, output, cost, provider
 
-                # Issue #902: Skip retries for permanent errors (auth, parameters)
-                if not success and _is_permanent_error(output):
-                    if verbose:
-                        console.print(f"[yellow]Permanent error from {provider}, skipping retries.[/yellow]")
+                last_error = output or "Unknown error"
+                _log_agentic_interaction(
+                    label=label,
+                    prompt=prompt_body,
+                    response=last_error,
+                    cost=cost,
+                    provider=provider,
+                    success=False,
+                    duration=duration,
+                    cwd=cwd_path,
+                    force=True,
+                )
+
+                if not quiet:
+                    console.print(f"[yellow]Attempt failed: {last_error[:200]}[/yellow]")
+
+                # Permanent error: skip retries, move to next provider
+                if _is_permanent_error(last_error):
+                    if not quiet:
+                        console.print(f"[red]Permanent error from {provider}; skipping retries.[/red]")
                     break
 
-                # Failed - retry with backoff if attempts remain
+                # Multi-provider logic: break on fail to try next candidate unless it's the only one
+                if not is_single_provider:
+                    break
+
+                # Single-provider logic: exponential backoff retries
                 if attempt < max_retries:
-                    # Issue #902: Exponential backoff with additive jitter and cap
-                    # Delay = base * 2^(attempt-1) + random_jitter
-                    base_backoff = retry_delay * (2 ** (attempt - 1))
-                    jitter = random.uniform(0, retry_delay)
-                    backoff = min(base_backoff + jitter, MAX_RETRY_DELAY)
-                    
-                    if verbose:
-                        console.print(f"[dim]Waiting {backoff:.1f}s before retry...[/dim]")
+                    backoff = retry_delay * (2 ** (attempt - 1)) + random.uniform(0, retry_delay)
+                    backoff = min(backoff, MAX_RETRY_DELAY)
+                    if not quiet:
+                        console.print(f"[dim]Backing off {backoff:.1f}s...[/dim]")
                     time.sleep(backoff)
-
-            # All retries exhausted (or deadline budget exhausted) for this provider
-            provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
-            if verbose:
-                console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
-            # Issue #1072: Always log failures (not just when verbose)
-            _log_agentic_interaction(
-                label=label,
-                prompt=full_instruction,
-                response=last_output,
-                cost=0.0,
-                provider=provider,
-                success=False,
-                duration=time.time() - task_start_time,
-                cwd=cwd
-            )
-            # If deadline was exhausted, don't try other providers either
-            if deadline_exhausted or time.time() > aggregate_deadline:
-                break
-
-        return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
-
     finally:
-        # Cleanup prompt file
-        if prompt_path.exists():
-            try:
-                os.remove(prompt_path)
-            except OSError:
-                pass
+        try:
+            prompt_file.unlink()
+        except Exception:
+            pass
+
+    msg = f"All agent providers failed. Last error from {last_provider}: {last_error[:500]}"
+    return False, msg, 0.0, last_provider
 
 
-import logging as _logging
-_scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
+def _detect_single_letter_files(cwd: str, quiet: bool = False) -> None:
+    """Warn if single-letter files appeared (likely shell-redirect artifacts)."""
+    try:
+        for name in ("C", "E", "T"):
+            p = Path(cwd) / name
+            if p.is_file():
+                if not quiet:
+                    console.print(
+                        f"[red]SUSPICIOUS FILES DETECTED: stray file '{name}' in {cwd} "
+                        "(likely artifact)[/red]"
+                    )
+    except Exception:
+        pass
 
 
-def _revert_out_of_scope_changes(
-    cwd: Path,
-    allowed_paths: set[Path],
-) -> List[Path]:
-    """
-    Revert any git-tracked file changes outside the allowed set.
+# -----------------------------------------------------------------------------
+# GitHub State Persistence
+# -----------------------------------------------------------------------------
 
-    After an agentic task, this function detects deletions and modifications
-    to files not in *allowed_paths* and restores them to their ``HEAD`` state.
+_STATE_MARKER_PREFIX = "<!-- PDD_WORKFLOW_STATE:"
+_STATE_MARKER_SUFFIX = " -->"
+GITHUB_STATE_MARKER_START: str = _STATE_MARKER_PREFIX
+GITHUB_STATE_MARKER_END: str = _STATE_MARKER_SUFFIX
 
-    Skips silently when *cwd* is not a git repo, when git is unavailable,
-    or when none of the *allowed_paths* reside under *cwd*.
 
-    Args:
-        cwd: Root of the git repository.
-        allowed_paths: Set of resolved absolute paths the agent is permitted
-            to modify.
+def _gh_available() -> bool:
+    return shutil.which("gh") is not None
 
-    Returns:
-        List of paths that were reverted.
-    """
-    cwd_str = str(cwd.resolve())
-    if not any(str(p).startswith(cwd_str) for p in allowed_paths):
-        return []
+
+def _gh_run(args: List[str], cwd: Optional[str] = None,
+            timeout: float = 60.0, input_data: Optional[str] = None
+            ) -> Tuple[int, str, str]:
+    if not _gh_available():
+        return 127, "", "gh CLI not installed"
     try:
         result = subprocess.run(
-            ["git", "-C", str(cwd), "status", "--porcelain", "-uno"],
-            capture_output=True, text=True, timeout=30,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-        _scope_guard_logger.warning("Scope guard: git status failed: %s", exc)
-        return []
-    if result.returncode != 0:
-        _scope_guard_logger.warning(
-            "Scope guard: git status returned %d: %s",
-            result.returncode, result.stderr.strip(),
-        )
-        return []
-    reverted: List[Path] = []
-    to_restore: List[str] = []
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        rel_path = line[3:].strip()
-        full_path = (cwd / rel_path).resolve()
-        if full_path not in allowed_paths:
-            to_restore.append(rel_path)
-            reverted.append(full_path)
-    if to_restore:
-        try:
-            subprocess.run(
-                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
-                capture_output=True, timeout=30,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _scope_guard_logger.warning(
-                "Scope guard: git checkout failed for %d file(s): %s",
-                len(to_restore), exc,
-            )
-            reverted.clear()
-        else:
-            if reverted:
-                _scope_guard_logger.info(
-                    "Scope guard reverted %d out-of-scope file(s): %s",
-                    len(reverted),
-                    ", ".join(str(p.name) for p in reverted[:10]),
-                )
-    return reverted
-
-def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
-                    text=False, timeout=None, start_new_session=False, **kwargs):
-    """Wrapper around subprocess that uses Popen for proper process group cleanup.
-
-    Provides a subprocess.run-compatible interface but uses Popen internally
-    so we can reliably kill the process group on timeout (Issue #830).
-    """
-    proc = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=env,
-        stdin=subprocess.PIPE if input is not None or capture_output else None,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        text=text,
-        start_new_session=start_new_session,
-    )
-    try:
-        stdout, stderr = proc.communicate(input=input, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        if start_new_session:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
-        proc.kill()
-        proc.wait(timeout=5)
-        raise
-
-    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
-    return result
-
-
-def _run_with_provider(
-    provider: str,
-    prompt_path: Path,
-    cwd: Path,
-    timeout: float = DEFAULT_TIMEOUT_SECONDS,
-    verbose: bool = False,
-    quiet: bool = False,
-    cli_path: Optional[str] = None,
-    label: str = "",
-    use_playwright: bool = False,
-    reasoning_time: Optional[float] = None,
-) -> Tuple[bool, str, float]:
-    """
-    Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost).
-
-    Args:
-        provider: Provider name (anthropic, google, openai)
-        prompt_path: Path to the prompt file
-        cwd: Working directory
-        timeout: Timeout in seconds
-        verbose: Verbose output
-        quiet: Suppress output
-        cli_path: Optional explicit CLI path (if None, uses _find_cli_binary)
-        label: Task label for heartbeat messages
-        use_playwright: Enable constrained tool access for browser testing
-        time: Reasoning-allocation float in [0.0, 1.0]. When provided,
-            takes precedence over the ``PDD_REASONING_EFFORT`` env var.
-            ``None`` means "fall back to env" so unplumbed call sites
-            keep receiving the signal via the global variable set by
-            ``pdd/core/cli.py``.
-    """
-
-    # Prepare Environment
-    env = os.environ.copy()
-    env["TERM"] = "dumb"
-    env["NO_COLOR"] = "1"
-    env["CI"] = "1"
-    env.pop("PDD_OUTPUT_COST_PATH", None)
-    # Force CLI agents to stay in the worktree instead of following
-    # the .git file pointer back to the main repo (Issue #894).
-    env["GIT_WORK_TREE"] = str(cwd)
-
-    # Get CLI binary name for this provider
-    cli_name = CLI_COMMANDS.get(provider)
-    if not cli_name:
-        return False, f"Unknown provider {provider}", 0.0
-
-    # Find CLI binary path (use explicit path if provided)
-    if cli_path is None:
-        cli_path = _find_cli_binary(cli_name)
-    if not cli_path:
-        return False, f"CLI '{cli_name}' not found. {_get_cli_diagnostic_info(cli_name)}", 0.0
-
-    cmd: List[str] = []
-
-    # Read prompt content for providers that pipe via stdin
-    prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
-
-    # Reasoning-effort plumbing. Three input paths converge here, in
-    # precedence order:
-    # 1. ``CODEX_REASONING_EFFORT`` env var — Codex-specific override, accepts
-    #    ``low|medium|high|xhigh`` (xhigh is Codex-only, used by the cloud
-    #    worker for GPT-5.4 routing). Only consulted when provider == "openai".
-    # 2. Explicit ``reasoning_time`` kwarg threaded down from a command that
-    #    saw ``--time`` on argv (cli.py only forwards when ``time_explicit`` is
-    #    True, so a default ``ctx.obj["time"]`` does NOT reach here).
-    # 3. ``PDD_REASONING_EFFORT`` env var set by pdd/core/cli.py for call
-    #    sites that don't thread the kwarg (sync, split, test_generate,
-    #    update, verify, crash, etc.).
-    # ``CODEX_REASONING_EFFORT`` only fires for the openai branch below; the
-    # generic ``reasoning_effort`` resolved here covers paths 2 and 3 and is
-    # what the anthropic/gemini logging notices read.
-    if reasoning_time is not None:
-        from .reasoning import time_to_effort_level
-        reasoning_effort = time_to_effort_level(reasoning_time)
-    else:
-        reasoning_effort = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
-        if reasoning_effort not in {"low", "medium", "high"}:
-            reasoning_effort = ""
-
-    # Construct Command using discovered cli_path (Issue #234 fix)
-    if provider == "anthropic":
-        # Use -p - to pipe prompt as direct user message via stdin.
-        # This prevents Claude from interpreting file-discovered instructions
-        # as "automated bot workflow" and refusing to execute.
-        if use_playwright:
-            # Playwright mode: constrained tool access with cost ceiling
-            cmd = [
-                cli_path,
-                "-p", "-",
-                "--allowedTools", "Bash", "Read", "Write",
-                "--max-turns", "30",
-                "--output-format", "json",
-            ]
-        else:
-            cmd = [
-                cli_path,
-                "-p", "-",
-                "--dangerously-skip-permissions",
-                "--output-format", "json",
-            ]
-        # Allow model override via CLAUDE_MODEL env var (Issue #318)
-        claude_model = env.get("CLAUDE_MODEL")
-        if claude_model:
-            cmd.extend(["--model", claude_model])
-        if reasoning_effort and not quiet:
-            # Always surface outside --quiet mode — silently dropping the user's
-            # reasoning signal is a support-ticket generator. The Claude Code CLI
-            # has no --reasoning-effort flag today, so clarify that the effort
-            # applies to LiteLLM-invoked steps (analysis/verification) but not
-            # to this code-writing subprocess.
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
-    elif provider == "google":
-        # Do NOT use -p flag for Gemini. The -p flag passes text literally,
-        # so passing a file path gives Gemini the path string instead of content.
-        # Instead, pass a short instruction as positional argument telling Gemini
-        # to read the prompt file (matches old _run_google_variants pattern).
-        cmd = [
-            cli_path,
-            f"Read the file {prompt_path.name} for your full instructions and execute them.",
-            "--yolo",
-            "--output-format", "json"
-        ]
-        # Allow model override via GEMINI_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
-        gemini_model = env.get("GEMINI_MODEL")
-        if gemini_model:
-            cmd.extend(["--model", gemini_model])
-        if reasoning_effort and not quiet:
-            # See Claude Code branch above for rationale — same constraint applies.
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
-    elif provider == "openai":
-        # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
-        # panics on gVisor (Cloud Run) and Docker-on-macOS. Since the PDD worker
-        # container IS the sandbox boundary, use danger-full-access instead.
-        # Ref: https://github.com/openai/codex/issues/6828
-        sandbox_mode = env.get("CODEX_SANDBOX_MODE", "danger-full-access")
-        cmd = [cli_path]
-        # Codex accepts -c / --config only as a top-level flag before the
-        # subcommand; appending after "exec" is silently ignored.
-        # Codex-specific override: CODEX_REASONING_EFFORT takes precedence
-        # over the generic reasoning_effort (kwarg / PDD_REASONING_EFFORT)
-        # and additionally accepts ``xhigh`` for GPT-5.4 routing — the
-        # cloud worker sets this env var directly when promoting Codex to
-        # an extra-high reasoning budget regardless of the user's --time.
-        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
-        if codex_effort in {"low", "medium", "high", "xhigh"}:
-            effective_codex_effort: Optional[str] = codex_effort
-        elif reasoning_effort:
-            effective_codex_effort = reasoning_effort
-        else:
-            effective_codex_effort = None
-        if effective_codex_effort:
-            cmd.extend(["-c", f"model_reasoning_effort={effective_codex_effort}"])
-        cmd.extend([
-            "exec",
-            "--sandbox", sandbox_mode,
-            "--json",
-            str(prompt_path)
-        ])
-        # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
-        codex_model = env.get("CODEX_MODEL")
-        if codex_model:
-            cmd.extend(["--model", codex_model])
-    elif provider == "opencode":
-        # OpenCode CLI: `opencode run` runs a one-shot task in headless mode.
-        # JSONL is emitted on stdout (one event per line). We pass the prompt
-        # text as a positional argument; the prompt content already includes
-        # the "Read the file ... for instructions" directive that points the
-        # agent at the prompt file written by run_agentic_task().
-        cmd = [
-            cli_path,
-            "run",
-            "--dir", str(cwd),
-            "--format", "json",
-            "--dangerously-skip-permissions",
-        ]
-        # Optional model override via OPENCODE_MODEL env var. Format is
-        # "provider/model" (e.g. "anthropic/claude-sonnet-4-5"); may contain
-        # multiple slashes (e.g. "openrouter/openai/gpt-5.3-codex"). Pass
-        # verbatim — OpenCode parses the full string.
-        oc_model = _resolve_opencode_model(env)
-        if oc_model:
-            cmd.extend(["--model", oc_model])
-        # Optional agent override (e.g. "build", "plan").
-        oc_agent = (env.get("OPENCODE_AGENT") or "").strip()
-        if oc_agent:
-            cmd.extend(["--agent", oc_agent])
-        # Optional variant override (e.g. "high", "max") when the selected
-        # provider supports tiered variants.
-        oc_variant = (env.get("OPENCODE_VARIANT") or "").strip()
-        if oc_variant:
-            cmd.extend(["--variant", oc_variant])
-        if reasoning_effort and not quiet:
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but OpenCode CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
-        # Final positional argument: the instruction the agent should execute.
-        cmd.append(prompt_content)
-    else:
-        return False, f"Unknown provider {provider}", 0.0
-
-    # For anthropic, pipe prompt content via stdin; others use file path in cmd
-    stdin_content = prompt_content if provider == "anthropic" else None
-
-    try:
-        result = _subprocess_run(
-            cmd,
+            ["gh"] + args,
             cwd=cwd,
-            env=env,
-            input=stdin_content,
+            input=input_data,
             capture_output=True,
             text=True,
             timeout=timeout,
-            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        return False, "Timeout expired", 0.0
-    except Exception as e:
-        return False, str(e), 0.0
+    except subprocess.TimeoutExpired as exc:
+        return -9, "", f"Timeout after {exc.timeout}s"
+    except OSError as exc:
+        return 1, "", str(exc)
+    return result.returncode, result.stdout or "", result.stderr or ""
 
-    if result.returncode != 0:
-        error_detail = result.stderr or result.stdout[:500]
-        if provider == "openai":
-            combined_error = "\n".join(
-                part for part in [
-                    result.stderr or "",
-                    (result.stdout or "")[:MAX_ERROR_SNIPPET_LENGTH],
-                ]
-                if part
-            )
-            codex_auth_message = _codex_auth_failure_message(combined_error)
-            if codex_auth_message:
-                return False, codex_auth_message, 0.0
-        return False, f"Exit code {result.returncode}: {error_detail}", 0.0
 
-    # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
-    # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
-    # with a blank provider error and no log trail. Stderr tail + prompt size
-    # + auth-key presence is usually enough to tell apart auth failures, rate
-    # limits, and genuine empty responses.
-    if not result.stdout.strip():
-        auth_keys_present = sorted(
-            k for k in env
-            if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
-        )
-        stderr_tail = (result.stderr or "")[-500:]
-        console.print(
-            f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
-        )
-        console.print(
-            f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
-            f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
-        )
+def _find_state_comment(repo_owner: str, repo_name: str, issue_number: int,
+                        workflow_id: str, cwd: Optional[str] = None
+                        ) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+    """Find the existing state marker comment. Returns (comment_id, state_dict)."""
+    rc, stdout, stderr = _gh_run(
+        ["api", "--paginate",
+         f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments"],
+        cwd=cwd, timeout=120.0,
+    )
+    if rc != 0:
+        return None, None
 
-    # OpenCode emits JSONL events — parse the whole stream directly rather
-    # than going through the single-object _parse_provider_json path.
-    if provider == "opencode":
-        success, text, cost, err = _parse_opencode_jsonl(result.stdout or "")
-        if not success:
-            return False, err or text or "OpenCode parse error", cost
-        return True, text, cost
-
-    # Parse JSON Output
     try:
-        # Handle JSONL output (Codex sometimes streams)
-        output_str = result.stdout.strip()
-        data = {}
-
-        if provider == "openai" and "\n" in output_str:
-            # Parse NDJSON, collecting both the agent response and usage stats
-            lines = output_str.splitlines()
-            agent_message_data = None
-            session_end = None
-            for line in lines:
-                try:
-                    item = json.loads(line)
-                    # Legacy Codex format: single event contains both text and usage
-                    if item.get("type") == "result":
-                        data = item
-                        break
-                    # Modern Codex CLI (0.104.0+): text in item.completed agent_message
-                    if (item.get("type") == "item.completed"
-                            and isinstance(item.get("item"), dict)
-                            and item["item"].get("type") == "agent_message"):
-                        agent_message_data = item
-                    # usage/cost stats are in session.end or turn.completed
-                    # (Codex CLI 0.105.0+ uses turn.completed instead of session.end)
-                    if item.get("type") in ("session.end", "turn.completed"):
-                        session_end = item
-                except json.JSONDecodeError:
-                    continue
-            if not data:
-                if agent_message_data is not None:
-                    # Merge usage from session.end so cost can be calculated
-                    if session_end is not None:
-                        data = {**agent_message_data, "usage": session_end.get("usage", {})}
-                    else:
-                        data = agent_message_data
-                elif session_end is not None:
-                    data = session_end
-                elif lines:
-                    try:
-                        data = json.loads(lines[-1])
-                    except:
-                        pass
-        else:
-            # Claude Code may emit non-JSON text to stdout (npm warnings,
-            # upgrade prompts) alongside the JSON result.  Try parsing as
-            # single JSON first, then fall back to line-by-line extraction.
-            try:
-                data = json.loads(output_str)
-            except json.JSONDecodeError:
-                data = _extract_json_from_output(output_str)
-
-        success, text, cost = _parse_provider_json(provider, data)
-        if cost == 0.0 and verbose and isinstance(data, dict):
-            console.print(
-                f"[dim]Warning: {provider} returned $0 cost. "
-                f"JSON keys: {sorted(data.keys())}[/dim]"
-            )
-        return success, text, cost
-    except json.JSONDecodeError:
-        # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0
-
-
-def _extract_json_from_output(output_str: str) -> dict:
-    """Extract a JSON object from output that may contain non-JSON text.
-
-    Claude Code may emit non-JSON text to stdout (npm warnings, upgrade
-    prompts) alongside the JSON result.  Try line-by-line extraction first,
-    then fall back to brace-depth matching on the full string.
-
-    Raises ``json.JSONDecodeError`` if no valid JSON object can be found.
-    """
-    # Try each line individually
-    for line in output_str.splitlines():
-        line = line.strip()
-        if not line or not line.startswith("{"):
-            continue
+        comments: List[Dict[str, Any]] = []
+        decoder = json.JSONDecoder()
+        idx = 0
+        s = stdout.strip()
+        while idx < len(s):
+            while idx < len(s) and s[idx] in " \n\r\t":
+                idx += 1
+            if idx >= len(s):
+                break
+            obj, end = decoder.raw_decode(s, idx)
+            if isinstance(obj, list):
+                comments.extend(obj)
+            idx = end
+    except Exception:
         try:
-            return json.loads(line)
+            comments = json.loads(stdout)
         except json.JSONDecodeError:
-            continue
+            return None, None
 
-    # Fallback: brace-depth matching to find the first complete JSON object
-    depth = 0
-    start_index: Optional[int] = None
-    in_string = False
-    escape = False
-
-    for i, ch in enumerate(output_str):
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-            continue
-
-        if ch == "{":
-            if depth == 0:
-                start_index = i
-            depth += 1
-        elif ch == "}" and depth > 0:
-            depth -= 1
-            if depth == 0 and start_index is not None:
-                candidate = output_str[start_index : i + 1]
+    for comment in comments:
+        body = comment.get("body", "") or ""
+        markers = [
+            f"{_STATE_MARKER_PREFIX}{workflow_id}:issue-{issue_number}:",
+            f"{_STATE_MARKER_PREFIX}{workflow_id}:",
+        ]
+        marker = next((m for m in markers if m in body), "")
+        if marker:
+            start = body.find(marker) + len(marker)
+            end = body.find(_STATE_MARKER_SUFFIX, start)
+            if end > start:
+                payload = body[start:end].strip()
                 try:
-                    return json.loads(candidate)
+                    state = json.loads(payload)
+                    return comment.get("id"), state
                 except json.JSONDecodeError:
-                    start_index = None
-                    continue
+                    return comment.get("id"), None
+    return None, None
 
-    raise json.JSONDecodeError(
-        "No valid JSON object found in output", output_str[:200], 0
+
+def _build_state_marker(workflow_type: str, issue_number: int) -> str:
+    return f"{_STATE_MARKER_PREFIX}{workflow_type}:issue-{issue_number}"
+
+
+def _serialize_state_comment(workflow_type: str, issue_number: int, state: Dict[str, Any]) -> str:
+    payload = json.dumps(state, default=str)
+    return f"{_build_state_marker(workflow_type, issue_number)}:{payload}{_STATE_MARKER_SUFFIX}"
+
+
+def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) -> Optional[Dict[str, Any]]:
+    marker = f"{_build_state_marker(workflow_type, issue_number)}:"
+    if marker not in body:
+        return None
+    start = body.find(marker) + len(marker)
+    end = body.find(_STATE_MARKER_SUFFIX, start)
+    if end <= start:
+        return None
+    try:
+        parsed = json.loads(body[start:end].strip())
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _should_use_github_state(use_github_state: bool = True) -> bool:
+    if not use_github_state:
+        return False
+    return os.environ.get("PDD_NO_GITHUB_STATE", "").lower() not in {"1", "true", "yes"}
+
+
+def _local_state_path(
+    cwd: Optional[Union[str, Path]],
+    workflow_id: str,
+    issue_number: Optional[int] = None,
+    state_dir: Optional[Union[str, Path]] = None,
+) -> Path:
+    if state_dir is not None:
+        base = Path(state_dir)
+        filename = f"{workflow_id}_state_{issue_number}.json" if issue_number is not None else f"{workflow_id}.json"
+        return base / filename
+    base_cwd = Path(cwd or ".")
+    return base_cwd / ".pdd" / "workflow-state" / f"{workflow_id}.json"
+
+
+def load_workflow_state(
+    repo_owner: str = "",
+    repo_name: str = "",
+    issue_number: int = 0,
+    workflow_id: Optional[str] = None,
+    cwd: Optional[Union[str, Path]] = None,
+    workflow_type: Optional[str] = None,
+    state_dir: Optional[Union[str, Path]] = None,
+    use_github_state: bool = True,
+) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+    """Load workflow state from GitHub issue comments."""
+    workflow = workflow_id or workflow_type or "workflow"
+    if _should_use_github_state(use_github_state) and repo_owner and repo_name and issue_number:
+        state, comment_id = github_load_state(repo_owner, repo_name, issue_number, workflow, cwd=cwd)
+        if state is not None:
+            return state, comment_id
+
+    local_path = _local_state_path(cwd, workflow, issue_number or None, state_dir)
+    try:
+        if local_path.is_file():
+            return json.loads(local_path.read_text(encoding="utf-8")), None
+    except Exception:
+        pass
+    return None, None
+
+
+def _save_local_state(
+    workflow_id: str,
+    state: Dict[str, Any],
+    cwd: Optional[Union[str, Path]] = None,
+    issue_number: Optional[int] = None,
+    state_dir: Optional[Union[str, Path]] = None,
+) -> None:
+    try:
+        path = _local_state_path(cwd, workflow_id, issue_number, state_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, default=str)
+    except Exception:
+        pass
+
+
+def github_load_state(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_id: str,
+    cwd: Optional[Union[str, Path]] = None,
+) -> Tuple[Optional[Dict[str, Any]], Optional[int]]:
+    if not _gh_available():
+        return None, None
+    comment_id, state = _find_state_comment(
+        repo_owner, repo_name, issue_number, workflow_id, cwd=str(cwd) if cwd is not None else None
+    )
+    return state, comment_id
+
+
+def github_save_state(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_id: str,
+    state: Dict[str, Any],
+    comment_id: Optional[int] = None,
+    cwd: Optional[Union[str, Path]] = None,
+) -> Optional[int]:
+    if not _gh_available():
+        return None
+
+    payload = json.dumps(state, default=str)
+    body = (f"## PDD Workflow State\n\n"
+            f"Workflow: `{workflow_id}`\n"
+            f"Updated: {datetime.now(timezone.utc).isoformat()}\n\n"
+            f"{_STATE_MARKER_PREFIX}{workflow_id}:{payload}{_STATE_MARKER_SUFFIX}")
+
+    if comment_id is None:
+        existing_id, _ = _find_state_comment(
+            repo_owner, repo_name, issue_number, workflow_id,
+            cwd=str(cwd) if cwd is not None else None,
+        )
+        comment_id = existing_id
+
+    if comment_id:
+        rc, stdout, stderr = _gh_run(
+            ["api", "--method", "PATCH",
+             f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
+             "-f", f"body={body}"],
+            cwd=str(cwd) if cwd is not None else None,
+        )
+        return comment_id if rc == 0 else None
+
+    rc, stdout, stderr = _gh_run(
+        ["api", "--method", "POST",
+         f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+         "-f", f"body={body}"],
+        cwd=str(cwd) if cwd is not None else None,
+    )
+    if rc != 0:
+        return None
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    return data.get("id")
+
+
+def save_workflow_state(
+    repo_owner: str = "",
+    repo_name: str = "",
+    issue_number: int = 0,
+    workflow_id: Optional[str] = None,
+    state: Optional[Dict[str, Any]] = None,
+    comment_id: Optional[int] = None,
+    cwd: Optional[Union[str, Path]] = None,
+    workflow_type: Optional[str] = None,
+    state_dir: Optional[Union[str, Path]] = None,
+    use_github_state: bool = True,
+    github_comment_id: Optional[int] = None,
+) -> Optional[int]:
+    """Save state. Returns comment_id on success, None on GitHub failure."""
+    workflow = workflow_id or workflow_type or "workflow"
+    state = state or {}
+    _save_local_state(workflow, state, cwd=cwd, issue_number=issue_number or None, state_dir=state_dir)
+
+    if not _should_use_github_state(use_github_state):
+        return comment_id or github_comment_id
+
+    saved_id = github_save_state(
+        repo_owner,
+        repo_name,
+        issue_number,
+        workflow,
+        state,
+        comment_id=comment_id if comment_id is not None else github_comment_id,
+        cwd=cwd,
+    )
+    if saved_id is None:
+        console.print("[yellow]GitHub workflow state save failed; local state was written.[/yellow]")
+    return saved_id
+
+
+def clear_workflow_state(
+    repo_owner: str = "",
+    repo_name: str = "",
+    issue_number: int = 0,
+    workflow_id: Optional[str] = None,
+    cwd: Optional[Union[str, Path]] = None,
+    workflow_type: Optional[str] = None,
+    state_dir: Optional[Union[str, Path]] = None,
+    use_github_state: bool = True,
+) -> None:
+    """Delete the state comment and local cache."""
+    workflow = workflow_id or workflow_type or "workflow"
+    try:
+        local_path = _local_state_path(cwd, workflow, issue_number or None, state_dir)
+        if local_path.exists():
+            local_path.unlink()
+    except Exception:
+        pass
+
+    if not (_should_use_github_state(use_github_state) and _gh_available() and repo_owner and repo_name and issue_number):
+        return
+    comment_id, _ = _find_state_comment(
+        repo_owner, repo_name, issue_number, workflow,
+        cwd=str(cwd) if cwd is not None else None,
+    )
+    if comment_id:
+        _gh_run(
+            ["api", "--method", "DELETE",
+             f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}"],
+            cwd=str(cwd) if cwd is not None else None,
+        )
+
+
+def github_clear_state(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow_id: str,
+    cwd: Optional[Union[str, Path]] = None,
+) -> None:
+    clear_workflow_state(
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        workflow_id=workflow_id,
+        cwd=cwd,
+        use_github_state=True,
     )
 
 
-def _parse_provider_json(provider: str, data: Dict[str, Any]) -> Tuple[bool, str, float]:
-    """
-    Extracts (success, text_response, cost_usd) from provider JSON.
-    """
-    cost = 0.0
-    output_text = ""
-
-    try:
-        if provider == "anthropic":
-            # Use total_cost_usd if available, otherwise estimate from token usage
-            cost = float(data.get("total_cost_usd", 0.0))
-            if cost == 0.0:
-                cost = _calculate_anthropic_cost(data)
-            # Result might be in 'result' or 'response'
-            output_text = data.get("result") or data.get("response") or ""
-            # Claude Code JSON includes is_error when the session failed
-            # (auth, refusal, crash). Propagate as failure so callers can
-            # retry or fall through instead of treating it as success.
-            if data.get("is_error"):
-                return False, str(output_text) or "CLI reported is_error with no message", cost
-
-        elif provider == "google":
-            stats = data.get("stats", {})
-            cost = _calculate_gemini_cost(stats)
-            output_text = data.get("result") or data.get("response") or data.get("output") or ""
-
-        elif provider == "openai":
-            usage = data.get("usage", {})
-            cost = _calculate_codex_cost(usage)
-            # Modern Codex CLI (0.104.0+): text at data["item"]["text"]
-            item = data.get("item", {})
-            if isinstance(item, dict) and item.get("type") == "agent_message":
-                output_text = item.get("text", "")
-            else:
-                output_text = data.get("result") or data.get("output") or ""
-
-        return True, str(output_text), cost
-
-    except Exception as e:
-        return False, f"Error parsing {provider} JSON: {e}", 0.0
-
-
-# --- GitHub State Persistence ---
-
-def _build_state_marker(workflow_type: str, issue_number: int) -> str:
-    return f"{GITHUB_STATE_MARKER_START}{workflow_type}:issue-{issue_number}"
-
-def _serialize_state_comment(workflow_type: str, issue_number: int, state: Dict) -> str:
-    marker = _build_state_marker(workflow_type, issue_number)
-    json_str = json.dumps(state, indent=2)
-    return f"{marker}\n{json_str}\n{GITHUB_STATE_MARKER_END}"
-
-def _parse_state_from_comment(body: str, workflow_type: str, issue_number: int) -> Optional[Dict]:
-    marker = _build_state_marker(workflow_type, issue_number)
-    if marker not in body:
-        return None
-    
-    try:
-        # Extract content between marker and end marker
-        start_idx = body.find(marker) + len(marker)
-        end_idx = body.find(GITHUB_STATE_MARKER_END, start_idx)
-        
-        if end_idx == -1:
-            return None
-            
-        json_str = body[start_idx:end_idx].strip()
-        return json.loads(json_str)
-    except (json.JSONDecodeError, ValueError):
-        return None
-
-def _find_state_comment(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    cwd: Path
-) -> Optional[Tuple[int, Dict]]:
-    """
-    Returns (comment_id, state_dict) if found, else None.
-    """
-    if not _find_cli_binary("gh"):
-        return None
-
-    try:
-        # List comments
-        cmd = [
-            "gh", "api",
-            f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-            "--method", "GET",
-            "--paginate"
-        ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-        if result.returncode != 0:
-            return None
-            
-        comments = json.loads(result.stdout)
-        marker = _build_state_marker(workflow_type, issue_number)
-        
-        for comment in comments:
-            body = comment.get("body", "")
-            if marker in body:
-                state = _parse_state_from_comment(body, workflow_type, issue_number)
-                if state:
-                    return comment["id"], state
-                    
-        return None
-    except Exception:
-        return None
-
-def github_save_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    cwd: Path, 
-    comment_id: Optional[int] = None
-) -> Optional[int]:
-    """
-    Creates or updates a GitHub comment with the state. Returns new/existing comment_id.
-    """
-    if not _find_cli_binary("gh"):
-        return None
-
-    body = _serialize_state_comment(workflow_type, issue_number, state)
-    
-    try:
-        if comment_id:
-            # PATCH existing
-            cmd = [
-                "gh", "api",
-                f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
-                "-X", "PATCH",
-                "-f", f"body={body}"
-            ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-            if res.returncode == 0:
-                return comment_id
-        else:
-            # POST new
-            cmd = [
-                "gh", "api",
-                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
-                "-X", "POST",
-                "-f", f"body={body}"
-            ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-            if res.returncode == 0:
-                data = json.loads(res.stdout)
-                return data.get("id")
-                
-        return None
-    except Exception:
-        return None
-
-def github_load_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    cwd: Path
-) -> Tuple[Optional[Dict], Optional[int]]:
-    """
-    Wrapper to find state. Returns (state, comment_id).
-    """
-    result = _find_state_comment(repo_owner, repo_name, issue_number, workflow_type, cwd)
-    if result:
-        return result[1], result[0]
-    return None, None
-
-def github_clear_state(
-    repo_owner: str, 
-    repo_name: str, 
-    issue_number: int, 
-    workflow_type: str, 
-    cwd: Path
-) -> bool:
-    """
-    Deletes the state comment if it exists.
-    """
-    result = _find_state_comment(repo_owner, repo_name, issue_number, workflow_type, cwd)
-    if not result:
-        return True # Already clear
-        
-    comment_id = result[0]
-    try:
-        cmd = [
-            "gh", "api",
-            f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
-            "-X", "DELETE"
-        ]
-        subprocess.run(cmd, cwd=cwd, capture_output=True)
-        return True
-    except Exception:
-        return False
-
-def _should_use_github_state(use_github_state: bool) -> bool:
-    if not use_github_state:
-        return False
-    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
-        return False
-    return True
-
-# --- Cached State Validation (Issue #467) ---
+# -----------------------------------------------------------------------------
+# State validation
+# -----------------------------------------------------------------------------
 
 def validate_cached_state(
     last_completed_step: Union[int, float],
     step_outputs: Dict[str, str],
-    step_order: Optional[List[Union[int, float]]] = None,
+    step_order: Optional[List[Union[str, int]]] = None,
     quiet: bool = False,
 ) -> Union[int, float]:
-    """Validate cached state and return actual last successful step.
-
-    Scans step_outputs for entries with "FAILED:" prefix and corrects
-    last_completed_step to the actual last successfully completed step.
-    This prevents the "blind resume" bug (Issue #467) where the orchestrator
-    trusts a corrupted last_completed_step and skips failed steps.
-
-    Args:
-        last_completed_step: The stored last_completed_step value.
-        step_outputs: Dict mapping step number strings to output strings.
-        step_order: Ordered list of step numbers. If None, derived from
-            step_outputs keys sorted numerically.
-        quiet: If False, prints a warning when correction is applied.
-
-    Returns:
-        The corrected last_completed_step value.
-    """
+    """Scan step_outputs for FAILED markers; return corrected last completed step."""
     if not step_outputs:
         return last_completed_step
 
-    if step_order is None:
-        # Derive order from keys, sorted numerically
-        # Filter out non-numeric keys (e.g. "1b", "2b", "7b", "9b") that
-        # are informational intermediate-step outputs — only numeric keys
-        # (e.g. "1", "1.5", "2", "7.5") participate in validation ordering.
-        numeric_keys = []
-        for k in step_outputs.keys():
-            try:
-                float(k)
-                numeric_keys.append(k)
-            except ValueError:
-                continue
-        step_order = sorted(numeric_keys, key=lambda k: float(k))
+    corrected = last_completed_step
+    if step_order:
+        for idx, step_name in enumerate(step_order):
+            key = str(step_name)
+            output = step_outputs.get(key, step_outputs.get(step_name, ""))  # type: ignore[arg-type]
+            if isinstance(output, str) and "FAILED:" in output:
+                step_num: Union[int, float]
+                try:
+                    step_num = int(step_name)
+                except (TypeError, ValueError):
+                    step_num = idx + 1
+                if step_num <= corrected:
+                    if idx > 0:
+                        try:
+                            corrected = int(step_order[idx - 1])
+                        except (TypeError, ValueError):
+                            corrected = idx
+                    else:
+                        corrected = 0
+                    if not quiet:
+                        console.print(
+                            f"[yellow]State validation: step '{key}' shows FAILED; "
+                            f"rolling back to {corrected}[/yellow]"
+                        )
+                    break
     else:
-        # Convert to string keys for lookup
-        step_order = [str(s) if not isinstance(s, str) else s for s in step_order]
-
-    actual_last_success: Union[int, float] = 0
-    for sn in step_order:
-        key = str(sn)
-        output_val = step_outputs.get(key, "")
-        if not output_val:
-            break
-        if str(output_val).startswith("FAILED:"):
-            break
-        # Parse back to numeric for comparison
-        try:
-            actual_last_success = float(key) if "." in key else int(key)
-        except ValueError:
-            actual_last_success = 0
-
-    if actual_last_success < last_completed_step:
-        if not quiet:
-            console.print(
-                f"[yellow]State validation: correcting last_completed_step "
-                f"from {last_completed_step} to {actual_last_success} "
-                f"(found FAILED steps in cache)[/yellow]"
-            )
-        return actual_last_success
-
-    return last_completed_step
+        for key, output in step_outputs.items():
+            if isinstance(output, str) and "FAILED:" in output:
+                if not quiet:
+                    console.print(
+                        f"[yellow]State validation: step '{key}' shows FAILED[/yellow]"
+                    )
+                try:
+                    match = re.search(r"\d+", key)
+                    step_num = int(match.group()) if match else 0
+                    if step_num <= corrected:
+                        corrected = max(0, step_num - 1)
+                except (AttributeError, ValueError):
+                    pass
+    return corrected
 
 
-# --- High Level State Wrappers ---
-
-def load_workflow_state(
-    cwd: Path,
-    issue_number: int,
-    workflow_type: str,
-    state_dir: Path,
-    repo_owner: str,
-    repo_name: str,
-    use_github_state: bool = True
-) -> Tuple[Optional[Dict], Optional[int]]:
-    """
-    Loads state from GitHub (priority) or local file.
-    Returns (state_dict, github_comment_id).
-    """
-    local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-
-    # Try GitHub first
-    if _should_use_github_state(use_github_state):
-        gh_state, gh_id = github_load_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
-        if gh_state:
-            # Cache locally
-            try:
-                state_dir.mkdir(parents=True, exist_ok=True)
-                with open(local_file, "w") as f:
-                    json.dump(gh_state, f, indent=2)
-            except Exception:
-                pass # Ignore local cache errors
-            return gh_state, gh_id
-    # Fallback to local
-    if local_file.exists():
-        try:
-            with open(local_file, "r") as f:
-                return json.load(f), None
-        except Exception:
-            pass
-            
-    return None, None
-
-def save_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state: Dict, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
-    use_github_state: bool = True, 
-    github_comment_id: Optional[int] = None
-) -> Optional[int]:
-    """
-    Saves state to local file and GitHub.
-    Returns updated github_comment_id.
-    """
-    local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-    
-    # 1. Save Local (atomic: write to tmp then rename)
-    try:
-        state_dir.mkdir(parents=True, exist_ok=True)
-        tmp_file = local_file.with_suffix(".json.tmp")
-        with open(tmp_file, "w") as f:
-            json.dump(state, f, indent=2)
-        tmp_file.replace(local_file)  # atomic on POSIX
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to save local state: {e}[/yellow]")
-
-    # 2. Save GitHub
-    if _should_use_github_state(use_github_state):
-        new_id = github_save_state(
-            repo_owner, repo_name, issue_number, workflow_type, state, cwd, github_comment_id
-        )
-        if new_id:
-            return new_id
-        else:
-            console.print("[dim]Warning: Failed to sync state to GitHub[/dim]")
-            return None
-
-    return github_comment_id
-
-def clear_workflow_state(
-    cwd: Path, 
-    issue_number: int, 
-    workflow_type: str, 
-    state_dir: Path, 
-    repo_owner: str, 
-    repo_name: str, 
-    use_github_state: bool = True
-) -> None:
-    """
-    Clears local and GitHub state.
-    """
-    local_file = state_dir / f"{workflow_type}_state_{issue_number}.json"
-    
-    # Clear Local
-    if local_file.exists():
-        try:
-            os.remove(local_file)
-        except Exception:
-            pass
-
-    # Clear GitHub
-    if _should_use_github_state(use_github_state):
-        github_clear_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
-
+# -----------------------------------------------------------------------------
+# GitHub Progress Comments
+# -----------------------------------------------------------------------------
 
 def post_step_comment(
     repo_owner: str,
@@ -2163,61 +1999,21 @@ def post_step_comment(
     total_steps: int,
     description: str,
     output: str,
-    cwd: Path,
+    cwd: Optional[str] = None,
 ) -> bool:
-    """
-    Post a fallback comment on a GitHub issue when a step fails.
-
-    When the LLM agent fails (e.g., all providers unavailable), the agent never
-    runs and therefore never posts its own step comment. This function posts a
-    fallback comment so users can see which steps failed and why.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        issue_number: Issue number to comment on
-        step_num: Current step number
-        total_steps: Total number of steps in the workflow
-        description: Human-readable step description
-        output: Error output / failure details
-        cwd: Working directory for subprocess
-
-    Returns:
-        True if comment was posted successfully, False otherwise
-    """
-    if not _find_cli_binary("gh"):
+    """Post per-step progress comment to GitHub issue."""
+    if not _gh_available():
         return False
-
-    # Truncate output to avoid exceeding GitHub comment size limits
-    error_detail = output[:1000] if len(output) > 1000 else output
-
-    body = (
-        f"## Step {step_num}/{total_steps}: {description}\n\n"
-        f"**Status:** FAILED\n\n"
-        f"### Error Details\n"
-        f"```\n{error_detail}\n```\n\n"
-        f"---\n"
-        f"*Automated fallback comment — agent did not execute for this step.*"
+    snippet = output[-3000:] if len(output) > 3000 else output
+    body = (f"### Step {step_num}/{total_steps}: {description}\n\n"
+            f"```\n{snippet}\n```")
+    rc, _, _ = _gh_run(
+        ["issue", "comment", str(issue_number),
+         "--repo", f"{repo_owner}/{repo_name}",
+         "--body", body],
+        cwd=cwd,
     )
-
-    try:
-        result = subprocess.run(
-            [
-                "gh", "issue", "comment", str(issue_number),
-                "--repo", f"{repo_owner}/{repo_name}",
-                "--body", body,
-            ],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {result.stderr}[/yellow]")
-            return False
-        return True
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
-        return False
+    return rc == 0
 
 
 def post_pr_comment(
@@ -2225,101 +2021,87 @@ def post_pr_comment(
     repo_name: str,
     pr_number: int,
     body: str,
-    cwd: Path,
+    cwd: Optional[str] = None,
 ) -> bool:
-    """
-    Post a comment on a pull request.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        pr_number: Pull request number to comment on
-        body: Comment body
-        cwd: Working directory for subprocess
-
-    Returns:
-        True if comment was posted successfully, False otherwise
-    """
-    if not _find_cli_binary("gh"):
+    """Post a comment to a PR."""
+    if not _gh_available():
         return False
-
-    try:
-        result = subprocess.run(
-            [
-                "gh", "pr", "comment", str(pr_number),
-                "--repo", f"{repo_owner}/{repo_name}",
-                "--body", body,
-            ],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post PR comment: {result.stderr}[/yellow]")
-            return False
-        return True
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to post PR comment: {e}[/yellow]")
-        return False
+    rc, _, _ = _gh_run(
+        ["pr", "comment", str(pr_number),
+         "--repo", f"{repo_owner}/{repo_name}",
+         "--body", body],
+        cwd=cwd,
+    )
+    return rc == 0
 
 
 def post_final_comment(
     repo_owner: str,
     repo_name: str,
     issue_number: int,
-    reason: str,
-    total_cost: float,
-    steps_completed: int,
-    total_steps: int,
-    cwd: Path,
+    body: str,
+    cwd: Optional[str] = None,
 ) -> bool:
-    """
-    Post a final status comment when the workflow stops early.
-
-    Unlike post_step_comment (which is for step-level failures where the agent
-    didn't execute), this is for workflow-level outcomes: NOT_A_BUG, max cycles
-    exhausted, missing loop control token, etc.
-
-    Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        issue_number: Issue number to comment on
-        reason: Human-readable reason the workflow stopped
-        total_cost: Total LLM cost incurred
-        steps_completed: Last completed step number
-        total_steps: Total number of steps in the workflow
-        cwd: Working directory for subprocess
-
-    Returns:
-        True if comment was posted successfully, False otherwise
-    """
-    if not _find_cli_binary("gh"):
+    """Post final workflow summary comment to issue."""
+    if not _gh_available():
         return False
-
-    body = (
-        f"## Workflow Stopped\n\n"
-        f"**Reason:** {reason}\n\n"
-        f"**Progress:** Completed through step {steps_completed}/{total_steps}\n"
-        f"**Total cost:** ${total_cost:.4f}\n\n"
-        f"---\n"
-        f"*Automated status comment — pdd-fix workflow exited early.*"
+    rc, _, _ = _gh_run(
+        ["issue", "comment", str(issue_number),
+         "--repo", f"{repo_owner}/{repo_name}",
+         "--body", body],
+        cwd=cwd,
     )
+    return rc == 0
 
+
+def _revert_out_of_scope_changes(cwd: Union[str, Path], allowed_files: Set[Path]) -> List[Path]:
+    """Revert tracked and remove untracked files outside the allowed file set."""
+    root = Path(cwd)
+    allowed = {Path(p).resolve() for p in allowed_files}
+    reverted: List[Path] = []
     try:
         result = subprocess.run(
-            [
-                "gh", "issue", "comment", str(issue_number),
-                "--repo", f"{repo_owner}/{repo_name}",
-                "--body", body,
-            ],
-            cwd=cwd,
+            ["git", "status", "--porcelain", "-u"],
+            cwd=str(root),
             capture_output=True,
             text=True,
+            timeout=30,
         )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post final comment: {result.stderr}[/yellow]")
-            return False
-        return True
-    except Exception as e:
-        console.print(f"[yellow]Warning: Failed to post final comment: {e}[/yellow]")
-        return False
+    except (subprocess.TimeoutExpired, OSError):
+        return reverted
+    if result.returncode != 0:
+        return reverted
+
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        status = line[:2]
+        raw_path = line[3:].strip().strip('"')
+        if " -> " in raw_path:
+            raw_path = raw_path.split(" -> ")[-1]
+        rel_path = Path(raw_path)
+        abs_path = (root / rel_path).resolve()
+        if abs_path in allowed:
+            continue
+
+        if status == "??":
+            try:
+                abs_path.unlink()
+                reverted.append(rel_path)
+            except OSError:
+                pass
+            continue
+
+        try:
+            checkout = subprocess.run(
+                ["git", "checkout", "HEAD", "--", raw_path],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if checkout.returncode == 0:
+                reverted.append(rel_path)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    return reverted

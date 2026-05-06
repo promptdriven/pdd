@@ -162,6 +162,7 @@ def _write_csv_file(path, rows):
 
 def _run_setup_capture(tmp_path, monkeypatch, ref_csv_rows=None,
                        user_csv_rows=None, env_keys=None,
+                       api_env_keys=None,
                        input_sequence=None, cli_results=None,
                        test_result=None, create_pddrc=False):
     """Run run_setup() with full environment control, capturing all output.
@@ -221,6 +222,11 @@ def _run_setup_capture(tmp_path, monkeypatch, ref_csv_rows=None,
 
     # Force shell detection to "bash" for deterministic api-env path
     monkeypatch.setenv("SHELL", "/bin/bash")
+
+    if api_env_keys:
+        api_env_path = pdd_dir / "api-env.bash"
+        lines = [f'export {key}="{value}"\n' for key, value in api_env_keys.items()]
+        api_env_path.write_text("".join(lines), encoding="utf-8")
 
     # --- Output capture ---
     captured_lines = []
@@ -459,6 +465,25 @@ def test_scan_finds_multiple_keys(tmp_path, monkeypatch):
     assert "ANTHROPIC_API_KEY" in output
     assert "OPENAI_API_KEY" in output
     assert "2 API key" in output
+
+
+def test_scan_finds_api_env_key_and_prints_source_reminder(tmp_path, monkeypatch):
+    """Keys in ~/.pdd/api-env.{shell} are found and source reminder is printed."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={},
+        api_env_keys={"ANTHROPIC_API_KEY": "sk-api-env-test123"},
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    api_env_path = tmp_path / "home" / ".pdd" / "api-env.bash"
+    summary = (tmp_path / "project" / "PDD-SETUP-SUMMARY.txt").read_text()
+
+    assert "~/.pdd/api-env.bash" in output
+    assert "Important:" in output
+    assert f"source {api_env_path}" in output
+    assert "ANTHROPIC_API_KEY = sk-a...t123" in summary
 
 
 def test_scan_no_keys_prompts_user(tmp_path, monkeypatch):

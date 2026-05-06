@@ -1,0 +1,162 @@
+"""Example: read and use the PDD LLM model catalog.
+
+The catalog is a CSV data resource at ``pdd/data/llm_model.csv``. Each row
+describes one model with costs in USD per million tokens, optional coding arena
+ELO, the environment variable that should contain the provider API key, an
+optional OpenAI-compatible base URL, an optional internal reasoning-token limit,
+and whether structured output is reliably supported.
+"""
+
+import csv
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+EXPECTED_FIELDS = [
+    "provider",
+    "model",
+    "input",
+    "output",
+    "coding_arena_elo",
+    "api_key",
+    "base_url",
+    "max_reasoning_tokens",
+    "structured_output",
+]
+
+
+def catalog_path() -> Path:
+    """Return the package-local path to the model catalog CSV.
+
+    Inputs:
+        None.
+
+    Outputs:
+        Path to ``pdd/data/llm_model.csv``.
+    """
+
+    return Path(__file__).resolve().parents[1] / "pdd" / "data" / "llm_model.csv"
+
+
+def load_model_catalog(csv_path: Path) -> list[dict[str, object]]:
+    """Load the LLM model catalog from CSV and normalize typed fields.
+
+    Inputs:
+        csv_path: Path to a CSV file with the columns listed in
+            ``EXPECTED_FIELDS``. ``input`` and ``output`` are USD per million
+            tokens. ``coding_arena_elo`` and ``max_reasoning_tokens`` are
+            integers when present and ``None`` when blank.
+
+    Outputs:
+        A list of dictionaries. Boolean ``structured_output`` values are
+        converted to ``True`` or ``False``.
+    """
+
+    rows: list[dict[str, object]] = []
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames != EXPECTED_FIELDS:
+            raise ValueError(f"Unexpected CSV fields: {reader.fieldnames}")
+        for row in reader:
+            rows.append(
+                {
+                    "provider": row["provider"],
+                    "model": row["model"],
+                    "input": float(row["input"]),
+                    "output": float(row["output"]),
+                    "coding_arena_elo": int(row["coding_arena_elo"])
+                    if row["coding_arena_elo"]
+                    else None,
+                    "api_key": row["api_key"],
+                    "base_url": row["base_url"] or None,
+                    "max_reasoning_tokens": int(row["max_reasoning_tokens"])
+                    if row["max_reasoning_tokens"]
+                    else None,
+                    "structured_output": row["structured_output"] == "True",
+                }
+            )
+    return rows
+
+
+def estimate_token_cost(
+    model_row: dict[str, object],
+    input_tokens: int,
+    output_tokens: int,
+) -> float:
+    """Estimate model usage cost for a token-count pair.
+
+    Inputs:
+        model_row: A row returned by ``load_model_catalog``.
+        input_tokens: Prompt tokens, counted as individual model tokens.
+        output_tokens: Completion tokens, counted as individual model tokens.
+
+    Outputs:
+        Estimated cost in USD, using the row's per-million-token prices.
+    """
+
+    input_cost = input_tokens / 1_000_000 * float(model_row["input"])
+    output_cost = output_tokens / 1_000_000 * float(model_row["output"])
+    return input_cost + output_cost
+
+
+def find_model(rows: list[dict[str, object]], provider: str, model: str) -> dict[str, object]:
+    """Find one provider/model row from the catalog.
+
+    Inputs:
+        rows: Catalog rows returned by ``load_model_catalog``.
+        provider: Provider name exactly as stored in the ``provider`` column.
+        model: Model string exactly as stored in the ``model`` column.
+
+    Outputs:
+        The matching catalog row.
+    """
+
+    for row in rows:
+        if row["provider"] == provider and row["model"] == model:
+            return row
+    raise LookupError(f"No catalog entry for {provider}/{model}")
+
+
+def main() -> None:
+    """Run a standalone demonstration without calling external APIs."""
+
+    rows = load_model_catalog(catalog_path())
+    print("Loaded LLM model catalog")
+    print(f"Rows: {len(rows)}")
+    print(f"Providers: {', '.join(sorted({str(row['provider']) for row in rows}))}")
+    print()
+
+    model = find_model(rows, "OpenAI", "gpt-5.1")
+    estimated_cost = estimate_token_cost(model, input_tokens=250_000, output_tokens=50_000)
+    print("Example model selection")
+    print(f"Provider: {model['provider']}")
+    print(f"Model: {model['model']}")
+    print("Input price unit: USD per 1M tokens")
+    print(f"Input price: ${float(model['input']):.2f}")
+    print("Output price unit: USD per 1M tokens")
+    print(f"Output price: ${float(model['output']):.2f}")
+    print(f"Structured output supported: {model['structured_output']}")
+    print(f"Estimated 250K input + 50K output cost: ${estimated_cost:.4f}")
+    print()
+
+    missing_keys = sorted(
+        {
+            str(row["api_key"])
+            for row in rows
+            if row["api_key"] and not os.environ.get(str(row["api_key"]))
+        }
+    )
+    if missing_keys:
+        print("No live API calls were made.")
+        print("Set one of these environment variables before using a provider client:")
+        print(", ".join(missing_keys[:8]))
+        print("Additional provider keys may be listed in the CSV catalog.")
+    else:
+        print("All catalog API key environment variables are present.")
+
+
+if __name__ == "__main__":
+    main()

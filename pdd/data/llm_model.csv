@@ -1,131 +1,72 @@
-provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
-AWS Bedrock,anthropic.claude-opus-4-7,5.0,25.0,1565,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
-AWS Bedrock,anthropic.claude-sonnet-4-6,3.0,15.0,1525,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
-AWS Bedrock,zai.glm-4.7,0.6,2.2,1440,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,effort,
-AWS Bedrock,minimax.minimax-m2.1,0.3,1.2,1392,,AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,0,True,none,
-Anthropic,claude-opus-4-7,5.0,25.0,1565,,ANTHROPIC_API_KEY,128000,True,budget,
-Anthropic,claude-sonnet-4-6,3.0,15.0,1525,,ANTHROPIC_API_KEY,128000,True,budget,
-Anthropic,claude-haiku-4-5,1.0,5.0,1316,,ANTHROPIC_API_KEY,128000,True,budget,
-Azure AI,azure_ai/claude-opus-4-7,5.0,25.0,1565,,AZURE_AI_API_KEY,128000,True,budget,
-Azure AI,azure_ai/claude-sonnet-4-6,3.0,15.0,1525,,AZURE_AI_API_KEY,128000,True,budget,
-Azure AI,azure_ai/kimi-k2.5,0.6,3.0,1408,,AZURE_AI_API_KEY,0,True,none,
-Azure AI,azure_ai/grok-4-1-fast-reasoning,0.2,0.5,1402,,AZURE_AI_API_KEY,128000,True,budget,
-Azure OpenAI,azure/gpt-5.5,5.0,30.0,1450,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Azure OpenAI,azure/gpt-5.4,2.5,15.0,1437,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Azure OpenAI,azure/gpt-5.3-codex,1.75,14.0,1407,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Azure OpenAI,azure/gpt-5,1.25,10.0,1393,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Azure OpenAI,azure/o3,2.0,8.0,1370,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Azure OpenAI,azure/o4-mini,1.1,4.4,1330,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Azure OpenAI,azure/gpt-4.1-mini,0.4,1.6,1310,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,none,
-Azure OpenAI,azure/gpt-5.4-nano,0.2,1.25,1320,,AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION,0,True,effort,
-Baseten,baseten/zai-org/GLM-4.7,0.6,2.2,1440,,BASETEN_API_KEY,0,False,none,
-Baseten,baseten/MiniMaxAI/MiniMax-M2.5,0.3,1.2,1383,,BASETEN_API_KEY,0,False,none,
-Dashscope,dashscope/qwen3-max,0.0,0.0,1310,,DASHSCOPE_API_KEY,0,True,effort,
-DeepInfra,deepinfra/deepseek-ai/DeepSeek-R1-0528,0.5,2.15,1370,,DEEPINFRA_API_KEY,0,True,none,
-DeepInfra,deepinfra/moonshotai/Kimi-K2-Instruct,0.5,2.0,1310,,DEEPINFRA_API_KEY,0,True,none,
-DeepInfra,deepinfra/deepseek-ai/DeepSeek-V3-0324,0.25,0.88,1300,,DEEPINFRA_API_KEY,0,True,none,
-DeepSeek,deepseek/deepseek-v4-pro,0.435,0.87,1340,,DEEPSEEK_API_KEY,0,True,effort,
-DeepSeek,deepseek/deepseek-v4-flash,0.14,0.28,1332,,DEEPSEEK_API_KEY,0,True,effort,
-Fireworks AI,fireworks_ai/glm-5p1,1.4,4.4,1440,,FIREWORKS_AI_API_KEY,0,True,effort,
-Fireworks AI,fireworks_ai/minimax-m2p7,0.3,1.2,1392,,FIREWORKS_AI_API_KEY,0,True,none,
-Fireworks AI,fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-thinking-2507,0.22,0.88,1300,,FIREWORKS_AI_API_KEY,0,False,none,
-GMI Cloud,gmi/anthropic/claude-opus-4.5,5.0,25.0,1468,,GMI_API_KEY,0,True,none,
-GMI Cloud,gmi/google/gemini-3-pro-preview,2.0,12.0,1438,,GMI_API_KEY,0,True,none,
-GMI Cloud,gmi/google/gemini-3-flash-preview,0.5,3.0,1437,,GMI_API_KEY,0,True,none,
-GMI Cloud,gmi/MiniMaxAI/MiniMax-M2.1,0.3,1.2,1392,,GMI_API_KEY,0,False,none,
-GMI Cloud,gmi/deepseek-ai/DeepSeek-V3.2,0.28,0.4,1332,,GMI_API_KEY,0,True,none,
-Github Copilot,github_copilot/claude-opus-4.6-fast,0.0,0.0,1548,,,0,True,none,
-Github Copilot,github_copilot/claude-opus-4.5,0.0,0.0,1468,,,0,True,none,
-Github Copilot,github_copilot/gemini-3-pro-preview,0.0,0.0,1438,,,0,True,none,
-Github Copilot,github_copilot/gpt-5.3-codex,0.0,0.0,1407,,,0,True,none,
-Github Copilot,github_copilot/gpt-5.2,0.0,0.0,1404,,,0,True,none,
-Github Copilot,github_copilot/gpt-5,0.0,0.0,1393,,,0,True,none,
-Github Copilot,github_copilot/claude-opus-41,0.0,0.0,1389,,,0,False,none,
-Github Copilot,github_copilot/gpt-5.1-codex-max,0.0,0.0,1389,,,0,True,none,
-Github Copilot,github_copilot/claude-sonnet-4.5,0.0,0.0,1386,,,0,True,none,
-Github Copilot,github_copilot/gpt-4.1,0.0,0.0,1355,,,0,True,none,
-Github Copilot,github_copilot/claude-sonnet-4,0.0,0.0,1350,,,0,True,none,
-Github Copilot,github_copilot/gpt-5.1,0.0,0.0,1339,,,0,True,none,
-Github Copilot,github_copilot/claude-haiku-4.5,0.0,0.0,1316,,,0,True,none,
-Github Copilot,github_copilot/gpt-5-mini,0.0,0.0,1310,,,0,True,none,
-Github Copilot,github_copilot/gpt-4o,0.0,0.0,1300,,,0,True,none,
-Google Gemini,gemini/gemini-3.1-pro-preview,2.0,12.0,1456,,GEMINI_API_KEY,0,True,effort,
-Google Gemini,gemini/gemini-3.1-pro-preview-customtools,2.0,12.0,1456,,GEMINI_API_KEY,0,True,effort,
-Google Gemini,gemini/gemini-3-flash-preview,0.5,3.0,1437,,GEMINI_API_KEY,0,True,effort,
-Google Gemini,gemini/gemini-2.5-flash,0.3,2.5,1300,,GEMINI_API_KEY,0,True,effort,
-Google Vertex AI,vertex_ai/claude-opus-4-7,5.0,25.0,1565,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
-Google Vertex AI,vertex_ai/claude-sonnet-4-6,3.0,15.0,1525,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
-Google Vertex AI,gemini-3.1-pro-preview,2.0,12.0,1456,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
-Google Vertex AI,gemini-3.1-pro-preview-customtools,2.0,12.0,1456,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
-Google Vertex AI,vertex_ai/zai-org/glm-4.7-maas,0.6,2.2,1440,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
-Google Vertex AI,vertex_ai/gemini-3-flash-preview,0.5,3.0,1437,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,effort,global
-Google Vertex AI,vertex_ai/minimaxai/minimax-m2-maas,0.3,1.2,1313,,GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,0,True,none,global
-Heroku,heroku/claude-4-sonnet,3.0,15.0,1350,,HEROKU_API_KEY,0,True,none,
-Hyperbolic,hyperbolic/deepseek-ai/DeepSeek-R1-0528,3.0,3.0,1370,,HYPERBOLIC_API_KEY,0,True,none,
-Hyperbolic,hyperbolic/deepseek-ai/DeepSeek-R1,2.0,2.0,1340,,HYPERBOLIC_API_KEY,0,True,none,
-Hyperbolic,hyperbolic/deepseek-ai/DeepSeek-V3,0.25,0.25,1300,,HYPERBOLIC_API_KEY,0,True,none,
-Lambda AI,lambda_ai/deepseek-r1-0528,0.2,0.6,1370,,LAMBDA_API_KEY,0,True,effort,
-MiniMax,minimax/MiniMax-M2.7,0.3,1.2,1392,,MINIMAX_API_KEY,0,True,effort,
-Moonshot AI,moonshot/kimi-k2.6,0.95,4.0,1529,,MOONSHOT_API_KEY,0,True,effort,
-Nebius,nebius/deepseek-ai/DeepSeek-R1-0528,0.8,2.4,1370,,NEBIUS_API_KEY,0,True,effort,
-Nebius,nebius/deepseek-ai/DeepSeek-V3,0.5,1.5,1300,,NEBIUS_API_KEY,0,True,none,
-Nebius,nebius/deepseek-ai/DeepSeek-V3-0324,0.5,1.5,1300,,NEBIUS_API_KEY,0,True,none,
-Novita AI,novita/zai-org/glm-4.7,0.6,2.2,1440,,NOVITA_API_KEY,0,True,effort,
-Novita AI,novita/minimax/minimax-m2.1,0.3,1.2,1392,,NOVITA_API_KEY,0,True,none,
-Novita AI,novita/deepseek/deepseek-v3.2,0.269,0.4,1332,,NOVITA_API_KEY,0,True,effort,
-Oci,oci/xai.grok-4,3.0,15.0,1350,,OCI_API_KEY,0,True,none,
-Oci,oci/google.gemini-2.5-flash,0.15,0.6,1300,,OCI_API_KEY,0,True,none,
-OpenAI,gpt-5.5,5.0,30.0,1450,,OPENAI_API_KEY,0,True,effort,
-OpenAI,gpt-5.4,2.5,15.0,1437,,OPENAI_API_KEY,0,True,effort,
-OpenAI,gpt-5.3-codex,1.75,14.0,1407,,OPENAI_API_KEY,0,True,effort,
-OpenAI,gpt-5,1.25,10.0,1393,,OPENAI_API_KEY,0,True,effort,
-OpenAI,o3,2.0,8.0,1370,,OPENAI_API_KEY,0,True,effort,
-OpenAI,o4-mini,1.1,4.4,1330,,OPENAI_API_KEY,0,True,effort,
-OpenAI,gpt-4.1-mini,0.4,1.6,1310,,OPENAI_API_KEY,0,True,none,
-OpenAI,gpt-5.4-nano,0.2,1.25,1320,,OPENAI_API_KEY,0,True,effort,
-OpenRouter,openrouter/anthropic/claude-opus-4.7,5.0,25.0,1565,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/anthropic/claude-sonnet-4.6,3.0,15.0,1525,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/google/gemini-3.1-pro-preview,2.0,12.0,1456,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/z-ai/glm-5.1,1.05,3.5,1440,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/minimax/minimax-m2.7,0.3,1.2,1392,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/minimax/minimax-m2.5,0.3,1.1,1383,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/deepseek/deepseek-v4-pro,1.74,3.48,1332,,OPENROUTER_API_KEY,0,True,effort,
-OpenRouter,openrouter/deepseek/deepseek-v4-flash,0.14,0.28,1300,,OPENROUTER_API_KEY,0,False,none,
-Perplexity,perplexity/anthropic/claude-opus-4-7,0.0,0.0,1565,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/anthropic/claude-opus-4-6,0.0,0.0,1548,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/anthropic/claude-opus-4-5,0.0,0.0,1468,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/google/gemini-3-pro-preview,0.0,0.0,1438,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/google/gemini-3-flash-preview,0.0,0.0,1437,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/openai/gpt-5.2,0.0,0.0,1404,,PERPLEXITYAI_API_KEY,0,True,effort,
-Perplexity,perplexity/anthropic/claude-sonnet-4-5,0.0,0.0,1386,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/xai/grok-4-1-fast-non-reasoning,0.0,0.0,1350,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/openai/gpt-5.1,0.0,0.0,1339,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/anthropic/claude-haiku-4-5,0.0,0.0,1316,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/openai/gpt-5-mini,0.0,0.0,1310,,PERPLEXITYAI_API_KEY,0,True,none,
-Perplexity,perplexity/google/gemini-2.5-flash,0.0,0.0,1300,,PERPLEXITYAI_API_KEY,0,True,none,
-Replicate,replicate/google/gemini-3-pro,2.0,12.0,1438,,REPLICATE_API_KEY,0,True,none,
-Replicate,replicate/openai/gpt-5,1.25,10.0,1393,,REPLICATE_API_KEY,0,True,none,
-Replicate,replicate/openai/gpt-4.1,2.0,8.0,1355,,REPLICATE_API_KEY,0,True,none,
-Replicate,replicate/openai/o4-mini,1.0,4.0,1330,,REPLICATE_API_KEY,0,False,effort,
-Replicate,replicate/openai/gpt-4.1-mini,0.4,1.6,1310,,REPLICATE_API_KEY,0,True,none,
-Replicate,replicate/openai/gpt-5-nano,0.05,0.4,1300,,REPLICATE_API_KEY,0,True,none,
-SambaNova,sambanova/DeepSeek-R1,5.0,7.0,1340,,SAMBANOVA_API_KEY,0,False,none,
-SambaNova,sambanova/DeepSeek-V3-0324,3.0,4.5,1300,,SAMBANOVA_API_KEY,0,True,effort,
-SambaNova,sambanova/DeepSeek-V3.1,3.0,4.5,1300,,SAMBANOVA_API_KEY,0,True,effort,
-Snowflake,snowflake/deepseek-r1,0.0,0.0,1340,,SNOWFLAKE_API_KEY,0,False,effort,
-Snowflake,snowflake/claude-3-5-sonnet,0.0,0.0,1310,,SNOWFLAKE_API_KEY,0,False,none,
-Together AI,together_ai/zai-org/GLM-4.7,0.45,2.0,1440,,TOGETHERAI_API_KEY,0,True,effort,
-Together AI,together_ai/deepseek-ai/DeepSeek-V3.1,0.6,1.7,1300,,TOGETHERAI_API_KEY,0,True,effort,
-Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-opus-4.6,5.0,25.0,1548,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,
-Vercel AI Gateway,vercel_ai_gateway/anthropic/claude-sonnet-4.5,3.0,15.0,1386,,VERCEL_AI_GATEWAY_API_KEY,0,True,effort,
-Vercel AI Gateway,vercel_ai_gateway/openai/o3,2.0,8.0,1370,,VERCEL_AI_GATEWAY_API_KEY,0,True,none,
-Vercel AI Gateway,vercel_ai_gateway/zai/glm-4.6,0.45,1.8,1354,,VERCEL_AI_GATEWAY_API_KEY,0,True,none,
-Vercel AI Gateway,vercel_ai_gateway/openai/gpt-4.1-mini,0.4,1.6,1310,,VERCEL_AI_GATEWAY_API_KEY,0,True,none,
-Vercel AI Gateway,vercel_ai_gateway/deepseek/deepseek-v3,0.9,0.9,1300,,VERCEL_AI_GATEWAY_API_KEY,0,False,none,
-W&B Inference,wandb/moonshotai/Kimi-K2.5,0.6,3.0,1408,,WANDB_API_KEY,0,True,effort,
-W&B Inference,wandb/MiniMaxAI/MiniMax-M2.5,0.3,1.2,1383,,WANDB_API_KEY,0,True,effort,
-W&B Inference,wandb/Qwen/Qwen3-235B-A22B-Thinking-2507,0.1,0.1,1300,,WANDB_API_KEY,0,False,none,
-Zai,zai/glm-5.1,0.6,2.2,1440,,ZAI_API_KEY,0,True,effort,
-lm_studio,lm_studio/mlx-community/qwen3.6-35b-a3b@bf16,0.0,0.0,1310,http://localhost:1234/v1,,0,True,none,
-xAI,xai/grok-4.3,3.0,15.0,1467,,XAI_API_KEY,0,True,none,
-xAI,xai/grok-4-1-fast,0.2,0.5,1402,,XAI_API_KEY,0,True,none,
+provider,model,input,output,coding_arena_elo,api_key,base_url,max_reasoning_tokens,structured_output
+OpenAI,gpt-5.1,1.25,10.00,1456,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-5.1-chat-latest,1.25,10.00,,OPENAI_API_KEY,,16384,True
+OpenAI,gpt-5.1-codex,1.25,10.00,,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-5.1-codex-max,1.25,10.00,,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-5,1.25,10.00,1465,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-5-mini,0.25,2.00,1380,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-5-nano,0.05,0.40,1320,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-5-pro,15.00,120.00,,OPENAI_API_KEY,,128000,True
+OpenAI,gpt-4.1,2.00,8.00,1370,OPENAI_API_KEY,,,True
+OpenAI,gpt-4.1-mini,0.40,1.60,1340,OPENAI_API_KEY,,,True
+OpenAI,gpt-4.1-nano,0.10,0.40,1280,OPENAI_API_KEY,,,True
+OpenAI,gpt-4o,2.50,10.00,1310,OPENAI_API_KEY,,,True
+OpenAI,gpt-4o-mini,0.15,0.60,1250,OPENAI_API_KEY,,,True
+OpenAI,o3,2.00,8.00,1410,OPENAI_API_KEY,,100000,True
+OpenAI,o3-mini,1.10,4.40,1350,OPENAI_API_KEY,,100000,True
+OpenAI,o4-mini,1.10,4.40,1390,OPENAI_API_KEY,,100000,True
+OpenAI,o1,15.00,60.00,1355,OPENAI_API_KEY,,100000,True
+OpenAI,o1-mini,1.10,4.40,1305,OPENAI_API_KEY,,65536,False
+Anthropic,claude-opus-4-5,5.00,25.00,1430,ANTHROPIC_API_KEY,,64000,True
+Anthropic,claude-opus-4-1,15.00,75.00,1400,ANTHROPIC_API_KEY,,64000,True
+Anthropic,claude-opus-4,15.00,75.00,1385,ANTHROPIC_API_KEY,,64000,True
+Anthropic,claude-sonnet-4-5,3.00,15.00,1415,ANTHROPIC_API_KEY,,64000,True
+Anthropic,claude-sonnet-4,3.00,15.00,1375,ANTHROPIC_API_KEY,,64000,True
+Anthropic,claude-3-7-sonnet-20250219,3.00,15.00,1340,ANTHROPIC_API_KEY,,64000,True
+Anthropic,claude-3-5-sonnet-20241022,3.00,15.00,1290,ANTHROPIC_API_KEY,,,True
+Anthropic,claude-3-5-haiku-20241022,0.80,4.00,1230,ANTHROPIC_API_KEY,,,True
+Anthropic,claude-haiku-4-5,1.00,5.00,1310,ANTHROPIC_API_KEY,,64000,True
+Google,gemini-3-pro-preview,2.00,12.00,1486,GEMINI_API_KEY,,65536,True
+Google,gemini-2.5-pro,1.25,10.00,1425,GEMINI_API_KEY,,65536,True
+Google,gemini-2.5-flash,0.30,2.50,1360,GEMINI_API_KEY,,65536,True
+Google,gemini-2.5-flash-lite,0.10,0.40,1270,GEMINI_API_KEY,,65536,True
+Google,gemini-2.0-flash,0.10,0.40,1300,GEMINI_API_KEY,,,True
+Google,gemini-2.0-flash-lite,0.075,0.30,1240,GEMINI_API_KEY,,,True
+Google,gemini-1.5-pro,1.25,5.00,1260,GEMINI_API_KEY,,,True
+Google,gemini-1.5-flash,0.075,0.30,1220,GEMINI_API_KEY,,,True
+xAI,grok-4-0709,3.00,15.00,1395,XAI_API_KEY,https://api.x.ai/v1,,True
+xAI,grok-4-fast-reasoning,0.20,0.50,1340,XAI_API_KEY,https://api.x.ai/v1,,True
+xAI,grok-4-fast-non-reasoning,0.20,0.50,1340,XAI_API_KEY,https://api.x.ai/v1,,True
+xAI,grok-3,3.00,15.00,1310,XAI_API_KEY,https://api.x.ai/v1,,True
+xAI,grok-3-mini,0.30,0.50,1270,XAI_API_KEY,https://api.x.ai/v1,,True
+xAI,grok-code-fast-1,0.20,1.50,1330,XAI_API_KEY,https://api.x.ai/v1,,True
+DeepSeek,deepseek-chat,0.28,0.42,1330,DEEPSEEK_API_KEY,https://api.deepseek.com,,True
+DeepSeek,deepseek-reasoner,0.28,0.42,1380,DEEPSEEK_API_KEY,https://api.deepseek.com,64000,True
+Mistral,mistral-large-latest,2.00,6.00,1280,MISTRAL_API_KEY,,,True
+Mistral,mistral-medium-latest,0.40,2.00,1250,MISTRAL_API_KEY,,,True
+Mistral,mistral-small-latest,0.10,0.30,1200,MISTRAL_API_KEY,,,True
+Mistral,codestral-latest,0.30,0.90,1260,MISTRAL_API_KEY,,,True
+Meta,llama-4-maverick,0.27,0.85,1290,TOGETHER_API_KEY,https://api.together.xyz/v1,,True
+Meta,llama-4-scout,0.18,0.59,1240,TOGETHER_API_KEY,https://api.together.xyz/v1,,True
+Meta,llama-3.3-70b-instruct,0.88,0.88,1230,TOGETHER_API_KEY,https://api.together.xyz/v1,,True
+Meta,llama-3.1-405b-instruct,3.50,3.50,1260,TOGETHER_API_KEY,https://api.together.xyz/v1,,True
+Qwen,qwen3-max,1.20,6.00,1450,DASHSCOPE_API_KEY,https://dashscope-intl.aliyuncs.com/compatible-mode/v1,,True
+Qwen,qwen3-coder-plus,1.00,5.00,1340,DASHSCOPE_API_KEY,https://dashscope-intl.aliyuncs.com/compatible-mode/v1,,True
+Qwen,qwen3-coder-flash,0.30,1.50,1280,DASHSCOPE_API_KEY,https://dashscope-intl.aliyuncs.com/compatible-mode/v1,,True
+Qwen,qwen3-235b-a22b,0.70,2.80,1300,DASHSCOPE_API_KEY,https://dashscope-intl.aliyuncs.com/compatible-mode/v1,,True
+Qwen,qwen-max,1.60,6.40,1280,DASHSCOPE_API_KEY,https://dashscope-intl.aliyuncs.com/compatible-mode/v1,,True
+Cohere,command-a-03-2025,2.50,10.00,1240,COHERE_API_KEY,,,True
+Cohere,command-r-plus,2.50,10.00,1210,COHERE_API_KEY,,,False
+Cohere,command-r,0.15,0.60,1180,COHERE_API_KEY,,,False
+Groq,llama-3.3-70b-versatile,0.59,0.79,1230,GROQ_API_KEY,https://api.groq.com/openai/v1,,True
+Groq,llama-3.1-8b-instant,0.05,0.08,1140,GROQ_API_KEY,https://api.groq.com/openai/v1,,True
+Groq,moonshotai/kimi-k2-instruct,1.00,3.00,1320,GROQ_API_KEY,https://api.groq.com/openai/v1,,True
+Moonshot,kimi-k2.6,0.95,4.00,,MOONSHOT_API_KEY,https://api.moonshot.ai/v1,,True
+Moonshot,kimi-k2.5,0.60,3.00,,MOONSHOT_API_KEY,https://api.moonshot.ai/v1,,True
+Moonshot,kimi-k2,0.60,2.50,1330,MOONSHOT_API_KEY,https://api.moonshot.ai/v1,,True
+Moonshot,kimi-k2-thinking,0.60,2.50,1370,MOONSHOT_API_KEY,https://api.moonshot.ai/v1,32000,True
+Ollama,llama3.3,0.00,0.00,1230,OLLAMA_API_KEY,http://localhost:11434/v1,,False
+Ollama,qwen2.5-coder,0.00,0.00,1250,OLLAMA_API_KEY,http://localhost:11434/v1,,False
+Ollama,deepseek-r1,0.00,0.00,1310,OLLAMA_API_KEY,http://localhost:11434/v1,32000,False
+Azure,gpt-4o,2.50,10.00,1310,AZURE_OPENAI_API_KEY,https://YOUR-RESOURCE.openai.azure.com,,True
+Azure,gpt-4o-mini,0.15,0.60,1250,AZURE_OPENAI_API_KEY,https://YOUR-RESOURCE.openai.azure.com,,True

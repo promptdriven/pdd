@@ -59,21 +59,28 @@ def _setup_cloud_defaults() -> None:
 
 # Initialize cloud defaults on package import
 _setup_cloud_defaults()
-from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, github_save_state, github_load_state, github_clear_state, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment
-from .agentic_test_orchestrator import run_agentic_test_orchestrator
-from .architecture_sync_helper import filepath_to_prompt_filename
-from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
-from .ci_validation import detect_ci_system, post_ci_failure_comment, run_ci_validation_loop
-from .agentic_e2e_fix import run_agentic_e2e_fix
-from .agentic_bug_orchestrator import run_agentic_bug_orchestrator
-from .agentic_update import run_agentic_update
-from .update_main import resolve_prompt_code_pair, find_and_resolve_all_pairs, get_git_changed_files, derive_basename_and_language, is_code_changed, update_file_pair, update_main
-from .ci_drift_heal import DriftInfo, HealResult, detect_drift, heal_module, commit_and_push, main
-from .agentic_change_orchestrator import run_agentic_change_orchestrator
-from .agentic_common_worktree import get_git_root, worktree_exists, branch_exists, remove_worktree, delete_branch, resolve_main_ref, setup_worktree, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker
-from .get_lint_commands import LintCommand, get_lint_commands
-from .split_main import split_main
-from .split_validation import ValidationFailure, ValidationResult, validate_extraction
-from .agentic_split_orchestrator import run_agentic_split_orchestrator
-from .agentic_split import run_agentic_split
-from .ci_detect_changed_modules import main
+
+try:
+    from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment, TokenMatch, detect_control_token, classify_step_output, set_agentic_progress, clear_agentic_progress, get_and_clear_agentic_interrupt_context
+    from .agentic_test_orchestrator import run_agentic_test_orchestrator
+    from .architecture_sync_helper import filepath_to_prompt_filename
+    from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+    from .ci_validation import detect_ci_system, post_ci_failure_comment, run_ci_validation_loop
+    from .agentic_e2e_fix import run_agentic_e2e_fix
+    from .agentic_bug_orchestrator import run_agentic_bug_orchestrator
+    from .agentic_update import run_agentic_update
+    from .update_main import resolve_prompt_code_pair, find_and_resolve_all_pairs, get_git_changed_files, derive_basename_and_language, is_code_changed, update_file_pair, update_main
+    from .ci_drift_heal import DriftInfo, HealResult, detect_drift, heal_module, commit_and_push, main
+    from .agentic_change_orchestrator import run_agentic_change_orchestrator
+    from .agentic_common_worktree import get_git_root, worktree_exists, branch_exists, remove_worktree, delete_branch, resolve_main_ref, setup_worktree, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker
+    from .get_lint_commands import LintCommand, get_lint_commands
+    from .split_main import split_main
+    from .split_validation import ValidationFailure, ValidationResult, validate_extraction
+    from .agentic_split_orchestrator import run_agentic_split_orchestrator
+    from .agentic_split import run_agentic_split
+    from .ci_detect_changed_modules import main
+except ImportError:
+    pass
+
+from .cli_detector import CliBootstrapResult, detect_and_bootstrap_cli, detect_cli_tools
+from .setup_tool import run_setup
