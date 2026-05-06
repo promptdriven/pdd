@@ -848,15 +848,58 @@ _OPENCODE_PROVIDER_BY_CSV: Dict[str, str] = {
 }
 
 
+# Env vars that, when set, make a CSV provider routable through OpenCode.
+# Keys are the lowercased CSV ``provider`` column.
+_OPENCODE_PROVIDER_AUTH_ENV: Dict[str, Tuple[str, ...]] = {
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "xai": ("XAI_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "mistral": ("MISTRAL_API_KEY",),
+    "groq": ("GROQ_API_KEY",),
+    "moonshot": ("MOONSHOT_API_KEY",),
+    "cohere": ("COHERE_API_KEY",),
+    "ollama": ("OLLAMA_API_KEY",),
+    "azure": ("AZURE_OPENAI_API_KEY",),
+}
+
+
+def _opencode_authed_providers(source: Dict[str, str]) -> Set[str]:
+    """Return the set of OpenCode provider ids the user has auth for.
+
+    Combines provider env vars (``ANTHROPIC_API_KEY`` etc.) with the providers
+    stored in ``~/.local/share/opencode/auth.json`` (whose top-level keys are
+    OpenCode provider ids such as ``anthropic`` or ``github-copilot``).
+    """
+    available: Set[str] = set()
+    for csv_provider, env_keys in _OPENCODE_PROVIDER_AUTH_ENV.items():
+        if any(source.get(k) for k in env_keys):
+            opencode_id = _OPENCODE_PROVIDER_BY_CSV.get(csv_provider)
+            if opencode_id:
+                available.add(opencode_id)
+    try:
+        with open(_OPENCODE_AUTH_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            for key in data.keys():
+                if isinstance(key, str) and key.strip():
+                    available.add(key.strip().lower())
+    except (OSError, json.JSONDecodeError):
+        pass
+    return available
+
+
 def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Resolve OpenCode model from env or CSV defaults.
 
     OpenCode requires a ``provider/model`` identifier. When OPENCODE_MODEL is
     not set we walk the CSV catalog and combine the CSV ``provider`` column
-    with the ``model`` column. Rows whose model already contains ``/`` are
-    skipped because those identifiers route through a sub-provider (e.g.
-    ``moonshotai/kimi-k2-instruct`` served on Groq) and cannot be passed to
-    OpenCode verbatim.
+    with the ``model`` column, filtered by the providers the user has auth for
+    (provider env vars + OpenCode's ``auth.json``). Rows whose model already
+    contains ``/`` are skipped because those identifiers route through a
+    sub-provider (e.g. ``moonshotai/kimi-k2-instruct`` served on Groq) and
+    cannot be passed to OpenCode verbatim.
     """
     source = env if env is not None else os.environ
     explicit = source.get("OPENCODE_MODEL", "").strip()
@@ -866,11 +909,14 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
     if env is not None:
         return None
 
+    authed = _opencode_authed_providers(source)
+
     # Try to derive from CSV metadata if present, mapping CSV provider to
-    # OpenCode provider id.
+    # OpenCode provider id and filtering to providers the user can route to.
     try:
         rows = _load_model_data()
         if rows:
+            fallback: Optional[str] = None
             for row in rows:
                 provider = (row.get("provider") or "").strip().lower()
                 model = (row.get("model") or row.get("model_id") or "").strip()
@@ -879,9 +925,32 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
                 opencode_provider = _OPENCODE_PROVIDER_BY_CSV.get(provider)
                 if not opencode_provider:
                     continue
-                return _normalize_opencode_model_id(f"{opencode_provider}/{model}")
+                candidate = _normalize_opencode_model_id(f"{opencode_provider}/{model}")
+                if not authed:
+                    # No auth signal at all: behave like the previous fallback
+                    # and just take the first OpenCode-mappable row.
+                    return candidate
+                if opencode_provider in authed:
+                    return candidate
+                if fallback is None:
+                    fallback = candidate
+            if fallback is not None and not authed:
+                return fallback
     except Exception:
         pass
+
+    # Last-resort defaults keyed off whichever provider the user can reach.
+    default_by_provider: Dict[str, str] = {
+        "anthropic": "anthropic/claude-sonnet-4-5",
+        "openai": "openai/gpt-5.1",
+        "google": "google/gemini-2.5-pro",
+        "xai": "xai/grok-4-0709",
+        "deepseek": "deepseek/deepseek-chat",
+        "groq": "groq/llama-3.3-70b-versatile",
+    }
+    for provider in ("anthropic", "openai", "google", "xai", "deepseek", "groq"):
+        if provider in authed and provider in default_by_provider:
+            return default_by_provider[provider]
     return "anthropic/claude-sonnet-4-5"
 
 
@@ -1107,7 +1176,16 @@ def _parse_opencode_jsonl(stdout: str) -> Tuple[bool, str, float, Optional[str]]
         evt_type = evt.get("type") or ""
 
         if evt_type == "text":
-            t = evt.get("text") or evt.get("content") or ""
+            # ``opencode run --format json`` emits text events with the actual
+            # content nested under ``part.text``. Older/stub event shapes used
+            # a top-level ``text``/``content`` field, which we still accept for
+            # backwards compatibility.
+            part = evt.get("part") or {}
+            t = ""
+            if isinstance(part, dict):
+                t = part.get("text") or part.get("content") or ""
+            if not t:
+                t = evt.get("text") or evt.get("content") or ""
             if t:
                 text_parts.append(str(t))
                 saw_text_or_step = True

@@ -205,8 +205,8 @@ def test_anthropic_is_error_is_failure() -> None:
 
 def test_opencode_jsonl_parses_text_cost_and_errors() -> None:
     ok, text, cost, error = _parse_opencode_jsonl(
-        '{"type":"text","text":"Hello "}\n'
-        '{"type":"text","text":"world"}\n'
+        '{"type":"text","part":{"text":"Hello "}}\n'
+        '{"type":"text","part":{"text":"world"}}\n'
         '{"type":"step_finish","part":{"cost":0.01}}\n'
         '{"type":"step_finish","cost":0.02}\n'
     )
