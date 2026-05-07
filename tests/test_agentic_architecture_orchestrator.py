@@ -47,7 +47,34 @@ from typing import Any, Dict, Tuple
 from pdd.agentic_architecture_orchestrator import (
     run_agentic_architecture_orchestrator,
     _validate_generated_test_syntax,
+    _validate_step5_output_structure,
 )
+
+
+# A realistic, structurally-valid step-5 module-design output used as the
+# default mock response so the orchestrator's post-step-5 structural validator
+# (issue #817) does not fail-fast on the generic "Output for stepN" stub.
+_VALID_STEP5_DESIGN_OUTPUT = (
+    "## Modules\n"
+    "- auth_module: priority 1, depends on db_module, interface POST /login\n"
+    "- db_module: priority 2, dependency none, interface SQL schema users(id, email)\n"
+    "- api_module: priority 3, depends on auth_module + db_module, interface REST /api/v1/*\n"
+    "- ui_module: priority 4, depends on api_module, interface React SPA\n"
+    "- notifications_module: priority 5, depends on db_module, interface SMTP\n"
+    "Module dependency graph and per-module priority assignments are listed above.\n"
+)
+
+
+def _default_step_output(label: str) -> str:
+    """Default mock output for a labelled orchestrator step.
+
+    Returns a structurally-valid module-design body for the bare ``step5``
+    label so the post-step-5 structural validator (issue #817) accepts the
+    output, and the original ``Output for {label}`` placeholder otherwise.
+    """
+    if label == "step5":
+        return _VALID_STEP5_DESIGN_OUTPUT
+    return f"Output for {label}"
 
 # --- Fixtures ---
 
@@ -138,7 +165,7 @@ def test_happy_path_full_run(mock_dependencies, base_args):
         if "step9" in label:
             # Step 9 creates prompt files
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -168,7 +195,7 @@ def test_hard_stop_step_1(mock_dependencies, base_args):
         label = kwargs.get("label", "")
         if "step1" in label:
             return (True, "Analysis: PRD Content Insufficient. Cannot proceed.", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
     
     mocks["run"].side_effect = side_effect
 
@@ -225,7 +252,7 @@ def test_validation_loop_fix_flow(mock_dependencies, base_args):
         # Steps 11-12 pass immediately
         if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -283,7 +310,7 @@ def test_max_validation_iterations(mock_dependencies, base_args):
         # Steps 11-12 pass
         if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -343,7 +370,7 @@ def test_resumption_from_state(mock_dependencies, base_args):
         # Steps 10-12 validation pass
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -407,7 +434,7 @@ def test_json_parsing_fallback(mock_dependencies, base_args):
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
         if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -681,7 +708,7 @@ class TestScaffoldingFilesTracking:
             # Steps 10-12 validation pass
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -734,7 +761,7 @@ class TestScaffoldingFilesTracking:
             # Steps 11-12 pass
             if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -786,7 +813,7 @@ class TestScaffoldingFilesTracking:
             # Steps 11-12 pass
             if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -842,7 +869,7 @@ class TestProgrammaticJSONValidation:
             # Steps 11-12 pass
             if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -894,7 +921,7 @@ class TestProgrammaticJSONValidation:
             # Steps 11-12 pass
             if "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -989,7 +1016,7 @@ contexts:
                 # The LLM would detect the wrong path and return INVALID
                 return (True, "VALIDATION_RESULT: INVALID\n\nINCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']", 0.1, "gpt-4")
 
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -1076,7 +1103,7 @@ contexts:
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
 
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -1187,7 +1214,7 @@ contexts:
 INCLUDE PATH ERROR in prompts/models_Python.prompt: 'src/models_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']
 INCLUDE PATH ERROR in prompts/routes_Python.prompt: 'src/context/routes_example.py' does not match any example_output_path in .pddrc. Expected paths: ['context/']""", 0.1, "gpt-4")
 
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -1433,7 +1460,7 @@ def test_issue624_completeness_validation_failure_does_not_block(mock_dependenci
             return (True, 'No changes needed', 0.1, "gpt-4")
         if "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1471,7 +1498,7 @@ def test_issue624_all_validations_fail_returns_failure(mock_dependencies, base_a
             return (True, "VALIDATION_RESULT: INVALID\nMultiple issues found.", 0.1, "gpt-4")
         if "fix" in label:
             return (True, 'No changes made', 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1509,7 +1536,7 @@ def test_step5b_completeness_gate_passes(mock_dependencies, base_args):
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1553,7 +1580,7 @@ def test_step5b_completeness_gate_fails_then_fixes(mock_dependencies, base_args)
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1581,7 +1608,7 @@ def test_step5b_exhausted_retries_returns_hard_failure(mock_dependencies, base_a
             return (True, "VALIDATION_RESULT: INVALID\nMissing modules", 0.1, "gpt-4")
         if "step5b_fix" in label:
             return (True, "Corrected design but still incomplete", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1634,7 +1661,7 @@ def test_step5b_fix_updates_step5_context(mock_dependencies, base_args):
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1648,6 +1675,131 @@ def test_step5b_fix_updates_step5_context(mock_dependencies, base_args):
     assert final_state["step_outputs"]["5"] == corrected_design, (
         f"Step 5 output should be replaced with corrected design, "
         f"but got: {final_state['step_outputs'].get('5', 'MISSING')[:50]}"
+    )
+
+
+# ============================================================================
+# Step 5 Structural Validator Tests (issue #817)
+# ============================================================================
+
+
+class TestValidateStep5OutputStructure:
+    """Pure-function tests for ``_validate_step5_output_structure``."""
+
+    def test_short_output_is_invalid(self):
+        ok, reason = _validate_step5_output_structure("Done.")
+        assert ok is False
+        assert "step 5" in reason
+        assert "200" in reason or "shorter" in reason
+
+    def test_bare_acknowledgement_is_invalid_even_when_padded(self):
+        # > 200 chars but stripped content is bare ack
+        padded = "Done." + " " * 300
+        ok, reason = _validate_step5_output_structure(padded)
+        assert ok is False
+        assert "step 5" in reason
+        assert "acknowledgement" in reason.lower()
+
+    def test_bare_acknowledgement_variants(self):
+        for word in ("done", "Done", "DONE", "Completed", "finished", "ok", "Ok.", "Acknowledged"):
+            padded = f"{word}" + " " * 300
+            ok, reason = _validate_step5_output_structure(padded)
+            assert ok is False, f"{word!r} should be rejected"
+            assert "step 5" in reason
+
+    def test_long_output_without_design_markers_is_invalid(self):
+        ok, reason = _validate_step5_output_structure("x" * 250)
+        assert ok is False
+        assert "step 5" in reason
+        assert "marker" in reason.lower()
+
+    def test_valid_module_design_passes(self):
+        ok, reason = _validate_step5_output_structure(_VALID_STEP5_DESIGN_OUTPUT)
+        assert ok is True
+        assert reason == ""
+
+    def test_none_output_is_invalid(self):
+        ok, reason = _validate_step5_output_structure(None)  # type: ignore[arg-type]
+        assert ok is False
+        assert "step 5" in reason
+
+
+def test_step5_degenerate_output_hard_stops_before_step5b(mock_dependencies, base_args):
+    """Degenerate Step 5 output (e.g. 'Done.') must fail-fast before Step 5b runs.
+
+    Regression for issue #817 — the orchestrator previously persisted Step 5
+    'Done.' output as success and burned ~2.5 minutes on three Step 5b LLM
+    retries before giving up.
+    """
+    mocks = mock_dependencies
+    cwd = base_args["cwd"]
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        if label == "step5":
+            # Degenerate bare-acknowledgement output
+            return (True, "Done.", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is False
+    assert "step 5" in msg.lower()
+    assert "invalid" in msg.lower() or "structurally invalid" in msg.lower()
+
+    # The Step 5b gate must NOT have run (no LLM retries on degenerate input)
+    labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+    assert not any("step5b" in l for l in labels), (
+        f"Step 5b should not run on degenerate Step 5 output, got labels: {labels}"
+    )
+
+    # Failure reason must be persisted in step_outputs["5"]
+    saved_state_calls = mocks["save_state"].call_args_list
+    assert saved_state_calls, "save_workflow_state should have been called"
+    last_state = saved_state_calls[-1][0][3]  # 4th positional arg is `state`
+    step5_persisted = last_state["step_outputs"].get("5", "")
+    assert step5_persisted.startswith("FAILED:"), (
+        f"Degenerate Step 5 output must be persisted as a FAILED entry, got: {step5_persisted!r}"
+    )
+
+
+def test_step5b_pre_check_fails_fast_on_resumed_degenerate_state(mock_dependencies, base_args):
+    """Resumed runs whose persisted Step 5 output is structurally invalid must
+    fail-fast in the Step 5b pre-check rather than entering the gate retry loop.
+    """
+    mocks = mock_dependencies
+
+    # State indicates Step 5 completed but with stale degenerate output
+    state = {
+        "last_completed_step": 5,
+        "step_outputs": {
+            "1": "out1", "2": "out2", "3": "out3", "4": "out4", "5": "Done.",
+        },
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+    }
+    mocks["load_state"].return_value = (state, 12345)
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is False
+    assert "step 5" in msg.lower()
+    assert "invalid" in msg.lower() or "structurally invalid" in msg.lower()
+
+    # No Step 5b gate calls should fire on resumed degenerate state
+    labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+    assert not any("step5b" in l for l in labels), (
+        f"Step 5b gate must be skipped on resumed degenerate state, got: {labels}"
     )
 
 
@@ -1683,7 +1835,7 @@ def test_resume_from_step_5_5(mock_dependencies, base_args):
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, "ok", 0.1, "gpt-4")
+        return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1728,7 +1880,7 @@ def test_step1b_manageable_continues(mock_dependencies, base_args):
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1752,7 +1904,7 @@ def test_step1b_complex_without_force_exits(mock_dependencies, base_args):
         label = kwargs.get("label", "")
         if "step1b" in label:
             return (True, "COMPLEXITY_RESULT: COMPLEX\nScore: 8/14.\nSub-issues created.", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1785,7 +1937,7 @@ def test_step1b_complex_emits_stop_condition_to_stdout_issue_671(
         label = kwargs.get("label", "")
         if "step1b" in label:
             return (True, "COMPLEXITY_RESULT: COMPLEX\nScore: 8/14.\nSub-issues created.", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -1825,7 +1977,7 @@ def test_step1b_complex_with_force_continues(mock_dependencies, base_args):
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2242,7 +2394,7 @@ class TestSiblingContextInjection:
                 return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -2290,7 +2442,7 @@ def test_step8_merge_preserves_existing_contexts(mock_dependencies, base_args):
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
         if "step8_5" in label:
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2309,7 +2461,7 @@ def test_step8_merge_preserves_existing_contexts(mock_dependencies, base_args):
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2357,7 +2509,7 @@ def test_step8_merge_noop_when_all_contexts_preserved(mock_dependencies, base_ar
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
         if "step8_5" in label:
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2370,7 +2522,7 @@ def test_step8_merge_noop_when_all_contexts_preserved(mock_dependencies, base_ar
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2400,7 +2552,7 @@ def test_step8_stray_pddrc_removed_when_target_dir_set(mock_dependencies, base_a
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
         if "step8_5" in label:
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2417,7 +2569,7 @@ def test_step8_stray_pddrc_removed_when_target_dir_set(mock_dependencies, base_a
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2447,7 +2599,7 @@ def test_step8_stray_pddrc_moved_to_root_when_root_missing(mock_dependencies, ba
         if "step7b" in label:
             return (True, "REVIEW_RESULT: CLEAN", 0.1, "gpt-4")
         if "step8_5" in label:
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
         if "step9b" in label:
             return (True, "AUDIT_RESULT: CONSISTENT", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
@@ -2463,7 +2615,7 @@ def test_step8_stray_pddrc_moved_to_root_when_root_missing(mock_dependencies, ba
             return (True, 'FILES_CREATED: .pddrc', 0.1, "gpt-4")
         if "step9" in label:
             return (True, 'FILES_CREATED: prompts/test.prompt', 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2622,7 +2774,7 @@ def test_generate_merges_with_existing(mock_dependencies, base_args):
             return (True, "FILES_CREATED: prompts/new_module_Python.prompt", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2699,7 +2851,7 @@ def test_step7_output_contains_full_merged_architecture(mock_dependencies, base_
             return (True, "FILES_CREATED: prompts/fresh_Python.prompt", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2764,7 +2916,7 @@ def test_step7b_review_file_preserves_sibling_modules(mock_dependencies, base_ar
             return (True, "FILES_CREATED: prompts/cli_Python.prompt", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2829,7 +2981,7 @@ def test_step7b_fallback_restores_on_module_drop(mock_dependencies, base_args):
             return (True, "FILES_CREATED: prompts/cli_Python.prompt", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -2873,7 +3025,7 @@ def test_generate_first_time_records_registry(mock_dependencies, base_args):
             return (True, "FILES_CREATED: prompts/mod_a_Python.prompt", 0.1, "gpt-4")
         if "step10" in label or "step11" in label or "step12" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
@@ -3032,7 +3184,7 @@ class TestStep9cReconciliation:
                 return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
             if "step9" in label:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3067,7 +3219,7 @@ class TestStep9cReconciliation:
                 return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
             if "step9" in label:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3107,7 +3259,7 @@ class TestStep9cReconciliation:
                 return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
             if "step9" in label:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
-            return (True, f"Output for {label}", 0.1, "gpt-4")
+            return (True, _default_step_output(label), 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3161,7 +3313,7 @@ class TestStep8_5ContextDocs:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3223,7 +3375,7 @@ class TestStep8_5ContextDocs:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3269,7 +3421,7 @@ class TestStep8_5ContextDocs:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3324,7 +3476,7 @@ class TestStep8_5ContextDocs:
                 return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
             if "step10" in label or "step11" in label or "step12" in label:
                 return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
-            return (True, "ok", 0.1, "gpt-4")
+            return (True, _default_step_output(label) if label == "step5" else "ok", 0.1, "gpt-4")
 
         mocks["run"].side_effect = side_effect
 
@@ -3397,7 +3549,7 @@ def test_step7_dict_format_existing_arch_triggers_merge(
             return (True, "FILES_CREATED: .pddrc", 0.1, "gpt-4")
         if "step9" in label:
             return (True, "FILES_CREATED: prompts/test.prompt", 0.1, "gpt-4")
-        return (True, f"Output for {label}", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
 
