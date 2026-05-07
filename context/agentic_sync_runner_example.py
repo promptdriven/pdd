@@ -4,15 +4,18 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-# Add the project root to sys.path
+# Prepend the project root to sys.path so the local checkout always wins
+# over an older installed `pdd` package (e.g. one missing recently-added
+# helpers like `_is_nonfatal_warning`).
 project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+sys.path.insert(0, str(project_root))
 
 from pdd.agentic_sync_runner import (
     AsyncSyncRunner,
     ModuleState,
     build_dep_graph_from_architecture,
     _format_duration,
+    _is_nonfatal_warning,
     _parse_cost_from_csv,
 )
 
@@ -100,6 +103,17 @@ def main():
     print("\n--- GitHub Comment Preview ---")
     body = runner._build_comment_body(issue_number=42)
     print(body)
+
+    # --- Failure-summary contract (issue #1399) ---
+    # `_sync_one_module` returns `(success, cost, error)`. The `error`
+    # string for a failed module always leads with a deterministic
+    # failure reason (`Overall status: Failed` line if present, else
+    # `Exit code N`). High-signal lines (containing
+    # error/failed/traceback/exception/abort) follow, with known
+    # nonfatal preprocessing warnings filtered out:
+    print("\n--- Nonfatal-warning filter ---")
+    print(_is_nonfatal_warning('Warning: ContentSelector failed for select="class:Foo"'))  # True
+    print(_is_nonfatal_warning("RuntimeError: real failure"))                              # False
 
 
 if __name__ == "__main__":
