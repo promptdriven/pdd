@@ -592,6 +592,7 @@ class TestAgenticSyncDispatch:
                 budget=20.0,
                 skip_verify=False,
                 skip_tests=False,
+                dry_run=False,
                 agentic=False,
                 no_steer=False,
                 max_attempts=3,
@@ -603,6 +604,7 @@ class TestAgenticSyncDispatch:
             assert result == ("All synced", 0.50, "claude-3")
             kw = mock_ras.call_args.kwargs
             assert kw["use_github_state"] is True
+            assert kw["dry_run"] is False
             assert kw["one_session"] is True
 
     def test_dispatch_failure_raises_exit_1(self):
@@ -621,6 +623,7 @@ class TestAgenticSyncDispatch:
                     budget=20.0,
                     skip_verify=False,
                     skip_tests=False,
+                    dry_run=False,
                     agentic=False,
                     no_steer=False,
                     max_attempts=3,
@@ -644,6 +647,7 @@ class TestAgenticSyncDispatch:
                 budget=5.0,
                 skip_verify=False,
                 skip_tests=False,
+                dry_run=False,
                 agentic=False,
                 no_steer=False,
                 max_attempts=None,
@@ -669,6 +673,7 @@ class TestAgenticSyncDispatch:
                 budget=5.0,
                 skip_verify=False,
                 skip_tests=False,
+                dry_run=False,
                 agentic=False,
                 no_steer=False,
                 max_attempts=None,
