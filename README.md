@@ -167,9 +167,9 @@ For CLI enthusiasts, implement GitHub issues directly:
    ```
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
-   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
-   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
+   - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
 
 **Usage:**
 ```bash
@@ -229,9 +229,9 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
-  2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
-  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers  based on your available keys
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys or stored OAuth/subscription logins such as Claude Max/Pro, Gemini OAuth, or Codex ChatGPT login.
+  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription login, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
+  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
   4. Optionally creates a `.pddrc` project config
   5. Tests the first available model with a real LLM call 
   6. Prints a structured summary (CLIs, keys, models, test result)
@@ -589,7 +589,7 @@ graph TB
 - **Core loop**: `pdd sync` runs the full auto-deps → generate → example → crash → verify → test → fix → update cycle for each module
 - **Health check**: `pdd checkup <url>` identifies what needs attention next; `pdd checkup --pr ... --issue ...` verifies existing PRs
 - **Defect path**: `test <url>` or `bug <url>` surfaces failing tests → `fix <url>` resolves them
-- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules
+- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules. Auth caveat: `sync <url>` still runs a LiteLLM-backed generate phase, so OAuth-only CLI setup is not enough; configure an API key first.
 
 ### Getting Started
 - **[`connect`](#18-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
@@ -600,7 +600,7 @@ graph TB
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
 - **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or verify existing PRs against source issues
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
-- **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename)
+- **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename). This mode still requires API-key-backed LiteLLM for its generate phase; stored CLI OAuth alone is not sufficient.
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (18-step workflow in agentic mode)
 
 ### Core Commands (Prompt-Based)
@@ -829,7 +829,7 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs agentic multi-module issue sync.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Codex OAuth alone is not sufficient for this mode.
 
 ```bash
 # Project-wide architecture sync (no argument)
@@ -838,7 +838,7 @@ pdd [GLOBAL OPTIONS] sync [OPTIONS]
 # Single-module sync
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
 
-# Agentic multi-module sync from a GitHub issue
+# Multi-module sync from a GitHub issue (requires API-key-backed LiteLLM)
 pdd [GLOBAL OPTIONS] sync [OPTIONS] GITHUB_ISSUE_URL
 ```
 
@@ -852,7 +852,7 @@ Arguments:
 - No argument: Scan `architecture.json` and sync all modules that need deterministic Tier 1 prompt-to-code updates.
 - `architecture.json` as a positional value is not a global-sync alias in v1; use no-argument `pdd sync` for project-wide Tier 1 sync.
 - `BASENAME`: The base name for the prompt file (e.g., "factorial_calculator" for "factorial_calculator_python.prompt")
-- `GITHUB_ISSUE_URL`: A GitHub issue URL for agentic issue-driven multi-module sync.
+- `GITHUB_ISSUE_URL`: A GitHub issue URL for issue-driven multi-module sync. This path is not OAuth-only friendly because its generate phase uses LiteLLM; configure an API key even if your agentic CLI has a stored OAuth login.
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
@@ -2053,19 +2053,20 @@ pdd [GLOBAL OPTIONS] fix --manual --loop --no-agentic-fallback [OTHER OPTIONS] P
 ```
 
 **Prerequisites:**
-For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed and the corresponding API key configured in your environment. The agents are tried in the following order of preference:
+For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed with valid credentials. Each CLI has its own credential store and falls back to environment-variable API keys if you don't have a stored login. The agents are tried in the following order of preference:
 
 1.  **Anthropic Claude:**
     *   Requires the `claude` CLI to be installed and in your `PATH`.
-    *   Requires the `ANTHROPIC_API_KEY` environment variable to be set.
+    *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
+    *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
 2.  **Google Gemini:**
     *   Requires the `gemini` CLI to be installed and in your `PATH`.
-    *   Requires the `GOOGLE_API_KEY` or `GEMINI_API_KEY` environment variable to be set.
+    *   Authenticates with `~/.gemini` OAuth credentials (run `gemini` interactively once to populate), `GOOGLE_API_KEY`/`GEMINI_API_KEY`, or Vertex AI service-account credentials.
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
-    *   Requires the `OPENAI_API_KEY` environment variable to be set.
+    *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
 
-You can configure these keys using `pdd setup` or by setting them in your shell's environment.
+You can configure environment-variable keys using `pdd setup` or by setting them in your shell. For OAuth/subscription auth, run each CLI's login command once interactively.
 
 #### Agentic E2E Fix Mode
 
@@ -2119,7 +2120,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, or Codex) with API key configured
+- At least one supported agent CLI (Claude, Gemini, or Codex) with valid credentials — either a stored OAuth/subscription login (recommended) or an API key in the environment
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2451,7 +2452,7 @@ Options:
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed and the corresponding API key configured in your environment.
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed with valid credentials — either a stored OAuth/subscription login or an API key in your environment (see [Prerequisites](#prerequisites) for details).
 
 Example:
 ```

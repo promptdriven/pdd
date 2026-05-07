@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,6 +24,74 @@ _ORIGINAL_STDERR = sys.stderr
 _ORIGINAL_GIT_WORK_TREE = os.environ.get('GIT_WORK_TREE')
 
 
+_E2E_FIX_ORIGINAL_ATTRS: dict[str, Any] | None = None
+_E2E_FIX_ATTRS_TO_RESTORE = (
+    "run_agentic_task",
+    "load_prompt_template",
+    "console",
+    "load_workflow_state",
+    "save_workflow_state",
+    "clear_workflow_state",
+    "_get_file_hashes",
+    "_detect_changed_files",
+    "_detect_meaningful_changes",
+    "_commit_and_push",
+    "_check_e2e_environment",
+    "classify_step_output",
+    "post_final_comment",
+    "_run_step11_code_cleanup",
+    "run_ci_validation_loop",
+)
+
+
+@pytest.fixture(autouse=True)
+def restore_agentic_e2e_fix_orchestrator_mocks():
+    """Restore orchestrator globals that heavily mocked tests replace.
+
+    The public CI unit-test job runs many orchestrator regression modules in
+    shared xdist workers. If a mock of file-change detection leaks past one
+    test, later end-to-end tests can think a fix was applied and skip their
+    no-progress guards. Keep the cleanup centralized so those tests remain
+    order-independent.
+    """
+    global _E2E_FIX_ORIGINAL_ATTRS
+
+    try:
+        import pdd.agentic_e2e_fix_orchestrator as orchestrator
+    except ImportError:
+        yield
+        return
+
+    if _E2E_FIX_ORIGINAL_ATTRS is None:
+        _E2E_FIX_ORIGINAL_ATTRS = {
+            attr: getattr(orchestrator, attr)
+            for attr in _E2E_FIX_ATTRS_TO_RESTORE
+            if hasattr(orchestrator, attr)
+        }
+
+    yield
+
+    for attr, original in _E2E_FIX_ORIGINAL_ATTRS.items():
+        setattr(orchestrator, attr, original)
+
+
+@pytest.fixture(autouse=True)
+def preserve_cwd():
+    """Restore cwd after each test so xdist workers don't leak temp dirs.
+
+    Several tests intentionally chdir into throwaway workspaces. When one of
+    those tests leaves the worker process outside the repository, later tests
+    that read committed relative paths such as ``pdd/data/llm_model.csv`` fail
+    order-dependently in the full public CI run.
+    """
+    original_cwd = os.getcwd()
+    yield
+    try:
+        os.chdir(original_cwd)
+    except FileNotFoundError:
+        os.chdir(Path(__file__).resolve().parents[1])
+
+
 @pytest.fixture(autouse=True)
 def preserve_git_work_tree():
     """Clear GIT_WORK_TREE during tests to avoid interfering with git init in temp dirs."""
@@ -32,6 +101,34 @@ def preserve_git_work_tree():
         os.environ['GIT_WORK_TREE'] = _ORIGINAL_GIT_WORK_TREE
     else:
         os.environ.pop('GIT_WORK_TREE', None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_claude_oauth_probe(monkeypatch):
+    """Default the Issue #813 OAuth probe to False so tests are CI-portable.
+
+    On developer machines and CI runners that have ``claude`` installed and
+    logged in via Max/Pro, the probe in ``_strip_anthropic_creds_for_claude_subprocess``
+    would otherwise pop ANTHROPIC_API_KEY out of the subprocess env and break
+    legacy tests that assert the key survives (e.g. ``test_environment_sanitization``).
+
+    Tests that exercise the strip behavior re-patch ``_claude_has_oauth_login``
+    or ``_probe_claude_auth_status`` to True/non-empty in their own scope.
+    """
+    monkeypatch.setattr("pdd.agentic_common._claude_has_oauth_login", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_codex_auth_file(monkeypatch):
+    """Default ``_has_codex_auth_file`` to False (Issue #813 round-6).
+
+    Developer machines often have ``~/.codex/auth.json`` from a real
+    ``codex login``. Without this fixture, ``test_get_available_agents_*``
+    tests that assume "no auth signal" pick up the dev's real codex
+    login and incorrectly report openai available, breaking
+    deterministic test runs across environments.
+    """
+    monkeypatch.setattr("pdd.agentic_common._has_codex_auth_file", lambda: False)
 
 
 @pytest.fixture(autouse=True)
@@ -142,7 +239,6 @@ collect_ignore_glob = [
 
 
 # --- Common fixtures for CLI tests ---
-from pathlib import Path
 from click.testing import CliRunner
 
 

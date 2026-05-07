@@ -15,9 +15,9 @@ This tutorial walks through implementing a GitHub issue using PDD.
 - **PDD installed**: `pdd --version`
 - **GitHub CLI**: `brew install gh && gh auth login`
 - **One Agentic CLI** - Install at least one:
-  - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
-  - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
-  - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+  - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (Claude Max/Pro OAuth via `claude auth login` recommended, or `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
+  - **Gemini CLI**: `npm install -g @google/gemini-cli` (`~/.gemini` OAuth or `GOOGLE_API_KEY`)
+  - **Codex CLI**: `npm install -g @openai/codex` (`codex login` ChatGPT account or `OPENAI_API_KEY`)
 
 ### Method 1: Using the Web Interface
 

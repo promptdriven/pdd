@@ -61,7 +61,7 @@ def _print_pdd_logo() -> None:
 
 def run_setup() -> None:
     """Main entry point for pdd setup. Two-phase flow with post-setup menu."""
-    from pdd.cli_detector import detect_and_bootstrap_cli, CliBootstrapResult
+    from pdd.cli_detector import detect_and_bootstrap_cli, CliBootstrapResult, _has_provider_oauth
 
     # ── Banner ────────────────────────────────────────────────────────────
     _print_pdd_logo()
@@ -73,9 +73,14 @@ def run_setup() -> None:
         for result in results:
             if result.skipped:
                 pass
-            elif not result.api_key_configured:
+            elif not result.api_key_configured and not _has_provider_oauth(result.provider):
+                # Issue #813 follow-up: only warn when neither an API key nor
+                # a stored OAuth credential is present. Claude Max users with
+                # `claude auth login` (and similar) have a valid auth path that
+                # this warning previously misrepresented as missing.
                 _console.print(
-                    f"[yellow]Note: No API key configured for {result.cli_name or 'the CLI'}. "
+                    f"[yellow]Note: No credentials configured for {result.cli_name or 'the CLI'} "
+                    "(no API key in env, no stored OAuth login). "
                     "The agent may have limited capability.[/yellow]"
                 )
 
@@ -92,12 +97,25 @@ def run_setup() -> None:
             except (EOFError, KeyboardInterrupt):
                 choice = ""
 
-            if choice:
+            menu_was_opened = bool(choice)
+            if menu_was_opened:
                 _run_options_menu()
         else:
             found_keys: list[tuple[str, str]] = []
+            menu_was_opened = True
             _console.print("\n  [yellow]Setup incomplete. Use the menu to configure manually.[/yellow]")
             _run_options_menu()
+
+        # Issue #813 P4 review: the options menu's "Add a provider" path
+        # writes new keys to ~/.pdd/api-env.{shell} and os.environ via
+        # _save_key_to_api_env, but the in-memory ``found_keys`` snapshot was
+        # captured before the menu ran. Without a refresh, an OAuth-only
+        # user who adds an API key through the menu still hits the
+        # OAuth-only quick-start ("no API key, do not run pdd generate")
+        # in the final summary — the opposite of what the user just did.
+        # Rescan silently so the summary reflects post-menu state.
+        if menu_was_opened:
+            found_keys = _scan_for_api_keys_quiet()
 
         # ── Final summary (after menu, so it reflects any changes) ────────
         _print_exit_summary(found_keys, results)
@@ -126,7 +144,7 @@ def _run_auto_phase(cli_results=None) -> Optional[Tuple[List[Tuple[str, str]], D
     try:
         # Step 1: Scan API keys
         _print_step_banner("Scanning for API keys...")
-        found_keys = _step1_scan_keys()
+        found_keys = _step1_scan_keys(cli_results=cli_results)
         print()
         _console.print("[blue]Press Enter to continue to the next step...[/blue]", end="")
         input()
@@ -153,15 +171,87 @@ def _run_auto_phase(cli_results=None) -> Optional[Tuple[List[Tuple[str, str]], D
 # Step 1 — Scan for API keys
 # ---------------------------------------------------------------------------
 
-def _step1_scan_keys() -> List[Tuple[str, str]]:
+def _scan_for_api_keys_quiet() -> List[Tuple[str, str]]:
+    """Return ``[(key_name, source_label), …]`` from all scan sources, no output.
+
+    Mirrors the source-finding logic in ``_step1_scan_keys`` (env →
+    ``~/.pdd/api-env.{shell}`` → project/home ``.env``) but emits nothing to
+    the console. Used by the post-options-menu refresh in ``run_setup`` so
+    keys added via "Add a provider" surface in the final exit summary's
+    OAuth-only branch decision (Issue #813 P4 review). Re-running the
+    printable ``_step1_scan_keys`` would double-print the per-key listing.
+    """
+    from pdd.provider_manager import _read_csv, parse_api_key_vars
+    from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
+
+    pdd_dir = Path.home() / ".pdd"
+    ref_path = Path(__file__).parent / "data" / "llm_model.csv"
+    try:
+        ref_rows = _read_csv(ref_path)
+    except (OSError, FileNotFoundError):
+        return []
+
+    all_vars: List[str] = []
+    seen: set = set()
+    for row in ref_rows:
+        for var in parse_api_key_vars(row.get("api_key", "").strip()):
+            if var and var not in seen:
+                seen.add(var)
+                all_vars.append(var)
+
+    dotenv_vals: Dict[str, str] = {}
+    try:
+        from dotenv import dotenv_values
+        for env_path in [Path.cwd() / ".env", Path.home() / ".env"]:
+            if env_path.is_file():
+                for k, v in dotenv_values(env_path).items():
+                    if v is not None and k not in dotenv_vals:
+                        dotenv_vals[k] = v
+    except ImportError:
+        pass
+
+    shell_name = _detect_shell()
+    api_env_vals: Dict[str, str] = {}
+    api_env_label = ""
+    if shell_name:
+        api_env_vals = _parse_api_env_file(pdd_dir / f"api-env.{shell_name}")
+        api_env_label = f"~/.pdd/api-env.{shell_name}"
+
+    # Issue #813 round-10: same rule as `_step1_scan_keys._find_source`. A
+    # name with empty/whitespace value is not a usable key — it must not
+    # short-circuit the OAuth-only quick-start.
+    found: List[Tuple[str, str]] = []
+    for var in all_vars:
+        env_val = os.environ.get(var, "")
+        if env_val and env_val.strip():
+            found.append((var, "shell environment"))
+            continue
+        api_env_val = api_env_vals.get(var, "")
+        if api_env_val and api_env_val.strip():
+            found.append((var, api_env_label))
+            continue
+        dotenv_val = dotenv_vals.get(var, "")
+        if dotenv_val and dotenv_val.strip():
+            found.append((var, ".env file"))
+    return found
+
+
+def _step1_scan_keys(cli_results=None) -> List[Tuple[str, str]]:
     """Scan API key env vars referenced in the reference CSV across all sources.
 
     Returns list of (key_name, source_label) for keys that were found.
     Multi-credential providers (pipe-delimited api_key) are displayed as
     grouped provider lines; single-var providers as individual lines.
+
+    Issue #813: when ``cli_results`` shows that at least one bootstrapped CLI
+    has a stored OAuth/subscription credential (Claude Max keychain,
+    ~/.gemini OAuth, ~/.codex/auth.json), the "no API keys found" prompt is
+    skipped — those credentials are a valid auth path and pushing the user
+    to add ANTHROPIC_API_KEY undoes the protection this PR provides.
     """
     from pdd.provider_manager import _read_csv, parse_api_key_vars
     from pdd.api_key_scanner import _parse_api_env_file, _detect_shell
+    from pdd.cli_detector import _has_provider_oauth
 
     # Ensure ~/.pdd exists
     pdd_dir = Path.home() / ".pdd"
@@ -213,11 +303,20 @@ def _step1_scan_keys() -> List[Tuple[str, str]]:
         api_env_label = f"~/.pdd/api-env.{shell_name}"
 
     def _find_source(var: str) -> Optional[str]:
-        if var in os.environ:
+        # Issue #813 round-10: count a key as found only when its VALUE is
+        # non-empty after stripping. A bare `ANTHROPIC_API_KEY=` in env or a
+        # blank line in `.env` passes name-only membership checks but yields
+        # nothing usable to litellm — counting such entries as "found" defeats
+        # the OAuth-only quick-start branch and leaves the user with the
+        # standard `pdd generate` recommendation that will fail at runtime.
+        env_val = os.environ.get(var, "")
+        if env_val and env_val.strip():
             return "shell environment"
-        if var in api_env_vals:
+        api_env_val = api_env_vals.get(var, "")
+        if api_env_val and api_env_val.strip():
             return api_env_label
-        if var in dotenv_vals:
+        dotenv_val = dotenv_vals.get(var, "")
+        if dotenv_val and dotenv_val.strip():
             return ".env file"
         return None
 
@@ -260,8 +359,29 @@ def _step1_scan_keys() -> List[Tuple[str, str]]:
             _console.print(f"  [green]✓[/green] {key_name:<{max_name_len}s}   {source}")
 
     if not found_keys:
-        _console.print("  [yellow]✗ No API keys found.[/yellow]\n")
-        found_keys = _prompt_for_api_key()
+        # Issue #813: don't prompt OAuth-only users to add an API key.
+        # If any selected CLI has a stored OAuth/subscription credential,
+        # the agentic workflows can run without an env-var API key, so
+        # skip the "add at least one API key" pressure.
+        oauth_providers = []
+        if cli_results:
+            for r in cli_results:
+                if not getattr(r, "skipped", False) and getattr(r, "provider", "") \
+                   and _has_provider_oauth(r.provider):
+                    oauth_providers.append(r.provider)
+        if oauth_providers:
+            providers_str = ", ".join(sorted(set(oauth_providers)))
+            _console.print(
+                f"  [green]✓[/green] No API keys in env, but stored OAuth/subscription "
+                f"credentials detected ({providers_str}). Skipping API-key prompt."
+            )
+            _console.print(
+                "  [dim]Add an API key later via `pdd setup` if you want fallback billing "
+                "for non-OAuth providers.[/dim]\n"
+            )
+        else:
+            _console.print("  [yellow]✗ No API keys found.[/yellow]\n")
+            found_keys = _prompt_for_api_key()
 
     print(f"\n  {len(found_keys)} API key(s) found.")
 
@@ -561,14 +681,21 @@ def _step3_test_and_summary(
 
     # CLIs
     if cli_results:
+        from pdd.cli_detector import _has_provider_oauth
         configured = [r for r in cli_results if not r.skipped and r.cli_name]
         skipped = [r for r in cli_results if r.skipped]
         if configured:
             names = ", ".join(r.cli_name for r in configured)
-            no_key = [r for r in configured if not r.api_key_configured]
-            if no_key:
-                no_key_names = ", ".join(r.cli_name for r in no_key)
-                _console.print(f"    CLI:       [green]✓[/green] {names} configured ([yellow]{no_key_names} missing API key[/yellow])")
+            # Issue #813 follow-up: a CLI with stored OAuth (Claude Max,
+            # Gemini OAuth, Codex ChatGPT login) is fully configured even
+            # without an API-key env var. Only flag CLIs missing both.
+            no_creds = [
+                r for r in configured
+                if not r.api_key_configured and not _has_provider_oauth(r.provider)
+            ]
+            if no_creds:
+                no_creds_names = ", ".join(r.cli_name for r in no_creds)
+                _console.print(f"    CLI:       [green]✓[/green] {names} configured ([yellow]{no_creds_names} missing credentials (no API key, no OAuth)[/yellow])")
             else:
                 _console.print(f"    CLI:       [green]✓[/green] {names} configured")
         elif skipped:
@@ -668,6 +795,62 @@ def _print_exit_summary(found_keys: List[Tuple[str, str]], cli_results=None) -> 
     else:
         source_cmd = f"source {api_env_path}"
 
+    # Quick-start tailoring (Issue #813 P2 / P3 review): when no API keys are
+    # configured anywhere but a CLI has a stored OAuth login, the standard
+    # quick-start `pdd generate success_python.prompt` would fail — `pdd
+    # generate` routes through litellm and needs an API key, not the agentic
+    # CLI's OAuth credential. Don't advertise a doomed command.
+    #
+    # Use ``found_keys`` (the full scan: os.environ + ~/.pdd/api-env +
+    # project .env) rather than ``valid_keys`` (env-loaded subset). A key
+    # discovered in a project `.env` is loaded by `llm_invoke` via dotenv at
+    # runtime, so the user CAN run `pdd generate` even when nothing is in
+    # `os.environ` yet — basing the OAuth-only branch on `valid_keys` would
+    # misclassify them and print the wrong guidance.
+    from pdd.cli_detector import _has_provider_oauth
+    oauth_only_setup = not found_keys and bool(cli_results) and any(
+        not getattr(r, "skipped", False)
+        and getattr(r, "provider", "")
+        and _has_provider_oauth(r.provider)
+        for r in cli_results
+    )
+
+    if oauth_only_setup:
+        quick_start_lines: List[str] = [
+            "QUICK START:",
+            "",
+            "Setup detected an OAuth-backed agentic CLI but no API key. PDD has",
+            "two command families with different auth paths:",
+            "",
+            "1. Issue-driven agentic commands — work NOW with your OAuth login:",
+            "     pdd generate <issue-url>    scaffold architecture/prompts from a PRD issue",
+            "     pdd change <issue-url>      drive a feature/refactor from a GitHub issue",
+            "     pdd bug <issue-url>         investigate and reproduce a reported bug",
+            "     pdd fix <issue-url>         fix code from a GitHub issue",
+            "     pdd test <issue-url>        generate tests for an issue",
+            "     pdd checkup <issue-url>     audit a module against an issue",
+            "   These dispatch through your installed CLI (claude/codex/gemini)",
+            "   and use its stored OAuth/subscription credential — no API key",
+            "   needed.",
+            "",
+            "2. Direct prompt commands — require an API key:",
+            "     pdd generate <prompt-file>, pdd test <prompt>, pdd fix <prompt>,",
+            "     pdd sync <prompt-or-issue> (sync's generate step calls litellm",
+            "       even with an issue URL — it is not a pure agentic command),",
+            "     pdd crash, etc.",
+            "   These call the LLM via litellm and need ANTHROPIC_API_KEY /",
+            "   GEMINI_API_KEY / OPENAI_API_KEY in env. Re-run `pdd setup` and",
+            "   add a key (or pick 'm' next time → 'Add a provider') to enable",
+            "   them.",
+        ]
+    else:
+        quick_start_lines = [
+            "QUICK START:",
+            "",
+            "1. Generate code from the sample prompt:",
+            "   pdd generate success_python.prompt",
+        ]
+
     # ── Build full summary (saved to file) ───────────────────────────────
     lines: List[str] = []
     lines.append("")
@@ -684,7 +867,17 @@ def _print_exit_summary(found_keys: List[Tuple[str, str]], cli_results=None) -> 
         configured = [r for r in cli_results if not r.skipped and r.cli_name]
         if configured:
             for r in configured:
-                key_status = "API key set" if r.api_key_configured else "no API key"
+                # Issue #813 round-10: render OAuth/subscription credential
+                # when stored OAuth login is detected. Previously this branch
+                # only checked api_key_configured, so an OAuth-backed CLI
+                # showed "no API key" — technically true but the same
+                # misleading framing this PR exists to remove.
+                if r.api_key_configured:
+                    key_status = "API key set"
+                elif _has_provider_oauth(r.provider):
+                    key_status = "OAuth/subscription credential configured"
+                else:
+                    key_status = "no credentials"
                 lines.append(f"  {r.cli_name} ({r.provider}) — {key_status}")
         else:
             lines.append("  None")
@@ -727,10 +920,7 @@ def _print_exit_summary(found_keys: List[Tuple[str, str]], cli_results=None) -> 
     lines.append("")
     lines.append(_THIN_DIVIDER)
     lines.append("")
-    lines.append("QUICK START:")
-    lines.append("")
-    lines.append("1. Generate code from the sample prompt:")
-    lines.append("   pdd generate success_python.prompt")
+    lines.extend(quick_start_lines)
     lines.append("")
     lines.append(_THIN_DIVIDER)
     lines.append("")
@@ -777,10 +967,8 @@ def _print_exit_summary(found_keys: List[Tuple[str, str]], cli_results=None) -> 
     print()
     print(_THIN_DIVIDER)
     print()
-    print("QUICK START:")
-    print()
-    print("1. Generate code from the sample prompt:")
-    print("   pdd generate success_python.prompt")
+    for line in quick_start_lines:
+        print(line)
     print()
     print(_THIN_DIVIDER)
     print()

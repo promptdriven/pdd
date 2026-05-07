@@ -225,9 +225,41 @@ def test_get_available_agents_mixed(mock_env, mock_load_model_data, mock_shutil_
     mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["OPENAI_API_KEY"] = "key" # Key exists but binary doesn't
-    
+
     agents = get_available_agents()
     assert agents == ["anthropic"]
+
+
+def test_get_available_agents_includes_openai_with_codex_auth_file(
+    mock_env, mock_load_model_data, mock_shutil_which
+):
+    """Issue #813 round-6: codex-login-only users (no OPENAI_API_KEY in
+    env, no PDD_CODEX_AUTH_AVAILABLE, but ~/.codex/auth.json exists with
+    a token) must have OpenAI/Codex enabled by `get_available_agents`.
+
+    Without this, `pdd setup` reports Codex configured (because it checks
+    the same auth.json via `_has_provider_oauth`) but the runtime then
+    silently drops Codex from the preference list — agentic workflows
+    skip the provider the user just confirmed during setup.
+    """
+    mock_shutil_which.side_effect = lambda cmd: "/bin/codex" if cmd == "codex" else None
+    # No OPENAI_API_KEY, no PDD_CODEX_AUTH_AVAILABLE.
+    with patch("pdd.agentic_common._has_codex_auth_file", return_value=True):
+        agents = get_available_agents()
+    assert "openai" in agents
+
+
+def test_get_available_agents_excludes_openai_without_any_codex_auth(
+    mock_env, mock_load_model_data, mock_shutil_which
+):
+    """Sanity: codex CLI binary present but no auth signal at all
+    (no env var, no PDD_CODEX_AUTH_AVAILABLE, no ~/.codex/auth.json) →
+    OpenAI/Codex stays unavailable. Otherwise the runtime would try
+    to dispatch to a CLI that has no credentials and fail loudly."""
+    mock_shutil_which.side_effect = lambda cmd: "/bin/codex" if cmd == "codex" else None
+    with patch("pdd.agentic_common._has_codex_auth_file", return_value=False):
+        agents = get_available_agents()
+    assert "openai" not in agents
 
 def test_run_agentic_task_validation(mock_cwd, mock_shutil_which):
     """Test behavior with empty instruction (validation removed in refactored code)."""
@@ -5958,7 +5990,14 @@ def test_codex_stale_chatgpt_token_returns_actionable_message(
     assert cost == 0.0
     assert "Codex CLI authentication failed" in msg
     assert "codex login" in msg
+    # Issue #813 round-7: primary disable is PDD_AGENTIC_PROVIDER —
+    # mentioned ahead of PDD_CODEX_AUTH_AVAILABLE so file-only Codex
+    # users (who never set the env var) get an actionable path.
+    assert "PDD_AGENTIC_PROVIDER" in msg
     assert "PDD_CODEX_AUTH_AVAILABLE" in msg
+    # Round-7: also surface ~/.codex/auth.json removal / `codex logout`
+    # since `_has_codex_auth_file` now picks up the file directly.
+    assert ".codex/auth.json" in msg or "codex logout" in msg
     assert "wss://" not in msg
     assert "websocket" not in msg
 

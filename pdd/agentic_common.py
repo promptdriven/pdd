@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import os
 import signal
 import sys
@@ -359,8 +360,10 @@ def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
         "Codex CLI authentication failed: the stored ChatGPT/Codex login token "
         "could not be refreshed. Run `codex login` (or `codex login --device-auth`; "
         "use `codex login --with-api-key` for API-key auth) and retry. "
-        "To avoid Codex for this run, unset `PDD_CODEX_AUTH_AVAILABLE` or set "
-        "`PDD_AGENTIC_PROVIDER=anthropic,google`."
+        "To avoid Codex for this run, set `PDD_AGENTIC_PROVIDER=anthropic,google`. "
+        "Other ways to disable Codex auto-detection: unset `PDD_CODEX_AUTH_AVAILABLE` "
+        "(if set in env), or run `codex logout` / remove `~/.codex/auth.json` "
+        "(picked up by `_has_codex_auth_file` since Issue #813 round-6)."
     )
 
 
@@ -761,9 +764,19 @@ def get_available_agents() -> List[str]:
         available.append("google")
 
     # 3. OpenAI (Codex)
-    # Available if 'codex' CLI exists AND (OPENAI_API_KEY is set OR codex auth signaled)
+    # Available if 'codex' CLI exists AND any supported auth path is present:
+    #   - OPENAI_API_KEY env (direct API auth)
+    #   - PDD_CODEX_AUTH_AVAILABLE (cloud waterfall signal)
+    #   - ~/.codex/auth.json with a token (local `codex login` ChatGPT auth).
+    # Issue #813 round-6 follow-up: keep the runtime check aligned with
+    # `pdd setup`'s detection (`_has_provider_oauth("openai")`) so a user
+    # with only the file-based login isn't told Codex is configured during
+    # setup but then silently dropped from the runtime preference list.
+    has_codex_oauth = _has_codex_auth_file()
     if _find_cli_binary("codex") and (
-        os.environ.get("OPENAI_API_KEY") or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
+        os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("PDD_CODEX_AUTH_AVAILABLE")
+        or has_codex_oauth
     ):
         available.append("openai")
 
@@ -785,6 +798,32 @@ def _has_gemini_oauth_credentials() -> bool:
     if not isinstance(data, dict):
         return False
     return bool(data.get("refresh_token") or data.get("access_token"))
+
+
+def _has_codex_auth_file() -> bool:
+    """Return True when Codex CLI stored ChatGPT login is present.
+
+    Codex CLI persists its ChatGPT/OAuth token at ``~/.codex/auth.json``
+    (created by ``codex login``). Treating ``OPENAI_API_KEY`` and
+    ``PDD_CODEX_AUTH_AVAILABLE`` as the only auth signals makes PDD skip
+    a working local Codex CLI when the user has only the file-based login,
+    and (Issue #813 round-6 follow-up) creates a UX inconsistency where
+    ``pdd setup`` calls Codex configured via this same file but
+    ``get_available_agents()`` then drops it from the runtime preference
+    list.
+    """
+    auth_path = Path.home() / ".codex" / "auth.json"
+    try:
+        data = json.loads(auth_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(
+        data.get("token")
+        or data.get("tokens")
+        or data.get("OPENAI_API_KEY")
+    )
 
 def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
     """Calculates cost for Gemini based on token stats."""
@@ -1262,6 +1301,175 @@ def _revert_out_of_scope_changes(
                 )
     return reverted
 
+_CLAUDE_OAUTH_PROBE_TIMEOUT_SECONDS = 10
+_ANTHROPIC_KEY_STRIP_NOTICE_LOGGED: Dict[str, bool] = {}
+
+
+@functools.lru_cache(maxsize=1)
+def _probe_claude_auth_status() -> Dict[str, Any]:
+    """Cached `claude auth status` output for OAuth detection (Issue #813).
+
+    Returns ``{}`` on any failure (CLI missing, timeout, non-zero exit, parse
+    error, missing subcommand on older Claude Code). Callers must treat that as
+    'no OAuth detected' and leave the API key in place.
+
+    Probe runs with ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN popped to avoid an
+    env-supplied key shadowing the OAuth signal in the JSON payload, and uses
+    ``subprocess.run`` directly (not ``_subprocess_run``) so it isn't
+    intercepted by mocks for the main provider call site.
+    """
+    cli_path = _find_cli_binary("claude")
+    if not cli_path:
+        return {}
+
+    probe_env = os.environ.copy()
+    probe_env.pop("ANTHROPIC_API_KEY", None)
+    probe_env.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+    # Claude Code documents `claude auth status` as the JSON-producing probe.
+    # Some versions accepted/required `--json`, while others reject that flag.
+    # Try the documented shape first, then fall back to the flag form so either
+    # CLI version can still report the stored OAuth credential.
+    probe_commands = (
+        [cli_path, "auth", "status"],
+        [cli_path, "auth", "status", "--json"],
+    )
+
+    for command in probe_commands:
+        try:
+            result = subprocess.run(
+                command,
+                env=probe_env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=_CLAUDE_OAUTH_PROBE_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return {}
+
+        if result.returncode != 0:
+            continue
+
+        try:
+            data = json.loads((result.stdout or "").strip())
+        except json.JSONDecodeError:
+            continue
+
+        if isinstance(data, dict):
+            return data
+
+    return {}
+
+
+_CLAUDE_OAUTH_AUTH_METHODS = frozenset({
+    # Local interactive `claude auth login` — keychain-backed Max/Pro OAuth.
+    "claude.ai",
+    # Env-supplied OAuth (CLAUDE_CODE_OAUTH_TOKEN) — used by the cloud
+    # GitHub App executor's waterfall, where the token comes from
+    # Secret Manager rather than a keychain login.
+    #
+    # Caveat: `claude auth status` does not validate the token, so a
+    # bogus or stale CLAUDE_CODE_OAUTH_TOKEN still reports loggedIn:true and
+    # will trigger our pop. We accept this — the resulting "invalid OAuth
+    # token" error is more actionable than the silent shadowing the pop
+    # protects against. The cloud waterfall isolates each attempt to one
+    # credential type, so the conjunction (bogus token + valid API key)
+    # shouldn't arise in production.
+    "oauth_token",
+})
+
+
+def _claude_has_oauth_login() -> bool:
+    """True when Claude Code has a usable first-party OAuth credential.
+
+    Drives the ANTHROPIC_API_KEY pop in ``_run_with_provider`` (Issue #813).
+    ``subscriptionType`` is intentionally not required: API-credit OAuth users
+    leave that field null but still want OAuth to win over a stale env key.
+
+    Both keychain OAuth (``authMethod == "claude.ai"``) and env OAuth
+    (``authMethod == "oauth_token"``, e.g. ``CLAUDE_CODE_OAUTH_TOKEN``) count
+    as OAuth here. Empirical: with both ``CLAUDE_CODE_OAUTH_TOKEN`` and
+    ``ANTHROPIC_API_KEY`` set under ``CI=1`` the API key still wins the
+    real call (Issue #813's shadowing pattern), so the cloud waterfall
+    pattern needs the same protection as local Max users.
+
+    Bedrock/Vertex routes report ``apiProvider != "firstParty"`` and are
+    correctly excluded here.
+    """
+    info = _probe_claude_auth_status()
+    return (
+        bool(info.get("loggedIn"))
+        and info.get("authMethod") in _CLAUDE_OAUTH_AUTH_METHODS
+        and info.get("apiProvider") == "firstParty"
+    )
+
+
+def _strip_anthropic_creds_for_claude_subprocess(
+    env: Dict[str, str], *, verbose: bool = False, quiet: bool = False
+) -> bool:
+    """Pop stale ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN when claude has OAuth.
+
+    Issue #813: PDD always sets ``CI=1`` to keep the claude CLI non-interactive.
+    Under ``CI=1``, Claude Code prefers ``ANTHROPIC_API_KEY`` over the user's
+    stored OAuth credential, so a depleted key in the parent shell silently
+    routes every call to the API tier and fails with 'Credit balance is too
+    low' even though ``claude auth status`` still reports the Max account.
+
+    Pop only when an OAuth login is confirmed, so users without OAuth (pure
+    API-key setups, including the GitHub App executor that injects keys from
+    Secret Manager) keep working unchanged.
+
+    Returns True iff something was popped (for tests and the one-shot notice).
+
+    Provider-scope note: codex/gemini have analogous shadowing risks
+    (``codex login status``, ``_has_gemini_oauth_credentials``). They are out
+    of scope for this fix; extend here when the symptom is empirically
+    reproduced for those providers.
+    """
+    if env.get("CLAUDE_CODE_USE_BEDROCK") or env.get("CLAUDE_CODE_USE_VERTEX"):
+        return False
+
+    # Match common truthy spellings only ("1", "true", "yes", "on" — case-
+    # insensitive). Bare-presence checks misread `PDD_KEEP_ANTHROPIC_API_KEY=0`
+    # or `=false` as opt-in, defeating the fix in environments where the var
+    # is set to a disabling value.
+    if (env.get("PDD_KEEP_ANTHROPIC_API_KEY") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }:
+        return False
+
+    if not (env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")):
+        return False
+
+    if not _claude_has_oauth_login():
+        return False
+
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+    # ``quiet`` suppresses both the one-shot notice and the verbose echo to
+    # honor the orchestrator's "no non-error output" contract — scripted
+    # workflows redirect / parse stdout and a stray dim line breaks them.
+    if quiet:
+        return True
+
+    if not _ANTHROPIC_KEY_STRIP_NOTICE_LOGGED.get("done"):
+        console.print(
+            "[dim]Issue #813: dropped ANTHROPIC_API_KEY/AUTH_TOKEN from claude "
+            "subprocess env — local OAuth login detected. Set "
+            "PDD_KEEP_ANTHROPIC_API_KEY=1 to override.[/dim]"
+        )
+        _ANTHROPIC_KEY_STRIP_NOTICE_LOGGED["done"] = True
+    elif verbose:
+        console.print(
+            "[dim]Issue #813: dropped ANTHROPIC_API_KEY/AUTH_TOKEN from claude "
+            "subprocess env (OAuth detected).[/dim]"
+        )
+    return True
+
+
 def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False,
                     text=False, timeout=None, start_new_session=False, **kwargs):
     """Wrapper around subprocess that uses Popen for proper process group cleanup.
@@ -1343,6 +1551,13 @@ def _run_with_provider(
     # Force CLI agents to stay in the worktree instead of following
     # the .git file pointer back to the main repo (Issue #894).
     env["GIT_WORK_TREE"] = str(cwd)
+
+    # Issue #813: under CI=1 the claude CLI prefers ANTHROPIC_API_KEY over the
+    # user's stored OAuth (Max/Pro) credential. Drop a stale key only when an
+    # OAuth login is confirmed so API-key-only setups (e.g. GitHub App
+    # executor with Secret-Manager-injected keys) still work.
+    if provider == "anthropic":
+        _strip_anthropic_creds_for_claude_subprocess(env, verbose=verbose, quiet=quiet)
 
     # Get CLI binary name for this provider
     cli_name = CLI_COMMANDS.get(provider)
