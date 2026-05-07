@@ -34,6 +34,18 @@ console = Console()
 # (Rich Panel borders, table separators, etc.) — used to skip them in heartbeat.
 _BOX_CHARS_RE = re.compile(r'^[\s╭╮╰╯─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬\-|+]*$')
 
+# Substrings that mark a child stdout/stderr line as a known nonfatal warning.
+# These contain the word "failed" but are benign preprocessing fallbacks, so
+# they must not be promoted to the headline error in `_sync_one_module`.
+_NONFATAL_WARNING_SUBSTRINGS: Tuple[str, ...] = (
+    "ContentSelector failed",
+)
+
+
+def _is_nonfatal_warning(line: str) -> bool:
+    """Return True if `line` matches a known nonfatal-warning substring."""
+    return any(s in line for s in _NONFATAL_WARNING_SUBSTRINGS)
+
 # Maximum concurrent syncs
 MAX_WORKERS = 4
 # Per-module timeout in seconds. Large modules (200KB+) routinely need the full
@@ -882,25 +894,68 @@ class AsyncSyncRunner:
         error = ""
         if not success:
             # Extract meaningful error lines from stderr and stdout,
-            # filtering out INFO/DEBUG log noise
+            # filtering out INFO/DEBUG log noise and known nonfatal warnings
+            # (see _NONFATAL_WARNING_SUBSTRINGS).
             all_output = (stderr or "") + "\n" + (stdout or "")
             error_lines = [
                 line for line in all_output.splitlines()
-                if line.strip() and not re.match(
+                if line.strip()
+                and not re.match(
                     r"^\d{4}-\d{2}-\d{2} .* - (INFO|DEBUG)( |-)", line
                 )
+                and not _is_nonfatal_warning(line)
             ]
-            # Prefer lines containing error/traceback keywords
+
+            # Always surface a deterministic failure reason: prefer the
+            # `Overall status: Failed` line when present, otherwise the
+            # nonzero exit code.
+            failure_reason = f"Exit code {exit_code}"
+            for line in stdout.splitlines():
+                if "Overall status:" in line and "Failed" in line:
+                    failure_reason = line.strip()
+                    break
+
+            # Prefer high-signal lines containing real error keywords.
+            # Drop any line equal to `failure_reason` so the headline does
+            # not echo the same line twice.
             keyword_lines = [
                 line for line in error_lines
-                if any(kw in line.lower() for kw in ("error", "failed", "traceback", "exception", "abort"))
+                if line.strip() != failure_reason
+                and any(
+                    kw in line.lower()
+                    for kw in ("error", "failed", "traceback", "exception", "abort")
+                )
             ]
+
+            summary_parts: List[str] = [failure_reason]
             if keyword_lines:
-                error = "\n".join(keyword_lines[-20:])
-            elif error_lines:
-                error = "\n".join(error_lines[-20:])
+                summary_parts.append("\n".join(keyword_lines[-20:]))
             else:
-                error = f"Exit code {exit_code}"
+                # No high-signal line: fall back to labeled stderr/stdout
+                # tails so surrounding context is still visible. Exclude
+                # the failure_reason line so it is not echoed twice.
+                stderr_tail = [
+                    line for line in (stderr or "").splitlines()
+                    if line.strip()
+                    and line.strip() != failure_reason
+                    and not _is_nonfatal_warning(line)
+                ][-10:]
+                stdout_tail = [
+                    line for line in (stdout or "").splitlines()
+                    if line.strip()
+                    and line.strip() != failure_reason
+                    and not _is_nonfatal_warning(line)
+                ][-10:]
+                if stderr_tail:
+                    summary_parts.append(
+                        "--- stderr tail ---\n" + "\n".join(stderr_tail)
+                    )
+                if stdout_tail:
+                    summary_parts.append(
+                        "--- stdout tail ---\n" + "\n".join(stdout_tail)
+                    )
+
+            error = "\n".join(p for p in summary_parts if p)
             if not self.quiet:
                 console.print(f"[red]  Error for {basename}:[/red] {error[:500]}")
 

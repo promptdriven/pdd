@@ -4,8 +4,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_architecture", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "run_incremental_architecture", "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "run_agentic_architecture", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, project_root: Optional[str])", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "run_incremental_architecture", "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float, project_root: Optional[str])", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "_is_github_issue_url", "signature": "(url: str)", "returns": "bool"},
       {"name": "_parse_github_url", "signature": "(url: str)", "returns": "Optional[Tuple[str, str, int]]"}
     ]
@@ -14,12 +14,13 @@
 </pdd-interface>
 <pdd-dependency>agentic_architecture_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>incremental_prd_architecture_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 
 % Role & Scope
 The `pdd/agentic_architecture.py` module serves as the CLI entry point for the agentic architecture workflow. Its responsibility is to validate GitHub issue URLs, fetch issue content and comments via the `gh` CLI, ensure the local repository context is correctly set up (cloning if necessary), discover cross-project context (such as sibling architectures and existing configurations), and finally invoke the orchestrator to begin the generation process.
 
 % Requirements
-1. **Core Function**: Implement `run_agentic_architecture(issue_url, *, verbose=False, quiet=False, timeout_adder=0.0, use_github_state=True, skip_prompts=False, target_dir=None, force_single=False) -> Tuple[bool, str, float, str, List[str]]`.
+1. **Core Function**: Implement `run_agentic_architecture(issue_url, *, verbose=False, quiet=False, timeout_adder=0.0, use_github_state=True, skip_prompts=False, target_dir=None, force_single=False, project_root=None) -> Tuple[bool, str, float, str, List[str]]`. The optional `project_root` is an explicit override path; when provided, validate it exists and use it as the resolved project root, bypassing marker-based discovery and the git-toplevel walk.
 2. **Return Contract**: Must return a 5-tuple: `(success: bool, message: str, total_cost: float, model_used: str, output_files: List[str])`.
 3. **URL Parsing**:
     - `_is_github_issue_url(url) -> bool`: Detects valid GitHub issue URLs.
@@ -30,9 +31,19 @@ The `pdd/agentic_architecture.py` module serves as the CLI entry point for the a
     - Use `gh api {comments_url} --paginate` to fetch all comments.
     - Extract: `title`, `body`, `user.login`, and `comments_url`.
 5. **Repository Management**:
-    - `_ensure_repo_context(owner, repo, cwd, quiet)`:
+    - Before invoking `_ensure_repo_context`, resolve the project root by calling
+      `pdd.architecture_registry.find_project_root(cwd)` (or honoring the explicit
+      `project_root` override when supplied). The resolved project root — not the
+      enclosing git toplevel — is what subsequent path resolution, ignore-pattern
+      handling, and codebase scanning operate against.
+    - `_ensure_repo_context(owner, repo, cwd, quiet, *, project_root=None)`:
         - If the current directory is the matching git repo, use it.
-        - If it's a mismatched git repo, warn the user but proceed.
+        - If it's a mismatched git repo, warn the user but proceed — **except** when the
+          resolved `project_root` (Tier A `.pddrc`/`.pdd/` or Tier B `sources/` + PRD/spec
+          markdown) is a strict descendant of the git toplevel. In that case the cwd is a
+          self-contained pdd project nested inside an unrelated outer repo, so the
+          remote-vs-issue mismatch warning MUST be suppressed (it is a false positive).
+          The resolved `project_root` is still used for downstream operations.
         - If not in a git repo, check for a `{repo}/` subdirectory or clone it using `gh repo clone`.
 6. **Context Discovery**:
     - `_extract_target_dir(issue_body) -> Optional[str]`: Parse target subdirectory from the issue body. Match backtick-quoted (`` in `dir` ``), double-quote-quoted (`in "dir"`), or unquoted directory-like names (must contain slash, underscore, or dot). CLI parameter `target_dir` takes precedence. For explicit quoted targets, accept the same safe repo-relative path policy as `--output-dir`, including path characters such as `.` that do not escape the repo. Reject absolute paths, parent traversal, backslashes, whitespace, newlines, shell metacharacters, Markdown backticks, leading-hyphen path segments, and any path outside the shell-safe grammar `[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?(/[A-Za-z0-9_](?:[A-Za-z0-9._-]*[A-Za-z0-9_])?)*`. If issue text explicitly contains an unsafe target path, fail the workflow instead of silently falling back to the repo root.
@@ -42,7 +53,7 @@ The `pdd/agentic_architecture.py` module serves as the CLI entry point for the a
     - `_read_existing_pddrc(cwd)`: Read the content of the root `.pddrc` file if present.
     - `_read_existing_architecture(cwd, target_dir)`: Read existing `architecture.json` at the target location (for merge context).
 7. **Incremental PRD Architecture**:
-    - `run_incremental_architecture(prd_source, *, dry_run=False, verbose=False, quiet=False, use_github_state=True, target_dir=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME)` supports `pdd generate --incremental <issue-url|prd.md>`.
+    - `run_incremental_architecture(prd_source, *, dry_run=False, verbose=False, quiet=False, use_github_state=True, target_dir=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, project_root=None)` supports `pdd generate --incremental <issue-url|prd.md>`. The optional `project_root` is the same explicit override accepted by `run_agentic_architecture`; resolve it through `find_project_root` (or honor the explicit override) before invoking `run_incremental_prd_propagation`.
     - For GitHub issue URLs, reuse the agentic shell: fetch issue/comments, ensure repository context, parse `target_dir`, and pass the composed issue content into `run_incremental_prd_propagation`.
     - For local PRD files, validate the file relative to the current repository and call `run_incremental_prd_propagation` with the target architecture and prompts directories.
     - When a GitHub issue incremental run targets a subdirectory, convert returned `changed_files` to repo-relative paths by prefixing the normalized `target_dir` before returning or posting status.

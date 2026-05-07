@@ -8,6 +8,7 @@ entries with existing ones.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
@@ -249,19 +250,102 @@ def find_architecture_for_project(project_root: Path) -> List[Path]:
     return results
 
 
+_PRD_SPEC_GLOBS = ("prd*.md", "spec*.md", "*_prd.md", "*_spec.md")
+
+
+def _matches_prd_spec(name: str) -> bool:
+    """Return True if ``name`` matches any PRD/spec glob, case-insensitively."""
+    lowered = name.lower()
+    for pattern in _PRD_SPEC_GLOBS:
+        if fnmatch.fnmatchcase(lowered, pattern):
+            return True
+    return False
+
+
+def _has_prd_spec_marker(directory: Path) -> bool:
+    """Return True if ``directory`` contains any PRD/spec markdown file.
+
+    The match is case-insensitive so that ``PRD.md`` or ``Spec.md`` are
+    recognised on case-sensitive filesystems (e.g. Linux).
+    """
+    try:
+        for entry in directory.iterdir():
+            try:
+                if entry.is_file() and _matches_prd_spec(entry.name):
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        return False
+    return False
+
+
 def find_project_root(start: Optional[Path] = None) -> Path:
-    """Walk up from ``start`` (default: cwd) for a directory containing ``.pddrc`` or ``.git``."""
+    """Resolve the PDD project root by walking up from ``start`` (default: cwd).
+
+    Tiered marker discovery. Tier A (PDD-explicit), Tier B
+    (PDD-conventional), and Tier C (git) are project boundaries. The first
+    boundary found while walking upward wins, so a self-contained PDD project
+    nested inside an unrelated outer git repository is correctly identified as
+    its own root, while an outer PDD marker cannot override a nearer inner git
+    repository.
+
+    * Tier A (PDD-explicit): a directory containing ``.pddrc`` or a ``.pdd/``
+      directory.
+    * Tier B (PDD-conventional): a directory containing ``sources/`` plus PRD
+      or spec markdown (``prd*.md``, ``spec*.md``, ``*_prd.md``, ``*_spec.md``).
+    * Tier C (git): a directory containing ``.git``.
+    """
+    if start is None:
+        start = Path.cwd()
+    current = start.resolve()
+
+    # ~/.pdd and ~/.pddrc are user-global config (created by `pdd setup`),
+    # not project markers. Without this guard, any repo under $HOME without a
+    # closer marker would resolve to $HOME itself, making generate / sync /
+    # auto-deps operate at the user's home directory.
+    try:
+        home = Path.home().resolve()
+    except (RuntimeError, OSError):
+        home = None
+
+    for _ in range(20):
+        is_home = home is not None and current == home
+        if not is_home:
+            is_tier_a = (current / ".pddrc").exists() or (current / ".pdd").is_dir()
+            is_tier_b = (
+                (current / "sources").is_dir() and _has_prd_spec_marker(current)
+            )
+            if is_tier_a or is_tier_b:
+                return current
+        if (current / ".git").exists():
+            return current
+
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return start.resolve()
+
+
+def find_git_toplevel(start: Optional[Path] = None) -> Optional[Path]:
+    """Walk up from ``start`` (default: cwd) for the enclosing ``.git`` directory.
+
+    Returns the path containing ``.git`` or ``None`` if no git root is found
+    within 20 ancestors.
+    """
     if start is None:
         start = Path.cwd()
     current = start.resolve()
     for _ in range(20):
-        if (current / ".pddrc").exists() or (current / ".git").exists():
+        if (current / ".git").exists():
             return current
         parent = current.parent
         if parent == current:
             break
         current = parent
-    return start.resolve()
+    return None
 
 
 def load_combined_architecture_data(

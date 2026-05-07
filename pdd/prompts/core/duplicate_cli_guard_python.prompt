@@ -47,6 +47,9 @@ You are an expert backend engineer implementing a CLI guard module for a Prompt-
 <pdd.__init__>
     <include>context/__init__example.py</include>
 </pdd.__init__>
+<pdd.architecture_registry>
+    <include>context/architecture_registry_example.py</include>
+</pdd.architecture_registry>
 <utils.auth_service>
     <include select="def:get_jwt_cache_info,def:clear_jwt_cache,def:get_cached_jwt,def:get_auth_status">context/auth_service_example.py</include>
 </utils.auth_service>
