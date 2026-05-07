@@ -886,6 +886,16 @@ def run_agentic_architecture_orchestrator(
                     f"{pre_reason} — not entering completeness gate[/red]"
                 )
             state["step_outputs"]["5"] = f"FAILED: {pre_reason}"
+            # Issue #467/#817: Lower last_completed_step to the previous
+            # successful step so the persisted state does not retain a
+            # contradictory `last_completed_step == 5` while step_outputs["5"]
+            # is FAILED.  Re-run the same cached-state correction used at load
+            # to derive the correct value from the (now-updated) step_outputs.
+            state["last_completed_step"] = validate_cached_state(
+                state.get("last_completed_step", 0),
+                state["step_outputs"],
+                quiet=quiet,
+            )
             save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return (
                 False,

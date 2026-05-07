@@ -1889,6 +1889,21 @@ def test_step5b_pre_check_fails_fast_on_resumed_degenerate_state(mock_dependenci
         f"Step 5b gate must be skipped on resumed degenerate state, got: {labels}"
     )
 
+    # Issue #817 follow-up: persisted state must not retain a contradictory
+    # `last_completed_step == 5` while `step_outputs["5"]` is FAILED.  The
+    # pre-check must lower last_completed_step to the previous successful step.
+    saved_state_calls = mocks["save_state"].call_args_list
+    assert saved_state_calls, "save_workflow_state should have been called"
+    last_state = saved_state_calls[-1][0][3]  # 4th positional arg is `state`
+    step5_persisted = last_state["step_outputs"].get("5", "")
+    assert step5_persisted.startswith("FAILED:"), (
+        f"Resumed degenerate Step 5 output must be persisted as FAILED, got: {step5_persisted!r}"
+    )
+    assert last_state["last_completed_step"] < 5, (
+        f"last_completed_step must be lowered below 5 when step_outputs['5'] is FAILED, "
+        f"got: {last_state['last_completed_step']}"
+    )
+
 
 def test_resume_from_step_5_5(mock_dependencies, base_args):
     """Test that resuming from step 5.5 (completeness gate passed) starts at step 6."""
