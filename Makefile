@@ -22,6 +22,7 @@ help:
 	@echo "  make test                    - Run staging tests"
 	@echo "  make coverage                - Run tests with coverage"
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
+	@echo "  make regression-public       - Run public-safe CLI regressions without LLM/cloud credentials"
 	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make cloud-regression [TEST_NUM=n] - Run cloud regression tests (no --local flag)"
@@ -84,6 +85,11 @@ MAKEFILE_PROMPT := $(PROMPTS_DIR)/Makefile_makefile.prompt
 MAKEFILE_OUTPUT := $(STAGING_DIR)/Makefile
 SKIP_MAKEFILE_REGEN ?= 0
 
+# CI should test the checked-in Makefile, not regenerate it interactively.
+ifeq ($(CI),true)
+SKIP_MAKEFILE_REGEN := 1
+endif
+
 # Auto-skip Makefile regeneration if prompt file doesn't exist (e.g., public repo)
 ifeq ($(wildcard $(MAKEFILE_PROMPT)),)
 SKIP_MAKEFILE_REGEN := 1
@@ -100,7 +106,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -490,6 +496,11 @@ ifdef TEST_NUM
 else
 	@PDD_MODEL_DEFAULT=vertex_ai/gemini-3-flash-preview PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression.sh
 endif
+
+regression-public:
+	@echo "Running public-safe CLI regression tests"
+	@mkdir -p staging
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression_public.sh
 
 SYNC_PARALLEL ?= 1
 
