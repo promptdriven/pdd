@@ -4,11 +4,30 @@
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>progress_events_python.prompt</pdd-dependency>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)", "returns": "AsyncSyncRunner"},
+      {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
+      {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
+      {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = \"architecture.json\") -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"}
+    ]
+  }
+}
+</pdd-interface>
+
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
 
 % Role & Scope
 Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
+
+% Architecture Conformance
+- Treat this as an incremental extension of the existing runner, not a replacement of its public API.
+- The generated module MUST define and export the exact architecture-declared symbols in the `<pdd-interface>` block: class `AsyncSyncRunner`, method `AsyncSyncRunner.run`, function `build_dep_graph_from_architecture`, and function `build_dep_graph_from_architecture_data`.
+- Do not rename, remove, privatize, nest, or replace these symbols with aliases. Keep their call signatures compatible with the interface and architecture.json so conformance verification passes.
 
 % Requirements
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0)`

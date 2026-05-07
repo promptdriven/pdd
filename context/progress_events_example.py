@@ -101,6 +101,7 @@ def example_classify_event_kinds() -> None:
         "run_started",
         "phase_started",
         "phase_completed",
+        "step_started",
         "step_completed",
         "output_progress",
         "cost_progress",
