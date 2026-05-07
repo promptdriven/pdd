@@ -160,7 +160,14 @@ def test_api_key_column_contains_environment_variable_names():
     assert "ANTHROPIC_API_KEY" in keys
     assert "GEMINI_API_KEY" in keys
     assert "OLLAMA_API_KEY" in keys
-    assert all(key.endswith("_API_KEY") and key.upper() == key for key in keys)
+    # Most provider keys follow the *_API_KEY convention; allow opaque token
+    # names (e.g. ``GITHUB_TOKEN`` for github-copilot) where the upstream service
+    # uses a different env var name.
+    allowed_token_keys = {"GITHUB_TOKEN"}
+    assert all(
+        key in allowed_token_keys or (key.endswith("_API_KEY") and key.upper() == key)
+        for key in keys
+    )
 
 
 def test_base_urls_are_optional_http_urls():
@@ -212,7 +219,7 @@ def test_example_script_runs_from_any_working_directory(tmp_path):
     )
     assert result.returncode == 0
     assert "Loaded LLM model catalog" in result.stdout
-    assert "Rows: 89" in result.stdout
+    assert "Rows: 94" in result.stdout
     assert "Model: gpt-5.5" in result.stdout
     assert "Estimated 250K input + 50K output cost: $2.7500" in result.stdout
     assert "No live API calls were made." in result.stdout

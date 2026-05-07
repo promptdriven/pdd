@@ -679,7 +679,50 @@ _OPENCODE_PROVIDER_PREFIX_MAP = {
     "openrouter": "openrouter",
     "github copilot": "github-copilot",
     "github_copilot": "github-copilot",
+    "groq": "groq",
 }
+
+
+def _opencode_provider_for_row(row: Dict[str, str]) -> str:
+    """Map a CSV row's provider column to an OpenCode provider prefix."""
+    provider = (row.get("provider") or "").strip().lower()
+    return _OPENCODE_PROVIDER_PREFIX_MAP.get(provider, provider)
+
+
+def _configured_opencode_providers() -> Optional[set]:
+    """Return the OpenCode provider prefixes that have credentials configured.
+
+    Maps environment variables to OpenCode provider IDs. Returns ``None`` when
+    no provider can be inferred (e.g. only an opaque ``auth.json`` is present),
+    signalling callers to skip provider filtering and fall back to the entire
+    catalog.
+    """
+    providers: set = set()
+    if os.environ.get("OPENAI_API_KEY"):
+        providers.add("openai")
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        providers.add("anthropic")
+    if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+        providers.add("google")
+    if os.environ.get("OPENROUTER_API_KEY"):
+        providers.add("openrouter")
+    if os.environ.get("GITHUB_TOKEN"):
+        providers.add("github-copilot")
+    if os.environ.get("GROQ_API_KEY"):
+        providers.add("groq")
+    if providers:
+        return providers
+    if _has_opencode_auth_file():
+        try:
+            data = json.loads(_OPENCODE_AUTH_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        if isinstance(data, dict):
+            for key in data:
+                if isinstance(key, str) and key.strip():
+                    providers.add(key.strip().replace("_", "-").lower())
+        return providers or None
+    return None
 
 
 def _translate_to_opencode_model(model_id: str) -> str:
@@ -732,17 +775,24 @@ def _row_to_opencode_model(row: Dict[str, str]) -> Optional[str]:
     translated = _translate_to_opencode_model(model)
     if "/" in translated:
         return translated
-    provider = (row.get("provider") or "").strip().lower()
-    provider_prefix = _OPENCODE_PROVIDER_PREFIX_MAP.get(provider)
+    provider_prefix = _opencode_provider_for_row(row)
     if provider_prefix:
         return f"{provider_prefix}/{translated}"
     return translated
 
 
-def _select_opencode_model_from_rows(rows: List[Dict[str, str]], strength: float) -> Optional[str]:
+def _select_opencode_model_from_rows(
+    rows: List[Dict[str, str]],
+    strength: float,
+    allowed_providers: Optional[set] = None,
+) -> Optional[str]:
     candidates = [row for row in rows if (row.get("model") or row.get("name"))]
     if not candidates:
         return None
+    if allowed_providers is not None:
+        candidates = [row for row in candidates if _opencode_provider_for_row(row) in allowed_providers]
+        if not candidates:
+            return None
 
     base_name = os.environ.get("PDD_MODEL_DEFAULT", "").strip()
     base_row = next((row for row in candidates if row.get("model") == base_name), None) if base_name else None
@@ -780,7 +830,40 @@ def _resolve_opencode_model() -> Optional[str]:
         DEFAULT_STRENGTH = 0.5  # type: ignore
 
     rows = _load_model_data() or []
-    return _select_opencode_model_from_rows(rows, float(DEFAULT_STRENGTH)) if rows else None
+    if not rows:
+        return None
+    allowed = _configured_opencode_providers()
+    return _select_opencode_model_from_rows(rows, float(DEFAULT_STRENGTH), allowed_providers=allowed)
+
+
+def _opencode_csv_pricing(model_id: Optional[str]) -> Optional[Pricing]:
+    """Return CSV-derived ``Pricing`` for an OpenCode model id, if available.
+
+    OpenCode model ids are typically ``<provider>/<model>`` (e.g. ``openai/gpt-5``);
+    for some providers like ``github-copilot`` the model portion itself contains a
+    slash (``github-copilot/openai/gpt-5``). Match the row whose ``model`` column
+    equals either the full id or the id with the leading provider segment removed.
+    """
+    if not model_id:
+        return None
+    rows = _load_model_data() or []
+    if not rows:
+        return None
+    candidates = [model_id]
+    if "/" in model_id:
+        candidates.append(model_id.split("/", 1)[1])
+    for candidate in candidates:
+        for row in rows:
+            row_model = (row.get("model") or row.get("name") or "").strip()
+            if not row_model:
+                continue
+            if row_model == candidate:
+                return Pricing(
+                    input_per_million=_safe_float(row.get("input")),
+                    output_per_million=_safe_float(row.get("output")),
+                    cached_input_multiplier=0.5,
+                )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1233,7 +1316,9 @@ def _parse_opencode_jsonl(stdout: str) -> Tuple[bool, str, float, Optional[str],
             cost = fallback_cost
         elif text_parts:
             output_tokens = max(1, len("".join(text_parts)) // 4)
-            cost = _estimate_cost_from_tokens(0, output_tokens, CODEX_PRICING)
+            model_id = os.environ.get("OPENCODE_MODEL", "").strip() or _resolve_opencode_model()
+            pricing = _opencode_csv_pricing(model_id) or CODEX_PRICING
+            cost = _estimate_cost_from_tokens(0, output_tokens, pricing)
     return True, "".join(text_parts), cost, None, info
 
 
