@@ -435,10 +435,14 @@ def _has_opencode_auth() -> bool:
 
 
 def _has_any_provider_key() -> bool:
-    keys = (
-        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY",
-        "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN", "GROQ_API_KEY",
-    )
+    # Mirror the full set of provider env vars that ``_opencode_authed_providers``
+    # recognizes so OpenCode availability and OpenCode model resolution agree.
+    # Otherwise users with only ``XAI_API_KEY`` (or DeepSeek/Mistral/Moonshot/
+    # Cohere/Ollama/Azure/GitHub Copilot ``GH_TOKEN``) would never see the
+    # OpenCode backend even though the resolver could route them to a model.
+    keys: Set[str] = set()
+    for env_keys in _OPENCODE_PROVIDER_AUTH_ENV.values():
+        keys.update(env_keys)
     return any(os.environ.get(k) for k in keys)
 
 
@@ -937,6 +941,20 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
     treated as sub-provider routing (e.g. ``moonshotai/kimi-k2-instruct``
     served on Groq) and skipped because they cannot be passed to OpenCode
     verbatim.
+
+    Candidate rows are ranked by ``coding_arena_elo`` (descending) so the
+    chosen model mirrors PDD's strength-based selection — at the default
+    ``DEFAULT_STRENGTH=1.0`` PDD picks the highest-ELO model, and we do the
+    same here instead of the first-row-wins behaviour that silently picked
+    the most expensive Anthropic model for Anthropic-only users.
+
+    For users whose only OpenCode-recognised auth is ``OPENROUTER_API_KEY``
+    or GitHub Copilot (``GH_TOKEN``/``GITHUB_TOKEN``) — neither of which has
+    its own row in the bundled catalog — we route the highest-ELO catalog
+    model through the proxy as ``openrouter/<provider>/<model>`` (or
+    ``github-copilot/<provider>/<model>``) so cost lookup can still find the
+    underlying model in the catalog instead of falling through to the
+    generic codex pricing.
     """
     source = env if env is not None else os.environ
     explicit = source.get("OPENCODE_MODEL", "").strip()
@@ -948,69 +966,104 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
 
     authed = _opencode_authed_providers(source)
 
-    # Try to derive from CSV metadata if present, mapping CSV provider to
-    # OpenCode provider id and filtering to providers the user can route to.
+    def _row_elo(row: Dict[str, str]) -> float:
+        try:
+            return float(row.get("coding_arena_elo") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # Build a ranked candidate list from the CSV: each entry is
+    # ``(opencode_routable_id, opencode_provider, elo)``.
+    catalog: List[Tuple[str, str, float]] = []
     try:
-        rows = _load_model_data()
-        if rows:
-            fallback: Optional[str] = None
-            known_opencode_ids = set(_OPENCODE_PROVIDER_BY_CSV.values())
-            for row in rows:
-                provider = (row.get("provider") or "").strip().lower()
-                model = (row.get("model") or row.get("model_id") or "").strip()
-                if not provider or not model:
-                    continue
-
-                candidate: Optional[str] = None
-                opencode_provider: Optional[str] = None
-
-                if "/" in model:
-                    # The model column may already be a LiteLLM-style fully
-                    # qualified id. Accept it when the first segment (after
-                    # ``github_copilot`` -> ``github-copilot`` normalization)
-                    # is a known OpenCode provider.
-                    normalized = _normalize_opencode_model_id(model)
-                    first_seg = normalized.split("/", 1)[0].strip().lower()
-                    if first_seg in known_opencode_ids:
-                        candidate = normalized
-                        opencode_provider = first_seg
-
-                if candidate is None:
-                    # Fall back to mapping the CSV provider column. Try the
-                    # raw lowercased value first, then with spaces normalized
-                    # to dashes so values like ``Github Copilot`` match the
-                    # ``github-copilot`` entry in ``_OPENCODE_PROVIDER_BY_CSV``.
-                    mapped = _OPENCODE_PROVIDER_BY_CSV.get(provider)
-                    if mapped is None:
-                        mapped = _OPENCODE_PROVIDER_BY_CSV.get(
-                            provider.replace(" ", "-")
-                        )
-                    if not mapped:
-                        continue
-                    if "/" in model:
-                        # Sub-provider routing that OpenCode can't address via
-                        # a plain ``provider/model`` id; skip.
-                        continue
-                    candidate = _normalize_opencode_model_id(f"{mapped}/{model}")
-                    opencode_provider = mapped
-
-                if not authed:
-                    # No auth signal at all: behave like the previous fallback
-                    # and just take the first OpenCode-mappable row.
-                    return candidate
-                if opencode_provider in authed:
-                    return candidate
-                if fallback is None:
-                    fallback = candidate
-            if fallback is not None and not authed:
-                return fallback
+        rows = _load_model_data() or []
     except Exception:
-        pass
+        rows = []
+
+    known_opencode_ids = set(_OPENCODE_PROVIDER_BY_CSV.values())
+    for row in rows:
+        provider = (row.get("provider") or "").strip().lower()
+        model = (row.get("model") or row.get("model_id") or "").strip()
+        if not provider or not model:
+            continue
+
+        candidate: Optional[str] = None
+        opencode_provider: Optional[str] = None
+
+        if "/" in model:
+            # The model column may already be a LiteLLM-style fully qualified
+            # id. Accept it when the first segment (after ``github_copilot``
+            # -> ``github-copilot`` normalisation) is a known OpenCode
+            # provider.
+            normalized = _normalize_opencode_model_id(model)
+            first_seg = normalized.split("/", 1)[0].strip().lower()
+            if first_seg in known_opencode_ids:
+                candidate = normalized
+                opencode_provider = first_seg
+
+        if candidate is None:
+            # Fall back to mapping the CSV provider column. Try the raw
+            # lowercased value first, then with spaces normalised to dashes
+            # so values like ``Github Copilot`` match the ``github-copilot``
+            # entry in ``_OPENCODE_PROVIDER_BY_CSV``.
+            mapped = _OPENCODE_PROVIDER_BY_CSV.get(provider)
+            if mapped is None:
+                mapped = _OPENCODE_PROVIDER_BY_CSV.get(
+                    provider.replace(" ", "-")
+                )
+            if not mapped:
+                continue
+            if "/" in model:
+                # Sub-provider routing that OpenCode can't address via a
+                # plain ``provider/model`` id; skip.
+                continue
+            candidate = _normalize_opencode_model_id(f"{mapped}/{model}")
+            opencode_provider = mapped
+
+        catalog.append((candidate, opencode_provider, _row_elo(row)))
+
+    # Sort by ELO descending so the chosen model mirrors PDD's strength
+    # semantics at the default DEFAULT_STRENGTH=1.0 (highest ELO wins).
+    catalog.sort(key=lambda item: item[2], reverse=True)
+
+    # 1) Direct provider auth: pick the highest-ELO model whose provider
+    #    the user can reach without a proxy.
+    if authed:
+        for candidate, opencode_provider, _elo in catalog:
+            if opencode_provider in authed:
+                return candidate
+
+        # 2) OpenRouter / GitHub Copilot don't have their own catalog rows
+        #    but can proxy other providers' models. Route the highest-ELO
+        #    catalog candidate through whichever proxy the user is authed
+        #    for so cost lookup still finds the underlying model. OpenRouter
+        #    proxies essentially everything; GitHub Copilot only routes
+        #    Anthropic and OpenAI models in OpenCode, so narrow that set.
+        proxy_subproviders: Dict[str, Set[str]] = {
+            "openrouter": {
+                "anthropic", "openai", "google", "xai", "deepseek",
+                "mistral", "groq", "moonshot", "cohere", "meta", "qwen",
+            },
+            "github-copilot": {"anthropic", "openai"},
+        }
+        for proxy in ("openrouter", "github-copilot"):
+            if proxy not in authed:
+                continue
+            allowed = proxy_subproviders.get(proxy, set())
+            for candidate, opencode_provider, _elo in catalog:
+                if opencode_provider == proxy:
+                    return candidate
+                if opencode_provider in allowed:
+                    return f"{proxy}/{candidate}"
+    elif catalog:
+        # No auth signal at all: keep the historical fallback of returning
+        # the first OpenCode-mappable row, but now ranked by ELO.
+        return catalog[0][0]
 
     # Last-resort defaults keyed off whichever provider the user can reach.
-    # ``openrouter`` and ``github-copilot`` don't have CSV rows in the bundled
-    # catalog, so a default is the only way to produce a routable model id
-    # for users whose only auth is ``OPENROUTER_API_KEY`` or ``GITHUB_TOKEN``.
+    # These should rarely fire — only when the catalog can't be loaded at
+    # all. The OpenRouter / GitHub Copilot defaults use catalog-shaped
+    # ``proxy/<provider>/<model>`` ids so cost lookup can resolve them.
     default_by_provider: Dict[str, str] = {
         "anthropic": "anthropic/claude-sonnet-4-5",
         "openai": "openai/gpt-5.1",
@@ -1018,8 +1071,8 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
         "xai": "xai/grok-4-0709",
         "deepseek": "deepseek/deepseek-chat",
         "groq": "groq/llama-3.3-70b-versatile",
-        "openrouter": "openrouter/anthropic/claude-sonnet-4.5",
-        "github-copilot": "github-copilot/claude-sonnet-4.5",
+        "openrouter": "openrouter/anthropic/claude-sonnet-4-5",
+        "github-copilot": "github-copilot/anthropic/claude-sonnet-4-5",
     }
     for provider in (
         "anthropic", "openai", "google", "xai", "deepseek", "groq",
@@ -1367,12 +1420,26 @@ def _opencode_pricing_for_model(model: Optional[str]) -> Optional[Pricing]:
     if not opencode_provider or not model_name:
         return None
 
+    # ``openrouter`` and ``github-copilot`` don't have catalog rows of their
+    # own; they proxy other providers' models via LiteLLM-style nested ids
+    # like ``openrouter/anthropic/claude-sonnet-4-5``. Strip the proxy
+    # prefix so cost lookup can find the underlying model in the catalog
+    # instead of falling through to generic codex pricing.
+    if opencode_provider in {"openrouter", "github-copilot"} and "/" in model_name:
+        opencode_provider, _, model_name = model_name.partition("/")
+        opencode_provider = opencode_provider.strip().lower()
+        model_name = model_name.strip()
+        if not opencode_provider or not model_name:
+            return None
+
     for row in rows:
         csv_provider = (row.get("provider") or "").strip().lower()
         csv_model = (row.get("model") or "").strip()
         if not csv_provider or not csv_model:
             continue
         mapped = _OPENCODE_PROVIDER_BY_CSV.get(csv_provider)
+        if mapped is None:
+            mapped = _OPENCODE_PROVIDER_BY_CSV.get(csv_provider.replace(" ", "-"))
         if mapped != opencode_provider:
             continue
         if csv_model != model_name:
