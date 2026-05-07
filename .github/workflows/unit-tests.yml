@@ -73,3 +73,34 @@ jobs:
           --ignore=tests/test_llm_invoke.py
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_special_characters_zsh
           --deselect=tests/test_setup_tool.py::test_create_api_env_script_with_common_problematic_characters
+
+  public-cli-regression:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    name: Public CLI Regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      PDD_PATH: ${{ github.workspace }}/pdd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@pdd.dev"
+          git config --global user.name "PDD CI"
+          git config --global init.defaultBranch main
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run public-safe CLI regressions
+        run: make regression-public
