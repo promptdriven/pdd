@@ -1,45 +1,71 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>CLI entry point for the agentic split workflow, accepting a target file and invoking the orchestrator.</pdd-reason>
+<pdd-reason>CLI entry point for the agentic split workflow: validates the target, then either delegates to the orchestrator or, in strangler mode, uses the first proposed plan only to determine N and runs N independent full orchestrator passes.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_split", "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_split", "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_run_strangler_split", "signature": "(*, target_path, git_root, verbose, quiet, timeout_adder, use_github_state, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
 </pdd-interface>
 
 <pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>get_language_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_worktree_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_split.py` module.
 
 % Role & Scope
-CLI entry point for the agentic split workflow. Accepts a target file path, validates it exists and has a corresponding PDD dev unit (prompt + code), then invokes the orchestrator to run the 9-step split process. Supports dual-mode: agentic (default) runs the full diagnosis-to-extraction pipeline; legacy mode delegates to the existing `pdd/split.py:split()` function.
+Thin CLI wrapper around `run_agentic_split_orchestrator`. Resolves and validates the target file, detects language, finds the git root, optionally checks for a sibling prompt/test file (warnings only), and invokes the orchestrator. In `strangler` mode it runs `--propose-only` once to determine N (number of children in the best-scoring plan), clears workflow state, then runs N independent `--force-split` orchestrator passes. Each pass starts fresh — it picks its own plan and extracts whatever children that plan contains; the original plan is not threaded through. See issue #1402 for per-child enforcement (passing the original plan + a child selector through to the orchestrator).
 
 % Requirements
-1. Function: `run_agentic_split(target_file: str, *, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, diagnose_only: bool = False, propose_only: bool = False, delete_dead: bool = False, force_split: bool = False, no_verify: bool = False, skip_regen_gate: bool = False, experimental_language: bool = False) -> Tuple[bool, str, float, str, List[str]]`
-2. Return 5-tuple: (success, message, total_cost, model_used, changed_files)
-3. Validate target_file exists on disk
-4. Detect language from file extension (`.py` -> python, `.ts` -> typescript, etc.)
-5. Verify target has a corresponding prompt file in the prompts directory (check `prompts/<basename>_<language>.prompt`)
-6. Verify target has a corresponding test file (check `tests/test_<basename>.py` or equivalent)
-7. Call orchestrator: `run_agentic_split_orchestrator(target_file, cwd=Path.cwd(), verbose=verbose, quiet=quiet, timeout_adder=timeout_adder, use_github_state=use_github_state, diagnose_only=diagnose_only, propose_only=propose_only, delete_dead=delete_dead, force_split=force_split, no_verify=no_verify, skip_regen_gate=skip_regen_gate, experimental_language=experimental_language)`
-8. Return aggregated results from orchestrator
+
+1. Public function signature with these defaults:
+   - `verbose=False, quiet=False, timeout_adder=0.0, use_github_state=True`
+   - `diagnose_only=False, propose_only=False, delete_dead=False, force_split=False`
+   - `no_verify=False, skip_regen_gate=False, experimental_language=False`
+   - `intent: Optional[str] = None, no_phase_extraction=False, strangler=False`
+   - Returns 5-tuple `(success, message, total_cost, model_used, changed_files)`.
+
+2. Validation order (each failure returns `(False, msg, 0.0, "", [])` and prints a red `Error:` unless `quiet`):
+   a. `target_file` resolves to an existing regular file. Combined check: emit `f"Target file does not exist or is not a file: {target_file}"` when either condition fails.
+   b. `get_language(suffix)` returns a non-empty language; otherwise message contains "Unsupported".
+   c. `get_git_root(target_path.parent)` returns a path; otherwise message mentions "git".
+
+3. Prompt-file discovery (warning only, never blocks). Search for `<stem>_<language>.prompt` AND `<stem>_<Language>.prompt` (capitalized) in:
+   - `<git_root>/prompts/`
+   - `<git_root>/pdd/prompts/`
+   - every `extensions/*/prompts/` dir, recursively (every subdirectory of those).
+   If none match, print a yellow warning unless `quiet`.
+
+4. Test-file discovery (warning only). Look for `test_<stem><suffix>` in `<git_root>/tests/`, the target's own directory, and each `extensions/*/tests/` dir. Warn if none exist.
+
+5. Non-strangler path: call `run_agentic_split_orchestrator` with `cwd=git_root` and forward every flag (including `intent` and `no_phase_extraction`; `strangler` is NOT forwarded). Wrap in try/except — any exception returns `(False, f"Orchestrator failed: {e}", 0.0, "", [])`.
+
+6. Strangler path (when `strangler=True`): delegate to `_run_strangler_split`. It must:
+   - Print a cyan progress message unless quiet.
+   - Pass 1: call orchestrator with `propose_only=True, diagnose_only=False, delete_dead=False`. If it returns `success=False` AND the message is not "Propose only complete", abort with that message.
+   - Load the persisted plan from state: import `load_workflow_state` and `_stable_split_id` from the orchestrator module; compute the split_id from the repo-relative path of the target (fall back to the absolute path if not under git_root); state lives at `<git_root>/.pdd/split-state`.
+   - Read `state["step_outputs"]["4"]`, parse it via `_parse_step_output(..., OptionsConsidered)`, rebuild any dict entries into `SplitOption` via `_dict_to_dataclass`, and pick the option with the highest `numeric_score`. Each error condition (no state, missing step 4, parse failure, empty options) returns a descriptive `Strangler: ...` message.
+   - Let `N = len(best_plan.plan.children)`. Clear workflow state, then run N passes. Each pass calls the orchestrator with `force_split=True, propose_only=False, diagnose_only=False, delete_dead=False`, accumulates cost and changed files, and clears workflow state again before the next pass. A failed pass aborts and returns `f"Strangler pass {idx+1} failed: {msg}"` with accumulated cost/changed.
+   - On success return `(True, f"Strangler complete: {N} orchestrator passes ran ({len(all_changed)} files changed across passes)", total_cost, last_model, all_changed)`. Do NOT claim "{N} children extracted" — the wrapper does not enforce one child per pass; each pass picks its own plan (see issue #1402).
+
+7. Use `rich.console.Console` for all user-facing output; never print when `quiet=True`.
 
 % Dependencies
 <pdd.agentic_split_orchestrator><include optional>context/agentic_split_orchestrator_example.py</include></pdd.agentic_split_orchestrator>
-
-% Error Handling
-All error paths return `(False, error_message, 0.0, "", [])`:
-- Target file does not exist
-- No corresponding prompt file found
-- No corresponding test file found (warning only, not fatal)
-- Orchestrator exception
+<pdd.agentic_common>
+    <include select="def:load_workflow_state,def:clear_workflow_state">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
+<pdd.agentic_common_worktree><include select="def:get_git_root">pdd/agentic_common_worktree.py</include></pdd.agentic_common_worktree>
 
 % Deliverables
 - Code: `pdd/agentic_split.py`

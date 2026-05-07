@@ -24,8 +24,8 @@ console = Console()
 @click.option("--legacy", is_flag=True, default=False, help="Use the legacy 2-LLM-call splitting path.")
 @click.option("--output-sub", help="Optional path for saving the sub-prompt (legacy mode).")
 @click.option("--output-modified", help="Optional path for saving the modified prompt (legacy mode).")
-@click.option("--diagnose", is_flag=True, default=False, help="Run steps 1-2 only, return diagnosis report.")
-@click.option("--propose-only", is_flag=True, default=False, help="Run steps 1-4 only, show all options with scores.")
+@click.option("--diagnose", is_flag=True, default=False, help="Run steps 0-2 only, return diagnosis report.")
+@click.option("--propose-only", is_flag=True, default=False, help="Run steps 0-4 only, show all options with scores.")
 @click.option("--delete-dead", is_flag=True, default=False, help="Opt-in dead symbol deletion in extraction.")
 @click.option("--force-split", is_flag=True, default=False, help="Override LEAVE_ALONE diagnosis.")
 @click.option("--no-verify", is_flag=True, default=False, help="Skip verification gate (dev only).")
@@ -51,7 +51,7 @@ console = Console()
     "--strangler",
     is_flag=True,
     default=False,
-    help="Strangler mode: one child per PR, sequentially.",
+    help="Strangler mode: sequence N orchestrator passes (see issue #1402 for true 1-child-per-pass enforcement).",
 )
 @click.pass_context
 @track_cost
