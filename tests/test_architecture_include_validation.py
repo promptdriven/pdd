@@ -317,6 +317,21 @@ def test_pdd_dependency_and_include_mixed(tmp_path: Path) -> None:
     assert warnings == [], f"Expected no warnings; got: {warnings}"
 
 
+def test_ci_drift_heal_prompt_declares_architecture_dependencies() -> None:
+    """ci_drift_heal's prompt metadata must match its architecture dependencies."""
+    repo_root = Path(__file__).resolve().parents[1]
+    arch = json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, repo_root)
+    ci_drift_warnings = [
+        warning
+        for warning in warnings
+        if "ci_drift_heal_python.prompt" in warning
+    ]
+
+    assert not ci_drift_warnings
+
+
 @patch("pdd.core.cli.auto_update")
 def test_validate_arch_includes_cli_ok(mock_auto_update, tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()

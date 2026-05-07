@@ -9,9 +9,11 @@ import os
 import textwrap
 from unittest.mock import patch
 
-import pytest
-
-from pdd.code_generator_main import _detect_wireable_exports, _wire_to_parent_init, _env_flag_enabled
+from pdd.code_generator_main import (
+    _detect_wireable_exports,
+    _should_wire_generated_exports,
+    _wire_to_parent_init,
+)
 
 
 class TestDetectWireableExports:
@@ -56,8 +58,8 @@ class TestDetectWireableExports:
     def test_detect_wireable_exports_skips_non_python(self):
         """Should return empty list for non-.py paths."""
         code = "def foo(): pass"
-        assert _detect_wireable_exports(code, "template.prompt") == []
-        assert _detect_wireable_exports(code, "config.json") == []
+        assert not _detect_wireable_exports(code, "template.prompt")
+        assert not _detect_wireable_exports(code, "config.json")
 
 
 class TestWireToParentInit:
@@ -124,25 +126,8 @@ class TestWireToParentInit:
 class TestCodeGeneratorMainWiring:
     """Integration tests for wiring in code_generator_main."""
 
-    @patch("pdd.code_generator_main._wire_to_parent_init")
-    @patch("pdd.code_generator_main._detect_wireable_exports", return_value=["handle_event"])
-    def test_wiring_helpers_invoked_in_post_write_path(
-        self, mock_detect, mock_wire, tmp_path
-    ):
-        """Verify wiring helpers are called correctly when invoked as in the post-write path."""
-        mock_wire.return_value = True
-        # Simulate the post-write wiring logic from code_generator_main
-        final_content = "def handle_event(): pass"
-        p_output = str(tmp_path / "handlers.py")
-        if not _env_flag_enabled("PDD_SKIP_WIRING") and p_output.endswith('.py'):
-            wiring_exports = mock_detect(final_content, p_output)
-            if wiring_exports:
-                mock_wire(p_output, wiring_exports)
-        mock_detect.assert_called_once_with(final_content, p_output)
-        mock_wire.assert_called_once_with(p_output, ["handle_event"])
-
-    def test_wiring_skipped_when_env_flag_set(self, tmp_path):
-        """PDD_SKIP_WIRING=1 should prevent wiring."""
+    def test_wiring_disabled_by_default(self, tmp_path):
+        """Default generation must not mutate sibling __init__.py files."""
         pkg_dir = tmp_path / "mypackage"
         pkg_dir.mkdir()
         init_file = pkg_dir / "__init__.py"
@@ -150,11 +135,79 @@ class TestCodeGeneratorMainWiring:
         module_file = pkg_dir / "handlers.py"
         module_file.write_text("def handle(): pass\n")
 
-        # Simulate what code_generator_main does: check env before wiring
-        with patch.dict(os.environ, {"PDD_SKIP_WIRING": "1"}):
-            if not _env_flag_enabled("PDD_SKIP_WIRING"):
+        with patch.dict(os.environ, {}, clear=True):
+            if _should_wire_generated_exports(str(module_file)):
                 _wire_to_parent_init(str(module_file), ["handle"])
 
-        # __init__.py should be unchanged
         content = init_file.read_text()
         assert "from .handlers import" not in content
+
+    def test_wiring_enabled_by_explicit_env_flag(self, tmp_path):
+        """PDD_ENABLE_WIRING=1 opts into parent package wiring."""
+        pkg_dir = tmp_path / "mypackage"
+        pkg_dir.mkdir()
+        init_file = pkg_dir / "__init__.py"
+        init_file.write_text("# init\n")
+        module_file = pkg_dir / "handlers.py"
+        module_file.write_text("def handle(): pass\n")
+
+        with patch.dict(os.environ, {"PDD_ENABLE_WIRING": "1"}, clear=True):
+            if _should_wire_generated_exports(str(module_file)):
+                _wire_to_parent_init(str(module_file), ["handle"])
+
+        content = init_file.read_text()
+        assert "from .handlers import handle" in content
+
+    def test_skip_wiring_overrides_explicit_enable(self, tmp_path):
+        """PDD_SKIP_WIRING remains a backward-compatible opt-out."""
+        module_file = tmp_path / "handlers.py"
+
+        with patch.dict(
+            os.environ,
+            {"PDD_ENABLE_WIRING": "1", "PDD_SKIP_WIRING": "1"},
+            clear=True,
+        ):
+            assert _should_wire_generated_exports(str(module_file)) is False
+
+    def test_wiring_opt_in_still_skips_non_python_outputs(self, tmp_path):
+        """Explicit wiring only applies to Python module outputs."""
+        output_file = tmp_path / "handlers.ts"
+
+        with patch.dict(os.environ, {"PDD_ENABLE_WIRING": "1"}, clear=True):
+            assert _should_wire_generated_exports(str(output_file)) is False
+
+    def test_key_validator_regression_does_not_wire_parent_init_by_default(self, tmp_path):
+        """Regression: generated service modules should not re-export themselves by default."""
+        services_dir = tmp_path / "src" / "services"
+        services_dir.mkdir(parents=True)
+        init_file = services_dir / "__init__.py"
+        init_file.write_text(
+            textwrap.dedent("""\
+                # Business logic services
+                from src.services import secrets_dispatch
+                from src.workers import pdd_executor
+
+                __all__ = [
+                    "pdd_executor",
+                    "secrets_dispatch",
+                ]
+            """)
+        )
+        module_file = services_dir / "key_validator.py"
+        module_file.write_text(
+            textwrap.dedent("""\
+                class KeyValidationResult:
+                    pass
+
+                def validate_user_keys():
+                    pass
+            """)
+        )
+        exports = _detect_wireable_exports(module_file.read_text(), str(module_file))
+
+        with patch.dict(os.environ, {}, clear=True):
+            if _should_wire_generated_exports(str(module_file)):
+                _wire_to_parent_init(str(module_file), exports)
+
+        content = init_file.read_text()
+        assert "from .key_validator import" not in content

@@ -32,7 +32,7 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 - `_format_step_display(step_name: str) -> str`: maps step markers to user-friendly display strings; handles `crash_fix_attempt:N` and `test_fix_attempt:N` patterns
 
 % Dependencies
-<pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+<pdd.agentic_common><include select="def:run_agentic_task">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
 <pdd.agentic_sync_runner>

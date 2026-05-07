@@ -23,6 +23,8 @@
 <pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write a standalone CI script that detects prompt/example drift across all PDD modules and auto-heals drifted modules.
 
@@ -101,7 +103,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
     <include select="def:example_run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.auto_include>
-    <include query="usage of include tag parsing and validation logic for invariants check">context/auto_include_example.py</include>
+    <include select="def:main">context/auto_include_example.py</include>
 </pdd.auto_include>
 <pdd.architecture_sync>
     <include select="def:example_parse_tags,def:example_generate_tags">context/architecture_sync_example.py</include>
