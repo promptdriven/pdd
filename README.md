@@ -2078,7 +2078,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, or Codex) with API key configured
+- At least one supported agent CLI (Claude, Gemini, Codex, or OpenCode) with API key configured. OpenCode requires either `opencode auth login` or a provider API key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, or `GROQ_API_KEY`); set `PDD_AGENTIC_PROVIDER=opencode` (and optionally `OPENCODE_MODEL`) to route through it.
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2246,7 +2246,7 @@ Update prompts based on code changes. This command operates in two primary modes
 
 **Agentic Prompt Optimization (Default)**
 
-The `update` command uses an agentic AI (Claude Code, Gemini, or Codex) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+The `update` command uses an agentic AI (Claude Code, Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
 
 1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
 2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
@@ -2259,6 +2259,7 @@ This produces prompts that are more concise while remaining clear to developers 
 - `claude` (Anthropic Claude Code)
 - `gemini` (Google Gemini CLI)
 - `codex` (OpenAI Codex CLI)
+- `opencode` (OpenCode CLI; authenticate via `opencode auth login` or set a provider key such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, or `GROQ_API_KEY`, then set `PDD_AGENTIC_PROVIDER=opencode` and optionally `OPENCODE_MODEL`)
 
 If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
 
@@ -2410,7 +2411,7 @@ Options:
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed and the corresponding API key configured in your environment.
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, Codex, or OpenCode) installed and the corresponding API key configured in your environment. OpenCode is selected by exporting `PDD_AGENTIC_PROVIDER=opencode` (and optionally `OPENCODE_MODEL`); it accepts any provider key it can route to (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, or `GROQ_API_KEY`) or an existing `opencode auth login` session.
 
 Example:
 ```

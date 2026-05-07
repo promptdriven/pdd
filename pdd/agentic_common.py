@@ -843,16 +843,43 @@ def _resolve_opencode_model() -> Optional[str]:
 def _opencode_csv_pricing(model_id: Optional[str]) -> Optional[Pricing]:
     """Return CSV-derived ``Pricing`` for an OpenCode model id, if available.
 
-    OpenCode model ids are typically ``<provider>/<model>`` (e.g. ``openai/gpt-5``);
-    for some providers like ``github-copilot`` the model portion itself contains a
-    slash (``github-copilot/openai/gpt-5``). Match the row whose ``model`` column
-    equals either the full id or the id with the leading provider segment removed.
+    OpenCode model ids are ``<provider>/<model>`` (e.g. ``openai/gpt-5``); for some
+    providers like ``github-copilot`` or ``openrouter`` the model portion itself
+    contains a slash (``github-copilot/openai/gpt-5``). To avoid billing the wrong
+    provider when multiple CSV rows share the same model tail (e.g. both
+    ``OpenRouter`` and ``github_copilot`` carry an ``openai/gpt-5`` row), prefer
+    matching the row whose translated provider matches the model id's leading
+    segment. Fall back to a tail-only match when no provider-qualified row exists.
     """
     if not model_id:
         return None
     rows = _load_model_data() or []
     if not rows:
         return None
+
+    def _row_pricing(row: Dict[str, str]) -> Pricing:
+        return Pricing(
+            input_per_million=_safe_float(row.get("input")),
+            output_per_million=_safe_float(row.get("output")),
+            cached_input_multiplier=0.5,
+        )
+
+    # Provider-qualified match: split the leading provider segment and require
+    # both the translated provider and remaining model id to match.
+    if "/" in model_id:
+        provider_segment, model_remainder = model_id.split("/", 1)
+        for row in rows:
+            row_model = (row.get("model") or row.get("name") or "").strip()
+            if not row_model:
+                continue
+            if (
+                _opencode_provider_for_row(row) == provider_segment
+                and row_model == model_remainder
+            ):
+                return _row_pricing(row)
+
+    # Fallback: match by full id or trailing model when no provider-qualified row
+    # exists (e.g. legacy ids without an OpenCode provider prefix).
     candidates = [model_id]
     if "/" in model_id:
         candidates.append(model_id.split("/", 1)[1])
@@ -862,11 +889,7 @@ def _opencode_csv_pricing(model_id: Optional[str]) -> Optional[Pricing]:
             if not row_model:
                 continue
             if row_model == candidate:
-                return Pricing(
-                    input_per_million=_safe_float(row.get("input")),
-                    output_per_million=_safe_float(row.get("output")),
-                    cached_input_multiplier=0.5,
-                )
+                return _row_pricing(row)
     return None
 
 

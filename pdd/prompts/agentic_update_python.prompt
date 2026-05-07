@@ -4,7 +4,7 @@
 Write the `pdd/agentic_update.py` module.
 
 % Role & Scope
-The `agentic_update` module coordinates an "agentic" update of a prompt file using an external CLI agent (such as Claude Code, Gemini, or Codex). It acts as a bridge between the local file system and AI agents, ensuring that the agents have the necessary context (code and tests) to produce high-quality, compact prompt updates.
+The `agentic_update` module coordinates an "agentic" update of a prompt file using an external CLI agent (such as Claude Code, Gemini, Codex, or OpenCode). It acts as a bridge between the local file system and AI agents, ensuring that the agents have the necessary context (code and tests) to produce high-quality, compact prompt updates.
 
 % Requirements
 1. **Primary Function**: Implement `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`.

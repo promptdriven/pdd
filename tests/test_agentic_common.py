@@ -26,6 +26,7 @@ from pdd.agentic_common import (
     _is_false_positive,
     _is_permanent_error,
     _log_agentic_interaction,
+    _opencode_csv_pricing,
     _parse_opencode_jsonl,
     _parse_provider_json,
     _resolve_codex_reasoning_effort,
@@ -298,6 +299,37 @@ def test_opencode_model_selection_translates_csv_ids() -> None:
         ],
         0.5,
     ) == "github-copilot/openai/gpt-5"
+
+
+def test_opencode_csv_pricing_matches_provider_qualified_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider-qualified OpenCode ids must match the row whose translated
+    provider matches the leading segment, not the first row whose model tail
+    matches. See #818 (round 2 review)."""
+    rows = [
+        {
+            "provider": "OpenRouter",
+            "model": "openai/gpt-5",
+            "input": "1.25",
+            "output": "10.0",
+        },
+        {
+            "provider": "github_copilot",
+            "model": "openai/gpt-5",
+            "input": "0.0",
+            "output": "0.0",
+        },
+    ]
+    monkeypatch.setattr("pdd.agentic_common._load_model_data", lambda *a, **k: rows)
+
+    pricing = _opencode_csv_pricing("github-copilot/openai/gpt-5")
+    assert pricing is not None
+    assert pricing.input_per_million == 0.0
+    assert pricing.output_per_million == 0.0
+
+    pricing = _opencode_csv_pricing("openrouter/openai/gpt-5")
+    assert pricing is not None
+    assert pricing.input_per_million == 1.25
+    assert pricing.output_per_million == 10.0
 
 
 def test_false_positive_detection_is_anchored() -> None:
