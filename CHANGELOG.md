@@ -1,3 +1,62 @@
+## v0.0.230 (2026-05-06)
+
+### Feat
+
+- **generate/architecture**: add `--project-root` for GitHub issue and incremental PRD modes. Project-root detection now uses the nearest `.pddrc` / `.pdd/`, `sources/` + PRD/spec markdown, or `.git` boundary, skips user-global `~/.pdd*`, suppresses false outer-repo remote warnings for nested PDD projects, and resolves relative PRD paths against an explicit project root.
+- **code generation**: add deterministic generation-completion checks and propagate provider finish reasons from LiteLLM / Responses API calls so complete Python, JSON, and fenced-code outputs can skip unnecessary continuation judging.
+- **sync**: treat runtime `*_LLM.prompt` templates as non-syncable. Runtime-template-only branch diffs now short-circuit as no-op without an LLM module-identification call, and mixed LLM selections drop only the runtime templates before validation.
+
+### Fix
+
+- **generate**: make generated Python export wiring opt-in via `PDD_ENABLE_WIRING=1`, with `PDD_SKIP_WIRING` still overriding it, so default generation no longer mutates sibling `__init__.py` files.
+- **sync**: keep GitHub issue `--dry-run` read-only when dependency corrections are suggested.
+- **sync**: preserve actionable child-process failure summaries by filtering nonfatal ContentSelector warnings, surfacing exit status or `Overall status: Failed`, and adding labeled stdout/stderr tails when no higher-signal line exists.
+- **architecture**: load combined architecture data from both bare-list and `{modules: [...]}` files while preserving nested-project root semantics.
+- **ci drift heal**: avoid full code generation in clean CI for prompt-only, prompt+code, or review-artifact-only diffs; reclassify to example refresh or skip as appropriate.
+- **split**: align agentic split prompt/dependency metadata and strangler-mode messaging with actual behavior; restore missing split dependency metadata.
+- **tests**: relax live-LLM cost and snapshot assertions that can legitimately vary on cache hits or selector fallback warnings.
+
+### Docs
+
+- README documents project-root detection tiers and `--project-root`; split/generate prompt docs were refreshed to match the current split flow and project-root forwarding.
+
+### Build
+
+- Add the Fireworks Kimi K2.6 model-catalog row and refresh prompt/example artifacts, architecture metadata, `project_dependencies.csv`, package metadata, PyPI/README version references, and shell completion version for 0.0.230.
+
+## v0.0.229 (2026-05-05)
+
+### Feat
+
+- **incremental PRD architecture**: New `pdd/incremental_prd_architecture.py` module (with paired `incremental_prd_architecture_python.prompt` and `incremental_prd_architecture_patch_LLM.prompt`) implements an experimental, opt-in PRD-to-architecture propagation flow. `pdd generate --incremental --experimental-prd <prd-or-issue-url>` diffs a PRD against a hash/provenance record in `.pdd/meta/prd_hashes.json` (with raw baselines cached locally under `.pdd/cache/prd_snapshots/` — never tracked, never persisted in metadata), asks the LLM for a structured `ArchitecturePatch` (add/remove/modify modules + dependency updates), runs deterministic validators that reject unknown modules, dangling dependencies, removals that leave dependents, unsupported fields, hidden/secret-like file targets, path traversal, and dependency cycles, and on success applies the patch atomically with `.bak` backups, propagates Requirements changes into affected prompts via `detect_change` + `change`, and synthesizes lightweight starter prompts for new modules. On invalid LLM output the orchestrator retries up to 3 times with concrete validation feedback before failing without writes; re-running with no PRD changes is a free no-op. Mode is never selected by suffix alone — `--experimental-prd` is required, and `--incremental` on `.prompt` files retains its legacy code-patching semantics.
+- **`pdd generate` CLI surface**: New `--experimental-prd`, `--dry-run`, `--no-github-state`, and `--output-dir` flags wired through `pdd/commands/generate.py` and surfaced in zsh/fish/bash completions. README adds an Experimental Incremental PRD Mode section documenting the gating flag, current limitations (starter prompts only for new modules, hidden/config-file targets blocked, no shared-context-doc merge, no `pdd sync --dry-run` validation — tracked under #859), and follow-up sync guidance for `--output-dir` targets.
+- **agentic audit-trail model fallbacks (#1376)**: `CLAUDE_MODEL`, `GEMINI_MODEL`, and `CODEX_MODEL` env vars now feed the `model` field in `.pdd/agentic-logs/` records when the response JSON omits an explicit model name, with documented fallback order in the README.
+
+### Fix
+
+- **cost**: fall back to CSV rates when LiteLLM silently returns 0 cost.
+- **cost**: register CSV models with LiteLLM so `completion_cost` is nonzero.
+- **#1353**: default examples dir to `examples` in greenfield projects (legacy projects with populated `context/*_example.*` keep `context/` as primary). `pdd which` now mirrors the runtime resolver via `_resolve_default_examples_dir`, with regression tests covering greenfield and legacy back-compat ordering, closing the diagnostic/runtime mismatch on the very tool meant to diagnose path issues (#616). New `tests/test_preprocess.py` (+547 lines) and refreshed `pdd/preprocess.py` / `context/preprocess_example.py` accompany the fix.
+- **#1376**: every provider attempt now emits a summary record so the audit trail is complete (no silent skips on budget-exhausted attempts). Subsequent rounds add per-attempt logging, no double-log on budget-skipped attempts, Codex NDJSON model extraction, prompt `is_error` tuple sync, fingerprint dedup, README docs for env-var fallbacks, and incident-replay regression tests (`tests/test_agentic_common.py` +637 lines) for the provider-fallback audit trail.
+- **sync**: preserve path-qualified sync dependencies so dependency entries like `service/foo` survive sync rewrites instead of being collapsed to a basename.
+- **release**: harden public sync cleanup — `make publish-public` and `publish-public-cap` now `git clean -ffdx` after `git reset --hard origin/main` so untracked artifacts from prior runs cannot leak into the public mirror.
+- **llm_invoke** (#1364): unwrap Vertex Anthropic `parameter` tool-call envelope before pydantic validation; extend envelope unwrap to the `output_schema` / `jsonschema` path and sync the prompt; return validated payload from the jsonschema unwrap helper and serialize the unwrapped form; gate envelope unwrap on schemas that declare `parameter`; widen unwrap gates for aliases and composed schemas. Tests in `tests/test_llm_invoke.py` (+985 lines) and new `tests/test_llm_invoke_csv_model_registration.py` cover all paths.
+- **test**: drop `cost>0` assertion in `test_integration_prompt_authoritative_with_live_llm` (paired with the cost fixes above; cache hits legitimately have zero cost).
+
+### Docs
+
+- Expanded `docs/prompt-driven-development-doctrine.md` with contract and story capital sections, refined behavioral constraints, and clearer regeneration expectations (+253 lines).
+- `pdd/docs/prompting_guide.md`: clarified that grounding-control tags (unlike `<include>`) are sent through to PDD Cloud rather than expanded by the preprocessor, and added a "Non-Goals" example to the Contract Coverage Matrix template.
+- README: documented the experimental Incremental PRD Mode, its current limitations and follow-ups (#859), and the new agentic env-var fallbacks (`CLAUDE_MODEL` / `GEMINI_MODEL` / `CODEX_MODEL`).
+
+### Build
+
+- Version bump to 0.0.229 across `pyproject.toml`, `pdd/setup.py`, README, `pypi_description.rst`, and Commitizen config.
+- `.gitignore`: ignore `.pdd/cache/` and `*.json.bak` / `*.prompt.bak` so incremental PRD raw baselines and atomic-apply backups stay local.
+- `project_dependencies.csv`: register `context/incremental_prd_architecture_example.py` and refresh `context/preprocess_example.py` / `context/setup_example.py` digests.
+- Routine prompt/example drift heal across `agentic_common`, `agentic_sync`, `agentic_sync_runner`, `agentic_update`, `ci_drift_heal`, `commands/generate`, `generate_test`, `incremental_prd_architecture`, `setup`, and `sync_determine_operation` to keep prompts and packaged examples aligned with code.
+- Shell completions (zsh/fish/bash) updated to advertise the new `--experimental-prd`, `--dry-run`, `--no-github-state`, `--output-dir`, `--force-single`, `--skip-prompts`, `--template`, `--unit-test`, and `--exclude-tests` options on `pdd generate`.
+
 ## v0.0.228 (2026-05-04)
 
 ### Feat

@@ -54,6 +54,19 @@ def _env_flag_enabled(name: str) -> bool:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+def _should_wire_generated_exports(output_path: str) -> bool:
+    """Return True when generated Python exports should be wired to __init__.py.
+
+    Wiring mutates a sibling file, so the safe default is off. Users can opt in
+    with PDD_ENABLE_WIRING=1; PDD_SKIP_WIRING remains a backward-compatible
+    override for automation that already relies on it.
+    """
+    if not str(output_path).endswith('.py'):
+        return False
+    if _env_flag_enabled("PDD_SKIP_WIRING"):
+        return False
+    return _env_flag_enabled("PDD_ENABLE_WIRING")
+
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
     """Runs a git command and returns (return_code, stdout, stderr)."""
@@ -1514,8 +1527,8 @@ def code_generator_main(
                 p_output.write_text(final_content, encoding="utf-8")
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
-                # Post-write: wire exports to parent __init__.py
-                if not _env_flag_enabled("PDD_SKIP_WIRING") and str(p_output).endswith('.py'):
+                # Post-write: optionally wire exports to parent __init__.py.
+                if _should_wire_generated_exports(str(p_output)):
                     try:
                         wiring_exports = _detect_wireable_exports(final_content, str(p_output))
                         if wiring_exports:
