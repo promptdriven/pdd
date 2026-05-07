@@ -74,7 +74,7 @@ def run_agentic_split(
         git_root / "prompts",
         git_root / "pdd" / "prompts",
     ]
-    # Also search extensions/*/prompts/ for downstream extension projects.
+    # Also search extensions/*/prompts/ (pdd_cloud convention)
     extensions_root = git_root / "extensions"
     if extensions_root.is_dir():
         for ext_dir in extensions_root.iterdir():
@@ -119,9 +119,11 @@ def run_agentic_split(
     if not test_found and not quiet:
         console.print(f"[yellow]Warning: No test file found for {target_path.name}[/yellow]")
 
-    # Strangler mode (U7): produce N sequential runs, one per child,
-    # each with its own worktree / PR boundary. Implemented as
-    # --propose-only followed by N focused --force-split runs.
+    # Strangler mode (U7): use the first proposed plan only to determine
+    # N (number of children), then run N independent full orchestrator
+    # passes. Each pass starts fresh — it picks its own plan and extracts
+    # whatever children that plan contains; the original plan is not
+    # threaded through. See issue #1402 for per-child enforcement.
     if strangler:
         return _run_strangler_split(
             target_path=target_path,
@@ -179,20 +181,24 @@ def _run_strangler_split(
     intent: Optional[str],
     no_phase_extraction: bool,
 ) -> Tuple[bool, str, float, str, List[str]]:
-    """Sequential strangler-fig split: one child per PR.
+    """Sequential strangler-fig split: N independent full orchestrator passes.
 
-    Runs `--propose-only` once to get the plan, then invokes the
-    orchestrator N times, each time extracting exactly one child
-    from the still-growing parent. Each run produces its own worktree
-    / branch, keeping a re-export shim on the parent for reversibility.
+    Runs `--propose-only` once to determine N (number of children in the
+    best-scoring plan), clears workflow state, then runs N independent
+    `--force-split` orchestrator passes. Each pass starts fresh — it
+    picks its own plan and extracts whatever children that plan
+    contains; the original plan is NOT threaded through to subsequent
+    passes. Each pass also reuses the same split_id (worktree may be
+    reused/removed across passes). See issue #1402 for the work to pass
+    the original plan + a child selector to the orchestrator.
 
     Python does the sequencing; the orchestrator still does the
     per-pass work agentically. No new judgment in Python.
     """
     if not quiet:
         console.print(
-            "[cyan]Strangler mode: proposing plan, then extracting "
-            "children one at a time...[/cyan]"
+            "[cyan]Strangler mode: proposing once to determine N, then "
+            "running N independent full orchestrator passes...[/cyan]"
         )
 
     # Pass 1 — propose only. The orchestrator persists the plan; we'll
@@ -260,14 +266,15 @@ def _run_strangler_split(
     total_children = len(best_plan.plan.children)
     if not quiet:
         console.print(
-            f"[cyan]Strangler: {total_children} children planned, "
-            "will extract one per pass.[/cyan]"
+            f"[cyan]Strangler: {total_children} children in proposed plan; "
+            "running N independent full orchestrator passes "
+            "(see issue #1402 for true per-child enforcement).[/cyan]"
         )
 
-    # Pass 2...N — extract each child, one at a time. For each child,
-    # clear prior state and re-run the full pipeline with force_split
-    # and a fresh worktree. The agentic code does the per-pass extraction;
-    # this wrapper just sequences.
+    # Pass 2...N — one orchestrator pass per planned child. For each pass,
+    # clear prior state and re-run the full pipeline with force_split.
+    # The orchestrator currently extracts all remaining children per pass
+    # (issue #1402); this wrapper just sequences the passes.
     total_cost = propose_cost
     all_changed: List[str] = []
     from .agentic_common import clear_workflow_state
@@ -279,9 +286,10 @@ def _run_strangler_split(
                 f"\n[bold cyan]=== Strangler pass {idx+1}/{total_children} "
                 f"===[/bold cyan]"
             )
-        # Each pass is a full run. The agent will see the updated state
-        # of the target (already partially reduced) and propose
-        # extracting the next child.
+        # Each pass is a full independent run — propose, diagnose, plan,
+        # extract — against the already-partially-reduced target. The
+        # pass picks its own plan and extracts whatever children that
+        # plan contains; not necessarily one. See issue #1402.
         ok, msg, cost, model, changed = run_agentic_split_orchestrator(
             target_file=str(target_path),
             cwd=git_root,
@@ -314,6 +322,7 @@ def _run_strangler_split(
 
     return (
         True,
-        f"Strangler complete: {total_children} children extracted",
+        f"Strangler complete: {total_children} orchestrator passes ran "
+        f"({len(all_changed)} files changed across passes)",
         total_cost, model, all_changed,
     )
