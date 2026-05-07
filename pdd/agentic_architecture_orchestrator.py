@@ -152,9 +152,14 @@ def _validate_step5_output_structure(output: str) -> Tuple[bool, str]:
     runs and again as a defense-in-depth gate before step 5b.
 
     Failure cases (mirroring instruction #6.5 in the orchestrator prompt):
-      * Output is shorter than 200 characters.
+      * Stripped (non-whitespace) content is shorter than 200 characters.
       * Output is a bare acknowledgement such as "Done." or "Ok".
       * Output contains none of the expected module-design markers.
+
+    The minimum-length check is based on stripped/non-whitespace content so that
+    a marker word padded with whitespace (e.g. ``"module" + " " * 300``) cannot
+    masquerade as a non-degenerate response. Marker detection is only reached
+    after the meaningful-content threshold has been met.
 
     The diagnostic string always names "step 5" so downstream error messages
     can surface the upstream cause clearly.
@@ -163,11 +168,12 @@ def _validate_step5_output_structure(output: str) -> Tuple[bool, str]:
         return False, "step 5 output is empty"
 
     stripped = output.strip()
-    if len(output) < 200:
+    if len(stripped) < 200:
         return (
             False,
             f"step 5 output is shorter than 200 characters "
-            f"({len(output)} chars) — degenerate / near-empty response",
+            f"({len(stripped)} non-whitespace chars) — "
+            f"degenerate / near-empty response",
         )
 
     if _STEP5_BARE_ACK_RE.match(stripped):
@@ -177,8 +183,8 @@ def _validate_step5_output_structure(output: str) -> Tuple[bool, str]:
             "(e.g. 'Done.'/'Ok'/'Completed') with no module design",
         )
 
-    output_lower = output.lower()
-    if not any(marker in output_lower for marker in _STEP5_DESIGN_MARKERS):
+    stripped_lower = stripped.lower()
+    if not any(marker in stripped_lower for marker in _STEP5_DESIGN_MARKERS):
         return (
             False,
             "step 5 output contains no module-design markers "

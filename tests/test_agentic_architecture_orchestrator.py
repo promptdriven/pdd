@@ -1693,12 +1693,18 @@ class TestValidateStep5OutputStructure:
         assert "200" in reason or "shorter" in reason
 
     def test_bare_acknowledgement_is_invalid_even_when_padded(self):
-        # > 200 chars but stripped content is bare ack
+        # Raw length > 200 chars but stripped content is bare ack. The
+        # stripped-content length check rejects this up-front (the more
+        # specific bare-ack regex remains as defense-in-depth for any
+        # future relaxation of the length rule).
         padded = "Done." + " " * 300
         ok, reason = _validate_step5_output_structure(padded)
         assert ok is False
         assert "step 5" in reason
-        assert "acknowledgement" in reason.lower()
+        assert (
+            "acknowledgement" in reason.lower()
+            or "shorter" in reason.lower()
+        )
 
     def test_bare_acknowledgement_variants(self):
         for word in ("done", "Done", "DONE", "Completed", "finished", "ok", "Ok.", "Acknowledged"):
@@ -1712,6 +1718,18 @@ class TestValidateStep5OutputStructure:
         assert ok is False
         assert "step 5" in reason
         assert "marker" in reason.lower()
+
+    def test_marker_only_padded_with_whitespace_is_invalid(self):
+        # Regression: prior implementation used len(output) for the threshold,
+        # so a marker word padded with whitespace (raw length 306, stripped
+        # length 6) passed the structural check and entered the Step 5b gate.
+        # The fix bases the minimum-length check on stripped/non-whitespace
+        # content so degenerate marker-only padding is rejected up-front.
+        padded_marker = "module" + " " * 300
+        ok, reason = _validate_step5_output_structure(padded_marker)
+        assert ok is False
+        assert "step 5" in reason
+        assert "200" in reason or "shorter" in reason
 
     def test_valid_module_design_passes(self):
         ok, reason = _validate_step5_output_structure(_VALID_STEP5_DESIGN_OUTPUT)
