@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Match, Tuple
 
 
 _INCLUDE_TAG_RE = re.compile(
-    r"<include>(.*?)</include>",
+    r"<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|"
+    r"<include(?P<attrs_self>\s+[^>]*?)\s*/>",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -61,6 +62,64 @@ def _resolve_include_against_base_dir(rel_or_abs: str, base_dir: Path) -> Path:
             break
         cur = parent
     return (base / rel).resolve()
+
+
+def _parse_attrs(attr_str: str) -> Dict[str, str]:
+    """Parse XML-ish include attributes used by preprocess.py."""
+    attrs: Dict[str, str] = {}
+    if not attr_str:
+        return attrs
+    for match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']*)["\']', attr_str):
+        attrs[match.group(1)] = match.group(2)
+    if "optional" not in attrs and re.search(
+        r"(?<![A-Za-z0-9_])optional(?![A-Za-z0-9_])",
+        attr_str,
+    ):
+        attrs["optional"] = "true"
+    return attrs
+
+
+def _optional_attr_is_truthy(attrs: Dict[str, str]) -> bool:
+    optional_val = attrs.get("optional")
+    if optional_val is None:
+        return False
+    return str(optional_val).strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _include_match_path_and_attrs(match: Match[str]) -> Tuple[str, Dict[str, str]]:
+    attrs_str = match.group("attrs") or match.group("attrs_self") or ""
+    attrs = _parse_attrs(attrs_str)
+    content = match.group("content") if match.group("content") is not None else ""
+    raw_path = (attrs.get("path") or content.strip()).strip()
+    return raw_path, attrs
+
+
+def _selector_error_for_include(path: Path, attrs: Dict[str, str]) -> str | None:
+    selectors_str = attrs.get("select")
+    lines_str = attrs.get("lines")
+    mode = attrs.get("mode", "full")
+    if not selectors_str and not lines_str and mode == "full":
+        return None
+
+    selectors: List[str] = []
+    if selectors_str:
+        selectors.extend(selector.strip() for selector in selectors_str.split(","))
+    if lines_str:
+        selectors.append(f"lines:{lines_str}")
+    selectors = [selector for selector in selectors if selector]
+
+    try:
+        from pdd.content_selector import ContentSelector
+
+        ContentSelector().select(
+            content=path.read_text(encoding="utf-8"),
+            selectors=selectors,
+            file_path=str(path),
+            mode=mode,
+        )
+    except Exception as exc:  # noqa: BLE001 - validation reports any selector failure
+        return str(exc)
+    return None
 
 
 def validate_include_tag(file_path: str, base_dir: str) -> bool:
@@ -175,7 +234,7 @@ def _find_parent_element_span(
     parent: Tuple[int, int] | None = None
     parent_size = None
 
-    for name, start, end in elements:
+    for _name, start, end in elements:
         if start <= child_start and child_end <= end:
             # Exclude the element if it is exactly the child span (e.g., <include> itself)
             if start == child_start and end == child_end:
@@ -262,7 +321,9 @@ def validate_prompt_includes(
 
     for m in _INCLUDE_TAG_RE.finditer(content):
         inc_start, inc_end = m.span()
-        raw_path = m.group(1).strip()
+        raw_path, attrs = _include_match_path_and_attrs(m)
+        if not raw_path:
+            continue
 
         # Normalize possible "Error processing include:" prefix but preserve
         # the original raw_path for reporting.
@@ -280,6 +341,28 @@ def validate_prompt_includes(
             exists_cache[p] = exists
 
         if exists:
+            selector_error = _selector_error_for_include(p, attrs)
+            if selector_error is None:
+                continue
+
+            invalid_label = (
+                f"{raw_path} select=\"{attrs.get('select', '')}\": {selector_error}"
+            )
+            invalid_includes.append(invalid_label)
+
+            if remove_invalid:
+                parent_span = _find_parent_element_span(elements, inc_start, inc_end)
+                if parent_span is None:
+                    block_start, block_end = inc_start, inc_end
+                else:
+                    block_start, block_end = parent_span
+                if (block_start, block_end) in removed_blocks:
+                    continue
+                removed_blocks.add((block_start, block_end))
+                edits.append((block_start, block_end, ""))
+            else:
+                replacement = f"<!-- Invalid selector for {raw_path}: {selector_error} -->"
+                edits.append((inc_start, inc_end, replacement))
             continue
 
         parent_element = _find_parent_element(elements, inc_start, inc_end)
@@ -293,6 +376,10 @@ def validate_prompt_includes(
             if (block_start, block_end) not in removed_blocks:
                 removed_blocks.add((block_start, block_end))
                 edits.append((block_start, block_end, ""))
+            continue
+
+        if _optional_attr_is_truthy(attrs):
+            edits.append((inc_start, inc_end, ""))
             continue
 
         # Track invalid include using the raw string from the tag
@@ -328,3 +415,24 @@ def validate_prompt_includes(
         content = "".join(chars)
 
     return content, invalid_includes
+
+
+def sanitize_prompt_output(
+    content: str,
+    output_path: str | Path,
+) -> Tuple[str, List[str]]:
+    """
+    Validate generated prompt content before writing it to ``output_path``.
+
+    Non-prompt outputs are returned unchanged. Prompt outputs are validated
+    relative to the output file's parent directory, matching the post-generation
+    cleanup used by ``pdd generate``.
+    """
+    path = Path(output_path)
+    if path.suffix != ".prompt":
+        return content, []
+    return validate_prompt_includes(
+        content,
+        base_dir=path.parent,
+        remove_invalid=False,
+    )

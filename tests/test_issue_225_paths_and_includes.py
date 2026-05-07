@@ -91,6 +91,99 @@ def test_validate_prompt_includes_removes_optional_shared_context_blocks_when_fi
     assert "Requirements" in validated
 
 
+def test_validate_prompt_includes_validates_attributed_missing_include(tmp_path, monkeypatch):
+    """Attributed include tags must get the same missing-file cleanup as bare tags."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+
+    content = '<include select="def:missing_symbol">context/missing.py</include>'
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path / "prompts",
+        remove_invalid=False,
+    )
+
+    assert invalid == ["context/missing.py"]
+    assert validated == "<!-- Missing: context/missing.py -->"
+
+
+def test_validate_prompt_includes_validates_self_closing_path_include(tmp_path, monkeypatch):
+    """Self-closing include tags with path= are real include tags and need validation."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+
+    content = '<dependency><include path="context/missing.py" /></dependency>'
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path / "prompts",
+        remove_invalid=False,
+    )
+
+    assert invalid == ["context/missing.py"]
+    assert "<!-- Missing: context/missing.py -->" in validated
+    assert "path=\"context/missing.py\"" not in validated
+
+
+def test_validate_prompt_includes_rejects_invalid_selected_symbols(tmp_path, monkeypatch):
+    """Regression for issue #798: selected includes must not silently fall back."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "context" / "llm_invoke_example.py").write_text(
+        "def run_llm_invoke_examples():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    content = (
+        "<pdd.llm_invoke>"
+        '<include select="class:TokenMatch,def:detect_control_token,'
+        'def:classify_step_output,def:substitute_template_variables">'
+        "context/llm_invoke_example.py"
+        "</include>"
+        "</pdd.llm_invoke>"
+    )
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path / "prompts",
+        remove_invalid=False,
+    )
+
+    assert len(invalid) == 1
+    assert invalid[0].startswith("context/llm_invoke_example.py")
+    assert "TokenMatch" in invalid[0]
+    assert "Invalid selector" in validated
+    assert "class:TokenMatch" not in validated
+
+
+def test_validate_prompt_includes_allows_valid_selected_symbols(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "context" / "agentic_common.py").write_text(
+        "class TokenMatch:\n    pass\n\n"
+        "def detect_control_token():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    content = (
+        '<include select="class:TokenMatch,def:detect_control_token">'
+        "context/agentic_common.py"
+        "</include>"
+    )
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path / "prompts",
+        remove_invalid=False,
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
 def test_get_pdd_file_paths_uses_architecture_filepath_for_flattened_prompt_names(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".pddrc").write_text(

@@ -8,6 +8,7 @@ from rich.console import Console
 
 from .construct_paths import construct_paths
 from .split import split
+from .validate_prompt_includes import sanitize_prompt_output
 
 console = Console()
 
@@ -87,6 +88,22 @@ def split_main(
 
         # Save the output files
         try:
+            sub_prompt, invalid_sub_includes = sanitize_prompt_output(
+                sub_prompt,
+                output_file_paths["output_sub"],
+            )
+            modified_prompt, invalid_modified_includes = sanitize_prompt_output(
+                modified_prompt,
+                output_file_paths["output_modified"],
+            )
+            if (
+                (invalid_sub_includes or invalid_modified_includes)
+                and not ctx.obj.get("quiet", False)
+            ):
+                console.print(
+                    "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                    "before saving split prompt outputs.[/yellow]"
+                )
             with open(output_file_paths["output_sub"], "w") as f:
                 f.write(sub_prompt)
             with open(output_file_paths["output_modified"], "w") as f:

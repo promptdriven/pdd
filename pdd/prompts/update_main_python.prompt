@@ -18,6 +18,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 7. Validate prompt is non-empty before writing (true update mode).
 8. Without --output, overwrite input_prompt_file in place.
 9. use_git and input_code_file are mutually exclusive (raise ValueError).
+10. Before any legacy path writes generated/updated `.prompt` content, call `sanitize_prompt_output(content, destination_path)` so invalid `<include>` tags or selected includes are cleaned before a later `pdd sync` preprocess pass.
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
@@ -78,6 +79,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
   <architecture_sync_example><include select="def:example_update_single_prompt,def:example_get_entry,def:example_sync_all,def:example_find_architecture_for_project,def:example_update_architecture_from_prompt">context/architecture_sync_example.py</include></architecture_sync_example>
   <operation_log_example><include select="def:example_save_fingerprint,def:example_infer_module_identity">context/operation_log_example.py</include></operation_log_example>
   <template_expander_example><include>context/template_expander_example.py</include></template_expander_example>
+  <validate_prompt_includes><include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include></validate_prompt_includes>
   <pdd.agentic_update><include select="def:example_no_agents_available,def:example_successful_update,def:example_agent_runs_but_no_change,def:example_missing_input_files">context/agentic_update_example.py</include></pdd.agentic_update>
 <pdd.api_key_scanner>
     <include>context/api_key_scanner_example.py</include>

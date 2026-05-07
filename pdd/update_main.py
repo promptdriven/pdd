@@ -33,6 +33,7 @@ from .git_update import git_update
 from .agentic_common import get_available_agents
 from .agentic_update import run_agentic_update
 from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
+from .validate_prompt_includes import sanitize_prompt_output
 from . import DEFAULT_TIME
 
 # Config/data files that should not get prompts in repo-scan mode.
@@ -789,6 +790,15 @@ def update_file_pair(
         if modified_prompt is not None:
             # Overwrite the original prompt file
             with open(prompt_file, "w") as f:
+                modified_prompt, invalid_includes = sanitize_prompt_output(
+                    modified_prompt,
+                    prompt_file,
+                )
+                if invalid_includes and not quiet:
+                    rprint(
+                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                        f"before saving {prompt_file}.[/yellow]"
+                    )
                 f.write(modified_prompt)
             return {
                 "prompt_file": prompt_file,
@@ -1405,6 +1415,15 @@ def update_main(
 
             # Write the result to the derived/correct prompt path.
             with open(prompt_path, "w") as f:
+                modified_prompt, invalid_includes = sanitize_prompt_output(
+                    modified_prompt,
+                    prompt_path,
+                )
+                if invalid_includes and not quiet:
+                    rprint(
+                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                        f"before saving {prompt_path}.[/yellow]"
+                    )
                 f.write(modified_prompt)
 
             if not quiet:
@@ -1541,6 +1560,15 @@ def update_main(
                 )
 
             with open(output_file_paths["output"], "w") as f:
+                modified_prompt, invalid_includes = sanitize_prompt_output(
+                    modified_prompt,
+                    output_file_paths["output"],
+                )
+                if invalid_includes and not quiet:
+                    rprint(
+                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                        f"before saving {output_file_paths['output']}.[/yellow]"
+                    )
                 f.write(modified_prompt)
 
             if not quiet:
