@@ -168,11 +168,15 @@ def _validate_step5_output_structure(output: str) -> Tuple[bool, str]:
         return False, "step 5 output is empty"
 
     stripped = output.strip()
-    if len(stripped) < 200:
+    # Count only non-whitespace characters so that a marker word padded with
+    # interior whitespace (e.g. "module" + " " * 300 + "dependency") cannot
+    # masquerade as a non-degenerate response.
+    non_ws_len = len(re.sub(r"\s+", "", stripped))
+    if non_ws_len < 200:
         return (
             False,
             f"step 5 output is shorter than 200 characters "
-            f"({len(stripped)} non-whitespace chars) — "
+            f"({non_ws_len} non-whitespace chars) — "
             f"degenerate / near-empty response",
         )
 
@@ -991,6 +995,16 @@ def run_agentic_architecture_orchestrator(
                                 f"{fix_reason} — not retrying completeness gate[/red]"
                             )
                         state["step_outputs"]["5"] = f"FAILED: {fix_reason}"
+                        # Issue #817 round 2: mirror the pre-check path —
+                        # lower last_completed_step so the persisted state
+                        # does not retain a contradictory
+                        # `last_completed_step == 5` while
+                        # `step_outputs["5"]` is FAILED.
+                        state["last_completed_step"] = validate_cached_state(
+                            state.get("last_completed_step", 0),
+                            state["step_outputs"],
+                            quiet=quiet,
+                        )
                         save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                         return (
                             False,

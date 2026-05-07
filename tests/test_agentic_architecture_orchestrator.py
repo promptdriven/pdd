@@ -1746,6 +1746,22 @@ def test_step5b_fix_with_degenerate_output_hard_stops_without_retry(mock_depende
     )
     assert not any("step6" in l for l in labels), "Step 6 must not run after structural failure"
 
+    # Issue #817 round 2: persisted state must not retain a contradictory
+    # `last_completed_step == 5` while `step_outputs["5"]` is FAILED.  The
+    # fix-output failure path must lower last_completed_step below 5,
+    # mirroring the pre-check path.
+    saved_state_calls = mocks["save_state"].call_args_list
+    assert saved_state_calls, "save_workflow_state should have been called"
+    last_state = saved_state_calls[-1][0][3]  # 4th positional arg is `state`
+    step5_persisted = last_state["step_outputs"].get("5", "")
+    assert step5_persisted.startswith("FAILED:"), (
+        f"Degenerate fix output must be persisted as FAILED, got: {step5_persisted!r}"
+    )
+    assert last_state["last_completed_step"] < 5, (
+        f"last_completed_step must be lowered below 5 when step_outputs['5'] is FAILED, "
+        f"got: {last_state['last_completed_step']}"
+    )
+
 
 # ============================================================================
 # Step 5 Structural Validator Tests (issue #817)
@@ -1797,6 +1813,23 @@ class TestValidateStep5OutputStructure:
         padded_marker = "module" + " " * 300
         ok, reason = _validate_step5_output_structure(padded_marker)
         assert ok is False
+        assert "step 5" in reason
+        assert "200" in reason or "shorter" in reason
+
+    def test_two_markers_with_interior_whitespace_padding_is_invalid(self):
+        # Regression for issue #817 round 2: prior implementation used
+        # len(stripped) which counts interior whitespace, so a payload like
+        # "module" + " " * 300 + "dependency" (stripped length 316) passed
+        # the length check AND matched two markers, returning (True, "").
+        # The fix counts only non-whitespace characters so this degenerate
+        # marker-only padded output is rejected up-front and cannot enter
+        # Step 5b.
+        padded = "module" + " " * 300 + "dependency"
+        ok, reason = _validate_step5_output_structure(padded)
+        assert ok is False, (
+            "marker words separated by whitespace padding must be rejected "
+            "by the non-whitespace length check"
+        )
         assert "step 5" in reason
         assert "200" in reason or "shorter" in reason
 
