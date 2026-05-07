@@ -338,7 +338,7 @@ def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
 
 
 def test_committed_csv_has_no_chatgpt_rows():
-    csv_path = Path("pdd/data/llm_model.csv")
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
     assert "chatgpt/" not in text
@@ -346,7 +346,7 @@ def test_committed_csv_has_no_chatgpt_rows():
 
 
 def test_committed_csv_includes_vertex_gemini_flash_ci_default():
-    csv_path = Path("pdd/data/llm_model.csv")
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
     assert "Google Vertex AI,vertex_ai/gemini-3-flash-preview," in text
