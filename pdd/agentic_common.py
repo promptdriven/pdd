@@ -1955,6 +1955,34 @@ def github_load_state(
     return state, cid
 
 
+def github_clear_state(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    workflow: str = "default",
+    cwd: Union[str, Path] = ".",
+    **kwargs: Any,
+) -> bool:
+    """Delete the GitHub state comment for the given workflow if present.
+
+    Returns True when the comment is cleared (or already absent), False on error.
+    """
+    workflow = str(kwargs.get("workflow_id") or kwargs.get("workflow_type") or workflow)
+    if not _gh_available():
+        return False
+    cid, _ = _find_state_comment(repo_owner, repo_name, issue_number, workflow, cwd)
+    if not cid:
+        return True  # already clear
+    rc, _, _ = _run_gh(
+        [
+            "api", "--method", "DELETE",
+            f"repos/{repo_owner}/{repo_name}/issues/comments/{cid}",
+        ],
+        cwd,
+    )
+    return rc == 0
+
+
 def _local_state_path(
     workflow: str,
     cwd: Union[str, Path] = ".",
@@ -2288,6 +2316,7 @@ __all__ = [
     "_serialize_state_comment",
     "github_load_state",
     "github_save_state",
+    "github_clear_state",
     "load_workflow_state",
     "save_workflow_state",
     "clear_workflow_state",

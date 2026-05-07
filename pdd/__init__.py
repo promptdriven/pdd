@@ -61,7 +61,7 @@ def _setup_cloud_defaults() -> None:
 _setup_cloud_defaults()
 
 try:
-    from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment, TokenMatch, detect_control_token, classify_step_output, set_agentic_progress, clear_agentic_progress, get_and_clear_agentic_interrupt_context
+    from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment, TokenMatch, detect_control_token, classify_step_output, set_agentic_progress, clear_agentic_progress, get_and_clear_agentic_interrupt_context, github_save_state, github_load_state, github_clear_state
     from .agentic_test_orchestrator import run_agentic_test_orchestrator
     from .architecture_sync_helper import filepath_to_prompt_filename
     from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
@@ -84,4 +84,4 @@ except ImportError:
 
 from .cli_detector import CliBootstrapResult, detect_and_bootstrap_cli, detect_cli_tools
 from .setup_tool import run_setup
-from .agentic_common import Pricing, TokenMatch, set_agentic_progress, clear_agentic_progress, get_and_clear_agentic_interrupt_context, substitute_template_variables, get_agent_provider_preference, get_available_agents, detect_control_token, classify_step_output, get_job_deadline, run_agentic_task, github_save_state, load_workflow_state, save_workflow_state, clear_workflow_state, validate_cached_state, post_step_comment, post_pr_comment, post_final_comment
+from .agentic_common import Pricing, TokenMatch, set_agentic_progress, clear_agentic_progress, get_and_clear_agentic_interrupt_context, substitute_template_variables, get_agent_provider_preference, get_available_agents, detect_control_token, classify_step_output, get_job_deadline, run_agentic_task, github_save_state, github_load_state, github_clear_state, load_workflow_state, save_workflow_state, clear_workflow_state, validate_cached_state, post_step_comment, post_pr_comment, post_final_comment
