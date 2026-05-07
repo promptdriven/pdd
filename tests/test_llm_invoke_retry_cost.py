@@ -57,6 +57,7 @@ def _make_completion_side_effect(responses_and_costs):
         _llm_mod._LAST_CALLBACK_DATA["cost"] = cost
         _llm_mod._LAST_CALLBACK_DATA["input_tokens"] = resp.usage.prompt_tokens
         _llm_mod._LAST_CALLBACK_DATA["output_tokens"] = resp.usage.completion_tokens
+        _llm_mod._LAST_CALLBACK_DATA["finish_reason"] = resp.choices[0].finish_reason
         return resp
 
     return side_effect
@@ -117,6 +118,7 @@ class TestRetryCostAccumulation:
             f"Cost should be {expected_total} (first {first_call_cost} + retry {retry_call_cost}), "
             f"but got {reported_cost}. Retry cost overwrote instead of accumulating."
         )
+        assert result["finish_reason"] == "stop"
 
     @patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1", "OPENAI_API_KEY": "test-key"})
     @patch("pdd.llm_invoke._ensure_api_key", return_value=True)

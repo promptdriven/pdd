@@ -16,15 +16,21 @@
 
 % Dependencies
 <internal_example_modules>
-    <llm_invoke_example><include>./context/llm_invoke_example.py</include></llm_invoke_example>
+    <llm_invoke_example><include query="implementation of llm_invoke with cost tracking and language parameter">./context/llm_invoke_example.py</include></llm_invoke_example>
     <unfinished_prompt_example><include>./context/unfinished_prompt_example.py</include></unfinished_prompt_example>
 </internal_example_modules>
+<utils.continue_generation>
+    <include select="class:TrimResultsOutput,class:TrimResultsContinuedOutput,def:extract_text_from_response">context/change/17/continue_generation.py</include>
+</utils.continue_generation>
+<context.change.18.code_generator>
+    <include>context/change/18/code_generator.py</include>
+</context.change.18.code_generator>
 
 % Requirements
 1. Load and preprocess three prompt templates: 'continue_generation_LLM', 'trim_results_start_LLM', 'trim_results_LLM' (recursive, no double curly brackets).
 2. Use Pydantic models for structured trim outputs (explanation + extracted field).
 3. First trim the start of llm_output using trim_results_start_LLM with EXTRACTION_STRENGTH, temperature=0.
-4. Loop: continue generation with continue_generation_LLM, check last 600 chars with unfinished_prompt (strength=0.5, temperature=0).
+4. Loop: continue generation with continue_generation_LLM, then check a line-aligned tail from the last 600 chars with unfinished_prompt (strength=0.5, temperature=0). Do not start the tail in the middle of a line when a newline exists in the slice.
 5. On completion: trim the continuation with trim_results_LLM (EXTRACTION_STRENGTH, temperature=0), append, and exit.
 6. Track and return total cost from all llm_invoke calls; return model_name from continue_generation_LLM call.
 7. Pass 'language' parameter to all llm_invoke and unfinished_prompt calls.

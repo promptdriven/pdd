@@ -7,6 +7,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .llm_invoke import llm_invoke
 from .unfinished_prompt import unfinished_prompt
+from .generation_completion import completion_check_tail
 from . import EXTRACTION_STRENGTH, DEFAULT_TIME
 
 console = Console()
@@ -135,7 +136,7 @@ def continue_generation(
 
             # Build prospective new block and check completeness on the updated tail
             new_code_block = code_block + continue_result
-            last_chunk = new_code_block[-600:] if len(new_code_block) > 600 else new_code_block
+            last_chunk = completion_check_tail(new_code_block)
             reasoning, is_finished, check_cost, check_model = unfinished_prompt(
                 prompt_text=last_chunk,
                 strength=0.5,
