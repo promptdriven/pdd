@@ -1980,7 +1980,7 @@ def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     _detect_worktree_changes only picks up .prompt and .md files,
     not .py, .txt, or .agentic_prompt_* temp files.
     """
-    # Create a real git repo with tracked prompts/ directory (like pdd_cloud)
+    # Create a real git repo with tracked prompts/ directory (like downstream_project)
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)

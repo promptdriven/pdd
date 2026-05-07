@@ -2,7 +2,7 @@
 
 This is a behavioral test that should NOT be flagged. It calls main(), verifies
 signal.signal was called, invokes the handler, and asserts on Firestore side effects.
-Copied from the validation run of pdd bug against promptdriven/pdd_cloud#591.
+Copied from the validation run of pdd bug against promptdriven/example_app#591.
 """
 
 import os

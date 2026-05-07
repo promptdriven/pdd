@@ -1271,6 +1271,7 @@ requires_cloud_e2e = pytest.mark.skipif(
 )
 
 
+@pytest.mark.e2e
 @requires_cloud_e2e
 def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     """
@@ -1280,7 +1281,7 @@ def test_cmd_test_main_cloud_e2e_generate_mode(tmp_path, monkeypatch, capsys):
     1. Setting PDD_CLOUD_ONLY=1 to prevent silent fallback to local
     2. Checking for "Cloud Success" in output
 
-    Requires PDD_JWT_TOKEN to be set (e.g., via infisical).
+    Requires PDD_JWT_TOKEN to be set.
     """
     # Retry credentials check (pytest-xdist workers may have delayed keyring access)
     if not _wait_for_cloud_credentials(max_retries=3, delay=1.0):

@@ -121,7 +121,7 @@ For users with PDD Cloud access, you can override automatic grounding using XML 
 - Use case: Escape an old pattern that's pulling generation in the wrong direction
 - Use case: Intentionally break from established patterns for a redesign
 
-These tags are grounding controls for PDD Cloud. Unlike `<include>`, they are not expanded into prompt context; they are sent with the prompt so Cloud grounding can pin or exclude examples before generation.
+These tags are processed by the preprocessor (like `<include>`) and removed before the LLM sees the prompt.
 
 **Most prompts don't need these.** Automatic grounding works well for:
 - Standard modules with similar existing examples
@@ -681,11 +681,6 @@ The exact log message wording is not important.
 
 - Returned errors must not contain the API key.
 - Logs must not contain the API key.
-
-## Non-Goals
-
-This story does not test successful refund behavior.
-This story does not test provider retry behavior.
 ```
 
 ### Contract Coverage Matrix

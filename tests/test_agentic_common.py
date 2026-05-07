@@ -4499,7 +4499,7 @@ def test_git_work_tree_set_to_cwd_in_subprocess_env(mock_cwd, mock_env, mock_loa
 
     Without this, agents follow the worktree's .git file pointer back to
     the main repo and write files there instead of in the worktree.
-    See: https://github.com/gltanaka/pdd/issues/894
+    See: issue #894.
     """
     mock_shutil_which.return_value = "/bin/claude"
     os.environ["ANTHROPIC_API_KEY"] = "key"
@@ -4874,7 +4874,7 @@ class TestIssue1072FailureLogging:
 
     # Issue #1376 update: success now ALSO writes a record without --verbose,
     # but as a summary (no full prompt/response bodies). Inverts the original
-    # #1072 contract that left successes invisible — see issue gltanaka/pdd#1376.
+    # #1072 contract that left successes invisible; see issue #1376.
     def test_success_logs_summary_without_verbose(
         self, mock_shutil_which, mock_subprocess_run, mock_console, mock_env, mock_load_model_data, tmp_path
     ):

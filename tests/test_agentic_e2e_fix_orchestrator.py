@@ -1819,7 +1819,7 @@ class TestPushWithRetryNonFastForward:
             success, message = _commit_and_push(
                 cwd=tmp_path, issue_number=608,
                 issue_title="Add fallback in get_waitlist_status.py",
-                repo_owner="promptdriven", repo_name="pdd_cloud",
+                repo_owner="promptdriven", repo_name="example_app",
                 initial_file_hashes={
                     "backend/functions/get_waitlist_status.py": "old_hash"
                 },
@@ -1828,7 +1828,7 @@ class TestPushWithRetryNonFastForward:
 
         assert success is True
         assert "1 file(s)" in message
-        mock_push.assert_called_once_with(tmp_path, "promptdriven", "pdd_cloud")
+        mock_push.assert_called_once_with(tmp_path, "promptdriven", "example_app")
 
 
 class TestProviderFailureAbort:
@@ -3576,7 +3576,7 @@ class TestClassifyStepOutput:
         assert _classify_step_output("NOT_A_BUG", step_num=3) == "NOT_A_BUG"
 
     def test_semantic_all_tests_passed_step9(self):
-        """Real Step 9 output from pdd_cloud#673 — says tests pass but no token."""
+        """Real Step 9 output from downstream_project#673 — says tests pass but no token."""
         from pdd.agentic_e2e_fix_orchestrator import _classify_step_output
         output = (
             "The fix appears complete for issue #673. "
@@ -3714,7 +3714,7 @@ class TestClassifyStepOutputCodeBugPriority:
 class TestIssue673CheckE2ESubdirectory:
     """Bug: _check_e2e_environment only checks repo root for playwright config.
 
-    In pdd_cloud, playwright.config.ts lives at frontend/playwright.config.ts.
+    In downstream_project, playwright.config.ts lives at frontend/playwright.config.ts.
     The current check only looks at cwd/ and misses subdirectory configs,
     causing Step 2 to be skipped unnecessarily.
     """
@@ -3858,7 +3858,7 @@ class TestIssue673SkippedStepEarlyExit:
 class TestIssue673NotABugAfterFixesApplied:
     """Bug: NOT_A_BUG is allowed on Cycle 2+ even after fixes were applied.
 
-    In pdd_cloud#673, the workflow applied fixes in Cycle 1, verified them
+    In downstream_project#673, the workflow applied fixes in Cycle 1, verified them
     in Cycle 2, but then on Cycle 4 Step 3 misclassified an E2E infrastructure
     issue as NOT_A_BUG, stopping the workflow with the wrong exit message.
     """
@@ -5412,7 +5412,7 @@ class TestStep11CodeCleanup:
         doubles this for the aggregate retry budget, so the practical ceiling
         is 2h, well under the 4h Cloud Run executor job timeout. Reverting to
         a smaller value silently kills the subprocess mid-iteration with a
-        misleading ``Cost: $0.0000`` failure (root-cause history: gltanaka/pdd#1366).
+        misleading ``Cost: $0.0000`` failure (root-cause history: promptdriven/pdd#1366).
         """
         from pdd.agentic_e2e_fix_orchestrator import E2E_FIX_STEP_TIMEOUTS
         assert 8 in E2E_FIX_STEP_TIMEOUTS

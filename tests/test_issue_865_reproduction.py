@@ -114,7 +114,7 @@ class TestIssue865Layer3SemanticDetection:
     def test_step3_paraphrased_not_a_bug_detected(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """Step 3 says 'it is already fixed' — semantic fallback detects NOT_A_BUG.
 
-        Real-world case from pdd_cloud#600: LLM said 'it is already fixed on
+        Real-world case from downstream_project#600: LLM said 'it is already fixed on
         this branch' and 'I did not make code changes' but never emitted NOT_A_BUG.
         Previously: workflow ran all 9 steps × 5 cycles (45 calls).
         Now: exits early at Step 3 (3 calls).
@@ -124,7 +124,7 @@ class TestIssue865Layer3SemanticDetection:
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
             if 'step3' in label:
-                # Real-world paraphrase from pdd_cloud#600 - no exact NOT_A_BUG token
+                # Real-world paraphrase from downstream_project#600 - no exact NOT_A_BUG token
                 return (True, (
                     "## Root Cause Analysis\n"
                     "After investigation, it is already fixed on this branch. "
@@ -155,7 +155,7 @@ class TestIssue865Layer3SemanticDetection:
     ):
         """Step 2 says 'both passed' — semantic fallback detects ALL_TESTS_PASS.
 
-        Real-world case from pdd_cloud#600: LLM said 'Verified with npx jest...
+        Real-world case from downstream_project#600: LLM said 'Verified with npx jest...
         both passed' but never emitted ALL_TESTS_PASS.
         Previously: workflow ran all 9 steps × 5 cycles (45 calls).
         Now: exits early at Step 2 (2 calls).
@@ -167,7 +167,7 @@ class TestIssue865Layer3SemanticDetection:
         def side_effect(*args, **kwargs):
             label = kwargs.get('label', '')
             if 'step2' in label:
-                # Real-world paraphrase from pdd_cloud#600 - no exact ALL_TESTS_PASS token
+                # Real-world paraphrase from downstream_project#600 - no exact ALL_TESTS_PASS token
                 return (True, (
                     "## E2E Test Results\n"
                     "Verified with npx jest -- both passed.\n"
@@ -193,7 +193,7 @@ class TestIssue865Layer3SemanticDetection:
     def test_step9_paraphrased_all_pass_detected(self, e2e_fix_mock_dependencies, e2e_fix_default_args):
         """Step 9 says '18/18 pass' — semantic fallback detects ALL_TESTS_PASS.
 
-        Real-world case from pdd_cloud#673: Step 9 had MANDATORY instructions
+        Real-world case from downstream_project#673: Step 9 had MANDATORY instructions
         but LLM still didn't emit any token.
         Previously: workflow stopped with safety error.
         Now: detects ALL_TESTS_PASS via semantic patterns.

@@ -72,10 +72,11 @@ import pytest
 from z3 import String, Const, StringVal, And, Or, Not, Solver, is_string, sat, unsat
 import sys
 import os
+from pathlib import Path
 
 # Add the module path to sys.path to import the code under test
-module_path = "/Users/gregtanaka/Documents/pdd_cloud/pdd/examples/test_generation_benchmark/src"
-sys.path.insert(0, module_path)
+module_path = Path(__file__).resolve().parents[2] / "src"
+sys.path.insert(0, str(module_path))
 
 from email_validator import EmailValidator, ValidationResult
 

@@ -37,10 +37,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 2. **Detection phase (no LLM calls):** Iterate modules via `discover_prompt_files()` and `infer_module_identity()`. For each, call `sync_determine_operation(basename, language, target_coverage=90.0, log_mode=True)`. Collect modules where operation is `update` (prompt stale), `example` (example stale), or any other non-synced operation (`verify`, `generate`, `auto-deps`, `test`, `crash`). Exit 0 if no drift.
 
-3. **Git-based reclassification:** When `--diff-base` is provided, fetch git changed files once (not per-module). For non-`update` operations:
-   - If the code file changed but the prompt file didn't (relative to diff_base), reclassify the drift as `update` (prompt stale).
-   - If `sync_determine_operation` reports `generate` but both the code file and prompt file changed in the PR, reclassify the drift as `example`. In a clean CI checkout this usually means the PR already updated both sides and only example refresh remains; do not rerun full code generation over reviewed code.
-   This fixes detection in CI where fingerprints are absent and `sync_determine_operation` returns `auto-deps`/`generate` instead of the true drift direction.
+3. **Git-based reclassification:** When `--diff-base` is provided, fetch git changed files once (not per-module). For non-`update` operations: if the code file changed but the prompt file didn't (relative to diff_base), reclassify the drift as `update` (prompt stale). This fixes detection in CI where fingerprints are absent and `sync_determine_operation` returns `auto-deps`/`generate` instead of `update`.
 
 4. **Code-without-prompt detection:** When `--modules` is specified, also scan for code files that have no corresponding prompt. These are collected as `update` drifts with `reason='Code exists without prompt'`.
 
@@ -48,9 +45,9 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 6. **Three-way heal dispatch:** Dispatch by `drift.operation`:
    - `update`: run `pdd --force --strength 0.5 update <code_path>` then `pdd --force --strength 0.5 example <prompt_path> <code_path>`. If code_path is unresolved, fail closed (no repo-wide fallback). After update, run churn gate and structural invariants gate before the follow-up example step. If example fails, revert prompt and fail.
-   - `example`: run `pdd --force --strength 0.5 example <prompt_path> <code_path>` directly. Require both paths resolved; fail closed otherwise. In CI, when `PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1` and the resolved example file already exists, skip the example rewrite and leave that reviewed artifact to the PR author; missing examples still run the heal.
+   - `example`: run `pdd --force --strength 0.5 example <prompt_path> <code_path>` directly. Require both paths resolved; fail closed otherwise.
    - `auto-deps`: run `pdd --force --strength 0.5 auto-deps <prompt_path> <dependency_dir> --output <prompt_path> --csv project_dependencies.csv` directly. Do not route this through full `pdd sync`, because sync can continue into generate/crash flows after dependency insertion.
-   - `verify`/`generate`/`test`/`crash`: run `pdd --force --strength 0.5 sync <basename>` to let sync_determine_operation dispatch correctly. Do NOT use `pdd example` for these — it would overwrite user edits (verify), skip code regeneration (generate), or save a stale fingerprint. The only exception is the git-based clean-CI reclassification above, where a reported `generate` operation is converted to `example` because both code and prompt changed in the PR.
+   - `verify`/`generate`/`test`/`crash`: run `pdd --force --strength 0.5 sync <basename>` to let sync_determine_operation dispatch correctly. Do NOT use `pdd example` for these — it would overwrite user edits (verify), skip code regeneration (generate), or save a stale fingerprint.
 
 7. **Noninteractive strength override:** All heal subprocess commands pass `--force --strength 0.5`. `--force` suppresses overwrite prompts in CI; `--strength 0.5` overrides `.pddrc` context strengths that would otherwise push model selection into expensive tiers.
 
@@ -77,7 +74,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 16. **Operational bypass:** `PDD_HEAL_SYNC_SKIP_MODULES` env var (comma-separated) skips `pdd sync`/`pdd example` steps for listed modules. For `update` drifts, the update itself still runs but the follow-up example is skipped; `main` records that module as both healed and skipped so PR mode cannot create a success checkpoint. For fully skipped non-update operations, `heal_module` returns `None` (distinct from True/False).
 
-17. **Environment:** Subprocess env sets `PDD_FORCE=1`, `CI=1`, `NO_COLOR=1`, `PDD_OUTPUT_COST_PATH`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`, and defaults `PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1`.
+17. **Environment:** Subprocess env sets `PDD_FORCE=1`, `CI=1`, `NO_COLOR=1`, `PDD_OUTPUT_COST_PATH`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`.
 
 18. **CLI interface:** `argparse` with `--modules` (space/comma-separated), `--budget-cap` (float), `--skip-ci` (flag), `--diff-base` (string). Invoked as `python -m pdd.ci_drift_heal`.
 
@@ -98,9 +95,6 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 <pdd.agentic_common>
     <include select="def:example_run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include>
 </pdd.agentic_common>
-<pdd.auto_include>
-    <include query="usage of include tag parsing and validation logic for invariants check">context/auto_include_example.py</include>
-</pdd.auto_include>
 
 % Deliverables
 - Code: `pdd/ci_drift_heal.py` — standalone CI script with `if __name__ == '__main__'` entry point

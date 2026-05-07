@@ -68,8 +68,9 @@ shared:
   # All prompts (full directory)
   - pdd/prompts/
 
-  # Architecture metadata
+  # Architecture and dependency metadata
   - architecture.json
+  - project_dependencies.csv
 
   # Context prompt files
   - context/ctx_obj_params.prompt

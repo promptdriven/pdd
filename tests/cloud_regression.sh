@@ -64,8 +64,8 @@ else
     echo "  export NEXT_PUBLIC_FIREBASE_API_KEY=<api_key>"
     echo "  export GITHUB_CLIENT_ID=<client_id>"
     echo ""
-    echo "Or run with Infisical:"
-    echo "  infisical run -- make cloud-regression"
+    echo "Or run after exporting the required API keys:"
+    echo "  make cloud-regression"
     echo "========================================"
     exit 1
 fi

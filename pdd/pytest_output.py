@@ -208,6 +208,12 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
 
         # Add --rootdir to ensure pytest uses project's config
         pytest_args.append(f"--rootdir={project_root}")
+    else:
+        # Keep ad hoc temp-file runs rooted in a writable directory. Without an
+        # explicit root, pytest may choose a broad common ancestor such as
+        # /private on macOS and emit cache permission warnings.
+        subprocess_kwargs["cwd"] = str(test_path.parent)
+        pytest_args.append(f"--rootdir={test_path.parent}")
 
     try:
         # Run pytest using Popen for proper process group cleanup (Issue #894).

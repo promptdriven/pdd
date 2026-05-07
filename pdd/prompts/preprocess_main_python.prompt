@@ -68,7 +68,7 @@
         b. Call `xml_tagger(prompt, strength, temperature, verbose, time=time)`.
         c. Use the result from `xml_tagger` (tagged prompt, cost, model name).
     4. If `xml` is False:
-        a. Call `preprocess(prompt, recursive=recursive, double_curly_brackets=double, exclude_keys=exclude)`.
+        a. Seed circular-include detection with the root prompt's resolved path: `initial_seen = {str(Path(prompt_file).resolve())}`. Then call `preprocess(prompt, recursive=recursive, double_curly_brackets=double, exclude_keys=exclude, _seen=initial_seen)` so a prompt that includes itself is rejected immediately.
         b. Set `total_cost = 0.0` and `model_name = "N/A"`.
     5. Save the resulting preprocessed (or XML-tagged) prompt to `output_file_paths["output"]`.
     6. Print success messages and cost/model information if not in `quiet` mode.

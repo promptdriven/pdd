@@ -6851,8 +6851,7 @@ def test_prompt_file_timeout_spec_matches_code_dict():
     import ast
     import re
 
-    # Load the prompt file (the specification for the orchestrator)
-    # Code prompts live in pdd_cap — skip when not available (e.g. public repo)
+    # Load the prompt file (the specification for the orchestrator).
     prompt_path = Path(__file__).resolve().parents[1] / "pdd" / "prompts" / "agentic_bug_orchestrator_python.prompt"
     if not prompt_path.exists():
         pytest.skip("Code prompt not available in this environment")
@@ -6905,7 +6904,7 @@ def test_step9_snapshot_covers_nested_test_dirs(
     spurious retry → Step 9 timeout / SIGKILL.
 
     This matches the #1026 bug 0 scenario that re-surfaced in production
-    on pdd_cloud #1064: inspect.getsource patterns at lines 3346/3362 of
+    on downstream_project #1064: inspect.getsource patterns at lines 3346/3362 of
     extensions/github_pdd_app/tests/pdd_executor/test_orchestrator.py
     were falsely flagged because that path lives under extensions/, not
     under the root tests/ dir.
@@ -6970,7 +6969,7 @@ def test_step9_snapshot_covers_nested_test_dirs(
     assert step9_call_count == 1, (
         f"Expected Step 9 to run exactly once when a nested-path file was "
         f"unchanged. Got {step9_call_count} calls. A retry means the "
-        f"snapshot didn't cover nested test directories — the pdd_cloud "
+        f"snapshot didn't cover nested test directories — the downstream_project "
         f"#1064 failure mode (tests under extensions/github_pdd_app/tests/ "
         f"were missed when the snapshot only walked {{worktree}}/tests/)."
     )
@@ -7015,7 +7014,7 @@ def test_step9_unchanged_file_with_preexisting_pattern_no_retry(
     mock_dependencies, default_args, tmp_path
 ):
     """Unchanged file (snapshot == post) must not trigger a retry, even when
-    it contains pre-existing structural patterns. This is the pdd_cloud
+    it contains pre-existing structural patterns. This is the downstream_project
     #1064 SIGKILL pattern."""
     mock_run, _, _ = mock_dependencies
     worktree_path = tmp_path / ".pdd" / "worktrees" / "fix-issue-1"
@@ -7044,7 +7043,7 @@ def test_step9_unchanged_file_with_preexisting_pattern_no_retry(
 
     assert step9_calls == 1, (
         f"Unchanged file with pre-existing pattern must not retry. "
-        f"Got {step9_calls} step9 calls (the pdd_cloud #1064 failure)."
+        f"Got {step9_calls} step9 calls (the downstream_project #1064 failure)."
     )
 
 

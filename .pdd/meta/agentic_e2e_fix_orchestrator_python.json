@@ -1,0 +1,16 @@
+{
+  "pdd_version": "0.0.228",
+  "timestamp": "2026-05-06T03:28:20.931522+00:00",
+  "command": "regenerate-public",
+  "prompt_hash": "83cb1f4bc9108f08c81dfeebb6a66b334f35da06bb351fd2909cc386d0910251",
+  "code_hash": "c798bbc20c7765f2f3186510095f70c36d24118593e060cd194b3e1d2c7acfb6",
+  "example_hash": "8cb026c4a4f63f2a8ff1eae9a271f76885503a44aa3c93c067ad6ba113dab2fb",
+  "test_hash": "bc235e8fdbf8b416f01f63890ecf5e410c8511a612c6b7c1dff14a513e37b385",
+  "test_files": {
+    "test_agentic_e2e_fix_orchestrator.py": "bc235e8fdbf8b416f01f63890ecf5e410c8511a612c6b7c1dff14a513e37b385"
+  },
+  "include_deps": {
+    "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+  }
+}

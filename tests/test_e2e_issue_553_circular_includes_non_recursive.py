@@ -18,8 +18,8 @@ from pathlib import Path
 
 
 # Timeout in seconds for subprocess — buggy code loops forever, so this must be finite.
-# 10 seconds is generous; the fixed code should exit in < 1 second.
-CLI_TIMEOUT = 10
+# Keep enough headroom for cold CLI startup under high xdist worker load.
+CLI_TIMEOUT = 45
 
 
 def _get_project_root() -> Path:
@@ -43,6 +43,8 @@ def _run_pdd_preprocess(prompt_file: str, cwd: str, extra_args: list = None):
         cmd.extend(extra_args)
     env = os.environ.copy()
     env["PYTHONPATH"] = str(_get_project_root())
+    env["PDD_AUTO_UPDATE"] = "false"
+    env["PDD_QUIET"] = "1"
     return subprocess.run(
         cmd,
         capture_output=True,

@@ -981,7 +981,7 @@ def detect_structural_test_patterns(
     # end naturally suppresses all violations (the intended behaviour).  The
     # old clamp treated "past the end" as "file shrank, rescan everything",
     # which false-flagged pre-existing patterns whenever Step 9 left the file
-    # untouched (the exact pdd_cloud #1064 failure mode).
+    # untouched (the exact downstream issue #1064 failure mode).
     if start_line is not None and start_line > 1:
         effective_start = start_line
     else:
@@ -1172,7 +1172,7 @@ def _scan_step9_file_for_new_patterns(
 
     Distinguishes "unchanged" from "rewritten" by content comparison, not by
     line count alone — line counts can match exactly while content differs
-    (the gltanaka review of pdd_cloud #1064 surfaced this).
+    (a downstream review of issue #1064 surfaced this).
 
     Args:
         file_path: Path to the file as it stands now (post-Step 9).
@@ -1586,7 +1586,7 @@ def run_agentic_bug_orchestrator(
         # Snapshot full content (not just line counts) so the structural test
         # guard can distinguish "unchanged" from "rewritten with same/fewer
         # lines" — a distinction line counts alone can't make.  See the
-        # gltanaka review of pdd_cloud #1064: a rewrite that happens to land
+        # Downstream issue #1064: a rewrite that happens to land
         # on the same line count would silently skip violation detection.
         pre_step9_snapshots: Dict[str, str] = {}
         if step_num == 9:

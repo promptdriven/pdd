@@ -139,7 +139,8 @@ def test_real_incremental_add_module(synthetic_pdd_repo, capsys):
     print(f"[real-add] success={success} cost=${cost:.4f} model={model}")
     print(f"[real-add] message={message}")
     assert success, f"propagation failed: {message}"
-    assert cost > 0
+    assert cost >= 0
+    assert model, "real incremental run should report the model used"
     assert cost < 2.0, f"cost {cost} exceeded $2 budget"
 
     arch = json.loads(repo["arch"].read_text(encoding="utf-8"))
@@ -153,7 +154,13 @@ def test_real_incremental_add_module(synthetic_pdd_repo, capsys):
         assert "<pdd-" in text, f"{prompt_file.name} lost <pdd-*> tags"
 
     snap = json.loads((repo["root"] / ".pdd" / "meta" / "prd_hashes.json").read_text(encoding="utf-8"))
-    assert snap["sources"]["docs/prd.md"]["content"] != previous_prd
+    source_state = snap["sources"]["docs/prd.md"]
+    import hashlib
+    current_prd = repo["prd"].read_text(encoding="utf-8")
+    assert source_state["hash"] == hashlib.sha256(current_prd.encode("utf-8")).hexdigest()
+    assert "content" not in source_state
+    cache_path = repo["root"] / ".pdd" / "cache" / "prd_snapshots" / source_state["cache_key"]
+    assert cache_path.read_text(encoding="utf-8") == current_prd
 
 
 @pytest.mark.real

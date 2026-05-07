@@ -78,7 +78,7 @@ def create_vertex_model_dataframe():
 def mock_set_llm_cache():
     """Mock the LiteLLM cache to avoid cache-related side effects."""
     with patch('litellm.caching.caching.Cache') as mock_cache_class:
-        # Force local execution to prevent cloud routing when infisical secrets are present
+        # Force local execution to prevent cloud routing when shell secrets are present.
         with patch.dict(os.environ, {"PDD_FORCE_LOCAL": "1"}):
             yield mock_cache_class
 

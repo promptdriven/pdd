@@ -2182,6 +2182,7 @@ requires_cloud_e2e = pytest.mark.skipif(
 )
 
 
+@pytest.mark.e2e
 @requires_cloud_e2e
 def test_fix_main_cloud_e2e_non_loop(tmp_path, capsys):
     """
@@ -2289,6 +2290,7 @@ FAILED test_sum_list.py::test_sum_list - AssertionError: assert 6 == 10
         os.environ.pop('PDD_CLOUD_ONLY', None)
 
 
+@pytest.mark.e2e
 @requires_cloud_e2e
 def test_fix_main_cloud_e2e_loop(tmp_path, capsys):
     """

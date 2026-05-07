@@ -62,6 +62,29 @@ If no specific modules can be identified from the issue content, but architectur
 - Transitive dependencies: if module A depends on B, and B needs sync, A may also need sync
 - Only include modules that exist in the architecture.json
 
+### Forbidden Outputs (HARD BOUNDARY)
+
+**Never output a basename ending in `_LLM`.**
+
+Files matching `*_LLM.prompt` (e.g. `agentic_split_step4_propose_options_LLM.prompt`,
+`agentic_sync_identify_modules_LLM.prompt`) are **runtime LLM templates** consumed
+directly by their owning code module via `load_prompt_template(...)`. They have no
+language-suffixed sync companion (no `<basename>_LLM_python.prompt`), so
+`pdd sync <basename>_LLM` will always fail with
+`"No prompt files found for basename '<basename>_LLM'"`.
+
+Rules:
+- MUST NOT include any basename ending in `_LLM` in `MODULES_TO_SYNC`.
+- MUST NOT include any basename whose only evidence is a changed `*_LLM.prompt` file.
+- If an issue or diff mentions only `*_LLM.prompt` files, return `MODULES_TO_SYNC: []`
+  (a successful no-op — those templates are already consumed directly by their owner).
+- If an issue mentions both a runtime `*_LLM.prompt` and an owning language-suffixed
+  prompt, select **only** the owning module basename (e.g. `agentic_split_orchestrator`,
+  not `agentic_split_step4_propose_options_LLM`).
+
+This is a safety boundary, not a heuristic. Even if the issue title, FILES_MODIFIED
+line, or architecture.json entry names a `*_LLM` basename, drop it from the output.
+
 ### Few-Shot Examples
 
 **Example 1: `pdd generate` issue**
@@ -73,16 +96,27 @@ Issue body contains:
 
 Answer: MODULES_TO_SYNC: ["user_service", "order_api"]
 
-**Example 2: `pdd change` issue**
+**Example 2: `pdd change` issue with mixed runtime + owning prompt**
 Issue body contains:
-> Step 8: Prompt Change Analysis
-> Prompt Modifications: agentic_sync_identify_modules_LLM.prompt
-> ...
-> Step 9: FILES_MODIFIED: pdd/prompts/agentic_sync_identify_modules_LLM.prompt
+> Step 9: FILES_MODIFIED: prompts/agentic_split_orchestrator_python.prompt,
+> prompts/agentic_split_step4_propose_options_LLM.prompt
 
-Answer: MODULES_TO_SYNC: ["agentic_sync_identify_modules_LLM"]
+The `_LLM.prompt` file is a runtime template owned by the orchestrator.
+Drop the `_LLM` basename and keep only the owning module.
 
-**Example 3: Long PRD issue with origin matching**
+Answer: MODULES_TO_SYNC: ["agentic_split_orchestrator"]
+
+**Example 3: Issue changes only runtime `*_LLM.prompt` files**
+Issue body contains:
+> Step 9: FILES_MODIFIED: prompts/agentic_sync_identify_modules_LLM.prompt
+
+Runtime LLM templates are consumed directly by their owning code module
+(`agentic_sync.py` calls `load_prompt_template("agentic_sync_identify_modules_LLM")`).
+There is no syncable module to regenerate.
+
+Answer: MODULES_TO_SYNC: []
+
+**Example 4: Long PRD issue with origin matching**
 Issue body is a long PRD with no explicit module names. But architecture.json contains:
 > {{"billing_service": {{"origin": "https://github.com/org/repo/issues/42", ...}},
 >  "payment_gateway": {{"origin": "https://github.com/org/repo/issues/42", ...}}}}

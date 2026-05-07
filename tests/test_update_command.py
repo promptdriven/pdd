@@ -149,7 +149,8 @@ class TestUpdateCommandArgs:
         # Should NOT fail with "Single-file mode accepts exactly one argument"
         assert "Single-file mode accepts exactly one argument" not in result.output
 
-    def test_two_args_with_git_flag(self, tmp_path):
+    @patch('pdd.commands.modify.update_main', return_value=("Updated prompt", 0.001, "mock-model"))
+    def test_two_args_with_git_flag(self, mock_update_main, tmp_path):
         """2-arg mode with --git should be accepted."""
         prompt_file = tmp_path / "test_python.prompt"
         prompt_file.write_text("prompt")
@@ -164,6 +165,8 @@ class TestUpdateCommandArgs:
 
         # Should NOT fail with "Single-file mode accepts exactly one argument"
         assert "Single-file mode accepts exactly one argument" not in result.output
+        mock_update_main.assert_called_once()
+        assert mock_update_main.call_args.kwargs["use_git"] is True
 
     def test_two_args_without_git_errors(self, tmp_path):
         """2-arg mode WITHOUT --git should give helpful error."""

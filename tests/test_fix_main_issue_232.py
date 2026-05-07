@@ -83,9 +83,9 @@ def test_issue_232_only_test_file_modified_should_not_print_code_file(
             'error_file': 'AssertionError: 3 != 4'
         },
         {
-            'output_test': '/home/james/pdd_cap/tests/test_fixed.py',
-            'output_code': '/home/james/pdd_cap/code_fixed.py',  # This path should NOT be printed
-            'output_results': '/home/james/pdd_cap/fix_results.log'
+            'output_test': '/home/james/pdd_workspace/tests/test_fixed.py',
+            'output_code': '/home/james/pdd_workspace/code_fixed.py',  # This path should NOT be printed
+            'output_results': '/home/james/pdd_workspace/fix_results.log'
         },
         None
     )
@@ -136,7 +136,7 @@ def test_issue_232_only_test_file_modified_should_not_print_code_file(
     # The code file path should NOT be printed when no code file was generated
 
     # First, verify the test file path WAS printed (expected behavior)
-    assert any('/home/james/pdd_cap/tests/test_fixed.py' in str(call) for call in mock_rprint.call_args_list), \
+    assert any('/home/james/pdd_workspace/tests/test_fixed.py' in str(call) for call in mock_rprint.call_args_list), \
         f"Expected test file path to be printed. Got calls: {all_rprint_calls}"
 
     # Now check if the code file path was incorrectly printed (THE BUG)

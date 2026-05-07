@@ -67,6 +67,7 @@ Hyperbolic,hyperbolic/deepseek-ai/DeepSeek-V3,0.25,0.25,1300,,HYPERBOLIC_API_KEY
 Lambda AI,lambda_ai/deepseek-r1-0528,0.2,0.6,1370,,LAMBDA_API_KEY,0,True,effort,
 MiniMax,minimax/MiniMax-M2.7,0.3,1.2,1392,,MINIMAX_API_KEY,0,True,effort,
 Moonshot AI,moonshot/kimi-k2.6,0.95,4.0,1529,,MOONSHOT_API_KEY,0,True,effort,
+Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,0.95,4.0,1529,,FIREWORKS_API_KEY,0,False,none,
 Nebius,nebius/deepseek-ai/DeepSeek-R1-0528,0.8,2.4,1370,,NEBIUS_API_KEY,0,True,effort,
 Nebius,nebius/deepseek-ai/DeepSeek-V3,0.5,1.5,1300,,NEBIUS_API_KEY,0,True,none,
 Nebius,nebius/deepseek-ai/DeepSeek-V3-0324,0.5,1.5,1300,,NEBIUS_API_KEY,0,True,none,

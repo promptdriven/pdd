@@ -329,6 +329,36 @@ def get_file_path(file_name: str) -> str:
         return os.path.join("./", file_name)
     return str(resolved)
 
+def _process_nested_includes(
+    content: str,
+    _seen: set,
+    _failed: Optional[List[str]],
+    _user_intent_paths: Optional[set],
+) -> str:
+    """Resolve include syntax from included content while preserving the include stack."""
+    nested_user_intent_paths = _user_intent_paths if _user_intent_paths is not None else set()
+    content = process_backtick_includes(
+        content,
+        recursive=False,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=nested_user_intent_paths,
+    )
+    content = process_include_tags(
+        content,
+        recursive=False,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=nested_user_intent_paths,
+    )
+    content = process_include_many_tags(
+        content,
+        recursive=False,
+        _failed=_failed,
+        _user_intent_paths=nested_user_intent_paths,
+    )
+    return content
+
 def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
     if _seen is None:
         _seen = set()
@@ -344,9 +374,23 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
             console.print(f"Processing backtick include: [cyan]{full_path}[/cyan]")
             with open(full_path, 'r', encoding='utf-8') as file:
                 content = file.read()
+                child_seen = _seen | {resolved}
                 if recursive:
-                    child_seen = _seen | {resolved}
-                    content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)
+                    content = preprocess(
+                        content,
+                        recursive=True,
+                        double_curly_brackets=False,
+                        _seen=child_seen,
+                        _failed=_failed,
+                        _user_intent_paths=_user_intent_paths,
+                    )
+                else:
+                    content = _process_nested_includes(
+                        content,
+                        _seen=child_seen,
+                        _failed=_failed,
+                        _user_intent_paths=_user_intent_paths,
+                    )
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
         except FileNotFoundError:
@@ -590,7 +634,22 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                     
                     if recursive:
                         child_seen = _seen | {resolved}
-                        content = preprocess(content, recursive=True, double_curly_brackets=False, _seen=child_seen)
+                        content = preprocess(
+                            content,
+                            recursive=True,
+                            double_curly_brackets=False,
+                            _seen=child_seen,
+                            _failed=_failed,
+                            _user_intent_paths=_user_intent_paths,
+                        )
+                    else:
+                        child_seen = _seen | {resolved}
+                        content = _process_nested_includes(
+                            content,
+                            _seen=child_seen,
+                            _failed=_failed,
+                            _user_intent_paths=_user_intent_paths,
+                        )
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
         except FileNotFoundError:
