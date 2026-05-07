@@ -3478,6 +3478,7 @@ def llm_invoke(
 
                         # Calculate cost using usage + CSV rates
                         total_cost = 0.0
+                        finish_reason = getattr(resp, "status", None)
                         usage = getattr(resp, "usage", None)
                         if usage is not None:
                             in_tok = getattr(usage, "input_tokens", 0) or 0
@@ -3556,6 +3557,7 @@ def llm_invoke(
                             model=str(model_name_litellm),
                             provider=str(provider),
                             cost=total_cost,
+                            finish_reason=finish_reason,
                             call_type="responses",
                         )
                         return {
@@ -3563,6 +3565,7 @@ def llm_invoke(
                             'cost': total_cost,
                             'model_name': model_name_litellm,
                             'thinking_output': None,
+                            'finish_reason': finish_reason,
                         }
                     except Exception as e:
                         last_exception = e
@@ -4228,7 +4231,8 @@ def llm_invoke(
                     'result': final_result,
                     'cost': total_cost,
                     'model_name': model_name_litellm, # Actual model used
-                    'thinking_output': final_thinking if final_thinking else None
+                    'thinking_output': final_thinking if final_thinking else None,
+                    'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
                 }
 
             # --- 6b. Handle Invocation Errors ---
