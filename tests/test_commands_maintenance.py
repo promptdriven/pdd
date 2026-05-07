@@ -258,7 +258,7 @@ def test_sync_with_github_issue_url_keeps_agentic_dispatch(
 ):
     """A GitHub issue URL should still dispatch to agentic issue sync."""
     mock_agentic_sync.return_value = (True, "Sync completed", 0.25, "agentic-sync")
-    issue_url = "https://github.com/promptdriven/pdd/issues/636"
+    issue_url = "https://github.com/gltanaka/pdd/issues/636"
 
     result = runner.invoke(
         cli.cli,
@@ -272,8 +272,33 @@ def test_sync_with_github_issue_url_keeps_agentic_dispatch(
     call_kwargs = mock_agentic_sync.call_args.kwargs
     assert call_kwargs["issue_url"] == issue_url
     assert call_kwargs["budget"] == 3.5
+    assert call_kwargs["dry_run"] is False
     assert call_kwargs["one_session"] is False
     assert call_kwargs["use_github_state"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_global_sync')
+@patch('pdd.commands.maintenance.sync_main')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+def test_sync_with_github_issue_url_forwards_dry_run(
+    mock_agentic_sync,
+    mock_sync_main,
+    mock_global_sync,
+    mock_auto_update,
+    runner,
+):
+    """Issue URL sync must keep --dry-run read-only by forwarding it."""
+    mock_agentic_sync.return_value = (True, "Dry run complete", 0.0, "agentic-sync")
+    issue_url = "https://github.com/gltanaka/pdd/issues/1382"
+
+    result = runner.invoke(cli.cli, ["sync", "--dry-run", issue_url])
+
+    assert result.exit_code == 0
+    mock_agentic_sync.assert_called_once()
+    mock_sync_main.assert_not_called()
+    mock_global_sync.assert_not_called()
+    assert mock_agentic_sync.call_args.kwargs["dry_run"] is True
 
 
 @patch('pdd.core.cli.auto_update')
