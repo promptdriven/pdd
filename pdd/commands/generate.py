@@ -80,6 +80,19 @@ class GenerateCommand(click.Command):
     is_flag=True,
     help="Disable GitHub issue comments/state for agentic modes.",
 )
+@click.option(
+    "--project-root",
+    "project_root",
+    type=click.Path(file_okay=False, dir_okay=True, exists=True, resolve_path=True),
+    default=None,
+    help=(
+        "Explicit project-root override. Use the given path as the resolved "
+        "project root instead of walking up from cwd. Useful when the cwd is "
+        "a self-contained pdd project nested inside an unrelated outer git repo. "
+        "Only valid in agentic-issue mode and --incremental --experimental-prd "
+        "mode; passing it on a standard prompt-file invocation is rejected."
+    ),
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -99,6 +112,7 @@ def generate(
     output_dir: Optional[str],
     force_single: bool,
     no_github_state: bool,
+    project_root: Optional[str],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -212,6 +226,7 @@ def generate(
                 strength=obj.get("strength", DEFAULT_STRENGTH),
                 temperature=obj.get("temperature", 0.0),
                 time=obj.get("time", DEFAULT_TIME),
+                project_root=project_root,
             )
             if not quiet:
                 if success:
@@ -241,6 +256,7 @@ def generate(
                 skip_prompts=skip_prompts,
                 target_dir=output_dir,
                 force_single=force_single,
+                project_root=project_root,
             )
             if not quiet:
                 if success:
@@ -250,6 +266,12 @@ def generate(
                 if output_files:
                     click.echo(f"Output files: {', '.join(output_files)}")
             return (message, cost, model) if success else None
+
+        if project_root:
+            raise click.UsageError(
+                "--project-root is only supported in agentic-issue mode "
+                "(GitHub issue URL) or --incremental --experimental-prd mode."
+            )
 
         # Validate file path (not a URL, must exist and not be a directory)
         if prompt_file and not template:

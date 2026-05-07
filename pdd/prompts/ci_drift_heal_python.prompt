@@ -95,7 +95,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
     <include>context/operation_log_example.py</include>
 </pdd.operation_log>
 <pdd.agentic_sync_runner>
-    <include>context/agentic_sync_runner_example.py</include>
+    <include select="def:main">context/agentic_sync_runner_example.py</include>
 </pdd.agentic_sync_runner>
 <pdd.agentic_common>
     <include select="def:example_run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include>

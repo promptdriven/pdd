@@ -1067,7 +1067,8 @@ Arguments:
 Options:
 - `--output LOCATION`: Specify where to save the generated code. Supports `${VAR}`/`$VAR` expansion from `-e/--env`. The default file name is `<basename>.<language_file_extension>`. If an environment variable `PDD_GENERATE_OUTPUT_PATH` is set, the file will be saved in that path unless overridden by this option.
 - `--original-prompt FILENAME`: The original prompt file used to generate the existing code. If not specified, the command automatically uses the last committed version of the prompt file from git.
-- `--incremental`: Force incremental patching even if changes are significant. This option is only valid when an output location is specified and the file exists.
+- `--incremental`: For prompt-to-code generation, force incremental patching when an output location is specified and the file exists. To run the experimental PRD-to-architecture workflow, combine it with `--experimental-prd`.
+- `--experimental-prd`: Explicitly opt in to experimental Incremental PRD Mode for PRD-like files (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) or GitHub issue URLs. Requires `--incremental`.
 - `--unit-test FILENAME`: Path to a unit test file. If provided, automatic test discovery is disabled and only the content of this file is included in the prompt, instructing the model to generate code that passes the specified tests.
 - `--exclude-tests`: Do not automatically include test files found in the default tests directory.
 
@@ -1165,6 +1166,19 @@ Each validation step retries up to 3 times with automatic fixes before proceedin
 
 **Options:**
 - `--skip-prompts`: Skip prompt file generation (steps 8-11), only generate `architecture.json` and `.pddrc`
+- `--project-root <path>`: Explicit project-root override. Use the given path as the resolved project root instead of walking up from cwd. Useful when the cwd is a self-contained pdd project nested inside an unrelated outer git repo.
+
+**Project Root Detection:**
+
+`pdd generate <issue-url>` (and `pdd generate --incremental --experimental-prd`) resolves the project root by walking up from cwd. Tier A, Tier B, and Tier C are all project boundaries — the nearest boundary found while walking upward wins. This lets a nested PDD marker beat an enclosing outer `.git`, but prevents an enclosing outer PDD marker from overriding a nearer inner git repository:
+
+1. **Tier A (PDD-explicit)**: a directory containing `.pddrc` or a `.pdd/` directory.
+2. **Tier B (PDD-conventional)**: a directory containing `sources/` plus PRD/spec markdown (`prd*.md`, `spec*.md`, or `*_prd.md`/`*_spec.md`).
+3. **Tier C (git)**: a directory containing `.git`.
+
+`Path.home()` (the user's `$HOME`) is skipped for the PDD-marker check — `~/.pdd` and `~/.pddrc` are user-global config (created by `pdd setup`), not project markers. So a normal repo under `$HOME` without its own marker still falls through to its enclosing `.git` rather than resolving to `$HOME`.
+
+A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root. A separate git repository nested inside an outer PDD project is also correctly identified as its own root. When the resolved project root is a strict descendant of the enclosing git toplevel, the remote-vs-issue mismatch warning is suppressed (it would be a false positive). Pass `--project-root <path>` to bypass marker-based discovery entirely; this is most useful for CI scripts and unusual layouts where automatic detection cannot infer the right root, since marker-based detection already handles the nested-project case.
 
 Prerequisites:
 - `gh` CLI must be installed and authenticated
@@ -1183,6 +1197,38 @@ pdd generate https://github.com/myorg/myrepo/issues/42
 pdd generate --skip-prompts https://github.com/myorg/myrepo/issues/42
 # Generates: architecture.json, architecture_diagram.html, .pddrc
 ```
+
+**Experimental Incremental PRD Mode (`--incremental --experimental-prd` with a PRD file or issue URL):**
+
+After the initial architecture has been generated, `pdd generate --incremental --experimental-prd <prd_file_or_issue_url>` produces a targeted, validated patch instead of regenerating from scratch. The flow diffs the PRD against a hash/provenance record in `.pdd/meta/prd_hashes.json` plus an ignored local raw-baseline cache in `.pdd/cache/prd_snapshots/`, asks the LLM for a structured `ArchitecturePatch` (add/remove/modify modules + dependency updates), validates it deterministically (rejecting unknown modules, dangling dependencies, removals that leave dependents, unsupported fields, path traversal, and dependency cycles), and on success applies it atomically with `.bak` backups, propagates Requirements changes into affected prompts via `detect_change` + `change`, and generates new prompt files for added modules. Tracked metadata never stores raw PRD text, GitHub issue bodies, or issue comments; the command also writes `.pdd/cache/.gitignore` so raw baselines stay local even in projects without a root ignore rule.
+
+```bash
+# Diff PRD vs last fingerprint, patch architecture.json + prompts
+pdd generate --incremental --experimental-prd docs/prd.md
+
+# Same, sourced from a GitHub issue
+pdd generate --incremental --experimental-prd https://github.com/owner/repo/issues/42
+
+# Preview without writing — dry-run is safe (no files modified)
+pdd generate --incremental --experimental-prd --dry-run docs/prd.md
+
+# Suppress GitHub issue status comments during agentic runs
+pdd generate --incremental --experimental-prd --no-github-state docs/prd.md
+
+# Patch a subproject architecture/prompts directory
+pdd generate --incremental --experimental-prd --output-dir service docs/prd.md
+```
+
+This mode is never selected by suffix alone: `--experimental-prd` is required. `--incremental` with a `.prompt` file remains the legacy code-patching mode (see "Force incremental patching" example above), and `.md`/`.markdown`/`.txt`/`.rst`/`.adoc` inputs also stay in legacy code generation when options such as `--output`, `--original-prompt`, `--template`, or `--unit-test` are present. Re-running with no PRD changes is a free no-op ("No PRD changes detected"). On invalid LLM patches the orchestrator retries up to 3 times with concrete validation feedback before failing without writes.
+
+**Current limitations (this experimental mode is intentionally narrower than `pdd generate <issue-url>`):**
+
+- **Starter prompts for new modules.** When the LLM patch adds a new module, this command generates a lightweight starter prompt (PDD metadata tags, architecture-target-relative `<include>` per dependency, Role / Requirements / Interface Specification / Dependencies skeleton) — not the richer artifacts produced by the full agentic Step 9 prompt-generation flow. If you used `--output-dir service` or an issue-derived target directory, run follow-up sync from that target directory (`cd service && pdd sync`) because generated includes resolve there. Run `pdd sync` from the repo root only for root-level architectures.
+- **Hidden/config file targets are blocked.** Incremental mode refuses LLM-proposed `filepath` values with hidden path components or secret-like names such as `.env`, `.github/...`, private keys, credentials, and secrets files. Use full agentic generation or a manual architecture edit for legitimate hidden/config-file modules.
+- **No shared-context-doc merge.** Step 8.5's merge across `data_dictionary.yaml` / `api_contracts.yaml` / `integration_points.yaml` is **not** invoked. Update those files manually if the PRD change affects them.
+- **No `pdd sync --dry-run` validation.** New or modified modules are not validated against the wider sync pipeline before this command writes; run `pdd sync` after the experimental PRD update to catch any downstream issues.
+
+These are tracked as follow-ups under #859. The architecture-side propagation (patch validation, transactional commit with rollback, concurrent-modification guard, `<pdd-*>` tag preservation, Requirements updates via `detect_change` + `change`) is fully implemented and live-verified.
 
 #### Prompt Templates
 
@@ -3033,9 +3079,11 @@ PDD uses several environment variables to customize its behavior:
 
 #### Agentic Workflow Variables
 
-- **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set.
+- **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set. Surfaced in the `.pdd/agentic-logs/` audit trail's `model` field when the response JSON does not carry an explicit model name (Issue #1376).
+- **`GEMINI_MODEL`**: Override the model used by Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` to the Gemini CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
+- **`CODEX_MODEL`**: Override the model used by Codex (OpenAI) CLI in agentic workflows (e.g., `gpt-5`). When set, passes `--model` to the Codex CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
-- **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud-hosted job runner. No default; only used in cloud-hosted job environments.
+- **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 
 #### Output Path Variables
 

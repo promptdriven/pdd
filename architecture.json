@@ -5279,11 +5279,88 @@
     }
   },
   {
+    "reason": "Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.",
+    "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root: PDD markers (.pddrc/.pdd/ Tier A or sources/ + PRD/spec markdown Tier B) and .git (Tier C) are project boundaries, and the nearest boundary found while walking upward wins. A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root, while an outer PDD marker cannot override a nearer inner git repository.",
+    "dependencies": [],
+    "priority": 208,
+    "filename": "architecture_registry_python.prompt",
+    "filepath": "pdd/architecture_registry.py",
+    "tags": [
+      "module",
+      "python",
+      "architecture",
+      "registry"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_modules",
+            "signature": "(data: Any)",
+            "returns": "List[Dict[str, Any]]"
+          },
+          {
+            "name": "extract_prd_files",
+            "signature": "(data: Any)",
+            "returns": "List[str]"
+          },
+          {
+            "name": "load_registry",
+            "signature": "(project_root: Path)",
+            "returns": "dict"
+          },
+          {
+            "name": "save_registry",
+            "signature": "(project_root: Path, registry: dict)",
+            "returns": "None"
+          },
+          {
+            "name": "record_generation",
+            "signature": "(project_root: Path, issue_number: int, issue_url: str, modules_added: List[str], modules_updated: List[str], target_dir: Optional[str] = None)",
+            "returns": "None"
+          },
+          {
+            "name": "merge_architecture",
+            "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str)",
+            "returns": "Tuple[List[dict], dict]"
+          },
+          {
+            "name": "find_architecture_for_project",
+            "signature": "(project_root: Path)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "find_project_root",
+            "signature": "(start: Optional[Path] = None)",
+            "returns": "Path"
+          },
+          {
+            "name": "find_git_toplevel",
+            "signature": "(start: Optional[Path] = None)",
+            "returns": "Optional[Path]"
+          },
+          {
+            "name": "load_combined_architecture_data",
+            "signature": "(project_root: Path)",
+            "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"
+          },
+          {
+            "name": "get_modules_for_issue",
+            "signature": "(arch_data: List[dict], issue_number: int)",
+            "returns": "List[dict]"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Also wraps guarded incremental PRD-to-architecture propagation for issue URLs and local PRD files, including shell-safe target-directory validation, repo-relative status paths, subproject sync hints, and GitHub status comment redaction.",
     "dependencies": [
       "agentic_architecture_orchestrator_python.prompt",
-      "incremental_prd_architecture_python.prompt"
+      "incremental_prd_architecture_python.prompt",
+      "architecture_registry_python.prompt"
     ],
     "priority": 209,
     "filename": "agentic_architecture_python.prompt",
@@ -5299,12 +5376,12 @@
         "functions": [
           {
             "name": "run_agentic_architecture",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool)",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, project_root: Optional[str])",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "run_incremental_architecture",
-            "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float)",
+            "signature": "(prd_source: str, *, dry_run: bool, verbose: bool, quiet: bool, use_github_state: bool, target_dir: Optional[str], strength: float, temperature: float, time: float, project_root: Optional[str])",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -7055,7 +7132,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",

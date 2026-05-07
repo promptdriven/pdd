@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -1255,6 +1257,299 @@ class TestSyncOneModule:
         captured = capsys.readouterr()
         assert "Example submitted to cloud" in captured.out
 
+    # ------------------------------------------------------------------
+    # Regression tests for issue #1399:
+    # AsyncSyncRunner._sync_one_module() must not promote nonfatal
+    # `ContentSelector failed` warnings to the headline error string,
+    # hiding the real child-process failure cause.
+    # ------------------------------------------------------------------
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_real_error_preferred_over_content_selector_warning(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Real RuntimeError + ContentSelector warning: warning must NOT
+        be the headline error. Real traceback must dominate."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select='
+                '"class:AsyncSyncRunner,def:_find_pdd_executable" '
+                '\u2014 falling back to full content\n'
+            ),
+            stderr_text=(
+                "Traceback (most recent call last):\n"
+                '  File "x.py", line 1, in <module>\n'
+                "RuntimeError: generation step failed\n"
+            ),
+            exit_code=1,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+        assert not success
+        # Real error must be present in headline summary
+        assert "RuntimeError: generation step failed" in error, (
+            f"Real RuntimeError must appear in headline error; got:\n{error!r}"
+        )
+        # Nonfatal ContentSelector warning must NOT pollute the headline
+        assert "ContentSelector failed for select=" not in error, (
+            "ContentSelector warning must not be promoted to headline; got:\n"
+            f"{error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_only_nonfatal_warning_contains_failed_keyword(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Nonzero child exit where only the ContentSelector warning
+        contains the word `failed`. Headline must NOT be the warning;
+        must surface exit code or the real `PDD command failed` line.
+        Verbatim cloud-run output from issue #1399."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select='
+                '"def:build_dependency_graph,def:extract_module_from_include,'
+                'def:topological_sort" \u2014 falling back\n'
+                "PDD command failed with exit code 1\n"
+            ),
+            exit_code=1,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["bar"],
+            dep_graph={"bar": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("bar")
+        assert not success
+        # The ContentSelector warning must not be the headline
+        assert "ContentSelector failed for select=" not in error, (
+            f"Warning must not appear in headline; got:\n{error!r}"
+        )
+        # An actionable failure reason (exit code or PDD command line) must remain
+        assert (
+            "Exit code 1" in error
+            or "exit code 1" in error
+            or "PDD command failed with exit code 1" in error
+        ), (
+            "Headline must surface real failure cause (exit code or PDD command "
+            f"failed line); got:\n{error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_overall_status_failed_in_summary(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Headline error for an `Overall status: Failed` run (with a
+        ContentSelector warning) must include the Overall status marker
+        and exclude the warning."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" '
+                "\u2014 falling back\n"
+                "Overall status: Failed\n"
+            ),
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["baz"],
+            dep_graph={"baz": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("baz")
+        assert not success
+        assert "Overall status: Failed" in error, (
+            f"Headline must include Overall status: Failed; got:\n{error!r}"
+        )
+        assert "ContentSelector failed for select=" not in error, (
+            f"Warning must not appear in headline; got:\n{error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_labeled_tails_when_no_high_signal_line(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """When no high-signal error line exists, the headline must NOT
+        be just the ContentSelector warning. It must surface either the
+        nonzero exit code or surrounding stderr/stdout context."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select='
+                '"def:topological_sort" \u2014 falling back\n'
+                "Working on module foo\n"
+                "Done preprocessing\n"
+            ),
+            stderr_text="some stderr context line\n",
+            exit_code=2,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+        assert not success
+        # The warning must not be the only/dominant content
+        assert "ContentSelector failed for select=" not in error, (
+            f"Warning must not be the headline; got:\n{error!r}"
+        )
+        # Headline must lead with the deterministic failure reason
+        assert "Exit code 2" in error, (
+            f"Headline must include `Exit code 2` failure reason; got:\n{error!r}"
+        )
+        # Labeled stderr/stdout tail blocks must be present so operators see
+        # surrounding context (acceptance criterion for issue #1399).
+        assert "--- stderr tail ---" in error, (
+            f"Headline must include `--- stderr tail ---` label; got:\n{error!r}"
+        )
+        assert "--- stdout tail ---" in error, (
+            f"Headline must include `--- stdout tail ---` label; got:\n{error!r}"
+        )
+        # Actual context lines must be in the tails
+        assert "some stderr context line" in error, (
+            f"stderr context line must appear in tail; got:\n{error!r}"
+        )
+        assert "Working on module foo" in error or "Done preprocessing" in error, (
+            f"stdout context line must appear in tail; got:\n{error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_multiple_content_selector_warnings_with_real_error(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Two ContentSelector warnings + real RuntimeError traceback:
+        the real traceback must dominate; warnings must be filtered."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" '
+                "\u2014 falling back\n"
+                'Warning: ContentSelector failed for select="def:bar,def:baz" '
+                "\u2014 falling back\n"
+            ),
+            stderr_text=(
+                "Traceback (most recent call last):\n"
+                '  File "y.py", line 5, in foo\n'
+                "RuntimeError: real failure\n"
+            ),
+            exit_code=1,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+        assert not success
+        assert "RuntimeError: real failure" in error, (
+            f"Real RuntimeError must dominate headline; got:\n{error!r}"
+        )
+        assert "ContentSelector failed for select=" not in error, (
+            f"ContentSelector warnings must be filtered out; got:\n{error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_content_selector_warnings_do_not_break_success(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Regression guard: ContentSelector warnings on a successful run
+        must not flip success to failure or populate the error string."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" '
+                "\u2014 falling back\n"
+                "Overall status: Success\n"
+            ),
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+        assert success
+        assert error == "", (
+            f"Success path must produce empty error string; got:\n{error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_overall_status_failed_not_duplicated_in_summary(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """When `Overall status: Failed` is the failure reason, it must
+        appear exactly once in the headline — not duplicated by the
+        keyword-line selector that also matches `failed`."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" '
+                "— falling back\n"
+                "Overall status: Failed\n"
+            ),
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["baz"],
+            dep_graph={"baz": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("baz")
+        assert not success
+        assert error.count("Overall status: Failed") == 1, (
+            "`Overall status: Failed` must appear exactly once in headline; "
+            f"got:\n{error!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Resumability: state file persistence
@@ -1776,3 +2071,166 @@ def test_dep_graph_from_dict_format_architecture(tmp_path):
         "but isinstance(arch, list) at agentic_sync_runner.py:120 rejects it "
         f"and returns empty graph: {result.graph}"
     )
+
+
+# ---------------------------------------------------------------------------
+# End-to-end (real subprocess) regression tests for issue #1399
+#
+# Unlike `TestSyncOneModule` which mocks `subprocess.Popen`, these tests
+# exercise the full `_sync_one_module` path with a real child process so
+# that pipe reading, thread joining, exit-code propagation, and
+# stdout/stderr accumulation are all proven to compose with the new
+# failure-summary contract.
+# ---------------------------------------------------------------------------
+
+import textwrap
+
+
+def _make_fake_pdd_shim(tmp_path, stdout_text: str, stderr_text: str, exit_code: int) -> Path:
+    """Write a tiny Python script with a shebang that ignores its argv,
+    emits the given stdout/stderr, and exits with `exit_code`. The shim
+    can be invoked directly so the runner spawns it the same way it
+    would spawn the real `pdd` CLI."""
+    shim = tmp_path / "fake_pdd"
+    shim.write_text(
+        f"#!{sys.executable}\n"
+        + textwrap.dedent(
+            f"""\
+            import sys as _s
+            _s.stdout.write({stdout_text!r})
+            _s.stdout.flush()
+            _s.stderr.write({stderr_text!r})
+            _s.stderr.flush()
+            _s.exit({int(exit_code)})
+            """
+        )
+    )
+    shim.chmod(0o755)
+    return shim
+
+
+class TestSyncOneModuleE2E:
+    """End-to-end coverage of `_sync_one_module` with a real child process."""
+
+    def _run(self, tmp_path, stdout_text, stderr_text, exit_code):
+        shim = _make_fake_pdd_shim(tmp_path, stdout_text, stderr_text, exit_code)
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_cwds = {"foo": tmp_path}
+
+        # `_find_pdd_executable` returns the shim → the runner spawns it
+        # via real `subprocess.Popen` with all the usual args appended;
+        # the shim ignores them and emits the scenario stdout/stderr.
+        with patch(
+            "pdd.agentic_sync_runner._find_pdd_executable",
+            return_value=str(shim),
+        ):
+            return runner._sync_one_module("foo")
+
+    def test_e2e_cloud_run_pattern_from_issue_1399(self, tmp_path):
+        """Verbatim cloud-run output from issue #1399 with a real
+        subprocess. Headline must NOT be the ContentSelector warning."""
+        success, cost, error = self._run(
+            tmp_path,
+            stdout_text=(
+                'Warning: ContentSelector failed for select='
+                '"class:AsyncSyncRunner,def:_find_pdd_executable" — falling back\n'
+                'Warning: ContentSelector failed for select='
+                '"def:build_dependency_graph,def:extract_module_from_include,'
+                'def:topological_sort" — falling back\n'
+                "PDD command failed with exit code 1\n"
+            ),
+            stderr_text="",
+            exit_code=1,
+        )
+        assert not success
+        assert "ContentSelector failed for select=" not in error, (
+            f"E2E: warning must not pollute headline; got:\n{error!r}"
+        )
+        assert "Exit code 1" in error, (
+            f"E2E: deterministic failure reason must lead headline; got:\n{error!r}"
+        )
+        assert "PDD command failed with exit code 1" in error, (
+            f"E2E: real failure line must be preserved; got:\n{error!r}"
+        )
+
+    def test_e2e_real_traceback_in_stderr(self, tmp_path):
+        """Real Python traceback in stderr + ContentSelector warning in
+        stdout, with a real subprocess. Traceback must dominate."""
+        success, cost, error = self._run(
+            tmp_path,
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" — falling back\n'
+            ),
+            stderr_text=(
+                "Traceback (most recent call last):\n"
+                '  File "x.py", line 1, in <module>\n'
+                "RuntimeError: e2e generation step failed\n"
+            ),
+            exit_code=1,
+        )
+        assert not success
+        assert "RuntimeError: e2e generation step failed" in error
+        assert "ContentSelector failed for select=" not in error
+        assert error.startswith("Exit code 1"), (
+            f"E2E: headline must lead with deterministic failure reason; got:\n{error!r}"
+        )
+
+    def test_e2e_overall_status_failed_not_duplicated(self, tmp_path):
+        """End-to-end dedupe guard: `Overall status: Failed` appears
+        exactly once even with a real child process."""
+        success, cost, error = self._run(
+            tmp_path,
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" — falling back\n'
+                "Overall status: Failed\n"
+            ),
+            stderr_text="",
+            exit_code=0,
+        )
+        assert not success
+        assert error.count("Overall status: Failed") == 1, (
+            f"E2E: must appear exactly once; got:\n{error!r}"
+        )
+
+    def test_e2e_labeled_tails_when_no_high_signal_line(self, tmp_path):
+        """End-to-end fallback: when no high-signal line exists, output
+        must include labeled stderr/stdout tail blocks."""
+        success, cost, error = self._run(
+            tmp_path,
+            stdout_text=(
+                'Warning: ContentSelector failed for select="def:topological_sort" — falling back\n'
+                "Working on module foo\n"
+                "Done preprocessing\n"
+            ),
+            stderr_text="some stderr context line\n",
+            exit_code=2,
+        )
+        assert not success
+        assert "ContentSelector failed for select=" not in error
+        assert "Exit code 2" in error
+        assert "--- stderr tail ---" in error
+        assert "--- stdout tail ---" in error
+        assert "some stderr context line" in error
+        assert "Working on module foo" in error or "Done preprocessing" in error
+
+    def test_e2e_success_with_warning_does_not_set_error(self, tmp_path):
+        """End-to-end success path: a benign ContentSelector warning on
+        a successful child run must NOT flip success or pollute error."""
+        success, cost, error = self._run(
+            tmp_path,
+            stdout_text=(
+                'Warning: ContentSelector failed for select="class:Foo" — falling back\n'
+                "Overall status: Success\n"
+            ),
+            stderr_text="",
+            exit_code=0,
+        )
+        assert success
+        assert error == ""
