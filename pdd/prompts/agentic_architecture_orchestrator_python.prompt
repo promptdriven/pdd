@@ -22,7 +22,7 @@ Orchestrator for the agentic architecture workflow. Runs each step as a separate
 5. Support fractional step resume logic (e.g., 1.5, 2.5, 5.5, 7.5, 8.5, 9.5, 9.7).
 6. Validation failures in steps 10-12 must block final success (return False).
 7. **Step 5 structural validation**: Provide a deterministic helper `_validate_step5_output_structure(output: str) -> Tuple[bool, str]` that returns `(is_valid, reason)` for a step-5 module-design output. The helper MUST treat each of these as a structural failure and return `(False, <short diagnostic>)`:
-   - Output is shorter than 200 characters (degenerate / near-empty response).
+   - Output has fewer than 200 **meaningful (non-whitespace) characters** (degenerate / near-empty response). Length MUST be measured after stripping ALL whitespace (e.g., `len(re.sub(r"\s+", "", stripped))`), NOT via `len(stripped)`. This is required so that marker-padding payloads with internal whitespace — for example `"module" + " " * 300 + "dependency"` — are correctly rejected as structurally invalid even though their raw character length exceeds 200. A simple `len(stripped) < 200` check is INSUFFICIENT and MUST NOT be used.
    - Output is a bare acknowledgement (e.g., matches a regex like `^\s*(done|completed|finished|ok|acknowledged)\.?\s*$` case-insensitively) regardless of length.
    - Output contains none of the expected module-design markers (e.g., none of: `module`, `dependency`, `priority`, `interface`, `## modules`, case-insensitive).
    On valid output, return `(True, "")`. The helper MUST be pure (no I/O), MUST NOT call the LLM, and MUST be importable for unit testing alongside `_check_step4_output`. The diagnostic string MUST name "step 5" so downstream error messages can surface the upstream cause.
