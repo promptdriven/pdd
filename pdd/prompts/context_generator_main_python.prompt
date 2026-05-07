@@ -14,7 +14,7 @@
     <include select="def:get_cached_jwt,def:verify_auth,def:get_auth_status">context/auth_service_example.py</include>
 </pdd.core.auth>
 <pdd.core.preprocess>
-    <include query="preprocess function with recursive and double_curly_brackets parameters">context/auto_include_example.py</include>
+    <include select="def:preprocess">pdd/preprocess.py</include>
 </pdd.core.preprocess>
 
 % Here are the inputs and outputs of the function:
