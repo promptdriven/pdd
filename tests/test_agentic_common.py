@@ -270,6 +270,35 @@ def test_opencode_model_selection_translates_csv_ids() -> None:
         0.5,
     ) == "openai/gpt-5.4"
 
+    # OpenRouter/github_copilot rows whose ``model`` column is itself qualified
+    # (e.g. ``openai/gpt-5``) must be prefixed with the OpenCode provider id so
+    # the resulting --model argument routes to the correct provider.
+    assert _select_opencode_model_from_rows(
+        [
+            {
+                "provider": "OpenRouter",
+                "model": "openai/gpt-5",
+                "input": "1.25",
+                "output": "10.0",
+                "coding_arena_elo": "1395",
+            }
+        ],
+        0.5,
+    ) == "openrouter/openai/gpt-5"
+
+    assert _select_opencode_model_from_rows(
+        [
+            {
+                "provider": "github_copilot",
+                "model": "openai/gpt-5",
+                "input": "0.0",
+                "output": "0.0",
+                "coding_arena_elo": "1395",
+            }
+        ],
+        0.5,
+    ) == "github-copilot/openai/gpt-5"
+
 
 def test_false_positive_detection_is_anchored() -> None:
     assert _is_false_positive("", 0.0) is True

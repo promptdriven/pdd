@@ -773,11 +773,15 @@ def _row_to_opencode_model(row: Dict[str, str]) -> Optional[str]:
     if not model:
         return None
     translated = _translate_to_opencode_model(model)
-    if "/" in translated:
-        return translated
     provider_prefix = _opencode_provider_for_row(row)
     if provider_prefix:
+        # Avoid double-prefixing when the model id is already qualified for
+        # this provider (e.g. ``github_copilot/openai/gpt-5`` was translated
+        # to ``github-copilot/openai/gpt-5``).
+        if translated == provider_prefix or translated.startswith(provider_prefix + "/"):
+            return translated
         return f"{provider_prefix}/{translated}"
+    # No provider context available — fall back to the translated id as-is.
     return translated
 
 
