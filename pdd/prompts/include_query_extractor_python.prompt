@@ -49,6 +49,12 @@ When a PDD prompt contains `<include query="...">file</include>`, the system nee
 <internal_modules>
     <llm_invoke_example><include select="def:llm_invoke">pdd/llm_invoke.py</include></llm_invoke_example>
     <preprocess_example><include select="def:preprocess">pdd/preprocess.py</include></preprocess_example>
+<pdd.load_prompt_template>
+    <include>pdd/load_prompt_template.py</include>
+</pdd.load_prompt_template>
+<pdd.path_resolution>
+    <include select="def:find_project_root_from_path">pdd/path_resolution.py</include>
+</pdd.path_resolution>
 </internal_modules>
 
 % Deliverables

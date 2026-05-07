@@ -9,6 +9,9 @@
 <pdd.load_prompt_template>
     <include>pdd/load_prompt_template.py</include>
 </pdd.load_prompt_template>
+<pdd.cli>
+    <include select="def:update">context/change/15/initial_cli.py</include>
+</pdd.cli>
 
 % Here are the inputs and outputs of the function (with explicit validation and semantics):
     Inputs:
