@@ -73,6 +73,7 @@ from unittest import mock
 
 import pytest
 
+from pdd import cli_detector as cli_detector_module
 from pdd.cli_detector import (
     CliBootstrapResult,
     detect_and_bootstrap_cli,
@@ -122,6 +123,7 @@ def _run_bootstrap_capture(
     install_then_found: str | None = None,
     version_output: str = "1.0.0",
     version_returncode: int = 0,
+    has_provider_oauth=False,
 ) -> tuple[str, list[CliBootstrapResult]]:
     """Run detect_and_bootstrap_cli with mocked boundaries.
 
@@ -206,7 +208,17 @@ def _run_bootstrap_capture(
         printed.append(" ".join(str(a) for a in args))
 
     # Apply mocks
+    # Issue #813: force `_has_provider_oauth` to a deterministic value so
+    # tests don't depend on the developer's local OAuth state. Default False;
+    # tests that need True (or a per-provider mapping) pass via
+    # ``has_provider_oauth`` — accepts a bool or a callable(provider) -> bool.
+    if callable(has_provider_oauth):
+        oauth_mock_kwargs = {"side_effect": has_provider_oauth}
+    else:
+        oauth_mock_kwargs = {"return_value": bool(has_provider_oauth)}
+
     with mock.patch("pdd.cli_detector._find_cli_binary", side_effect=mock_find_cli_binary), \
+         mock.patch("pdd.cli_detector._has_provider_oauth", **oauth_mock_kwargs), \
          mock.patch("pdd.cli_detector.console") as mock_console, \
          mock.patch("subprocess.run", side_effect=mock_subprocess_run), \
          mock.patch("shutil.which", side_effect=mock_shutil_which), \
@@ -482,6 +494,30 @@ class TestBootstrapApiKeyFlow:
         assert results[0].api_key_configured is True
         assert "Enter your" not in output
 
+    def test_oauth_login_present_skips_api_key_prompt(self, monkeypatch, tmp_path):
+        """Issue #813: when the user has a stored OAuth/subscription
+        credential (Claude Max keychain, ~/.gemini OAuth, ~/.codex/auth.json),
+        bootstrap MUST skip the API-key prompt entirely. Otherwise OAuth
+        users get pushed into the stale-key workflow this PR fixes.
+
+        Uses input ["1"] only (no API key) — would fail with
+        StopIteration if the prompt fired.
+        """
+        output, results = _run_bootstrap_capture(
+            monkeypatch, tmp_path,
+            ["1"],  # only select; no API key prompt expected
+            cli_paths=CLAUDE_ONLY,
+            # No env_keys → no API key in environment.
+            has_provider_oauth=lambda provider: provider == "anthropic",
+        )
+        # Path was found, OAuth detected → no API key needed.
+        assert results[0].cli_name == "claude"
+        assert results[0].api_key_configured is False  # API key still not set
+        # The status line should report OAuth, not "not set" red ✗.
+        assert "OAuth/subscription login configured" in output
+        # The credential prompt must NOT fire (user only provided 1 input).
+        assert "Enter your" not in output
+
     def test_key_not_set_user_provides(self, monkeypatch, tmp_path):
         """User provides key when prompted."""
         _, results = _run_bootstrap_capture(
@@ -660,6 +696,7 @@ class TestApiKeyPersistence:
         )
 
         with mock.patch("pdd.cli_detector._find_cli_binary") as mock_find, \
+             mock.patch("pdd.cli_detector._has_provider_oauth", return_value=False), \
              mock.patch("pdd.cli_detector.console"), \
              mock.patch("subprocess.run") as mock_run, \
              mock.patch("shutil.which", return_value=None), \
@@ -694,6 +731,7 @@ class TestApiKeyPersistence:
             lambda _prompt="": next(input_iter),
         )
         with mock.patch("pdd.cli_detector._find_cli_binary") as mock_find, \
+             mock.patch("pdd.cli_detector._has_provider_oauth", return_value=False), \
              mock.patch("pdd.cli_detector.console"), \
              mock.patch("subprocess.run") as mock_run, \
              mock.patch("shutil.which", return_value=None), \
@@ -710,6 +748,7 @@ class TestApiKeyPersistence:
             lambda _prompt="": next(input_iter2),
         )
         with mock.patch("pdd.cli_detector._find_cli_binary") as mock_find, \
+             mock.patch("pdd.cli_detector._has_provider_oauth", return_value=False), \
              mock.patch("pdd.cli_detector.console"), \
              mock.patch("subprocess.run") as mock_run, \
              mock.patch("shutil.which", return_value=None), \
@@ -772,3 +811,99 @@ class TestDetectCliToolsLegacy:
     def test_no_clis_found_shows_quick_start(self, monkeypatch):
         output = _run_legacy_capture(monkeypatch)
         assert "No CLI tools found" in output or "Quick start" in output
+
+
+# =============================================================================
+# 14. Anthropic credentials file shape parsing (Issue #813 round-9)
+# =============================================================================
+#
+# `_has_provider_oauth("anthropic")` previously treated any non-empty
+# `~/.claude/.credentials.json` as proof of OAuth login. A stale, corrupt, or
+# logged-out file can still contain bytes but no usable token, which would
+# false-positive and let `pdd setup` skip the API-key prompt — leaving the user
+# with no working credential when claude actually runs. The shape-parsed helper
+# `_claude_credentials_file_has_oauth` now requires `claudeAiOauth.accessToken`
+# or `claudeAiOauth.refreshToken` to be present and non-empty.
+class TestClaudeCredentialsFileShape:
+    """Shape-validate `~/.claude/.credentials.json` rather than just file size."""
+
+    def _isolate(self, monkeypatch, tmp_path):
+        """Force `Path.home()` to a tmpdir, clear env, force non-darwin keychain."""
+        monkeypatch.setattr(cli_detector_module.Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(cli_detector_module.sys, "platform", "linux")
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+
+    def _write_creds(self, tmp_path, payload: str):
+        creds_dir = tmp_path / ".claude"
+        creds_dir.mkdir(parents=True, exist_ok=True)
+        creds_file = creds_dir / ".credentials.json"
+        creds_file.write_text(payload, encoding="utf-8")
+        return creds_file
+
+    def test_canonical_shape_with_access_token_counts_as_oauth(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(
+            tmp_path,
+            '{"claudeAiOauth": {"accessToken": "sk-ant-oat01-token", "refreshToken": "rt"}}',
+        )
+        assert cli_detector_module._has_provider_oauth("anthropic") is True
+
+    def test_refresh_token_only_counts_as_oauth(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(
+            tmp_path,
+            '{"claudeAiOauth": {"refreshToken": "rt-only"}}',
+        )
+        assert cli_detector_module._has_provider_oauth("anthropic") is True
+
+    def test_top_level_token_fallback_counts_as_oauth(self, monkeypatch, tmp_path):
+        # A non-canonical writer leaves the token at the top level. Match the
+        # google/openai branch tolerance and accept it.
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(tmp_path, '{"accessToken": "top-level-token"}')
+        assert cli_detector_module._has_provider_oauth("anthropic") is True
+
+    def test_logged_out_file_rejected(self, monkeypatch, tmp_path):
+        # Stale state: file present, has bytes, but no claudeAiOauth tokens.
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(tmp_path, '{"loggedOut": true}')
+        assert cli_detector_module._has_provider_oauth("anthropic") is False
+
+    def test_empty_oauth_dict_rejected(self, monkeypatch, tmp_path):
+        # claudeAiOauth exists but tokens are missing/empty — also stale.
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(
+            tmp_path,
+            '{"claudeAiOauth": {"accessToken": "", "refreshToken": ""}}',
+        )
+        assert cli_detector_module._has_provider_oauth("anthropic") is False
+
+    def test_corrupt_json_rejected(self, monkeypatch, tmp_path):
+        # Partial-write or truncation must not raise nor false-positive.
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(tmp_path, '{"claudeAiOauth": {invalid json...')
+        assert cli_detector_module._has_provider_oauth("anthropic") is False
+
+    def test_zero_byte_file_rejected(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(tmp_path, "")
+        assert cli_detector_module._has_provider_oauth("anthropic") is False
+
+    def test_non_dict_json_rejected(self, monkeypatch, tmp_path):
+        # Edge case: the file contains a list or scalar instead of an object.
+        self._isolate(monkeypatch, tmp_path)
+        self._write_creds(tmp_path, '["accessToken", "rt"]')
+        assert cli_detector_module._has_provider_oauth("anthropic") is False
+
+    def test_missing_file_returns_false(self, monkeypatch, tmp_path):
+        self._isolate(monkeypatch, tmp_path)
+        # Don't create the file at all.
+        assert cli_detector_module._has_provider_oauth("anthropic") is False
+
+    def test_env_token_still_wins_over_stale_file(self, monkeypatch, tmp_path):
+        # CLAUDE_CODE_OAUTH_TOKEN env var must still short-circuit positive,
+        # even when the on-disk file is stale (cloud waterfall scenario).
+        self._isolate(monkeypatch, tmp_path)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "env-token")
+        self._write_creds(tmp_path, '{"loggedOut": true}')
+        assert cli_detector_module._has_provider_oauth("anthropic") is True

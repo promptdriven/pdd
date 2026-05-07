@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -126,6 +127,120 @@ def _has_api_key(provider: str) -> bool:
         val = os.environ.get("GOOGLE_API_KEY")
         return bool(val and val.strip())
     return False
+
+
+def _claude_credentials_file_has_oauth(path: Path) -> bool:
+    """True iff ``path`` is a Claude credentials file with a usable OAuth token.
+
+    The Claude Code CLI persists Max/Pro OAuth as
+    ``{"claudeAiOauth": {"accessToken": ..., "refreshToken": ..., ...}}``.
+    A logged-out or partially-rotated state can leave the file present and
+    non-empty but missing those token fields; treating bytes-on-disk as proof
+    of OAuth would false-positive on those, then `pdd setup` skips the API-key
+    prompt and the user runs into "no credentials" at first call. A few
+    non-canonical writers leave the token at the top level, so accept that
+    fallback shape too — both google and openai branches do the same.
+    """
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    oauth = data.get("claudeAiOauth")
+    if isinstance(oauth, dict) and (oauth.get("accessToken") or oauth.get("refreshToken")):
+        return True
+    if data.get("accessToken") or data.get("refreshToken"):
+        return True
+    return False
+
+
+def _has_provider_oauth(provider: str) -> bool:
+    """Check whether the provider's CLI has a stored OAuth/subscription credential.
+
+    Each agentic CLI maintains its own credential store separate from API-key
+    env vars. Setup must treat "OAuth configured" as a fully valid auth path —
+    otherwise it tells Max/Pro users they're "missing an API key" and pushes
+    them into setting ``ANTHROPIC_API_KEY``, the exact stale-key workflow that
+    Issue #813 fixes.
+
+    - **Anthropic**: Claude Code stores Max/Pro OAuth in the macOS keychain
+      (``security find-generic-password -s 'Claude Code-credentials'``) or in
+      ``~/.claude/.credentials.json`` on Linux. The authoritative runtime check
+      is ``claude auth status`` with a ``--json`` fallback (used by
+      ``agentic_common`` before launching the subprocess), but setup keeps this
+      lightweight to avoid spawning a subprocess and parses the credentials
+      file's JSON shape instead — a non-empty file alone is not enough, since a
+      stale, corrupt, or logged-out file can still have bytes but no usable
+      OAuth token, which would false-positive and skip the API-key prompt the
+      user actually needs. The env-supplied ``CLAUDE_CODE_OAUTH_TOKEN`` (used
+      by the cloud waterfall) is also accepted.
+    - **Google**: Gemini CLI stores OAuth at ``~/.gemini/oauth_creds.json``
+      (matches ``_has_gemini_oauth_credentials`` in agentic_common).
+    - **OpenAI/Codex**: codex CLI stores ChatGPT login at ``~/.codex/auth.json``.
+    """
+    if provider == "anthropic":
+        if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+            return True
+        # Parse the credentials file's JSON shape (cross-platform). A bare
+        # size check would treat a stale/corrupt/logged-out file as OAuth
+        # configured, then `pdd setup` skips the API-key prompt and the user
+        # is left with no working credential.
+        for path in (
+            Path.home() / ".claude" / ".credentials.json",
+            Path.home() / "Library" / "Application Support" / "Claude" / "credentials.json",
+        ):
+            if _claude_credentials_file_has_oauth(path):
+                return True
+        # macOS keychain check is more reliable than file presence; gate on
+        # platform to avoid spurious dependencies on Linux/Windows.
+        if sys.platform == "darwin":
+            try:
+                result = subprocess.run(
+                    ["security", "find-generic-password", "-s", "Claude Code-credentials"],
+                    capture_output=True, text=True, timeout=5, check=False,
+                )
+                if result.returncode == 0:
+                    return True
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        return False
+
+    if provider == "google":
+        creds = Path.home() / ".gemini" / "oauth_creds.json"
+        try:
+            if creds.exists():
+                data = json.loads(creds.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and (data.get("refresh_token") or data.get("access_token")):
+                    return True
+        except (OSError, json.JSONDecodeError):
+            pass
+        return False
+
+    if provider == "openai":
+        auth = Path.home() / ".codex" / "auth.json"
+        try:
+            if auth.exists():
+                data = json.loads(auth.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and (data.get("token") or data.get("tokens") or data.get("OPENAI_API_KEY")):
+                    return True
+        except (OSError, json.JSONDecodeError):
+            pass
+        return False
+
+    return False
+
+
+def _has_credential(provider: str) -> bool:
+    """True if the provider has *any* working credential (API key OR OAuth).
+
+    Used by setup_tool to decide whether to warn "no API key configured" — a
+    stored OAuth login (Claude Max, Gemini OAuth, Codex ChatGPT) is a fully
+    valid alternative and should not trigger that warning.
+    """
+    return _has_api_key(provider) or _has_provider_oauth(provider)
 
 def _get_display_key_name(provider: str) -> str:
     """Return the key name to display for a provider, checking which is actually set."""
@@ -340,6 +455,7 @@ def _bootstrap_single_cli(
     sel_cli_name: str = str(cli_entry["cli_name"])
     sel_path: Optional[str] = str(cli_entry["path"]) if cli_entry["path"] else None
     sel_has_key: bool = bool(cli_entry["has_key"])
+    sel_has_oauth: bool = bool(cli_entry.get("has_oauth", False))
 
     console.print(f"\n  [bold]Setting up {display_name}...[/bold]")
 
@@ -379,11 +495,27 @@ def _bootstrap_single_cli(
         else:
             return _cli_skip()
 
-    # API key step (if not set)
-    if not sel_has_key:
+    # Credential step (if no API key AND no OAuth login).
+    # Issue #813: Skip the API-key prompt when the CLI already has a stored
+    # OAuth/subscription credential (Claude Max keychain, ~/.gemini OAuth,
+    # ~/.codex/auth.json) — pushing those users into setting an API key is
+    # the exact stale-key workflow this PR exists to make safe.
+    if not sel_has_key and not sel_has_oauth:
         sel_has_key = _prompt_api_key(sel_provider, shell)
         if not sel_has_key and sel_provider != "anthropic":
-            console.print(f"  [dim]No API key set. {display_name} may have limited functionality.[/dim]")
+            console.print(f"  [dim]No API key or OAuth login configured. {display_name} may have limited functionality.[/dim]")
+    elif sel_has_oauth and not sel_has_key:
+        if sel_provider == "anthropic":
+            console.print(
+                f"  [green]✓[/green] Using stored OAuth/subscription credential for {display_name}; "
+                "no API key needed. (Set ANTHROPIC_API_KEY + PDD_KEEP_ANTHROPIC_API_KEY=1 to "
+                "force API-key billing instead.)"
+            )
+        else:
+            console.print(
+                f"  [green]✓[/green] Using stored OAuth credential for {display_name}; "
+                "no API key needed."
+            )
 
     # Force CLI test (no option to skip)
     _test_cli(sel_cli_name, sel_path or sel_cli_name)
@@ -426,6 +558,11 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
     for provider, cli_name, display_name in _TABLE_ORDER:
         path = _find_cli_binary(cli_name)
         has_key = _has_api_key(provider)
+        # Issue #813: detect OAuth/subscription credentials too — Claude Max,
+        # Gemini OAuth, Codex ChatGPT login are valid auth paths that the
+        # original API-key-only check missed, leading to UX that pushed
+        # OAuth users into the stale-API-key workflow.
+        has_oauth = _has_provider_oauth(provider)
         key_display = _get_display_key_name(provider)
         cli_info.append({
             "provider": provider,
@@ -433,6 +570,8 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
             "display_name": display_name,
             "path": path,
             "has_key": has_key,
+            "has_oauth": has_oauth,
+            "has_credential": has_key or has_oauth,
             "key_display": key_display,
         })
 
@@ -462,10 +601,14 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
         name_padded = str(c["display_name"]).ljust(max_name_len)
         install_display = install_strs_display[idx]
         install_padding = " " * (max_install_len - len(install_strs_plain[idx]))
+        # Issue #813: prefer reporting OAuth as credential source when present
+        # (more honest than "API key not set" for a Claude Max user).
         if c["has_key"]:
             key_str = f"[green]\u2713[/green] {c['key_display']} is set"
+        elif c["has_oauth"]:
+            key_str = f"[green]\u2713[/green] OAuth/subscription login configured"
         else:
-            key_str = f"[red]\u2717[/red] {c['key_display']} not set"
+            key_str = f"[red]\u2717[/red] no credentials ({c['key_display']} or OAuth login)"
         console.print(f"  [blue]{num}[/blue]. {name_padded}   {install_display}{install_padding}   {key_str}")
 
     console.print()
@@ -474,9 +617,9 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
     # 3. Determine smart default
     # ------------------------------------------------------------------
     default_idx = 0  # fallback: Claude (index 0 -> selection "1")
-    # Prefer installed + key
+    # Prefer installed + has any credential (API key OR OAuth login).
     for i, c in enumerate(cli_info):
-        if c["path"] and c["has_key"]:
+        if c["path"] and c["has_credential"]:
             default_idx = i
             break
     else:
