@@ -126,6 +126,75 @@ def test_validate_prompt_includes_validates_self_closing_path_include(tmp_path, 
     assert "path=\"context/missing.py\"" not in validated
 
 
+def test_validate_prompt_includes_preserves_case_insensitive_module_prompt_include(
+    tmp_path,
+    monkeypatch,
+):
+    """Linux-safe regression: module prompt includes follow architecture/sync casing semantics."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "parent_Python.prompt").write_text("%\n", encoding="utf-8")
+    content = "<include>parent_python.prompt</include>"
+    original_exists = Path.exists
+
+    def case_sensitive_exists(path: Path) -> bool:
+        if path.name == "parent_python.prompt":
+            return False
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", case_sensitive_exists)
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path / "prompts",
+        remove_invalid=False,
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
+def test_validate_prompt_includes_ignores_inline_code_include_examples(tmp_path, monkeypatch):
+    """Literal include syntax in inline code is documentation, not a real directive."""
+    monkeypatch.chdir(tmp_path)
+    content = (
+        'Use `<include select="def:foo">path/to/file.py</include>` for deterministic '
+        'selection and `<include query="summarize auth">path/to/file.py</include>` '
+        "for semantic extraction."
+    )
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path,
+        remove_invalid=False,
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
+def test_validate_prompt_includes_ignores_fenced_code_include_examples(tmp_path, monkeypatch):
+    """Literal include syntax in fenced code is documentation, not a real directive."""
+    monkeypatch.chdir(tmp_path)
+    content = textwrap.dedent(
+        """\
+        ```prompt
+        <include select="def:foo">path/to/file.py</include>
+        <include query="summarize auth">path/to/other.py</include>
+        ```
+        """
+    )
+
+    validated, invalid = validate_prompt_includes(
+        content,
+        base_dir=tmp_path,
+        remove_invalid=False,
+    )
+
+    assert invalid == []
+    assert validated == content
+
+
 def test_validate_prompt_includes_rejects_invalid_selected_symbols(tmp_path, monkeypatch):
     """Regression for issue #798: selected includes must not silently fall back."""
     monkeypatch.chdir(tmp_path)

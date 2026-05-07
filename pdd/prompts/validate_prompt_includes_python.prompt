@@ -35,17 +35,19 @@
 
 % Implementation details:
     1. Use regex to find all `<include>...</include>` and self-closing `<include path="..." />` patterns in the content, including tags with attributes such as `select`, `lines`, `mode`, `query`, and `optional`.
-    2. For each match, extract the file path from `path=` or the tag body and check if the file exists relative to base_dir.
-    3. If the file exists and the include uses `select`, `lines`, or non-full `mode`, validate the selector by running `ContentSelector.select` against the target file. Invalid selectors are invalid includes.
-    4. If the file does not exist:
+    2. Skip include tags inside inline-code or fenced-code spans because those are literal syntax examples, not include directives. Mirror the preprocessor's code-span protection so documentation examples like `` `<include select="def:foo">path/to/file.py</include>` `` are preserved.
+    3. For each match, extract the file path from `path=` or the tag body and check if the file exists relative to base_dir.
+    4. Module prompt includes should use the same practical resolution semantics as sync/architecture code: exact path first, then case-insensitive final filename matching for prompt files, then recursive case-insensitive prompt filename lookup under nearby `prompts/` roots. This preserves valid includes such as `<include>parent_python.prompt</include>` when the real file is `parent_Python.prompt` on Linux.
+    5. If the file exists and the include uses `select`, `lines`, or non-full `mode`, validate the selector by running `ContentSelector.select` against the target file. Invalid selectors are invalid includes.
+    6. If the file does not exist:
         - If remove_invalid is True: Remove the entire XML block containing the `<include>` tag (e.g., `<dependency_name><include>...</include></dependency_name>`).
         - If remove_invalid is False: Replace the `<include>` tag with a comment describing the missing dependency (e.g., `<!-- Missing: path/to/file.py -->`).
         - If the tag is marked `optional`, remove the include tag silently instead of reporting it as invalid.
-    5. If a selector is invalid:
+    7. If a selector is invalid:
         - If remove_invalid is True: Remove the containing XML block, matching missing-file behavior.
         - If remove_invalid is False: Replace the `<include>` tag with a comment describing the invalid selector.
-    6. Track all invalid includes and return them along with the validated content.
-    7. Handle edge cases:
+    8. Track all invalid includes and return them along with the validated content.
+    9. Handle edge cases:
         - Nested tags (e.g., `<dependency><include>...</include></dependency>`)
         - Multiple includes on the same line
         - Include tags with attributes
