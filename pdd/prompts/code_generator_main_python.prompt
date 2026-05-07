@@ -32,7 +32,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Perform "Architecture Conformance" checks: verify that the generated code's exported symbols (Functions/Classes) match the interface defined in `architecture.json`.
     - Enforce language-specific naming conventions (e.g., snake_case for Python).
 6. **Integration & Wiring**:
-    - Implement "Auto-Wiring": detect public exports in generated Python files and automatically insert/update import statements in the parent `__init__.py`.
+    - Implement opt-in "Auto-Wiring": detect public exports in generated Python files and insert/update import statements in the parent `__init__.py` only when `PDD_ENABLE_WIRING=1` is set. The default must not mutate sibling files; `PDD_SKIP_WIRING=1` must continue to override and disable wiring for backward compatibility.
     - Validate `<include>` tags in generated `.prompt` files to ensure they point to existing files.
 
 # Dependencies
@@ -52,16 +52,16 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     <include>pdd/core/cloud.py</include>
 </cloud_config>
 <architecture_sync>
-    <include>pdd/architecture_sync.py</include>
+    <include select="def:_verify_architecture_conformance,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
 </architecture_sync>
 <env_detector>
     <include>pdd/python_env_detector.py</include>
 </env_detector>
 <pdd.architecture_sync>
-    <include select="def:example_validate_interface,def:example_validate_dependencies,def:example_parse_tags,def:example_generate_tags,def:example_check_existing_tags,def:example_inject_tags_workflow,def:example_get_entry">context/architecture_sync_example.py</include>
+    <include select="def:example_validate_interface,def:example_validate_dependencies,def:example_parse_tags,def:example_generate_tags,def:example_check_existing_tags,def:example_inject_tags_workflow,def:example_get_entry,def:example_update_single_prompt,def:example_sync_all">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.auth_service>
-    <include select="def:get_cached_jwt,def:verify_auth,def:get_refresh_token">context/auth_service_example.py</include>
+    <include select="def:get_cached_jwt,def:verify_auth,def:get_refresh_token,def:get_jwt_cache_info,def:has_refresh_token,def:clear_jwt_cache">context/auth_service_example.py</include>
 </pdd.auth_service>
 <pdd.__init__>
     <include>context/__init__example.py</include>
@@ -91,5 +91,5 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 A single Python file containing:
 1. The primary `code_generator_main` function returning `(generated_code, was_incremental, total_cost, model_name)`.
 2. Private helper functions for Git operations (`_run_git_command`, `is_git_repository`).
-3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, `_wire_to_parent_init`).
+3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, `_should_wire_generated_exports`, `_wire_to_parent_init`).
 4. Logic for handling Cloud API requests, including JWT authentication and error code handling.

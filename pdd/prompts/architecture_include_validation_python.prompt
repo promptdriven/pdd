@@ -9,8 +9,11 @@
 %   - .architecture_sync: parse_prompt_tags
 
 <pdd.architecture_sync>
-    <include select="def:example_parse_tags,def:example_validate_dependencies">context/architecture_sync_example.py</include>
+    <include select="def:example_parse_tags,def:example_validate_dependencies,def:example_get_entry">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
+<pdd.architecture_registry>
+    <include>context/architecture_registry_example.py</include>
+</pdd.architecture_registry>
 
 % ============================================================
 % Responsibilities
