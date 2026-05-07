@@ -1,6 +1,6 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Post-extraction validation for the agentic split orchestrator (byte-equivalence, completeness, metadata).</pdd-reason>
+<pdd-reason>Post-extraction validation for the agentic split orchestrator (git sanity, completeness, metadata, test seams, parent wiring).</pdd-reason>
 
 <pdd-interface>
 {
@@ -18,43 +18,70 @@
 <pdd-dependency>get_test_command_python.prompt</pdd-dependency>
 <pdd-dependency>get_lint_commands_python.prompt</pdd-dependency>
 
-% You are an expert Python software engineer. Your task is to create a module `split_validation` that provides post-extraction validation for the agentic split orchestrator.
+% You are an expert Python software engineer. Create a module `split_validation` that performs post-extraction validation for the agentic split orchestrator. All checks are free functions; no class hierarchy or strategy plugins. Re-export `LintCommand` and `TestCommand` from this module.
 
-% Role & Scope
-  All post-extraction validation as free functions. No class hierarchy, no strategy plugins. Used by the agentic split orchestrator after each child extraction (step 6) and in validation steps (7a, 7b).
+% Dataclasses
+  - `ValidationFailure(check: str, message: str, severity: str = "error")` — `severity` is "error" or "warning".
+  - `ValidationResult(passed: bool, failures: list[ValidationFailure] = [], failure_type: str = "none")` — `failure_type` ∈ {"none", "extraction", "metadata", "completeness", "multiple"}. `passed` is True iff there are no error-severity failures.
 
-% Requirements
-  1) Dataclass `ValidationFailure`:
-     - `check: str` — name of the check that failed (e.g., "byte_equivalence", "completeness").
-     - `message: str` — human-readable failure description.
-     - `severity: str` — one of "error", "warning". Default "error".
+% Failure category map (for `failure_type` summary)
+  - extraction: `byte_equivalence`, `test_seam_resolution`
+  - metadata: `prompt_metadata`
+  - completeness: `children_completeness`, `example_file`, `test_ownership`
+  - parent_wiring: classify under extraction
+  - One distinct category → use it; multiple distinct categories → "multiple"; no failures → "none".
 
-  2) Dataclass `ValidationResult`:
-     - `passed: bool` — True if no error-severity failures.
-     - `failures: list[ValidationFailure]` — all failures found.
-     - `failure_type: str` — summary category: "none", "extraction", "metadata", "completeness", or "multiple".
+% `validate_extraction(plan, worktree)`
+  Runs the checks below in order and returns a `ValidationResult`. If `worktree` is not a directory, return a single `byte_equivalence` error ("not a directory") immediately.
 
-  3) Function `validate_extraction(plan, worktree: Path) -> ValidationResult`:
-     - Accepts a plan object (duck-typed with `children: list` where each child has `prompt_file: str` and `code_file: str` attributes) and a worktree path.
-     - Runs these checks in order:
-       a) **Moved-code byte-equivalence**: run `git diff --stat` in the worktree; if any tracked file shows unexpected changes, add an error failure.
-       b) **Children completeness**: assert `len(children_extracted)` matches `len(plan.children)` where `children_extracted` is determined by checking which child prompt files exist in the worktree.
-       c) **Prompt metadata tag presence**: for every new/modified `.prompt` file in the worktree, verify presence of `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` tags. Missing tags produce warning-severity failures.
-       d) **Example file existence**: for each child, verify the corresponding example file exists.
-       e) **Test ownership classification**: verify each child's test file references only that child's module (basic grep check).
-     - Return a `ValidationResult` summarizing all failures.
+  Plan duck-typing:
+  - `plan.children: list` may contain dataclass-like objects (with `.prompt_file`, `.code_file`, optional `.name`) OR dicts from LLM JSON. Normalize dicts via `SimpleNamespace`, mapping `new_prompt`→`prompt_file` and `new_source`→`code_file` (fall back to `prompt_file`/`code_file` keys). Default missing values to "".
+  - Children with both paths empty are LLM defects: emit a `children_completeness` warning naming the child and skip them.
+  - `plan.parent_changes` (optional dict) may contain `modified_source: str` for the parent-wiring check.
 
-  4) Function `get_test_command(file: Path) -> Optional[TestCommand]`:
-     - Delegates to `pdd.get_test_command.get_test_command_for_file(str(file))`.
-     - Returns the `TestCommand` or `None`.
+  Checks:
 
-  5) Function `get_lint_commands(file: Path) -> list[LintCommand]`:
-     - Delegates to `pdd.get_lint_commands.get_lint_commands(file)`.
-     - Returns the list of `LintCommand` instances.
+  (a) **byte_equivalence** — git sanity. Run `git status --porcelain` in `worktree` via `subprocess.run(..., capture_output=True, text=True)`. Dirty output is *expected* after extraction and not a failure. Only emit errors when:
+       - `returncode != 0` → message contains "git status failed".
+       - `FileNotFoundError` → message contains "git executable not found".
+       - other `OSError` → message contains "Error running git status".
 
-  6) All functions are module-level free functions. No classes beyond the dataclasses.
+  (b) **children_completeness** — A child is "extracted" if either its `prompt_file` or its `code_file` exists under `worktree`. If fewer extracted than total, emit one error listing the missing children (by name and path).
 
-  7) Use `subprocess.run` for git operations with `capture_output=True, text=True`.
+  (c) **prompt_metadata** — For each child whose prompt file exists, emit a *warning* per missing tag in {`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`}. Read with utf-8; on read failure print a warning via `rich.console.Console(stderr=True)` and skip.
+
+  (d) **example_file** — For each child with a `prompt_file`, derive the module stem by stripping language suffixes (`_python`, `_typescript`, `_go`, `_rust`). Use the child's `code_file` suffix (default `.py`). Search these locations under `worktree`:
+       - `examples/{stem}_example{suffix}`
+       - `examples/{prompt_stem}_example{suffix}` (without language strip)
+       - `{prompt_path.with_suffix(suffix)}`
+      If none exist, emit an error listing the candidate paths checked.
+
+  (e) **test_ownership** — For each child, look for `test_{module_stem}{suffix}` in `{code_dir}/` and `{worktree}/tests/`. Read the file and emit a *warning* per other child's module name that appears (word-boundary regex). Skip children with empty `code_file`/stem.
+
+  (f) **test_seam_resolution** — For every test file relevant to the children, parse string-based patch paths and verify each resolves to a symbol that exists post-extraction. Emit an error per unresolved patch path.
+       - Test discovery: child test files (as in (e)), plus all `test_*.{py,ts,tsx,js}` files in any `tests/` directory walking up to 6 levels from each child's package, plus `worktree/tests/`. De-duplicate by resolved path. Also check `worktree/extensions/*/tests/` for the per-child test name.
+       - Patch-string extraction is framework-agnostic — match the *string argument* (not the API) for: `patch("a.b")` / `patch.object("a.b", ...)`, `mocker.patch(...)` / `mocker.patch.object(...)`, `jest.mock("…")` / `jest.doMock("…")`. Keep dotted paths only (contain `.`, not leading/trailing dot).
+       - Resolution per dotted path `a.b.c…sym`:
+         * If any module-path component or the trailing symbol is a common stdlib name (os, sys, io, re, json, time, math, asyncio, subprocess, shutil, tempfile, pathlib, logging, functools, itertools, collections, typing, datetime, random, uuid, hashlib, base64, threading, multiprocessing, socket, signal, platform, builtins, copy, string, enum, dataclasses, warnings) → accept optimistically (note "stdlib").
+         * Otherwise locate a candidate module file by trying `Path(*module_parts).py`, `Path(*module_parts)/__init__.py`, and the same with the leading 1 or 2 components dropped. Search `worktree` and `worktree/extensions` via `rglob` of the basename, requiring the trailing path-parts of the candidate match the relative parts.
+         * If no candidate file → unresolved ("module file not found").
+         * Else accept if any of: a `def`/`async def`/`class`/assignment for `sym` is defined in the file; a `from … import … sym …` exists (collapse newlines inside parenthesized import groups before matching); a `from … import *` exists (optimistic); or a dir-walk re-export pattern (`for _name in dir(...)` with `globals()[_name] = getattr(...)` or `getattr(_…)`).
+         * Otherwise unresolved ("symbol '...' not found").
+       - After all paths are checked, if any were checked and a module-level `quiet_import` flag (default `False`) is False, print a one-line `[dim]Test-seam check: X/Y patch paths resolved across N test files[/dim]` to stderr via `rich.console.Console`. Failures on the print are swallowed.
+
+  (g) **parent_wiring** — If `plan.parent_changes["modified_source"]` is set and the file (or its package `__init__.py` if the file became a package) exists, find helpers defined in any child via top-level regex `^(async )?def NAME` / `^class NAME` (skip dunder names; keep single-underscore names). For every such helper whose name does not appear (word-boundary) anywhere in the parent's contents, emit an error: "Unwired helper: '{name}' defined in {child_file} but never imported/called from parent {parent_source}…".
+
+% `get_test_command(file: Path) -> Optional[TestCommand]`
+  Delegate to `pdd.get_test_command.get_test_command_for_file(str(file))` and return its result.
+
+% `get_lint_commands(file: Path) -> list[LintCommand]`
+  Delegate to `pdd.get_lint_commands.get_lint_commands(file)` and return the list.
+
+% Implementation notes
+  - Function-scope import for `rich.console.Console` (third-party).
+  - `subprocess.run` with `capture_output=True, text=True`, `cwd=worktree`.
+  - Module-level `quiet_import: bool = False` to suppress the test-seam progress print in tests.
+  - Re-export `LintCommand`, `TestCommand`, `ValidationFailure`, `ValidationResult`, `validate_extraction`, `get_test_command`, `get_lint_commands` via `__all__`.
 
 % Dependencies
   <get_test_command>
