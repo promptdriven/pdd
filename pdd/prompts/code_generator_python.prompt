@@ -52,7 +52,9 @@
         - If the prompt contains embedded data URLs (e.g., 'data:image/...;base64,...'), split the prompt into alternating text and image parts (preserving order) and call llm_invoke with messages=[{role: 'user', content: [{type: 'image_url', image_url: {url: ...}}, {type: 'text', text: ...}, ...]}] and the provided strength, temperature, time, verbose, output_schema, and language.
         - Otherwise, call llm_invoke with the (preprocessed or raw) prompt, input_json={}, and the provided strength, temperature, time, verbose, output_schema, and language.
 
-    Step 3. Detect if the generation is incomplete using the unfinished_prompt function (use strength=0.5, temperature=0.0) by passing in the last 600 characters of the output of Step 2. Pass through language, time, and verbose.
+    Step 3. Detect if the generation is incomplete:
+        - First inspect the `finish_reason` returned by llm_invoke. If it reports normal provider completion (for example "stop", "end_turn", or "completed") and the full output is structurally complete, skip unfinished_prompt and treat the generation as finished. Structural completeness means Python parses with ast.parse after removing an outer Markdown code fence, JSON parses with json.loads, or non-Python/non-JSON output has a closed outer Markdown code fence.
+        - Otherwise, call unfinished_prompt (strength=0.5, temperature=0.0) with a line-aligned tail from the last 600 characters of the output of Step 2. Do not start the tail in the middle of a line when a newline exists in the slice. Pass through language, time, and verbose.
         - a. If incomplete, call the continue_generation function to complete the generation and set final_output to that result. Pass through language, time, and verbose.
         - b. Else, set final_output to the initial model output.
 

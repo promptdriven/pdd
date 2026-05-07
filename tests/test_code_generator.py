@@ -442,6 +442,90 @@ def test_generate_loops_when_unfinished_never_true(monkeypatch):
     assert "# cont" in final_code
 
 
+def test_provider_stop_with_complete_python_skips_unfinished_check_and_continuation(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess,
+):
+    """
+    Regression for provider-complete generations whose last 600-character slice
+    can start mid-token. When the provider reports a normal stop and the full
+    generated Python parses, PDD should not ask the tail judge to continue.
+    """
+    body_prefix = "\n".join(f"VALUE_{i} = {i}" for i in range(80))
+    complete_python = (
+        "```python\n"
+        f"{body_prefix}\n"
+        "__all__ = [\n"
+        '    "clear_job_stop_request",\n'
+        '    "get_job_stop_requested",\n'
+        '    "release_cli_lock_sync",\n'
+        "]\n"
+        "```\n"
+    )
+    mock_llm_invoke.return_value = {
+        "result": complete_python,
+        "cost": 0.05,
+        "model_name": "qwen-local",
+        "finish_reason": "stop",
+    }
+
+    runnable_code, total_cost, model_name = code_generator(
+        prompt="Generate a complete Python module.",
+        language="python",
+        strength=0.8,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    mock_unfinished_prompt.assert_not_called()
+    mock_continue_generation.assert_not_called()
+    mock_postprocess.assert_called_once_with(
+        llm_output=complete_python,
+        language="python",
+        strength=EXTRACTION_STRENGTH,
+        temperature=0.0,
+        time=None,
+        verbose=False,
+    )
+    assert runnable_code == "runnable_code_here"
+    assert total_cost == 0.05 + MOCK_POSTPROCESS_RESPONSE[1]
+    assert model_name == MOCK_POSTPROCESS_RESPONSE[2]
+
+
+def test_provider_length_finish_reason_still_uses_unfinished_check(
+    mock_preprocess,
+    mock_llm_invoke,
+    mock_unfinished_prompt,
+    mock_continue_generation,
+    mock_postprocess,
+):
+    """
+    A provider truncation signal must not bypass continuation just because the
+    current text happens to be parseable.
+    """
+    mock_llm_invoke.return_value = {
+        "result": "def add(a, b):\n    return a + b\n",
+        "cost": 0.05,
+        "model_name": "model_v1",
+        "finish_reason": "length",
+    }
+    mock_unfinished_prompt.return_value = MOCK_UNFINISHED_RESPONSE_INCOMPLETE
+
+    code_generator(
+        prompt="Generate a Python function.",
+        language="python",
+        strength=0.8,
+        temperature=0.0,
+        verbose=False,
+    )
+
+    mock_unfinished_prompt.assert_called_once()
+    mock_continue_generation.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Issue #687: code_generator returns wrong model name after postprocessing
 # ---------------------------------------------------------------------------
