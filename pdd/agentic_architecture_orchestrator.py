@@ -967,6 +967,29 @@ def run_agentic_architecture_orchestrator(
                     model_used = fix_model
                     state["total_cost"] = total_cost
 
+                    # Structural validation of fix output before storing it or
+                    # entering the next gate attempt.  Without this, a degenerate
+                    # fix response (e.g. "Done.") would be persisted into
+                    # context/state and the next loop iteration would burn
+                    # another ~50s LLM gate call against obviously-broken
+                    # content.  See issue #817.
+                    is_valid_fix, fix_reason = _validate_step5_output_structure(fix_output)
+                    if not is_valid_fix:
+                        if not quiet:
+                            console.print(
+                                f"[red]⏹️  Step 5b fix produced invalid module design: "
+                                f"{fix_reason} — not retrying completeness gate[/red]"
+                            )
+                        state["step_outputs"]["5"] = f"FAILED: {fix_reason}"
+                        save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                        return (
+                            False,
+                            f"Step 5/Step 5b (module design) produced invalid output: {fix_reason}",
+                            total_cost,
+                            model_used,
+                            [],
+                        )
+
                     # Replace step5_output with corrected design
                     context["step5_output"] = fix_output
                     state["step_outputs"]["5"] = fix_output

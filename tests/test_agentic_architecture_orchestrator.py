@@ -1564,9 +1564,20 @@ def test_step5b_completeness_gate_fails_then_fixes(mock_dependencies, base_args)
         # Step 5b attempt 1: INVALID
         if "step5b_attempt1" in label:
             return (True, "VALIDATION_RESULT: INVALID\n\nR3: Missing auth module", 0.1, "gpt-4")
-        # Step 5b fix 1: corrected module design
+        # Step 5b fix 1: corrected module design (long enough to pass structural validation)
         if "step5b_fix1" in label:
-            return (True, "## Step 5: Module Design (Corrected)\nAdded auth_module", 0.1, "gpt-4")
+            return (
+                True,
+                "## Step 5: Module Design (Corrected)\n"
+                "module: auth_module — handles authentication and session management.\n"
+                "module: admin_module — administrative dashboard and user management.\n"
+                "module: notifications_module — outbound email/SMS notifications.\n"
+                "dependency: auth_module -> database\n"
+                "priority: 1 (auth_module), 2 (admin_module), 3 (notifications_module)\n"
+                "interface: REST endpoints exposed by each module.",
+                0.1,
+                "gpt-4",
+            )
         # Step 5b attempt 2: VALID
         if "step5b_attempt2" in label:
             return (True, "VALIDATION_RESULT: VALID", 0.1, "gpt-4")
@@ -1606,8 +1617,22 @@ def test_step5b_exhausted_retries_returns_hard_failure(mock_dependencies, base_a
         # Step 5b always fails
         if "step5b_attempt" in label:
             return (True, "VALIDATION_RESULT: INVALID\nMissing modules", 0.1, "gpt-4")
+        # Fix output passes structural validation but gate still says INVALID,
+        # so this test exercises the retry-exhaustion path rather than the
+        # structural-failure short-circuit.
         if "step5b_fix" in label:
-            return (True, "Corrected design but still incomplete", 0.1, "gpt-4")
+            return (
+                True,
+                "## Step 5: Module Design (Attempted Fix)\n"
+                "module: auth_module — handles authentication and session management.\n"
+                "module: admin_module — administrative dashboard and user management.\n"
+                "module: notifications_module — outbound email/SMS notifications.\n"
+                "dependency: auth_module -> database\n"
+                "priority: 1 (auth_module), 2 (admin_module), 3 (notifications_module)\n"
+                "interface: REST endpoints exposed by each module.",
+                0.1,
+                "gpt-4",
+            )
         return (True, _default_step_output(label), 0.1, "gpt-4")
 
     mocks["run"].side_effect = side_effect
@@ -1639,7 +1664,15 @@ def test_step5b_fix_updates_step5_context(mock_dependencies, base_args):
 
     mocks["save_state"].side_effect = capture_save
 
-    corrected_design = "## CORRECTED MODULE DESIGN\nAdded auth, admin, notifications modules"
+    corrected_design = (
+        "## CORRECTED MODULE DESIGN\n"
+        "module: auth_module — handles authentication and session management.\n"
+        "module: admin_module — administrative dashboard and user management.\n"
+        "module: notifications_module — outbound email/SMS notifications.\n"
+        "dependency: auth_module -> database\n"
+        "priority: 1 (auth_module), 2 (admin_module), 3 (notifications_module)\n"
+        "interface: REST endpoints exposed by each module."
+    )
 
     def side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
@@ -1676,6 +1709,42 @@ def test_step5b_fix_updates_step5_context(mock_dependencies, base_args):
         f"Step 5 output should be replaced with corrected design, "
         f"but got: {final_state['step_outputs'].get('5', 'MISSING')[:50]}"
     )
+
+
+def test_step5b_fix_with_degenerate_output_hard_stops_without_retry(mock_dependencies, base_args):
+    """Regression test for issue #817 round 2: a fix output of "Done." must
+    fail the structural pre-check, persist a FAILED diagnostic, and prevent
+    the next step5b_attempt from running. Without validating fix_output we
+    would burn another ~50s LLM gate call on obviously-broken content."""
+    mocks = mock_dependencies
+
+    def side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if "step1b" in label:
+            return (True, "COMPLEXITY_RESULT: MANAGEABLE", 0.1, "gpt-4")
+        # First gate attempt fails so the fix path is exercised
+        if "step5b_attempt1" in label:
+            return (True, "VALIDATION_RESULT: INVALID\nMissing auth", 0.1, "gpt-4")
+        # Fix returns degenerate output - must hard-stop, not retry
+        if "step5b_fix1" in label:
+            return (True, "Done.", 0.1, "gpt-4")
+        return (True, _default_step_output(label), 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect
+
+    success, msg, _, _, _ = run_agentic_architecture_orchestrator(**base_args)
+
+    assert success is False
+    assert "step 5" in msg.lower() and "invalid" in msg.lower(), (
+        f"Expected step-5/5b upstream-output diagnostic, got: {msg!r}"
+    )
+
+    labels = [kwargs.get("label", "") for _, kwargs in mocks["run"].call_args_list]
+    assert not any("step5b_attempt2" in l for l in labels), (
+        f"Subsequent step5b_attempt2 must not run after degenerate fix output, "
+        f"but labels were: {labels}"
+    )
+    assert not any("step6" in l for l in labels), "Step 6 must not run after structural failure"
 
 
 # ============================================================================
