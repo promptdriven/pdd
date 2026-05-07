@@ -7,11 +7,12 @@ unit tests cannot do.
 Skip gate: set ``PDD_RUN_REAL_LLM_TESTS=1`` to run.
 Expensive tests additionally require ``PDD_RUN_AGENTIC_TESTS=1``.
 
-Oracle: the old monolithic ``pdd_executor.py`` (3,186 lines) from pdd_cloud
-was manually split into 11 source + 8 runtime files. We compare the agentic
-split's diagnosis and proposals against that manual split to evaluate quality.
+Oracle: an old monolithic ``pdd_executor.py`` (3,186 lines) from a downstream
+reference repository was manually split into 11 source + 8 runtime files. We
+compare the agentic split's diagnosis and proposals against that manual split
+to evaluate quality.
 
-Manual split reference (commit ece9067a in pdd_cloud):
+Manual split reference (commit ece9067a in the downstream reference repo):
   pdd_executor/ (11 files):
     orchestrator.py (807), pr_creation.py (488), waterfall_runner.py (400),
     env_setup.py (376), process_runner.py (356), post_cli_processing.py (339),
@@ -56,30 +57,28 @@ def _skip_unless_agentic():
         pytest.skip("Agentic tests are expensive (~$5-20); set PDD_RUN_AGENTIC_TESTS=1")
 
 
-def _get_pdd_gltanaka_root() -> Optional[Path]:
-    """Resolve the pdd-gltanaka repo root."""
-    # Try common locations
+def _get_pdd_repo_root() -> Optional[Path]:
+    """Resolve the current pdd repo root."""
     for candidate in [
-        Path.home() / "Desktop" / "SF" / "pdd-gltanaka",
         Path.cwd(),
+        Path(__file__).resolve().parents[1],
     ]:
         if (candidate / "pdd" / "agentic_split_orchestrator.py").exists():
             return candidate
     return None
 
 
-def _get_pdd_cloud_root() -> Optional[Path]:
-    """Resolve the pdd_cloud repo root."""
-    for candidate in [
-        Path.home() / "Desktop" / "SF" / "pdd_cloud",
-        Path.cwd().parent / "pdd_cloud",
-    ]:
-        if (candidate / "extensions" / "github_pdd_app").exists():
-            return candidate
+def _get_reference_repo_root() -> Optional[Path]:
+    """Resolve the downstream reference repo root for expensive real tests."""
+    candidate = os.getenv("PDD_AGENTIC_SPLIT_REFERENCE_REPO")
+    if candidate:
+        path = Path(candidate).expanduser()
+        if (path / "extensions" / "github_pdd_app").exists():
+            return path
     return None
 
 
-def _extract_presplit_pdd_executor(pdd_cloud: Path) -> Optional[Path]:
+def _extract_presplit_pdd_executor(reference_repo: Path) -> Optional[Path]:
     """Extract the monolithic pdd_executor.py from before the manual split.
 
     Returns the path to a temp file, or None if the commit isn't available.
@@ -87,7 +86,7 @@ def _extract_presplit_pdd_executor(pdd_cloud: Path) -> Optional[Path]:
     try:
         result = subprocess.run(
             ["git", "show", "00a2c553e:extensions/github_pdd_app/src/workers/pdd_executor.py"],
-            cwd=str(pdd_cloud),
+            cwd=str(reference_repo),
             capture_output=True, text=True, timeout=30,
         )
         if result.returncode != 0:
@@ -137,9 +136,9 @@ class TestLeaveAlone:
         step should return LEAVE_ALONE with COHESIVE_WORKFLOW rationale.
         """
         _skip_unless_real()
-        root = _get_pdd_gltanaka_root()
+        root = _get_pdd_repo_root()
         if root is None:
-            pytest.skip("pdd-gltanaka repo not found")
+            pytest.skip("pdd repo not found")
 
         target = root / "pdd" / "agentic_bug_orchestrator.py"
         if not target.exists():
@@ -160,9 +159,9 @@ class TestLeaveAlone:
     def test_leave_alone_small_file(self):
         """A small file (<200 lines) should not be split."""
         _skip_unless_real()
-        root = _get_pdd_gltanaka_root()
+        root = _get_pdd_repo_root()
         if root is None:
-            pytest.skip("pdd-gltanaka repo not found")
+            pytest.skip("pdd repo not found")
 
         # Find a small Python file in pdd/
         small_files = sorted(
@@ -201,11 +200,11 @@ class TestPddExecutorDiagnosis:
         process management, PR creation, waterfall execution, result handling.
         """
         _skip_unless_agentic()
-        pdd_cloud = _get_pdd_cloud_root()
-        if pdd_cloud is None:
-            pytest.skip("pdd_cloud repo not found")
+        reference_repo = _get_reference_repo_root()
+        if reference_repo is None:
+            pytest.skip("Set PDD_AGENTIC_SPLIT_REFERENCE_REPO to run this test")
 
-        tmp_file = _extract_presplit_pdd_executor(pdd_cloud)
+        tmp_file = _extract_presplit_pdd_executor(reference_repo)
         if tmp_file is None:
             pytest.skip("Could not extract pre-split pdd_executor (commit 00a2c553e)")
 
@@ -213,7 +212,7 @@ class TestPddExecutorDiagnosis:
             from pdd.agentic_split_orchestrator import run_agentic_split_orchestrator
 
             ok, msg, cost, model, files = run_agentic_split_orchestrator(
-                str(tmp_file), cwd=pdd_cloud, quiet=True, diagnose_only=True,
+                str(tmp_file), cwd=reference_repo, quiet=True, diagnose_only=True,
                 experimental_language=True,
             )
             assert ok is False, "diagnose_only always returns False"
@@ -242,11 +241,11 @@ class TestPddExecutorProposal:
         the agent might name them differently but capture the same concept).
         """
         _skip_unless_agentic()
-        pdd_cloud = _get_pdd_cloud_root()
-        if pdd_cloud is None:
-            pytest.skip("pdd_cloud repo not found")
+        reference_repo = _get_reference_repo_root()
+        if reference_repo is None:
+            pytest.skip("Set PDD_AGENTIC_SPLIT_REFERENCE_REPO to run this test")
 
-        tmp_file = _extract_presplit_pdd_executor(pdd_cloud)
+        tmp_file = _extract_presplit_pdd_executor(reference_repo)
         if tmp_file is None:
             pytest.skip("Could not extract pre-split pdd_executor")
 
@@ -254,7 +253,7 @@ class TestPddExecutorProposal:
             from pdd.agentic_split_orchestrator import run_agentic_split_orchestrator
 
             ok, msg, cost, model, files = run_agentic_split_orchestrator(
-                str(tmp_file), cwd=pdd_cloud, quiet=True, propose_only=True,
+                str(tmp_file), cwd=reference_repo, quiet=True, propose_only=True,
                 experimental_language=True,
             )
             # Propose-only returns False with "Propose only complete"
@@ -288,11 +287,11 @@ class TestPddExecutorFullExtraction:
         4. At least 3 children were created
         """
         _skip_unless_agentic()
-        pdd_cloud = _get_pdd_cloud_root()
-        if pdd_cloud is None:
-            pytest.skip("pdd_cloud repo not found")
+        reference_repo = _get_reference_repo_root()
+        if reference_repo is None:
+            pytest.skip("Set PDD_AGENTIC_SPLIT_REFERENCE_REPO to run this test")
 
-        tmp_file = _extract_presplit_pdd_executor(pdd_cloud)
+        tmp_file = _extract_presplit_pdd_executor(reference_repo)
         if tmp_file is None:
             pytest.skip("Could not extract pre-split pdd_executor")
 
@@ -300,7 +299,7 @@ class TestPddExecutorFullExtraction:
             from pdd.agentic_split_orchestrator import run_agentic_split_orchestrator
 
             ok, msg, cost, model, changed_files = run_agentic_split_orchestrator(
-                str(tmp_file), cwd=pdd_cloud, quiet=False,
+                str(tmp_file), cwd=reference_repo, quiet=False,
                 experimental_language=True,
                 skip_regen_gate=True,  # Skip regen for speed in testing
             )

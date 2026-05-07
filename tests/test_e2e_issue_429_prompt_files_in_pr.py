@@ -245,7 +245,7 @@ def test_step10_prompt_references_files_to_stage():
                 with patch('pdd.agentic_bug_orchestrator.load_workflow_state', side_effect=mock_load_state):
                     with patch('pdd.agentic_bug_orchestrator.clear_workflow_state', side_effect=mock_clear_state):
                         success, message, cost, model, files = run_agentic_bug_orchestrator(
-                            issue_url="https://github.com/gltanaka/pdd/issues/429",
+                            issue_url="https://github.com/promptdriven/pdd/issues/429",
                             issue_content="Generated PR doesn't include prompt file changes from Step 5.5",
                             repo_owner="gltanaka",
                             repo_name="pdd",
@@ -351,7 +351,7 @@ def test_step10_prompt_references_files_to_stage():
                 with patch('pdd.agentic_bug_orchestrator.load_workflow_state', return_value=(None, None)):
                     with patch('pdd.agentic_bug_orchestrator.clear_workflow_state'):
                         success, message, cost, model, files = run_agentic_bug_orchestrator(
-                            issue_url="https://github.com/gltanaka/pdd/issues/429",
+                            issue_url="https://github.com/promptdriven/pdd/issues/429",
                             issue_content="Prompt files missing from PR",
                             repo_owner="gltanaka",
                             repo_name="pdd",

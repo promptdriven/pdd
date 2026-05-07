@@ -50,6 +50,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 % Circular Include Detection
 - Detect circular includes by tracking resolved file paths; raise `ValueError` with "Circular include" in the message if a file appears twice in the include chain
 - Include resolution uses a convergence loop (repeat until no changes) to handle diamond dependencies — where two includes both reference the same file, requiring multiple passes to resolve. Cap at 50 iterations to prevent infinite loops.
+- In non-recursive mode, nested includes from an included file must be resolved with a child `_seen` stack before substituting the content into the parent. This prevents circular chains from expanding text until the max-iteration guard or subprocess timeout; self-includes and A→B→A cycles should raise immediately while duplicate includes in separate branches remain valid.
 
 % Recursive Pass Behavior
 - `recursive=True`: resolve includes recursively. Child `preprocess()` calls must use `recursive=True` and `double_curly_brackets=False` (prevents double-doubling of braces in nested content).

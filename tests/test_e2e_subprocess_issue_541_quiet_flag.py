@@ -29,7 +29,7 @@ The test should:
   - FAIL on the current buggy code (leaked Rich panels and INFO log messages ARE present)
   - PASS once the bug is fixed (output is clean)
 
-Issue: https://github.com/gltanaka/pdd/issues/541
+Issue: https://github.com/promptdriven/pdd/issues/541
 """
 
 import os

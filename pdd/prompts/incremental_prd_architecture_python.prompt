@@ -69,7 +69,7 @@ Implement incremental PRD-to-architecture propagation. The LLM may propose a pat
    - Use `detect_change()` with the architecture diff to identify prompts whose Requirements sections need content changes.
    - Use `change()` to apply those Requirements changes.
    - For newly added modules, create a minimal prompt from the architecture entry and `requirements` list when no prompt file exists.
-   - Build new prompt dependency `<include>` paths relative to the architecture target directory (the directory containing `architecture.json`), not necessarily the PRD snapshot root, so `--output-dir` subprojects can sync from their own directory.
+   - Build new prompt dependency include-tag paths relative to the architecture target directory (the directory containing `architecture.json`), not necessarily the PRD snapshot root, so `--output-dir` subprojects can sync from their own directory.
    - When a module is removed from `architecture.json`, delete its prompt file transactionally as part of the same commit, include it in dry-run previews, and list it in `changed_files`.
 
 5. Safety:

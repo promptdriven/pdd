@@ -440,6 +440,34 @@ def test_run_pytest_without_pddrc_uses_original_behavior(tmp_path) -> None:
     assert results.get("passed") == 1
 
 
+def test_run_pytest_without_pddrc_roots_in_test_directory(tmp_path) -> None:
+    """Ad hoc test-file runs should not let pytest choose an unwritable ancestor."""
+    test_file = tmp_path / "test_simple.py"
+    test_file.write_text(
+        "def test_pass():\n"
+        "    assert True\n",
+        encoding="utf-8"
+    )
+
+    fake_completed = real_subprocess.CompletedProcess(
+        args=["pytest"],
+        returncode=0,
+        stdout="test_simple.py::test_pass PASSED [100%]\n"
+        "========================= 1 passed in 0.01s =========================\n",
+        stderr="",
+    )
+
+    with patch("pdd.pytest_output.subprocess.Popen", return_value=_mock_popen_from_completed(fake_completed)) as popen:
+        result = run_pytest_and_capture_output(str(test_file))
+
+    pytest_args = popen.call_args.args[0]
+    popen_kwargs = popen.call_args.kwargs
+    test_dir = str(tmp_path.resolve())
+    assert popen_kwargs["cwd"] == test_dir
+    assert f"--rootdir={test_dir}" in pytest_args
+    assert result["test_results"][0]["warnings"] == 0
+
+
 # --- Tests for extract_failing_files_from_output (Bug #156) ---
 
 def test_extract_failing_files_single_failure():
@@ -651,4 +679,3 @@ def test_warning_count_mixed_library_and_pytest_warnings(tmp_path):
         f"Expected 1 warning (from pytest summary), got {results['warnings']}. "
         f"Library warnings in stdout should not inflate the count."
     )
-

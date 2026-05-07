@@ -1359,6 +1359,48 @@ def test_get_pdd_file_paths_respects_context_override(tmp_path, monkeypatch):
             os.chdir(original_cwd)
 
 
+def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path, monkeypatch):
+    """Architecture filepaths should resolve example/test dirs from the module context."""
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "pdd").mkdir()
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context_tests").mkdir()
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
+
+    (tmp_path / ".pddrc").write_text(
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults:\n'
+        '      test_output_path: "tests/"\n'
+        '      example_output_path: "examples/"\n'
+        '      generate_output_path: "src/"\n'
+        '  pdd_cli:\n'
+        '    paths: ["pdd/**"]\n'
+        '    defaults:\n'
+        '      test_output_path: "context_tests/"\n'
+        '      example_output_path: "context"\n'
+        '      generate_output_path: "pdd/"\n'
+    )
+    (tmp_path / "architecture.json").write_text(json.dumps({
+        "modules": [{
+            "filename": "agentic_architecture_python.prompt",
+            "filepath": "pdd/agentic_architecture.py",
+        }]
+    }))
+
+    paths = get_pdd_file_paths("agentic_architecture", "python", "prompts")
+
+    assert paths["code"] == tmp_path / "pdd" / "agentic_architecture.py"
+    assert paths["example"] == tmp_path / "context" / "agentic_architecture_example.py"
+    assert paths["test"] == tmp_path / "context_tests" / "test_agentic_architecture.py"
+
+
 # --- Part 6: Auto-deps Infinite Loop Regression Tests ---
 
 class TestAutoDepsInfiniteLoopFix:
@@ -2550,7 +2592,7 @@ def test_get_pdd_file_paths_no_duplication_when_prompts_dir_is_absolute_with_sub
     Regression test: prompt path duplication when prompts_dir is an absolute path
     that already contains the context's subdirectory.
 
-    Bug scenario (from pdd_cloud recruiting modules):
+    Bug scenario (from downstream_project recruiting modules):
       - .pddrc context has prompts_dir: "prompts/recruiting"
       - sync_main discovers a prompt via template and passes the absolute parent as
         prompts_dir, e.g. "/abs/path/prompts/recruiting"
@@ -2569,7 +2611,7 @@ def test_get_pdd_file_paths_no_duplication_when_prompts_dir_is_absolute_with_sub
     """
     monkeypatch.chdir(tmp_path)
 
-    # Directory structure mimicking pdd_cloud recruiting
+    # Directory structure mimicking downstream_project recruiting
     prompts_recruiting = tmp_path / "prompts" / "recruiting"
     prompts_recruiting.mkdir(parents=True)
 
@@ -4204,7 +4246,7 @@ class TestGeneratePathsFromTemplatesCodeFallback:
     dict must still have a 'code' key. Otherwise sync_orchestration crashes with
     KeyError: 'code'.
 
-    Regression test for promptdriven/pdd_cloud#826: the frontend catch-all
+    Regression test for promptdriven/example_app#826: the frontend catch-all
     context has outputs.prompt but no outputs.code, causing page syncs to crash.
     """
 
@@ -4527,58 +4569,6 @@ def test_get_pdd_file_paths_architecture_json_nested_subdir(tmp_path, monkeypatc
     )
     # Verify code path resolves correctly from architecture.json
     assert "firestore_client.py" in str(paths['code'])
-
-
-def test_get_pdd_file_paths_architecture_filepath_uses_basename_context(tmp_path, monkeypatch):
-    """Architecture filepath resolution should still honor the module context.
-
-    The architecture branch used to detect context from cwd, so root-level PDD
-    modules defaulted examples to examples/ even when .pddrc mapped them to
-    context/. CI auto-heal then tried to generate wrong new example files.
-    """
-    monkeypatch.chdir(tmp_path)
-
-    (tmp_path / ".pddrc").write_text(json.dumps({
-        "contexts": {
-            "default": {
-                "defaults": {
-                    "example_output_path": "examples/",
-                    "test_output_path": "tests/",
-                }
-            },
-            "pdd_cli": {
-                "paths": ["pdd/**", "prompts/**", "tests/**"],
-                "defaults": {
-                    "prompts_dir": "prompts",
-                    "generate_output_path": "pdd",
-                    "test_output_path": "tests",
-                    "example_output_path": "context",
-                    "default_language": "python",
-                },
-            },
-        }
-    }))
-    (tmp_path / ".pdd" / "meta").mkdir(parents=True)
-    (tmp_path / ".pdd" / "locks").mkdir(parents=True)
-    (tmp_path / "prompts").mkdir()
-    (tmp_path / "pdd").mkdir()
-    (tmp_path / "context").mkdir()
-
-    (tmp_path / "prompts" / "agentic_architecture_python.prompt").write_text("prompt")
-    (tmp_path / "pdd" / "agentic_architecture.py").write_text("# code")
-    (tmp_path / "context" / "agentic_architecture_example.py").write_text("# example")
-    (tmp_path / "architecture.json").write_text(json.dumps({
-        "modules": [{
-            "filename": "agentic_architecture_python.prompt",
-            "filepath": "pdd/agentic_architecture.py",
-        }]
-    }))
-
-    paths = get_pdd_file_paths("agentic_architecture", "python", "prompts")
-
-    assert paths["code"].resolve() == (tmp_path / "pdd" / "agentic_architecture.py").resolve()
-    assert paths["example"].resolve() == (tmp_path / "context" / "agentic_architecture_example.py").resolve()
-    assert paths["test"].resolve() == (tmp_path / "tests" / "test_agentic_architecture.py").resolve()
 
 
 def test_get_pdd_file_paths_nested_subdir_logging_shows_exists_true(tmp_path, monkeypatch, caplog):

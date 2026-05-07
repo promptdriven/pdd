@@ -16,11 +16,13 @@ from pdd.agentic_sync import (
     _analyze_global_sync_modules,
     _architecture_module_basenames,
     _augment_architecture_from_pr_branch,
+    _branch_diff_is_runtime_llm_only,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
     _find_project_root,
     _is_catchall_match,
     _is_github_issue_url,
+    _is_runtime_llm_template,
     _llm_fix_dry_run_failure,
     _load_architecture_json,
     _parse_llm_response,
@@ -61,6 +63,43 @@ class TestIsGithubIssueUrl:
 
     def test_empty_string(self):
         assert not _is_github_issue_url("")
+
+
+# ---------------------------------------------------------------------------
+# _is_runtime_llm_template
+# ---------------------------------------------------------------------------
+
+class TestIsRuntimeLlmTemplate:
+    def test_bare_llm_basename(self):
+        assert _is_runtime_llm_template("agentic_sync_identify_modules_LLM")
+
+    def test_llm_prompt_filename(self):
+        # Issue #1396: classifier must accept the *_LLM.prompt filename form
+        # so the strip step in run_agentic_sync (which appends ".prompt") and
+        # any caller that passes raw FILES_MODIFIED entries are both handled.
+        assert _is_runtime_llm_template("agentic_sync_identify_modules_LLM.prompt")
+
+    def test_path_qualified_llm_prompt(self):
+        assert _is_runtime_llm_template(
+            "pdd/prompts/agentic_sync_identify_modules_LLM.prompt"
+        )
+
+    def test_path_qualified_bare_llm(self):
+        assert _is_runtime_llm_template(
+            "pdd/prompts/agentic_sync_identify_modules_LLM"
+        )
+
+    def test_lowercase_llm_not_classified(self):
+        # Case-sensitive: lowercase ``llm`` is a legitimate basename token.
+        assert not _is_runtime_llm_template("call_llm")
+        assert not _is_runtime_llm_template("call_llm.prompt")
+
+    def test_non_llm_basename(self):
+        assert not _is_runtime_llm_template("agentic_sync_identify_modules")
+        assert not _is_runtime_llm_template("agentic_sync_identify_modules_python")
+
+    def test_empty_string(self):
+        assert not _is_runtime_llm_template("")
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +770,123 @@ class TestRunAgenticSync:
         assert cost == pytest.approx(0.15)
         assert model == "anthropic"
         mock_runner.run.assert_called_once()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.DurableSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_issue_dry_run_does_not_start_write_mode_runner(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_durable_runner_cls,
+        mock_runner_cls,
+    ):
+        """GitHub issue --dry-run must stop before child write-mode syncs."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            dry_run=True,
+        )
+
+        assert success is True
+        assert "Dry run complete" in msg
+        assert "foo" in msg
+        assert cost == pytest.approx(0.05)
+        assert model == "anthropic"
+        mock_dry_run.assert_called_once()
+        mock_filter_synced.assert_called_once()
+        mock_runner_cls.assert_not_called()
+        mock_durable_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_issue_dry_run_does_not_write_dependency_corrections(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+    ):
+        """Dependency correction suggestions are read-only in issue dry-run mode."""
+        issue_data = {"title": "Test", "body": "Fix foo", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            dry_run=True,
+        )
+
+        assert success is True
+        assert "Dry run complete" in msg
+        mock_apply_corrections.assert_not_called()
+        mock_runner_cls.assert_not_called()
 
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
@@ -1820,6 +1976,173 @@ class TestDetectModulesFromBranchDiff:
         assert result == ["pdd_executor", "solving_orchestrator"]
 
 
+class TestBranchDiffIsRuntimeLlmOnly:
+    """Issue #1396: helper that detects runtime-template-only branch diffs."""
+
+    def test_true_when_all_prompt_changes_are_runtime_llm(self):
+        """All ``.prompt`` changes are ``_LLM.prompt`` → True (no LLM call needed)."""
+        diff_output = (
+            "M\tpdd/prompts/agentic_sync_identify_modules_LLM.prompt\n"
+            "A\tpdd/prompts/agentic_split_step4_propose_options_LLM.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is True
+
+    def test_false_when_real_prompt_change_present(self):
+        """Mixed changes (one real prompt + one runtime template) → False."""
+        diff_output = (
+            "M\tprompts/ci_validation_python.prompt\n"
+            "M\tpdd/prompts/agentic_sync_identify_modules_LLM.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_when_no_prompt_changes(self):
+        """Diff with only non-prompt files → False (defer to LLM fallback)."""
+        diff_output = "M\tpdd/agentic_common.py\nM\ttests/test_agentic_common.py\n"
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_when_runtime_prompt_and_non_prompt_change_present(self):
+        """A runtime prompt plus source change is inconclusive, not a no-op."""
+        diff_output = (
+            "M\tpdd/prompts/agentic_sync_identify_modules_LLM.prompt\n"
+            "M\tpdd/agentic_sync.py\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_on_main_branch(self):
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="main\n", stderr="")
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_on_git_failure(self):
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("git not found")
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_when_runtime_prompt_mixed_with_code_file(self):
+        """Runtime ``_LLM.prompt`` change combined with a non-prompt source
+        file (e.g. ``pdd/agentic_sync.py``) → False.
+
+        Regression for issue #1396 review feedback: previously the helper
+        ignored non-prompt files when deciding "runtime-only" and returned
+        True, which caused ``run_agentic_sync`` to short-circuit to a no-op
+        and silently skip the real code change.
+        """
+        diff_output = (
+            "M\tpdd/prompts/foo_LLM.prompt\n"
+            "M\tpdd/agentic_sync.py\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_when_runtime_prompt_mixed_with_test_file(self):
+        """Runtime ``_LLM.prompt`` change combined with a test file → False."""
+        diff_output = (
+            "M\tpdd/prompts/foo_LLM.prompt\n"
+            "M\ttests/test_foo.py\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_false_when_runtime_prompt_modified_and_real_file_deleted(self):
+        """Runtime ``_LLM.prompt`` modification alongside the deletion of a real
+        file (e.g. a non-LLM prompt or Python source file) → False.
+
+        Regression for issue #1396 review round 4 feedback: previously the
+        helper used ``--diff-filter=ACMR`` which excluded deletions, so a
+        branch that modified only ``*_LLM.prompt`` among ACMR files but also
+        deleted a real prompt/code/test/config file would incorrectly return
+        True and ``run_agentic_sync`` would short-circuit to a no-op success,
+        silently skipping the deletion.
+
+        The fix uses ``--diff-filter=ACMRD`` (include deletions); the deleted
+        non-runtime file fails the runtime-template predicate so the helper
+        correctly returns False and defers to the LLM fallback.
+        """
+        # Deletion of a real (non-_LLM) prompt file: not runtime-only.
+        diff_output = (
+            "M\tpdd/prompts/foo_LLM.prompt\n"
+            "D\tpdd/prompts/foo_python.prompt\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+        # Deletion of a Python source file: not runtime-only.
+        diff_output = (
+            "M\tpdd/prompts/foo_LLM.prompt\n"
+            "D\tpdd/some_module.py\n"
+        )
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+    def test_diff_filter_includes_deletions(self):
+        """Verify the helper invokes ``git diff`` with ``--diff-filter=ACMRD``
+        so deleted files are surfaced and evaluated against the
+        runtime-template predicate (issue #1396 review round 4)."""
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            _branch_diff_is_runtime_llm_only(Path("/fake/project"))
+            # Second subprocess.run call is the git diff invocation.
+            assert mock_run.call_count == 2
+            diff_call_args = mock_run.call_args_list[1].args[0]
+            assert "--name-status" in diff_call_args
+            assert "--diff-filter=ACMRD" in diff_call_args
+
+    def test_false_when_real_prompt_renamed_to_runtime_prompt(self):
+        """A real sync prompt renamed to ``*_LLM.prompt`` is not runtime-only.
+
+        ``git diff --name-only`` reports only the destination path for renames,
+        so it would make this look like a pure runtime-template change. The
+        helper must use name-status data and reject the rename because the old
+        path is a real sync prompt.
+        """
+        diff_output = "R100\tpdd/prompts/foo_python.prompt\tpdd/prompts/foo_LLM.prompt\n"
+        with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="feature-branch\n", stderr=""),
+                MagicMock(returncode=0, stdout=diff_output, stderr=""),
+            ]
+            assert _branch_diff_is_runtime_llm_only(Path("/fake/project")) is False
+
+
 class TestBranchDiffSkipsLlm:
     """Verify run_agentic_sync uses branch diff and skips LLM when modules found."""
 
@@ -1889,6 +2212,237 @@ class TestBranchDiffSkipsLlm:
         mock_llm.assert_called_once()
 
 
+class TestRuntimeLlmTemplateNoop:
+    """Issue #1396 / #1388 regression tests for ``run_agentic_sync``.
+
+    These cover the actual issue shape end-to-end (not just the classifier and
+    filter unit predicates):
+
+    * An LLM identify response that lists only ``*_LLM`` modules must complete
+      as a successful no-op without invoking dry-run validation or the runner.
+    * A mixed identify response (one runtime template + one real module) must
+      drop the runtime template and only the real module reaches dry-run /
+      runner.
+    * A branch diff that contains exclusively ``*_LLM.prompt`` changes must
+      short-circuit to a deterministic no-op without calling the identify LLM.
+    """
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False)
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_llm_returns_only_runtime_llm_modules_is_noop_success(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_branch_runtime_only,
+        mock_branch_diff,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """LLM returns only ``*_LLM`` basenames → success no-op, runner not called."""
+        issue_data = {"title": "Test", "body": "Touch runtime templates", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # Architecture only contains the runtime LLM template entry.
+        mock_load_arch.return_value = (
+            [{"filename": "agentic_sync_identify_modules_LLM.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["agentic_sync_identify_modules_LLM"]\nDEPS_VALID: true',
+            0.04,
+            "anthropic",
+        )
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1396", quiet=True
+        )
+
+        assert success is True
+        assert "All modules are already synced" in msg
+        # The identify LLM was called (we got past branch diff), but no
+        # downstream work happened: dry-run and the runner are untouched.
+        mock_agentic_task.assert_called_once()
+        mock_dry_run.assert_not_called()
+        mock_runner_cls.assert_not_called()
+        # Cost is just the LLM identify cost; runner cost is zero.
+        assert cost == pytest.approx(0.04)
+        assert model == "anthropic"
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False)
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_mixed_runtime_and_real_only_real_reaches_runner(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_branch_runtime_only,
+        mock_branch_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """Mixed runtime + real → only the real module reaches dry-run + runner."""
+        issue_data = {"title": "Test", "body": "Mix", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [
+                {"filename": "agentic_sync_identify_modules_LLM.prompt", "dependencies": []},
+                {"filename": "foo_python.prompt", "dependencies": []},
+            ],
+            Path("/tmp/architecture.json"),
+        )
+        # LLM returns one runtime template basename (must be dropped) and one
+        # real module (must reach validation and the runner).
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["agentic_sync_identify_modules_LLM", "foo"]\nDEPS_VALID: true',
+            0.06,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1396", quiet=True
+        )
+
+        assert success is True
+        # Dry-run validation was called with only the real module.
+        mock_dry_run.assert_called_once()
+        dry_run_kwargs = mock_dry_run.call_args.kwargs
+        dry_run_args = mock_dry_run.call_args.args
+        dry_run_modules = dry_run_kwargs.get("modules") if "modules" in dry_run_kwargs else (
+            dry_run_args[0] if dry_run_args else None
+        )
+        assert dry_run_modules == ["foo"]
+        # The runner was constructed with only the real module as a basename.
+        runner_kwargs = mock_runner_cls.call_args[1]
+        assert runner_kwargs["basenames"] == ["foo"]
+        mock_runner.run.assert_called_once()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=True)
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_branch_diff_runtime_llm_only_short_circuits_without_llm(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_branch_runtime_only,
+        mock_branch_diff,
+        mock_agentic_task,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """Branch diff containing only ``*_LLM.prompt`` changes → deterministic
+        no-op success; identify LLM, dry-run, and runner are never called."""
+        issue_data = {"title": "Test", "body": "Only runtime templates", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "agentic_sync_identify_modules_LLM.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1396", quiet=True
+        )
+
+        assert success is True
+        assert "All modules are already synced" in msg
+        # No LLM call, no dry-run validation, no runner.
+        mock_agentic_task.assert_not_called()
+        mock_dry_run.assert_not_called()
+        mock_runner_cls.assert_not_called()
+        # Zero cost since nothing was billed.
+        assert cost == 0.0
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False)
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_empty_llm_modules_without_runtime_only_diff_is_failure(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_branch_runtime_only,
+        mock_branch_diff,
+        mock_dry_run,
+        mock_runner_cls,
+    ):
+        """Empty ``MODULES_TO_SYNC`` from the LLM, when the diff is *not*
+        runtime-template-only, must be treated as a failure rather than a
+        silent no-op.
+
+        Regression for issue #1396 review feedback: previously any empty LLM
+        selection was a successful no-op, which could mask legitimate identify
+        failures (e.g. parsing drops the result, or the model fails to infer
+        modules for a normal issue).
+        """
+        issue_data = {"title": "Test", "body": "Real change", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        # LLM returns empty MODULES_TO_SYNC, but the branch diff is *not*
+        # runtime-template-only (mock_branch_runtime_only returns False).
+        mock_agentic_task.return_value = (
+            True,
+            "MODULES_TO_SYNC: []\nDEPS_VALID: true",
+            0.04,
+            "anthropic",
+        )
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1396", quiet=True
+        )
+
+        assert success is False
+        assert "no modules to sync" in msg.lower()
+        # No dry-run, no runner — we failed before reaching them.
+        mock_dry_run.assert_not_called()
+        mock_runner_cls.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # _filter_invalid_basenames — pre-validation against architecture.json
 # (Prevents LLM-hallucinated basenames from blocking the entire sync)
@@ -1931,17 +2485,35 @@ class TestFilterInvalidBasenames:
         assert valid == ["mod_a", "mod_b"]
         assert invalid == []
 
-    def test_matches_llm_prompt_basenames(self):
-        """LLM prompts (ending in _LLM) should also match."""
+    def test_rejects_runtime_llm_template_basenames(self):
+        """Runtime *_LLM.prompt templates are not syncable modules.
+
+        Hard boundary for issue #1396: an architecture entry whose only file
+        is a `_LLM.prompt` runtime template must not contribute either the
+        bare `_LLM` basename or the stripped owner-style basename to the
+        valid set. Both forms are guaranteed to fail in `pdd sync` because
+        runtime LLM templates are consumed directly by their owning code
+        module via `load_prompt_template(...)` and have no language-suffixed
+        sync companion.
+        """
         architecture = [
             {"filename": "agentic_bug_step10_verify_LLM.prompt"},
         ]
-        modules = ["agentic_bug_step10_verify"]
 
-        valid, invalid = _filter_invalid_basenames(modules, architecture)
+        # The bare `_LLM` basename must be rejected.
+        valid, invalid = _filter_invalid_basenames(
+            ["agentic_bug_step10_verify_LLM"], architecture
+        )
+        assert valid == []
+        assert invalid == ["agentic_bug_step10_verify_LLM"]
 
-        assert valid == ["agentic_bug_step10_verify"]
-        assert invalid == []
+        # The stripped owner-style basename must also be rejected when the
+        # only architecture entry is a runtime `_LLM.prompt` template.
+        valid, invalid = _filter_invalid_basenames(
+            ["agentic_bug_step10_verify"], architecture
+        )
+        assert valid == []
+        assert invalid == ["agentic_bug_step10_verify"]
 
     def test_returns_all_when_no_architecture(self):
         """If architecture is None, can't validate — keep all modules."""
@@ -1951,6 +2523,15 @@ class TestFilterInvalidBasenames:
 
         assert valid == ["mod_a", "hallucinated_mod"]
         assert invalid == []
+
+    def test_rejects_runtime_llm_even_without_architecture(self):
+        """The runtime-template boundary applies even when architecture is absent."""
+        modules = ["agentic_sync_identify_modules_LLM", "mod_a"]
+
+        valid, invalid = _filter_invalid_basenames(modules, None)
+
+        assert valid == ["mod_a"]
+        assert invalid == ["agentic_sync_identify_modules_LLM"]
 
     def test_preserves_order(self):
         """Valid basenames should maintain their original order."""

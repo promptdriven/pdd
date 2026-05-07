@@ -865,7 +865,7 @@ class TestKeyringTimeoutProtection:
     for the full sleep duration. On fixed code, the timeout wrapper
     returns within the patched timeout and yields False/None.
 
-    Issue: https://github.com/gltanaka/pdd/issues/1311
+    Issue: https://github.com/promptdriven/pdd/issues/1311
     """
 
     @pytest.fixture(autouse=True)
