@@ -1,7 +1,8 @@
 """CLI detector and bootstrapper for pdd setup.
 
-Detects agentic CLI harnesses (Claude, Codex, Gemini, OpenCode) and walks
-the user through installation and API key configuration.
+Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI,
+Gemini CLI, OpenCode CLI) required for `pdd fix`, `pdd change`, `pdd bug`,
+and `pdd setup`.
 """
 
 from __future__ import annotations
@@ -12,73 +13,77 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from rich.console import Console
+try:
+    from rich.console import Console
+    console = Console()
+    _HAS_RICH = True
+except Exception:  # pragma: no cover
+    console = None
+    _HAS_RICH = False
 
-from pdd.setup_tool import _print_step_banner
-
-
-console = Console()
+try:
+    from pdd.setup_tool import _print_step_banner
+except Exception:  # pragma: no cover - setup_tool is expected in normal pdd usage
+    def _print_step_banner(text: str) -> None:
+        _print()
+        _print(f"=== {text} ===")
+        _print()
 
 
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-# Mapping from provider -> primary env var name used for that provider.
-# OpenCode is multi-provider so it has no single primary key.
-PROVIDER_PRIMARY_KEY = {
+PROVIDER_PRIMARY_KEY: Dict[str, Optional[str]] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
-    "opencode": None,
+    "opencode": None,  # OpenCode is multi-provider; no single primary key.
 }
 
-# Mapping from provider -> human-friendly display name.
-PROVIDER_DISPLAY = {
+PROVIDER_DISPLAY: Dict[str, str] = {
     "anthropic": "Claude CLI",
     "google": "Gemini CLI",
     "openai": "Codex CLI",
     "opencode": "OpenCode CLI",
 }
 
-# Preferred CLI ordering (best-first) when auto-selecting.
-CLI_PREFERENCE = ["claude", "codex", "gemini", "opencode"]
+# Display order in selection table and preferred-default order.
+CLI_PREFERENCE: List[str] = ["claude", "codex", "gemini", "opencode"]
 
-# Shell -> RC file mapping.
-SHELL_RC_MAP = {
+SHELL_RC_MAP: Dict[str, str] = {
     "bash": "~/.bashrc",
     "zsh": "~/.zshrc",
     "fish": "~/.config/fish/config.fish",
 }
 
-# Provider -> CLI binary name.
-_PROVIDER_TO_CLI = {
+# Provider -> CLI name.
+_PROVIDER_CLI: Dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
     "opencode": "opencode",
 }
 
-# CLI -> npm install command.
-_CLI_NPM_PACKAGE = {
+# CLI name -> provider.
+_CLI_PROVIDER: Dict[str, str] = {
+    "claude": "anthropic",
+    "gemini": "google",
+    "codex": "openai",
+    "opencode": "opencode",
+}
+
+_CLI_NPM_PACKAGE: Dict[str, str] = {
     "claude": "@anthropic-ai/claude-code",
     "gemini": "@google/gemini-cli",
     "codex": "@openai/codex",
     "opencode": "opencode-ai",
 }
 
-# Table display order: (provider, cli_name)
-_TABLE_ORDER = [
-    ("anthropic", "claude"),
-    ("openai", "codex"),
-    ("google", "gemini"),
-    ("opencode", "opencode"),
-]
-
-# OpenCode provider keys — any of these makes OpenCode "configured".
-_OPENCODE_PROVIDER_KEYS = [
+# Accepted provider env keys for OpenCode (any one => configured).
+_OPENCODE_ACCEPTED_KEYS: List[str] = [
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "GEMINI_API_KEY",
@@ -88,7 +93,7 @@ _OPENCODE_PROVIDER_KEYS = [
     "GROQ_API_KEY",
 ]
 
-_OPENCODE_AUTH_FILE = Path("~/.local/share/opencode/auth.json")
+_OPENCODE_AUTH_RELATIVE_PATH = Path(".local") / "share" / "opencode" / "auth.json"
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +102,6 @@ _OPENCODE_AUTH_FILE = Path("~/.local/share/opencode/auth.json")
 
 @dataclass
 class CliBootstrapResult:
-    """Result of bootstrapping a single CLI."""
-
     cli_name: str = ""
     provider: str = ""
     cli_path: str = ""
@@ -107,588 +110,556 @@ class CliBootstrapResult:
 
 
 # ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+
+def _print(msg: str = "") -> None:
+    if _HAS_RICH and console is not None:
+        console.print(msg)
+    else:
+        # Strip very basic rich tags for plain output.
+        text = re.sub(r"\[/?[a-zA-Z0-9_# ]+\]", "", msg)
+        print(text)
+
+
+def _input(prompt: str) -> Optional[str]:
+    try:
+        return input(prompt)
+    except (KeyboardInterrupt, EOFError):
+        _print("\n[yellow]Input cancelled.[/yellow]")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Shell helpers
 # ---------------------------------------------------------------------------
 
 def _detect_shell() -> str:
-    """Detect the user's shell from the SHELL env var."""
-    shell_path = os.environ.get("SHELL", "")
-    if not shell_path:
-        return "bash"
-    name = os.path.basename(shell_path).lower()
-    if "zsh" in name:
-        return "zsh"
-    if "fish" in name:
-        return "fish"
+    shell_env = os.environ.get("SHELL", "")
+    base = os.path.basename(shell_env).lower()
+    if base in ("zsh", "bash", "fish"):
+        return base
     return "bash"
 
 
-def _rc_file_for_shell(shell: str) -> Path:
-    """Return the RC file path for the given shell."""
+def _rc_path(shell: str) -> Path:
     rc = SHELL_RC_MAP.get(shell, SHELL_RC_MAP["bash"])
     return Path(os.path.expanduser(rc))
 
 
-def _api_env_file_for_shell(shell: str) -> Path:
-    """Return the path to the pdd-managed api-env file."""
+def _api_env_file(shell: str) -> Path:
     pdd_dir = Path.home() / ".pdd"
     pdd_dir.mkdir(parents=True, exist_ok=True)
     return pdd_dir / f"api-env.{shell}"
 
 
-def _export_line(shell: str, key: str, value: str) -> str:
-    """Return a shell-specific export line for the given key/value."""
+def _format_export(shell: str, key: str, value: str) -> str:
     if shell == "fish":
         return f"set -gx {key} {value}\n"
     return f"export {key}={value}\n"
 
 
-def _source_line(shell: str, path: Path) -> str:
-    """Return a shell-specific source line for the given path."""
+def _format_source(shell: str, path: Path) -> str:
     p = str(path)
     if shell == "fish":
         return f"test -f {p} ; and source {p}\n"
     return f"source {p}\n"
 
 
-def _save_api_key(provider: str, key_name: str, key_value: str) -> bool:
-    """Persist an API key to the pdd-managed env file and ensure RC sources it."""
-    shell = _detect_shell()
-    env_file = _api_env_file_for_shell(shell)
-    rc_file = _rc_file_for_shell(shell)
-
-    # Read existing contents and dedupe lines that set this key.
+def _write_api_key(shell: str, key_name: str, key_value: str) -> Path:
+    """Write/update API key in ~/.pdd/api-env.{shell} and source from RC."""
+    env_file = _api_env_file(shell)
     existing = ""
     if env_file.exists():
-        try:
-            existing = env_file.read_text()
-        except OSError:
-            existing = ""
+        existing = env_file.read_text(encoding="utf-8")
 
-    if shell == "fish":
-        pattern = re.compile(rf"^\s*set\s+-gx\s+{re.escape(key_name)}\s+.*$\n?", re.MULTILINE)
-    else:
-        pattern = re.compile(rf"^\s*export\s+{re.escape(key_name)}=.*$\n?", re.MULTILINE)
+    # Dedup existing export lines for this key, including older quoted output.
+    pattern = re.compile(
+        rf"^(export\s+{re.escape(key_name)}=.*|set\s+-gx\s+{re.escape(key_name)}\s+.*)$\n?",
+        re.MULTILINE,
+    )
     cleaned = pattern.sub("", existing)
     if cleaned and not cleaned.endswith("\n"):
         cleaned += "\n"
-    cleaned += _export_line(shell, key_name, key_value)
+    cleaned += _format_export(shell, key_name, key_value)
+    env_file.write_text(cleaned, encoding="utf-8")
 
+    # Ensure the RC sources our env file.
+    rc = _rc_path(shell)
     try:
-        env_file.write_text(cleaned)
-        try:
-            os.chmod(env_file, 0o600)
-        except OSError:
-            pass
-    except OSError as e:
-        console.print(f"[red]Failed to write {env_file}: {e}[/red]")
-        return False
+        rc.parent.mkdir(parents=True, exist_ok=True)
+        rc_content = rc.read_text(encoding="utf-8") if rc.exists() else ""
+        source_line = _format_source(shell, env_file).rstrip("\n")
+        if source_line not in rc_content:
+            with rc.open("a", encoding="utf-8") as fh:
+                if rc_content and not rc_content.endswith("\n"):
+                    fh.write("\n")
+                fh.write("# Added by pdd setup\n")
+                fh.write(source_line + "\n")
+    except OSError as exc:
+        _print(f"[yellow]Warning:[/yellow] could not update {rc}: {exc}")
 
-    # Ensure RC file sources our env file.
-    src_line = _source_line(shell, env_file)
-    try:
-        rc_file.parent.mkdir(parents=True, exist_ok=True)
-        rc_contents = rc_file.read_text() if rc_file.exists() else ""
-        if str(env_file) not in rc_contents:
-            with rc_file.open("a") as f:
-                if rc_contents and not rc_contents.endswith("\n"):
-                    f.write("\n")
-                f.write(f"# Added by pdd setup\n{src_line}")
-    except OSError as e:
-        console.print(f"[yellow]Could not update {rc_file}: {e}[/yellow]")
-
-    # Also set in current process so subsequent steps see the key.
-    os.environ[key_name] = key_value
-    return True
+    return env_file
 
 
 # ---------------------------------------------------------------------------
-# CLI detection
+# CLI discovery
 # ---------------------------------------------------------------------------
 
-def _candidate_paths_for(cli_name: str) -> List[Path]:
-    """Return common paths where a CLI binary might live."""
-    home = Path.home()
-    candidates: List[Path] = [
-        home / ".local" / "bin" / cli_name,
-        Path("/usr/local/bin") / cli_name,
-        Path("/opt/homebrew/bin") / cli_name,
+def _fallback_dirs() -> List[Path]:
+    return [
+        Path.home() / ".local" / "bin",
+        Path("/usr/local/bin"),
+        Path("/opt/homebrew/bin"),
     ]
-    # nvm node version dirs
-    nvm_versions = home / ".nvm" / "versions" / "node"
-    if nvm_versions.is_dir():
-        try:
-            for ver in nvm_versions.iterdir():
-                candidates.append(ver / "bin" / cli_name)
-        except OSError:
-            pass
-    return candidates
 
 
-def _find_cli(cli_name: str) -> Optional[str]:
-    """Find a CLI binary using shutil.which() with fallback paths."""
+def _nvm_bin_dirs() -> List[Path]:
+    nvm_dir = Path(os.environ.get("NVM_DIR", str(Path.home() / ".nvm")))
+    versions = nvm_dir / "versions" / "node"
+    if not versions.is_dir():
+        return []
+    bins: List[Path] = []
+    try:
+        for entry in versions.iterdir():
+            b = entry / "bin"
+            if b.is_dir():
+                bins.append(b)
+    except OSError:
+        return []
+    return bins
+
+
+def _which(cli_name: str) -> Optional[str]:
     found = shutil.which(cli_name)
     if found:
         return found
-    for p in _candidate_paths_for(cli_name):
-        if p.is_file() and os.access(p, os.X_OK):
-            return str(p)
+    candidates: List[Path] = _fallback_dirs() + _nvm_bin_dirs()
+    for d in candidates:
+        candidate = d / cli_name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     return None
 
 
-def _opencode_auth_file() -> Path:
-    """Return the OpenCode auth file path under the current home directory."""
-    path = _OPENCODE_AUTH_FILE
-    if path.is_absolute():
-        return path
-    return Path(os.path.expanduser(str(path)))
+def _find_cli(cli_name: str) -> Optional[str]:
+    """Find a CLI binary on PATH or in common npm/node install locations."""
+    return _which(cli_name)
 
 
 # ---------------------------------------------------------------------------
-# API key checks
+# API key state helpers
 # ---------------------------------------------------------------------------
 
-def _get_active_key(provider: str) -> Tuple[Optional[str], Optional[str]]:
-    """Return (key_name, key_value) for a provider or (None, None) if absent.
-
-    For OpenCode this returns the first matching provider key found.
-    """
-    if provider == "opencode":
-        for k in _OPENCODE_PROVIDER_KEYS:
-            v = os.environ.get(k)
-            if v:
-                return k, v
-        return None, None
-
+def _get_provider_key_state(provider: str) -> Tuple[bool, Optional[str], Optional[str]]:
+    """Return (configured, key_name_in_use, key_value)."""
     if provider == "google":
         for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
             v = os.environ.get(k)
             if v:
-                return k, v
-        return None, None
+                return True, k, v
+        return False, None, None
+    if provider == "opencode":
+        for k in _OPENCODE_ACCEPTED_KEYS:
+            v = os.environ.get(k)
+            if v:
+                return True, k, v
+        auth_path = Path.home() / _OPENCODE_AUTH_RELATIVE_PATH
+        if auth_path.exists():
+            return True, "auth file", None
+        return False, None, None
 
     primary = PROVIDER_PRIMARY_KEY.get(provider)
     if primary:
         v = os.environ.get(primary)
         if v:
-            return primary, v
-    return None, None
-
-
-def _is_key_configured(provider: str) -> bool:
-    """Determine whether the API key (or auth) for a provider is configured."""
-    if provider == "opencode":
-        for k in _OPENCODE_PROVIDER_KEYS:
-            if os.environ.get(k):
-                return True
-        if _opencode_auth_file().exists():
-            return True
-        return False
-    name, _ = _get_active_key(provider)
-    return name is not None
+            return True, primary, v
+    return False, None, None
 
 
 # ---------------------------------------------------------------------------
-# Subprocess helpers
+# npm / install helpers
 # ---------------------------------------------------------------------------
 
 def _npm_available() -> bool:
     return shutil.which("npm") is not None
 
 
-def _run_npm_install(package: str) -> bool:
-    """Run `npm install -g <package>` and return success status."""
+def _install_via_npm(package: str) -> bool:
     if not _npm_available():
-        console.print("[red]npm is not installed or not on PATH.[/red]")
-        console.print("Please install Node.js (which includes npm) and try again.")
+        _print("[red]npm is not installed.[/red] Please install Node.js / npm first: https://nodejs.org/")
         return False
-    cmd = ["npm", "install", "-g", package]
-    console.print(f"[cyan]Running:[/cyan] {' '.join(cmd)}")
+    _print(f"[cyan]Running:[/cyan] npm install -g {package}")
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(
+            ["npm", "install", "-g", package],
+            check=False,
+        )
         if result.returncode == 0:
-            console.print("[green]Installation succeeded.[/green]")
+            _print(f"[green]Installed {package}[/green]")
             return True
-        console.print(f"[red]npm install exited with code {result.returncode}.[/red]")
+        _print(f"[red]npm install failed (exit {result.returncode}).[/red]")
         return False
-    except (OSError, subprocess.SubprocessError) as e:
-        console.print(f"[red]Failed to run npm: {e}[/red]")
+    except (OSError, subprocess.SubprocessError) as exc:
+        _print(f"[red]npm install error:[/red] {exc}")
         return False
 
 
-def _test_cli(cli_path: str) -> bool:
-    """Run cli --version (or --help) to verify it works."""
-    for arg in ("--version", "--help"):
+def _test_cli(cli_path: Optional[str], display: str) -> bool:
+    if not cli_path:
+        _print(f"[yellow]Cannot test {display}: CLI binary is not available.[/yellow]")
+        return False
+    for args in (["--version"], ["--help"]):
         try:
             result = subprocess.run(
-                [cli_path, arg],
+                [cli_path, *args],
                 capture_output=True,
                 text=True,
                 timeout=15,
-                check=False,
             )
             if result.returncode == 0:
                 first_line = (result.stdout or result.stderr or "").strip().splitlines()
-                snippet = first_line[0] if first_line else ""
-                console.print(f"[green]✓[/green] {cli_path} {arg} → {snippet}")
+                hint = first_line[0] if first_line else ""
+                _print(f"[green]OK[/green] {cli_path} {' '.join(args)} -> {hint[:80]}")
                 return True
-        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
-            continue
-    console.print(f"[red]✗[/red] {cli_path} did not respond to --version or --help")
+        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
+            _print(f"[yellow]Test {' '.join(args)} failed:[/yellow] {exc}")
+    _print(f"[red]CLI test failed for {cli_path}[/red]")
     return False
-
-
-# ---------------------------------------------------------------------------
-# Input helpers
-# ---------------------------------------------------------------------------
-
-def _safe_input(prompt: str, default: str = "") -> Optional[str]:
-    """Wrap input() to handle KeyboardInterrupt/EOF; return None on abort."""
-    try:
-        val = input(prompt)
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[yellow]Aborted by user.[/yellow]")
-        return None
-    if not val.strip():
-        return default
-    return val.strip()
-
-
-def _prompt_yes_no(prompt: str, default_yes: bool = True) -> Optional[bool]:
-    """Prompt for yes/no. Returns True/False or None on abort."""
-    suffix = " [Y/n]: " if default_yes else " [y/N]: "
-    val = _safe_input(prompt + suffix, default="y" if default_yes else "n")
-    if val is None:
-        return None
-    v = val.strip().lower()
-    if v in ("y", "yes"):
-        return True
-    if v in ("n", "no"):
-        return False
-    return default_yes
 
 
 # ---------------------------------------------------------------------------
 # Selection table
 # ---------------------------------------------------------------------------
 
-def _gather_status() -> List[dict]:
-    """Build status dict per CLI in display order."""
+def _gather_cli_state() -> List[Dict]:
+    """Return list of dicts describing each CLI's current state, in CLI_PREFERENCE order."""
     rows = []
-    for provider, cli in _TABLE_ORDER:
-        path = _find_cli(cli)
-        installed = path is not None
-        key_configured = _is_key_configured(provider)
-        key_name, _ = _get_active_key(provider)
+    for cli_name in CLI_PREFERENCE:
+        provider = _CLI_PROVIDER[cli_name]
+        npm_pkg = _CLI_NPM_PACKAGE[cli_name]
+        cli_path = _find_cli(cli_name)
+        configured, key_name, _ = _get_provider_key_state(provider)
         rows.append({
             "provider": provider,
-            "cli": cli,
             "display": PROVIDER_DISPLAY[provider],
-            "installed": installed,
-            "path": path or "",
-            "key_configured": key_configured,
-            "key_name": key_name or ("auth file" if provider == "opencode" and key_configured else ""),
+            "cli_name": cli_name,
+            "npm_package": npm_pkg,
+            "cli_path": cli_path,
+            "installed": cli_path is not None,
+            "key_configured": configured,
+            "key_name": key_name,
         })
     return rows
 
 
-def _pick_default_index(rows: List[dict]) -> int:
-    """Pick a sensible default index (1-based) based on CLI_PREFERENCE."""
-    # Prefer installed + key
-    for pref in CLI_PREFERENCE:
-        for i, row in enumerate(rows, 1):
-            if row["cli"] == pref and row["installed"] and row["key_configured"]:
-                return i
-    # Then installed
-    for pref in CLI_PREFERENCE:
-        for i, row in enumerate(rows, 1):
-            if row["cli"] == pref and row["installed"]:
-                return i
-    # Fallback: Claude (first row that matches)
-    for i, row in enumerate(rows, 1):
-        if row["cli"] == "claude":
-            return i
-    return 1
-
-
-def _print_selection_table(rows: List[dict], default_idx: int) -> None:
-    """Print a numbered, aligned selection table."""
-    name_w = max(len(r["display"]) for r in rows)
-    key_w = max(len("API Key"), *(len("yes (" + r["key_name"] + ")") if r["key_name"] else 3 for r in rows))
-    console.print()
-    header = f"  {'#':<3} {'CLI':<{name_w}}  {'Installed':<10}  {'API Key':<{key_w}}"
-    console.print(f"[bold]{header}[/bold]")
-    console.print("  " + "-" * (len(header) - 2))
-    for i, r in enumerate(rows, 1):
-        marker = "*" if i == default_idx else " "
-        inst_display = "yes" if r["installed"] else "no"
-        if r["key_configured"] and r["key_name"]:
-            key_display = f"yes ({r['key_name']})"
-        else:
-            key_display = "yes" if r["key_configured"] else "no"
-        console.print(
-            f" {marker}{i:<3} {r['display']:<{name_w}}  {inst_display:<10}  {key_display:<{key_w}}"
-        )
-    console.print()
-    console.print(f"  [dim]* = default (press Enter to accept)[/dim]")
-
-
-def _prompt_selection(rows: List[dict], default_idx: int) -> Optional[List[int]]:
-    """Prompt user for a comma-separated selection. Return list of 0-based indices,
-    None on abort, or [] for skip."""
-    val = _safe_input(
-        f"Select CLI(s) to bootstrap [comma-separated, default={default_idx}, q to skip]: ",
-        default=str(default_idx),
+def _print_selection_table(rows: List[Dict]) -> None:
+    widths = (3, 16, 10, 9, 60)
+    header = (
+        f"{'#':>{widths[0]}}  {'CLI':<{widths[1]}}  "
+        f"{'Installed':<{widths[2]}}  {'API Key':<{widths[3]}}  "
+        f"{'Path / Key':<{widths[4]}}"
     )
-    if val is None:
+    _print(header)
+    _print("-" * len(header))
+    for idx, r in enumerate(rows, start=1):
+        installed = "yes" if r["installed"] else "no"
+        key = "yes" if r["key_configured"] else "no"
+        detail = r["cli_path"] or "-"
+        if r["key_configured"] and r["key_name"]:
+            detail = f"{detail}  ({r['key_name']})"
+        _print(
+            f"{idx:>{widths[0]}}  {r['display']:<{widths[1]}}  "
+            f"{installed:<{widths[2]}}  {key:<{widths[3]}}  {detail:<{widths[4]}}"
+        )
+
+
+def _default_choice(rows: List[Dict]) -> int:
+    # Prefer installed+key, then installed, then anthropic (Claude).
+    for i, r in enumerate(rows):
+        if r["installed"] and r["key_configured"]:
+            return i
+    for i, r in enumerate(rows):
+        if r["installed"]:
+            return i
+    for i, r in enumerate(rows):
+        if r["provider"] == "anthropic":
+            return i
+    return 0
+
+
+def _parse_selection(raw: Optional[str], rows: List[Dict], default_idx: int) -> Optional[List[int]]:
+    """Parse comma-separated selection; return None if user wants to skip."""
+    if raw is None:
         return None
-    v = val.strip().lower()
-    if v in ("q", "n", "no", "skip"):
-        return []
-    indices: List[int] = []
-    for piece in v.split(","):
-        piece = piece.strip()
-        if not piece:
+    s = raw.strip().lower()
+    if s in ("q", "n", "quit", "skip"):
+        return None
+    if not s:
+        return [default_idx]
+    out: List[int] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
             continue
         try:
-            n = int(piece)
+            i = int(part) - 1
         except ValueError:
-            console.print(f"[red]Invalid selection: {piece!r}[/red]")
-            console.print(f"[yellow]Defaulting to {default_idx}.[/yellow]")
-            return [default_idx - 1]
-        if not 1 <= n <= len(rows):
-            console.print(f"[red]Out of range: {n}[/red]")
-            console.print(f"[yellow]Defaulting to {default_idx}.[/yellow]")
-            return [default_idx - 1]
-        indices.append(n - 1)
-    if not indices:
-        return [default_idx - 1]
-    # Dedupe, preserve order
-    seen = set()
-    deduped = []
-    for i in indices:
-        if i not in seen:
-            seen.add(i)
-            deduped.append(i)
-    return deduped
-
-
-def _run_cli_test_for_result(result: CliBootstrapResult, cli: str, display: str) -> None:
-    """Run the mandatory CLI verification step when possible."""
-    cli_path = result.cli_path or _find_cli(cli)
-    if cli_path:
-        result.cli_path = cli_path
-        console.print(f"[cyan]Testing {display}...[/cyan]")
-        _test_cli(cli_path)
-    else:
-        console.print(f"[red]Cannot test {display}: binary not found.[/red]")
+            _print(f"[yellow]Ignoring invalid entry:[/yellow] {part}")
+            continue
+        if 0 <= i < len(rows):
+            if i not in out:
+                out.append(i)
+        else:
+            _print(f"[yellow]Out of range:[/yellow] {part}")
+    if out:
+        return out
+    _print(f"[yellow]Defaulting to {default_idx + 1}.[/yellow]")
+    return [default_idx]
 
 
 # ---------------------------------------------------------------------------
-# Per-CLI bootstrap workflow
+# Per-CLI bootstrap steps
 # ---------------------------------------------------------------------------
 
-def _bootstrap_one(row: dict) -> CliBootstrapResult:
-    """Walk a single CLI through install, key, and test steps."""
+def _bootstrap_install(row: Dict) -> Optional[str]:
+    """Ensure CLI is installed; return path or None on failure/skip."""
+    if row["installed"]:
+        _print(f"[green]{row['display']} already installed at[/green] {row['cli_path']}")
+        return row["cli_path"]
+    _print(f"\n[bold]{row['display']} not found.[/bold]")
+    ans_raw = _input(f"Install via npm ({row['npm_package']})? [Y/n]: ")
+    if ans_raw is None:
+        _print(f"[yellow]Skipping {row['display']}.[/yellow]")
+        return None
+    ans = ans_raw.strip().lower()
+    if ans in ("n", "no"):
+        _print(f"[yellow]Skipping {row['display']}.[/yellow]")
+        return None
+    if not _install_via_npm(row["npm_package"]):
+        return None
+    new_path = _find_cli(row["cli_name"])
+    if not new_path:
+        _print(f"[red]Installed but {row['cli_name']} was not found on PATH.[/red] "
+               "You may need to restart your shell.")
+        return None
+    return new_path
+
+
+def _bootstrap_api_key(row: Dict) -> bool:
+    """Ensure an API key is configured. Returns True if configured, False otherwise."""
     provider = row["provider"]
-    cli = row["cli"]
-    display = row["display"]
-
-    console.print()
-    console.print(f"[bold cyan]── {display} ──[/bold cyan]")
-
-    result = CliBootstrapResult(
-        cli_name=cli,
-        provider=provider,
-        cli_path=row["path"],
-        api_key_configured=row["key_configured"],
-        skipped=False,
-    )
-
-    # ---- Install step ----
-    if not row["installed"]:
-        console.print(f"[yellow]{display} is not installed.[/yellow]")
-        pkg = _CLI_NPM_PACKAGE.get(cli)
-        ans = _prompt_yes_no(f"Install {display} via `npm install -g {pkg}`?", default_yes=True)
-        if ans is None:
-            result.skipped = True
-            _run_cli_test_for_result(result, cli, display)
-            return result
-        if ans:
-            ok = _run_npm_install(pkg)
-            if ok:
-                # Re-detect path
-                new_path = _find_cli(cli)
-                if new_path:
-                    result.cli_path = new_path
-                else:
-                    console.print(
-                        f"[yellow]Installed but {cli} not found on PATH yet - "
-                        "you may need to restart your shell.[/yellow]"
-                    )
-                    result.skipped = True
-                    _run_cli_test_for_result(result, cli, display)
-                    return result
-            else:
-                console.print(f"[yellow]Skipping further steps for {display}.[/yellow]")
-                result.skipped = True
-                _run_cli_test_for_result(result, cli, display)
-                return result
+    configured, key_name, _ = _get_provider_key_state(provider)
+    if configured:
+        if provider == "opencode" and key_name == "auth file":
+            auth_path = Path.home() / _OPENCODE_AUTH_RELATIVE_PATH
+            _print(f"[green]OpenCode auth file detected at[/green] {auth_path}")
+        elif provider == "opencode":
+            _print(f"[green]OpenCode auth via {key_name} is set.[/green]")
         else:
-            console.print(f"[yellow]Skipping {display}.[/yellow]")
-            result.skipped = True
-            _run_cli_test_for_result(result, cli, display)
-            return result
-    else:
-        console.print(f"[green]✓ {display} already installed at {row['path']}[/green]")
+            _print(f"[green]{key_name} is set for {row['display']}.[/green]")
+        return True
 
-    # ---- API key step ----
+    shell = _detect_shell()
+
     if provider == "opencode":
-        # Special case: OpenCode is multi-provider.
-        if _is_key_configured("opencode"):
-            name, _ = _get_active_key("opencode")
-            if name:
-                console.print(f"[green]✓ OpenCode auth detected via {name}[/green]")
-            elif _opencode_auth_file().exists():
-                console.print(f"[green]✓ OpenCode auth file present at {_opencode_auth_file()}[/green]")
-            result.api_key_configured = True
-        else:
-            console.print(
-                "[yellow]OpenCode has no provider key configured.[/yellow]\n"
-                "OpenCode supports several providers. You can either:\n"
-                f"  • Set one of: {', '.join(_OPENCODE_PROVIDER_KEYS)}\n"
-                "  • Or run `opencode auth login` after setup completes."
-            )
-            ans = _prompt_yes_no(
-                "Configure an OpenCode provider key now?", default_yes=False
-            )
-            if ans:
-                console.print("Which provider key would you like to set?")
-                for i, k in enumerate(_OPENCODE_PROVIDER_KEYS, 1):
-                    console.print(f"  {i}. {k}")
-                pick = _safe_input("Choose number [default=1]: ", default="1")
-                if pick is None:
-                    result.api_key_configured = False
-                else:
-                    try:
-                        n = int(pick)
-                        if 1 <= n <= len(_OPENCODE_PROVIDER_KEYS):
-                            key_name = _OPENCODE_PROVIDER_KEYS[n - 1]
-                            key_val = _safe_input(f"Enter value for {key_name}: ")
-                            if key_val and _save_api_key("opencode", key_name, key_val):
-                                result.api_key_configured = True
-                                console.print(f"[green]✓ Saved {key_name}[/green]")
-                    except ValueError:
-                        console.print("[red]Invalid selection.[/red]")
-            else:
-                console.print(
-                    "[dim]You can run `opencode auth login` later to authenticate.[/dim]"
-                )
-    else:
-        if _is_key_configured(provider):
-            name, _ = _get_active_key(provider)
-            console.print(f"[green]✓ {name} is set[/green]")
-            result.api_key_configured = True
-        else:
-            primary = PROVIDER_PRIMARY_KEY.get(provider)
-            console.print(f"[yellow]No API key found for {display} ({primary}).[/yellow]")
-            ans = _prompt_yes_no(f"Configure {primary} now?", default_yes=True)
-            if ans is None:
-                pass
-            elif ans:
-                key_val = _safe_input(f"Enter value for {primary}: ")
-                if key_val and _save_api_key(provider, primary, key_val):
-                    result.api_key_configured = True
-                    console.print(f"[green]✓ Saved {primary}[/green]")
-                else:
-                    console.print("[yellow]No key entered; skipping.[/yellow]")
-            else:
-                console.print(f"[yellow]Skipping API key configuration for {display}.[/yellow]")
+        _print("\n[bold]OpenCode credentials[/bold]")
+        _print("OpenCode is provider-agnostic. Configure any one of the following keys:")
+        for index, candidate in enumerate(_OPENCODE_ACCEPTED_KEYS, start=1):
+            _print(f"  {index}. {candidate}")
+        _print("Or run [cyan]opencode auth login[/cyan] after setup completes.")
+        configure_raw = _input("Configure a provider key for OpenCode now? [y/N]: ")
+        if configure_raw is None:
+            _print("[yellow]Skipping OpenCode key configuration.[/yellow] "
+                   "Run `opencode auth login` later if needed.")
+            return False
+        configure = configure_raw.strip().lower()
+        if configure not in ("y", "yes"):
+            _print("[yellow]Skipping OpenCode key configuration.[/yellow] "
+                   "Run `opencode auth login` later if needed.")
+            return False
 
-    # ---- CLI test step (always runs) ----
-    _run_cli_test_for_result(result, cli, display)
+        selection_raw = _input("Select key number or enter key name: ")
+        if selection_raw is None:
+            _print("[yellow]No key selected; skipping.[/yellow]")
+            return False
+        selection = selection_raw.strip()
+        if not selection:
+            _print("[yellow]No key selected; skipping.[/yellow]")
+            return False
+        if selection.isdigit():
+            selected_index = int(selection) - 1
+            if 0 <= selected_index < len(_OPENCODE_ACCEPTED_KEYS):
+                key_name = _OPENCODE_ACCEPTED_KEYS[selected_index]
+            else:
+                _print(f"[yellow]Out of range:[/yellow] {selection}")
+                return False
+        else:
+            key_name = selection.upper()
+        if key_name not in _OPENCODE_ACCEPTED_KEYS:
+            _print(f"[yellow]Warning:[/yellow] {key_name} is not a recognized OpenCode "
+                   "provider key, continuing anyway.")
+        value_raw = _input(f"Enter value for {key_name}: ")
+        if value_raw is None:
+            _print("[yellow]No value provided; skipping.[/yellow]")
+            return False
+        value = value_raw.strip()
+        if not value:
+            _print("[yellow]No value provided; skipping.[/yellow]")
+            return False
+        _write_api_key(shell, key_name, value)
+        os.environ[key_name] = value
+        _print(f"[green]Saved {key_name} to ~/.pdd/api-env.{shell}[/green]")
+        return True
 
-    return result
+    primary = PROVIDER_PRIMARY_KEY.get(provider)
+    if not primary:
+        _print(f"[yellow]No primary key defined for provider {provider}; skipping.[/yellow]")
+        return False
+    _print(f"\n[bold]{row['display']} requires {primary}.[/bold]")
+    configure_raw = _input(f"{primary} is not set. Add it now? [Y/n]: ")
+    if configure_raw is None:
+        _print(f"[yellow]Skipping API key configuration for {row['display']}.[/yellow]")
+        return False
+    if configure_raw.strip().lower() in ("n", "no"):
+        _print(f"[yellow]Skipping API key configuration for {row['display']}.[/yellow]")
+        return False
+    value_raw = _input(f"Enter {primary}: ")
+    if value_raw is None:
+        _print(f"[yellow]Skipping API key configuration for {row['display']}.[/yellow]")
+        return False
+    value = value_raw.strip()
+    if not value:
+        _print(f"[yellow]Skipping API key configuration for {row['display']}.[/yellow]")
+        return False
+    _write_api_key(shell, primary, value)
+    os.environ[primary] = value
+    _print(f"[green]Saved {primary} to ~/.pdd/api-env.{shell}[/green]")
+    return True
 
 
 # ---------------------------------------------------------------------------
-# Public entry points
+# Public: detect_and_bootstrap_cli
 # ---------------------------------------------------------------------------
 
 def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
-    """Detect agentic CLIs and bootstrap one or more selected by the user."""
+    """Phase 1 entry point for `pdd setup`.\n\n    Detects available agentic CLIs, presents a numbered table, and walks the\n    user through install / API-key / test for each selected CLI.\n    """
     _print_step_banner("Step: Detect & bootstrap agentic CLI")
 
-    rows = _gather_status()
-    default_idx = _pick_default_index(rows)
-    _print_selection_table(rows, default_idx)
+    rows = _gather_cli_state()
+    _print_selection_table(rows)
 
-    selection = _prompt_selection(rows, default_idx)
+    default_idx = _default_choice(rows)
+    default_label = rows[default_idx]["display"]
+    raw = _input(
+        f"\nSelect CLI(s) to set up (comma-separated numbers), "
+        f"[Enter] for default [{default_idx + 1}: {default_label}], "
+        f"or 'q' to skip: "
+    )
+
+    selection = _parse_selection(raw, rows, default_idx)
     if selection is None:
-        # Aborted entirely
-        return [CliBootstrapResult(skipped=True)]
-    if not selection:
-        console.print("[yellow]No CLI selected — skipping bootstrap.[/yellow]")
+        _print("[yellow]Skipping CLI bootstrap.[/yellow]")
         return [CliBootstrapResult(skipped=True)]
 
     results: List[CliBootstrapResult] = []
     for idx in selection:
+        row = rows[idx]
+        _print(f"\n[bold cyan]-- {row['display']} --[/bold cyan]")
         try:
-            res = _bootstrap_one(rows[idx])
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Skipping current CLI.[/yellow]")
-            res = CliBootstrapResult(
-                cli_name=rows[idx]["cli"],
-                provider=rows[idx]["provider"],
-                cli_path=rows[idx]["path"],
-                api_key_configured=rows[idx]["key_configured"],
+            cli_path = _bootstrap_install(row)
+            if not cli_path:
+                _test_cli(None, row["display"])
+                results.append(CliBootstrapResult(
+                    cli_name=row["cli_name"],
+                    provider=row["provider"],
+                    cli_path="",
+                    api_key_configured=row["key_configured"],
+                    skipped=True,
+                ))
+                continue
+
+            key_ok = _bootstrap_api_key(row)
+            # Always run the test step.
+            _test_cli(cli_path, row["display"])
+
+            results.append(CliBootstrapResult(
+                cli_name=row["cli_name"],
+                provider=row["provider"],
+                cli_path=cli_path,
+                api_key_configured=key_ok,
+                skipped=False,
+            ))
+        except KeyboardInterrupt:
+            _print(f"\n[yellow]Interrupted while configuring {row['display']}.[/yellow]")
+            results.append(CliBootstrapResult(
+                cli_name=row["cli_name"],
+                provider=row["provider"],
+                cli_path=row["cli_path"] or "",
+                api_key_configured=row["key_configured"],
                 skipped=True,
-            )
-        results.append(res)
+            ))
+            continue
+        except Exception as exc:  # pragma: no cover - defensive
+            _print(f"[red]Error configuring {row['display']}:[/red] {exc}")
+            results.append(CliBootstrapResult(
+                cli_name=row["cli_name"],
+                provider=row["provider"],
+                cli_path=row["cli_path"] or "",
+                api_key_configured=row["key_configured"],
+                skipped=True,
+            ))
+            continue
 
     if not results:
         return [CliBootstrapResult(skipped=True)]
     return results
 
 
+# ---------------------------------------------------------------------------
+# Public: detect_cli_tools (legacy)
+# ---------------------------------------------------------------------------
+
 def detect_cli_tools() -> None:
-    """Legacy detection: report CLI presence and offer install for missing CLIs
-    that have a matching API key already configured."""
-    console.print()
-    console.print("[bold cyan]Detecting agentic CLI tools...[/bold cyan]")
-
-    for provider, cli in _TABLE_ORDER:
+    """Legacy detection: report status of each CLI and offer install if a\n    matching API key is already present.\n    """
+    _print("\n[bold]Detecting agentic CLI tools...[/bold]")
+    for cli_name in CLI_PREFERENCE:
+        provider = _CLI_PROVIDER[cli_name]
+        npm_pkg = _CLI_NPM_PACKAGE[cli_name]
         display = PROVIDER_DISPLAY[provider]
-        path = _find_cli(cli)
-        key_configured = _is_key_configured(provider)
-
+        path = _find_cli(cli_name)
+        configured, key_name, _ = _get_provider_key_state(provider)
         if path:
-            console.print(f"  [green]✓[/green] {display} found at {path}")
+            _print(f"{display} found at {path}")
         else:
-            console.print(f"  [red]✗[/red] {display} not found")
-
-        if provider == "opencode":
-            if key_configured:
-                name, _ = _get_active_key("opencode")
-                if name:
-                    console.print(f"      [green]✓[/green] OpenCode auth via {name}")
-                elif _opencode_auth_file().exists():
-                    console.print(f"      [green]✓[/green] OpenCode auth file present")
+            _print(f"{display} not found")
+        if configured:
+            if provider == "opencode" and key_name == "auth file":
+                _print("OpenCode auth file is present")
+            elif provider == "opencode":
+                _print(f"OpenCode auth via {key_name} is set")
             else:
-                console.print("      [yellow]No OpenCode provider key/auth found[/yellow]")
+                _print(f"{key_name} is set")
         else:
             primary = PROVIDER_PRIMARY_KEY.get(provider)
-            if key_configured:
-                name, _ = _get_active_key(provider)
-                console.print(f"      [green]✓[/green] {name} is set")
+            if primary:
+                _print(f"{primary} not set")
             else:
-                console.print(f"      [yellow]{primary} not set[/yellow]")
+                _print("OpenCode auth not configured")
 
-        # Offer install if not present but key is configured
-        if not path and key_configured:
-            ans = _prompt_yes_no(
-                f"  Install {display} via npm now?", default_yes=True
-            )
-            if ans:
-                pkg = _CLI_NPM_PACKAGE.get(cli)
-                _run_npm_install(pkg)
+        if not path and configured:
+            ans_raw = _input(f"Install {display} via npm ({npm_pkg})? [y/N]: ")
+            ans = "" if ans_raw is None else ans_raw.strip().lower()
+            if ans in ("y", "yes"):
+                _install_via_npm(npm_pkg)
+
+
+__all__ = [
+    "CliBootstrapResult",
+    "detect_and_bootstrap_cli",
+    "detect_cli_tools",
+    "PROVIDER_PRIMARY_KEY",
+    "PROVIDER_DISPLAY",
+    "CLI_PREFERENCE",
+    "SHELL_RC_MAP",
+]

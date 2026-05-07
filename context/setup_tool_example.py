@@ -34,7 +34,7 @@ def main() -> None:
     #   API key: configured
     #
     #   ────────────────────────────────────────
-    #   Scanning for API keys...
+    #   Step 1 of 3: Scan for API keys
     #   ────────────────────────────────────────
     #     ✓ ANTHROPIC_API_KEY   shell environment
     #     ✓ GEMINI_API_KEY      shell environment
@@ -45,32 +45,32 @@ def main() -> None:
     #   Press Enter to continue to the next step...
     #
     #   ────────────────────────────────────────
-    #   Configuring models...
+    #   Step 2 of 3: Configure models and .pddrc
     #   ────────────────────────────────────────
     #     ✓ Added 3 new model(s) to ~/.pdd/llm_model.csv
     #
-    #     Total: 4 model(s) configured
-    #       Anthropic: 3
-    #       Google: 1
+    #     Configured models:
+    #       Anthropic                 3 model(s)
+    #       Google                    1 model(s)
     #     ✓ .pddrc detected in this project
     #
     #   Press Enter to continue to the next step...
     #
     #   ────────────────────────────────────────
-    #   Testing and summarizing...
+    #   Step 3 of 3: Test a model and summary
     #   ────────────────────────────────────────
-    #     Selected model: anthropic/claude-sonnet-4-5-20250929
-    #     Testing......
+    #     Testing model: anthropic/claude-sonnet-4-5-20250929
+    #     Testing.....
     #     ✓ anthropic/claude-sonnet-4-5-20250929 responded OK (1.2s, $0.0001)
     #
     #     PDD Setup Complete!
     #
     #       ✓ CLI: claude
     #       ✓ API Keys: 2 found
-    #       ✓ Models: 4 (Anthropic: 3, Google: 1)
+    #       ✓ Models: 4 configured — Anthropic (3), Google (1)
     #           ~/.pdd/llm_model.csv
-    #       ✓ .pddrc: exists
-    #       ✓ Test: anthropic/claude-sonnet-4-5-20250929 OK
+    #       ✓ .pddrc: /path/to/project/.pddrc
+    #       ✓ Test: passed (anthropic/claude-sonnet-4-5-20250929)
     #
     #   Press Enter to finish, or 'm' for more options:
     #
@@ -88,7 +88,7 @@ def main() -> None:
     #   Important: To load your API keys into this terminal session, run:
     #     source ~/.pdd/api-env.zsh
     #
-    #   Full summary saved to PDD-SETUP-SUMMARY.txt
+    #   Saved full summary to PDD-SETUP-SUMMARY.txt
     #
     #   --- OR if user enters 'm': ---
     #
@@ -96,7 +96,7 @@ def main() -> None:
     #     1. Add a provider
     #     2. Test a model
     #
-    #   Choose (Enter to exit):
+    #   Choice:
     pass
 
 

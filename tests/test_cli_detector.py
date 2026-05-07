@@ -2,28 +2,44 @@
 
 Test plan
 ---------
-1. Dataclass contract: defaults, skipped result, populated result.
-2. Exposed constants: provider key/display mappings, CLI preference, shell RC map,
-   and OpenCode package configuration.
-3. CLI detection: table order covers Claude, Codex, Gemini, OpenCode; shutil.which
-   is preferred; fallback paths include ~/.local/bin and nvm node version bins.
-4. Bootstrap selection: comma-separated input, spaces, deduplication, default
-   installed+key > installed > Claude, invalid fallback, q/n skip, banner call.
-5. Install flow: installed CLIs skip install, missing CLIs prompt, npm availability
-   is checked, npm install receives the right package, failures/declines mark only
-   that CLI skipped and continue to later selections.
-6. API key flow: existing keys skip prompts, new keys are saved and exported,
-   Google checks GEMINI_API_KEY before GOOGLE_API_KEY and saves GEMINI_API_KEY,
-   OpenCode accepts any supported provider key or auth.json and can save a chosen
-   provider key when no auth exists.
-7. API key persistence: bash/zsh/fish files use spec syntax, RC source lines are
-   added once, and repeated saves deduplicate by key name.
-8. CLI verification: --version runs, --help is fallback, and selected CLIs always
-   reach the verification branch even if no binary is available after skip/failure.
-9. Interrupt handling: KeyboardInterrupt/EOFError at selection and later prompts
-   return graceful skipped or partial results.
-10. Legacy detection: each CLI reports found/not-found plus key status and offers
-    installation only when a matching key/auth is present.
+1. Dataclass contract: defaults, skipped result, populated result, return shape.
+2. Public constants: provider key/display mappings, CLI preference order, shell
+   RC map, provider/CLI package forwarding, and OpenCode package configuration.
+3. Banner and table: detect_and_bootstrap_cli calls the imported banner and
+   prints Claude, Codex, Gemini, OpenCode in the required numbered order.
+4. CLI discovery: shutil.which wins; ~/.local/bin, /usr/local/bin,
+   /opt/homebrew/bin, and nvm node version bins are checked as fallbacks.
+5. Selection parsing: comma-separated input, whitespace, deduplication, q/n skip,
+   invalid fallback, and default installed+key > installed > Claude.
+6. Install branch coverage: installed CLIs skip npm; missing CLIs prompt; npm
+   availability is checked; npm install receives each exact package; decline,
+   npm-missing, install-failure, and post-install binary-missing branches skip
+   only the current CLI and continue to later selections.
+7. API key existing branches: Anthropic/OpenAI/Google key detection skips prompts;
+   Google displays GEMINI_API_KEY before GOOGLE_API_KEY; OpenCode accepts any
+   supported provider key or auth.json without prompting.
+8. API key write branches: new Anthropic/OpenAI/Google keys are saved to the
+   primary env var, update os.environ, and use the selected shell file.
+9. OpenCode no-auth branches: the user can decline and is pointed to
+   opencode auth login, or can choose a supported provider key by number/name.
+10. Shell persistence: bash, zsh, and fish output syntax and RC source syntax
+    match the spec.
+11. Deduplication: repeated saves replace old lines for the same key and add the
+    RC source line only once.
+12. CLI verification: --version runs first, --help is fallback, and the no-binary
+    branch is still reached after install skip/failure.
+13. Prompt interruption: KeyboardInterrupt and EOFError at selection, install,
+    and key prompts return graceful skipped or partial results.
+14. Legacy detection: all four CLIs report found/not-found and key status.
+15. Legacy installation: missing CLIs offer npm install only when a matching
+    provider key or OpenCode auth source is present.
+16. Parameter forwarding: subprocess receives npm install -g package, CLI
+    --version/--help commands, and direct dependency patches receive expected
+    command names.
+17. Error cases: q/n selection and empty result paths return
+    [CliBootstrapResult(skipped=True)] or per-CLI skipped results as appropriate.
+18. Regression checks: dynamic HOME fallback discovery, OpenCode auth file
+    discovery, unquoted API env syntax, and selection-interrupt skip behavior.
 """
 
 from __future__ import annotations

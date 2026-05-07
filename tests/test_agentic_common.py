@@ -28,7 +28,9 @@ from pdd.agentic_common import (
     _log_agentic_interaction,
     _parse_opencode_jsonl,
     _parse_provider_json,
+    _resolve_codex_reasoning_effort,
     _resolve_reasoning_effort,
+    _select_opencode_model_from_rows,
     _run_with_provider,
     _subprocess_run,
     clear_agentic_progress,
@@ -228,6 +230,47 @@ def test_opencode_jsonl_parses_text_cost_and_errors() -> None:
     assert _parse_provider_json("opencode", "") == (False, "", 0.0)
 
 
+def test_opencode_jsonl_falls_back_to_usage_cost_when_no_cost_field() -> None:
+    ok, text, cost, error, info = _parse_opencode_jsonl(
+        '{"type":"text","part":{"text":"OpenCode produced useful output."}}\n'
+        '{"type":"step_finish","part":{"model":"openai/gpt-5","usage":{"input_tokens":1000,"output_tokens":500}}}\n'
+    )
+
+    assert ok is True
+    assert text == "OpenCode produced useful output."
+    assert cost == pytest.approx(_calculate_codex_cost({"input_tokens": 1000, "output_tokens": 500}))
+    assert error is None
+    assert info["cost_reported"] is False
+
+
+def test_opencode_model_selection_translates_csv_ids() -> None:
+    assert _select_opencode_model_from_rows(
+        [
+            {
+                "provider": "Github Copilot",
+                "model": "github_copilot/openai/gpt-5.3-codex",
+                "input": "1.0",
+                "output": "2.0",
+                "coding_arena_elo": "1300",
+            }
+        ],
+        0.5,
+    ) == "github-copilot/openai/gpt-5.3-codex"
+
+    assert _select_opencode_model_from_rows(
+        [
+            {
+                "provider": "OpenAI",
+                "model": "gpt-5.4",
+                "input": "1.0",
+                "output": "2.0",
+                "coding_arena_elo": "1400",
+            }
+        ],
+        0.5,
+    ) == "openai/gpt-5.4"
+
+
 def test_false_positive_detection_is_anchored() -> None:
     assert _is_false_positive("", 0.0) is True
     assert _is_false_positive("short", 0.0) is True
@@ -364,6 +407,38 @@ def test_codex_reasoning_effort_config_precedes_exec(
     assert success is True
     assert captured_cmd.index("-c") < captured_cmd.index("exec")
     assert "model_reasoning_effort=xhigh" in captured_cmd
+
+
+def test_codex_reasoning_effort_env_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PDD_REASONING_EFFORT", "low")
+    monkeypatch.setenv("CODEX_REASONING_EFFORT", "xhigh")
+
+    assert _resolve_codex_reasoning_effort() == "xhigh"
+
+
+def test_local_aggregate_timeout_does_not_apply_job_deadline_reserve(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic"])
+    seen_timeouts: list[float] = []
+
+    def fake_provider(*_args: Any, **kwargs: Any) -> tuple[bool, str, float]:
+        seen_timeouts.append(float(kwargs["timeout"]))
+        return True, "Local timeout run produced a valid response.", 0.01
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_provider)
+
+    success, _output, _cost, provider = run_agentic_task(
+        "Do local work",
+        tmp_path,
+        timeout=60,
+        max_retries=1,
+        quiet=True,
+    )
+
+    assert success is True
+    assert provider == "anthropic"
+    assert seen_timeouts == [pytest.approx(60.0)]
 
 
 def test_control_token_detection_uses_splitlines_tail() -> None:

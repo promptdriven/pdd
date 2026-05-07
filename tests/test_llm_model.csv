@@ -3,14 +3,14 @@
 # 2. test_rows_are_well_formed: valid CSV row shape with no parser overflow.
 # 3. test_required_providers_are_present: comprehensive provider coverage.
 # 4. test_provider_and_model_values_are_nonempty_unique_strings: provider/model constraints and no duplicate entries.
-# 5. test_price_columns_are_usd_per_million_token_numbers: input/output numeric ranges and selected current prices.
+# 5. test_price_columns_are_usd_per_million_token_numbers: input/output numeric ranges and selected current prices from the refreshed catalog.
 # 6. test_nullable_integer_columns: coding_arena_elo and max_reasoning_tokens are integer-or-blank.
 # 7. test_api_key_column_contains_environment_variable_names: api_key names concrete env vars.
 # 8. test_base_urls_are_optional_http_urls: provider base URLs are blank or HTTP(S).
 # 9. test_structured_output_is_boolean_text_and_covers_both_branches: True/False only, both values covered.
 # 10. test_reasoning_models_have_reasoning_token_limits: reasoning-capable rows include expected limits.
 # 11. test_local_ollama_rows_are_free_and_unstructured: local model branch has zero costs and False structured output.
-# 12. test_example_script_runs_from_any_working_directory: example has visible output and does not depend on cwd.
+# 12. test_example_script_runs_from_any_working_directory: example has visible output, uses the current gpt-5.5 row, and does not depend on cwd.
 # 13. test_catalog_can_be_loaded_as_package_data_resource: CSV is reachable in the package data location.
 # 14. Parameter forwarding: not applicable because the deliverable is a static CSV resource and calls no dependencies.
 # 15. Error cases: malformed headers, non-numeric prices, invalid booleans, duplicate model rows, and bad URLs fail the tests above.
@@ -44,10 +44,9 @@ REQUIRED_PROVIDERS = {
     "xAI",
     "DeepSeek",
     "Mistral",
-    "Meta",
+    "Groq",
     "Qwen",
     "Cohere",
-    "Groq",
     "Moonshot",
     "Ollama",
     "Azure",
@@ -98,31 +97,47 @@ def test_provider_and_model_values_are_nonempty_unique_strings():
     assert len(keys) == len(set(keys))
     assert all(row["provider"] == row["provider"].strip() and row["provider"] for row in rows)
     assert all(row["model"] == row["model"].strip() and row["model"] for row in rows)
-    assert row_for("OpenAI", "gpt-5.1")["model"] == "gpt-5.1"
-    assert row_for("Anthropic", "claude-opus-4-5")["model"] == "claude-opus-4-5"
-    assert row_for("Google", "gemini-3-pro-preview")["model"] == "gemini-3-pro-preview"
+    assert row_for("OpenAI", "gpt-5.5")["model"] == "gpt-5.5"
+    assert row_for("Anthropic", "claude-opus-4-7")["model"] == "claude-opus-4-7"
+    assert row_for("Google", "gemini-3.1-pro")["model"] == "gemini-3.1-pro"
+    assert row_for("xAI", "grok-4.3")["model"] == "grok-4.3"
+    assert row_for("DeepSeek", "deepseek-v4-flash")["model"] == "deepseek-v4-flash"
 
 
 def test_price_columns_are_usd_per_million_token_numbers():
     _, rows = load_rows()
     assert all(float(row["input"]) >= 0 for row in rows)
     assert all(float(row["output"]) >= 0 for row in rows)
+    assert_price("OpenAI", "gpt-5.5", 5.00, 30.00)
+    assert_price("OpenAI", "gpt-5.4", 2.50, 15.00)
+    assert_price("OpenAI", "gpt-5.2", 1.75, 14.00)
     assert_price("OpenAI", "gpt-5.1", 1.25, 10.00)
     assert_price("OpenAI", "gpt-5-nano", 0.05, 0.40)
     assert_price("OpenAI", "gpt-5-pro", 15.00, 120.00)
-    assert_price("Anthropic", "claude-opus-4-5", 5.00, 25.00)
-    assert_price("Anthropic", "claude-sonnet-4-5", 3.00, 15.00)
+    assert_price("Anthropic", "claude-opus-4-7", 5.00, 25.00)
+    assert_price("Anthropic", "claude-sonnet-4-6", 3.00, 15.00)
     assert_price("Anthropic", "claude-haiku-4-5", 1.00, 5.00)
+    assert_price("Google", "gemini-3.1-pro", 2.00, 12.00)
     assert_price("Google", "gemini-3-pro-preview", 2.00, 12.00)
+    assert_price("Google", "gemini-3-flash-preview", 0.50, 3.00)
     assert_price("Google", "gemini-2.5-flash", 0.30, 2.50)
+    assert_price("xAI", "grok-4.3", 1.25, 2.50)
+    assert_price("xAI", "grok-4-1-fast-reasoning", 0.20, 0.50)
     assert_price("xAI", "grok-4-0709", 3.00, 15.00)
-    assert_price("xAI", "grok-4-fast-reasoning", 0.20, 0.50)
-    assert_price("DeepSeek", "deepseek-chat", 0.28, 0.42)
-    assert_price("DeepSeek", "deepseek-reasoner", 0.28, 0.42)
-    assert_price("Qwen", "qwen3-max", 1.20, 6.00)
+    assert_price("DeepSeek", "deepseek-v4-flash", 0.14, 0.28)
+    assert_price("DeepSeek", "deepseek-v4-pro", 1.74, 3.48)
+    assert_price("DeepSeek", "deepseek-reasoner", 0.14, 0.28)
+    assert_price("Mistral", "mistral-medium-3.5", 1.50, 7.50)
+    assert_price("Mistral", "mistral-small-latest", 0.10, 0.30)
+    assert_price("Mistral", "codestral-latest", 0.30, 0.90)
+    assert_price("Groq", "llama-3.3-70b-versatile", 0.59, 0.79)
+    assert_price("Groq", "meta-llama/llama-4-scout-17b-16e-instruct", 0.11, 0.34)
+    assert_price("Groq", "openai/gpt-oss-120b", 0.15, 0.60)
+    assert_price("Qwen", "qwen3-max", 0.78, 3.90)
     assert_price("Qwen", "qwen3-coder-plus", 1.00, 5.00)
     assert_price("Moonshot", "kimi-k2.6", 0.95, 4.00)
-    assert_price("Groq", "llama-3.3-70b-versatile", 0.59, 0.79)
+    assert_price("Cohere", "command-a-03-2025", 2.50, 10.00)
+    assert_price("Cohere", "command-r", 0.15, 0.60)
 
 
 def test_nullable_integer_columns():
@@ -150,9 +165,10 @@ def test_api_key_column_contains_environment_variable_names():
 
 def test_base_urls_are_optional_http_urls():
     _, rows = load_rows()
-    assert row_for("OpenAI", "gpt-5.1")["base_url"] == ""
-    assert row_for("xAI", "grok-4-0709")["base_url"] == "https://api.x.ai/v1"
+    assert row_for("OpenAI", "gpt-5.5")["base_url"] == ""
+    assert row_for("xAI", "grok-4.3")["base_url"] == "https://api.x.ai/v1"
     assert row_for("Ollama", "llama3.3")["base_url"] == "http://localhost:11434/v1"
+    assert row_for("Azure", "gpt-5.5")["base_url"] == "https://YOUR-RESOURCE.openai.azure.com"
     for row in rows:
         if row["base_url"]:
             assert row["base_url"].startswith(("http://", "https://"))
@@ -162,15 +178,18 @@ def test_structured_output_is_boolean_text_and_covers_both_branches():
     _, rows = load_rows()
     values = {row["structured_output"] for row in rows}
     assert values == {"True", "False"}
-    assert row_for("OpenAI", "gpt-5.1")["structured_output"] == "True"
+    assert row_for("OpenAI", "gpt-5.5")["structured_output"] == "True"
     assert row_for("Ollama", "deepseek-r1")["structured_output"] == "False"
 
 
 def test_reasoning_models_have_reasoning_token_limits():
-    assert row_for("OpenAI", "gpt-5.1")["max_reasoning_tokens"] == "128000"
+    assert row_for("OpenAI", "gpt-5.5")["max_reasoning_tokens"] == "128000"
     assert row_for("OpenAI", "o1-mini")["max_reasoning_tokens"] == "65536"
+    assert row_for("Anthropic", "claude-opus-4-7")["max_reasoning_tokens"] == "128000"
+    assert row_for("xAI", "grok-4.3")["max_reasoning_tokens"] == "128000"
+    assert row_for("DeepSeek", "deepseek-v4-flash")["max_reasoning_tokens"] == "384000"
     assert row_for("DeepSeek", "deepseek-reasoner")["max_reasoning_tokens"] == "64000"
-    assert row_for("Moonshot", "kimi-k2-thinking")["max_reasoning_tokens"] == "32000"
+    assert row_for("Moonshot", "kimi-k2.6")["max_reasoning_tokens"] == "32000"
 
 
 def test_local_ollama_rows_are_free_and_unstructured():
@@ -193,8 +212,9 @@ def test_example_script_runs_from_any_working_directory(tmp_path):
     )
     assert result.returncode == 0
     assert "Loaded LLM model catalog" in result.stdout
-    assert "Rows: 71" in result.stdout
-    assert "Estimated 250K input + 50K output cost: $0.8125" in result.stdout
+    assert "Rows: 89" in result.stdout
+    assert "Model: gpt-5.5" in result.stdout
+    assert "Estimated 250K input + 50K output cost: $2.7500" in result.stdout
     assert "No live API calls were made." in result.stdout
 
 
@@ -203,4 +223,4 @@ def test_catalog_can_be_loaded_as_package_data_resource():
     assert CATALOG_PATH.read_text(encoding="utf-8").startswith(
         "provider,model,input,output,coding_arena_elo,api_key,base_url,max_reasoning_tokens,structured_output"
     )
-    assert row_for("Azure", "gpt-4o")["base_url"] == "https://YOUR-RESOURCE.openai.azure.com"
+    assert row_for("Azure", "gpt-5.5")["base_url"] == "https://YOUR-RESOURCE.openai.azure.com"

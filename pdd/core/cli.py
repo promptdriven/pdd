@@ -396,7 +396,9 @@ def cli(
     # CODEX_REASONING_EFFORT=xhigh for GPT-5.4 routing) alone.
     if time is not None:
         from ..reasoning import time_to_effort_level
-        os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
+        effort_level = time_to_effort_level(time)
+        os.environ["PDD_REASONING_EFFORT"] = effort_level
+        os.environ["CODEX_REASONING_EFFORT"] = effort_level
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump

@@ -129,7 +129,7 @@ def main() -> None:
     print(f"Providers: {', '.join(sorted({str(row['provider']) for row in rows}))}")
     print()
 
-    model = find_model(rows, "OpenAI", "gpt-5.1")
+    model = find_model(rows, "OpenAI", "gpt-5.5")
     estimated_cost = estimate_token_cost(model, input_tokens=250_000, output_tokens=50_000)
     print("Example model selection")
     print(f"Provider: {model['provider']}")
