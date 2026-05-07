@@ -1681,11 +1681,27 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
              df['structured_output'] = False # Assume false if column missing
 
         # Ensure reasoning_type is string, fillna with 'none' and lowercase.
-        # The column is optional in the catalog; default missing rows to 'none'.
+        # When the column is absent, derive reasoning_type per-row from
+        # provider + max_reasoning_tokens so packaged models still receive
+        # the correct ``thinking``/``reasoning_effort`` parameter on the
+        # request path. Anthropic models with a non-zero reasoning-token
+        # budget use ``budget`` (mapped to LiteLLM ``thinking``); other
+        # providers with a non-zero limit use ``effort``; otherwise ``none``.
         if 'reasoning_type' in df.columns:
             df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
         else:
-            df['reasoning_type'] = 'none'
+            def _derive_reasoning_type(row):
+                provider_lower = str(row.get('provider', '') or '').lower()
+                try:
+                    max_tokens = int(row.get('max_reasoning_tokens', 0) or 0)
+                except (TypeError, ValueError):
+                    max_tokens = 0
+                if max_tokens <= 0:
+                    return 'none'
+                if provider_lower == 'anthropic':
+                    return 'budget'
+                return 'effort'
+            df['reasoning_type'] = df.apply(_derive_reasoning_type, axis=1)
 
         # Ensure api_key is treated as string, fill NaN with empty string ''
         # This handles cases where read_csv might interpret empty fields as NaN

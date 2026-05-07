@@ -162,12 +162,25 @@ def test_api_key_column_contains_environment_variable_names():
     assert "OLLAMA_API_KEY" in keys
     # Most provider keys follow the *_API_KEY convention; allow opaque token
     # names (e.g. ``GITHUB_TOKEN`` for github-copilot) where the upstream service
-    # uses a different env var name.
+    # uses a different env var name. Vertex AI rows declare a pipe-separated
+    # bundle of credentials (e.g.
+    # ``GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION``)
+    # rather than a single ``*_API_KEY``.
     allowed_token_keys = {"GITHUB_TOKEN"}
-    assert all(
-        key in allowed_token_keys or (key.endswith("_API_KEY") and key.upper() == key)
-        for key in keys
-    )
+
+    def _is_acceptable_api_key(key):
+        if key in allowed_token_keys:
+            return True
+        if key.endswith("_API_KEY") and key.upper() == key:
+            return True
+        # Vertex-style compound credentials: every pipe-separated segment is an
+        # uppercase environment variable name.
+        if "|" in key:
+            parts = [p for p in key.split("|") if p]
+            return bool(parts) and all(p.upper() == p and p.replace("_", "").isalnum() for p in parts)
+        return False
+
+    assert all(_is_acceptable_api_key(key) for key in keys)
 
 
 def test_base_urls_are_optional_http_urls():
@@ -219,7 +232,7 @@ def test_example_script_runs_from_any_working_directory(tmp_path):
     )
     assert result.returncode == 0
     assert "Loaded LLM model catalog" in result.stdout
-    assert "Rows: 94" in result.stdout
+    assert "Rows: 95" in result.stdout
     assert "Model: gpt-5.5" in result.stdout
     assert "Estimated 250K input + 50K output cost: $2.7500" in result.stdout
     assert "No live API calls were made." in result.stdout
