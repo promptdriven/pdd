@@ -379,7 +379,7 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
     "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
     "dependencies": [],
     "priority": 18,
@@ -949,7 +949,9 @@
   {
     "reason": "Determines output file paths for generated code.",
     "description": "Calculates where generated files should be written based on project structure and conventions.",
-    "dependencies": ["auto_deps_main_python.prompt"],
+    "dependencies": [
+      "auto_deps_main_python.prompt"
+    ],
     "priority": 30,
     "filename": "generate_output_paths_python.prompt",
     "filepath": "pdd/generate_output_paths.py",
@@ -2363,7 +2365,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -2577,7 +2582,9 @@
   {
     "reason": "Generates unit tests for PDD-generated code modules.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
-    "dependencies": ["bug_to_unit_test_python.prompt"],
+    "dependencies": [
+      "bug_to_unit_test_python.prompt"
+    ],
     "priority": 68,
     "filename": "generate_test_python.prompt",
     "filepath": "pdd/generate_test.py",
@@ -5346,7 +5353,7 @@
         "commands": [
           {
             "name": "generate",
-          "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
           },
           {
             "name": "test",
@@ -5574,7 +5581,7 @@
   },
   {
     "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
-    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt"
@@ -5965,7 +5972,9 @@
   {
     "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
-    "dependencies": ["agentic_bug_orchestrator_python.prompt"],
+    "dependencies": [
+      "agentic_bug_orchestrator_python.prompt"
+    ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
     "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
@@ -6960,7 +6969,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
@@ -7063,7 +7076,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7204,7 +7217,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
+    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7363,7 +7376,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [],
     "priority": 218,
@@ -7420,7 +7433,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -8048,7 +8061,7 @@
     }
   },
   {
-    "reason": "Post-extraction validation for the agentic split orchestrator \u2014 structural, seam, and wiring checks.",
+    "reason": "Post-extraction validation for the agentic split orchestrator — structural, seam, and wiring checks.",
     "description": "Runs checks (a-g) on a worktree after extraction: children_exist, parent_exists, children_count, byte_equivalence, re_export, test_seam_resolution, parent_wiring. Also resolves test/lint commands with agentic fallback.",
     "dependencies": [
       "get_test_command_python.prompt",
@@ -8309,6 +8322,29 @@
             "sideEffects": [
               "Starts a daemon worker thread for the keyring operation"
             ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "LLM prompt that identifies which PDD modules need syncing from GitHub issue content and validates dependency graphs.",
+    "description": "LLM prompt that identifies which PDD modules need syncing from GitHub issue content and validates dependency graphs.",
+    "dependencies": [],
+    "priority": 235,
+    "filename": "agentic_sync_identify_modules_LLM.prompt",
+    "filepath": "prompts/agentic_sync_identify_modules_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "identify_modules",
+            "signature": "(issue_content, architecture_json)",
+            "returns": "MODULES_TO_SYNC list and DEPS_VALID boolean"
           }
         ]
       }

@@ -56,6 +56,28 @@ def _is_github_issue_url(s: str) -> bool:
     return bool(re.search(r"github\.com/.+/issues/\d+", s))
 
 
+def _is_runtime_llm_template(basename: str) -> bool:
+    """Return True if ``basename`` refers to a runtime ``*_LLM.prompt`` template.
+
+    Runtime LLM templates (e.g. ``agentic_sync_identify_modules_LLM``) are
+    consumed directly by their owning code module via
+    ``load_prompt_template(...)`` and have no language-suffixed sync companion,
+    so ``pdd sync <basename>_LLM`` is guaranteed to fail with
+    ``"No prompt files found for basename '<basename>_LLM'"``.
+
+    The match is case-sensitive on the final ``/``-separated segment to avoid
+    false positives on legitimate basenames containing lowercase ``llm``. Both
+    bare basenames (``foo_LLM``) and filename forms (``foo_LLM.prompt``) are
+    classified, so callers may pass either shape without pre-stripping.
+    """
+    if not basename:
+        return False
+    tail = basename.rsplit("/", 1)[-1]
+    if tail.endswith(".prompt"):
+        tail = tail[: -len(".prompt")]
+    return tail.endswith("_LLM")
+
+
 def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
     """Detect modules to sync by diffing the current branch against main.
 
@@ -118,6 +140,79 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         return basenames
     except (subprocess.CalledProcessError, OSError):
         return []
+
+
+def _branch_diff_is_runtime_llm_only(project_root: Path) -> bool:
+    """Return True iff the branch diff vs. ``main`` consists only of runtime
+    ``*_LLM.prompt`` template changes (with at least one such change present).
+
+    Issue #1396: when an issue/PR only modifies runtime ``*_LLM.prompt``
+    templates, ``_detect_modules_from_branch_diff`` filters them out and
+    returns ``[]``, which is indistinguishable from "no prompt changes".
+    Without this check the caller would fall back to the identify-modules LLM
+    and spend an LLM call to (correctly) decide there is nothing to sync.
+    Detecting the runtime-only case deterministically lets ``run_agentic_sync``
+    return a successful no-op without touching the LLM.
+
+    The "runtime-only" contract requires that *every* file in the branch diff
+    is a runtime ``*_LLM.prompt`` template under a ``prompts/`` directory. If
+    any non-prompt source file (e.g. Python, tests, configs) or a non-LLM
+    prompt change is also present, we cannot treat the diff as a no-op and
+    must defer to the LLM fallback so that real code/test changes are not
+    silently skipped (issue #1396 review feedback).
+
+    Deletions are included in the diff filter (``ACMRD``): a branch that
+    deletes a real prompt/code/test/config file is *not* runtime-only even if
+    its other changes are limited to ``*_LLM.prompt`` files (issue #1396
+    review round 4 feedback).
+
+    Rename/copy records are evaluated with ``--name-status`` so both the old
+    and new paths must satisfy the runtime-template predicate. This prevents a
+    rename such as ``foo_python.prompt`` -> ``foo_LLM.prompt`` from being
+    mistaken for a runtime-only no-op.
+    """
+    def is_runtime_prompt_path(path: str) -> bool:
+        return (
+            _is_runtime_llm_template(path)
+            and ("/prompts/" in path or path.startswith("prompts/"))
+        )
+
+    try:
+        branch_result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_root, capture_output=True, text=True, check=True,
+        )
+        branch = branch_result.stdout.strip()
+        if branch in ("main", "master", "HEAD"):
+            return False
+
+        diff_result = subprocess.run(
+            ["git", "diff", "main...HEAD", "--name-status", "--diff-filter=ACMRD"],
+            cwd=project_root, capture_output=True, text=True, check=True,
+        )
+        diff_lines = [
+            line.strip()
+            for line in diff_result.stdout.strip().splitlines()
+            if line.strip()
+        ]
+
+        if not diff_lines:
+            return False
+        for line in diff_lines:
+            parts = line.split("\t")
+            status = parts[0]
+            paths = parts[1:]
+            if not paths:
+                return False
+            if status.startswith(("R", "C")) and len(paths) != 2:
+                return False
+            if not status.startswith(("R", "C")) and len(paths) != 1:
+                return False
+            if not all(is_runtime_prompt_path(path) for path in paths):
+                return False
+        return True
+    except (subprocess.CalledProcessError, OSError):
+        return False
 
 
 def _augment_architecture_from_pr_branch(
@@ -198,8 +293,11 @@ def _filter_invalid_basenames(
     Returns:
         (valid_basenames, invalid_basenames)
     """
+    candidate_modules = [m for m in modules if not _is_runtime_llm_template(m)]
+    invalid = [m for m in modules if _is_runtime_llm_template(m)]
+
     if architecture is None:
-        return modules, []
+        return candidate_modules, invalid
 
     # Build basename counts from architecture.json filenames.
     # A count > 1 means the basename is ambiguous (e.g. "auth" from both
@@ -212,22 +310,26 @@ def _filter_invalid_basenames(
         filename = entry.get("filename", "")
         if not filename:
             continue
+        # Skip runtime *_LLM.prompt entries entirely — they are not syncable
+        # modules and must not contribute either the bare `_LLM` basename or a
+        # stripped owner-style basename to known_basenames. Otherwise a
+        # hallucinated `<basename>_LLM` (or `<basename>` derived from stripping
+        # `_LLM`) would be marked valid by the fallback below.
+        if filename.endswith("_LLM.prompt"):
+            continue
+
         # Try standard extraction (handles _python.prompt, _typescript.prompt, etc.)
         basename = extract_module_from_include(filename)
         if basename:
             basename_counts[basename] += 1
         else:
             # Fallback for non-prompt filenames (e.g. "GitHubAppCTA.tsx" from
-            # frontend/architecture.json) and LLM prompts (_LLM.prompt).
-            # Strip known code extensions first, then .prompt and _LLM suffixes.
+            # frontend/architecture.json). Strip known code extensions first,
+            # then .prompt suffix.
             stem = filename
             for ext in (".tsx", ".ts", ".jsx", ".js", ".py", ".prompt"):
                 if stem.endswith(ext):
                     stem = stem[: -len(ext)]
-                    break
-            for suffix in ("_LLM",):
-                if stem.endswith(suffix):
-                    stem = stem[: -len(suffix)]
                     break
             if stem:
                 basename_counts[stem] += 1
@@ -236,7 +338,7 @@ def _filter_invalid_basenames(
         # -> "page"). The filename field may use a different convention
         # (e.g. "dashboardPage.tsx") that doesn't match the prompt basename.
         filepath = entry.get("filepath", "")
-        if filepath:
+        if filepath and not filepath.endswith("_LLM.prompt"):
             fp_stem = Path(filepath).stem  # "page" from "page.tsx"
             if fp_stem and fp_stem not in basename_counts:
                 basename_counts[fp_stem] += 1
@@ -244,8 +346,7 @@ def _filter_invalid_basenames(
     known_basenames = set(basename_counts.keys())
 
     valid = []
-    invalid = []
-    for m in modules:
+    for m in candidate_modules:
         if m in known_basenames:
             # Exact match (e.g. "agentic_bug_orchestrator")
             valid.append(m)
@@ -951,6 +1052,18 @@ def _run_dry_run_validation(
     total_llm_cost = 0.0
 
     for basename in modules:
+        # 0. Runtime-template pre-check (hard boundary):
+        # Skip runtime *_LLM.prompt basenames before invoking any subprocess
+        # or LLM fallback. They have no language-suffixed sync companion, so
+        # `pdd sync <basename>_LLM` is guaranteed to fail with
+        # "No prompt files found for basename '<basename>_LLM'".
+        if _is_runtime_llm_template(basename):
+            if not quiet:
+                console.print(
+                    f"[yellow]Skipping runtime LLM template (not syncable): {basename}[/yellow]"
+                )
+            continue
+
         # 1. Resolve cwd programmatically
         cwd = _resolve_module_cwd(basename, project_root)
 
@@ -1167,6 +1280,7 @@ def run_agentic_sync(
     budget: Optional[float] = None,
     skip_verify: bool = False,
     skip_tests: bool = False,
+    dry_run: bool = False,
     agentic_mode: bool = True,
     no_steer: bool = True,
     max_attempts: Optional[int] = None,
@@ -1189,6 +1303,7 @@ def run_agentic_sync(
         budget: Maximum total cost across module identification and child syncs.
         skip_verify: Skip verification step.
         skip_tests: Skip test generation.
+        dry_run: Analyze issue sync targets without launching write-mode child syncs.
         agentic_mode: Use agentic mode for individual syncs.
         no_steer: Disable interactive steering.
         max_attempts: Max fix attempts per module.
@@ -1277,6 +1392,21 @@ def run_agentic_sync(
         if not quiet:
             console.print(f"[green]Detected modules from branch diff: {branch_modules}[/green]")
         modules_to_sync = branch_modules
+    elif _branch_diff_is_runtime_llm_only(project_root):
+        # Hard boundary (Req 9 / issue #1396): the branch diff contains only
+        # runtime *_LLM.prompt template changes. Those templates are consumed
+        # directly by their owning code module via load_prompt_template(...)
+        # and have no language-suffixed sync companion, so there is nothing to
+        # sync. Return a deterministic no-op success without spending an LLM
+        # call on the identify-modules step.
+        msg = "All modules are already synced — nothing to do."
+        if not quiet:
+            console.print(
+                "[green]Branch diff contains only runtime *_LLM.prompt templates; "
+                "skipping LLM identification.[/green]"
+            )
+            console.print(f"[green]{msg}[/green]")
+        return True, msg, llm_cost, provider
     else:
         # 7b. Fall back to LLM-based module identification
         prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
@@ -1316,7 +1446,22 @@ def run_agentic_sync(
         modules_to_sync, deps_valid, deps_corrections = _parse_llm_response(llm_output)
 
         if not modules_to_sync:
-            return False, "LLM identified no modules to sync", llm_cost, provider
+            # Treat an empty LLM selection as a successful no-op only when the
+            # branch diff is verifiably runtime-template-only. The deterministic
+            # short-circuit in step 7 normally handles that case before the LLM
+            # is called, so reaching this branch implies either a non-prompt
+            # diff, a mixed diff, or LLM/parsing failure. A blanket success
+            # here would silently pass real issues without syncing anything
+            # (issue #1396 review feedback).
+            if _branch_diff_is_runtime_llm_only(project_root):
+                msg = "All modules are already synced — nothing to do."
+                if not quiet:
+                    console.print(f"[green]{msg}[/green]")
+                return True, msg, llm_cost, provider
+            msg = "LLM identified no modules to sync"
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, llm_cost, provider
 
     # LLM returns basenames from architecture.json filenames (e.g., "crm_models_Python").
     # pdd sync expects basenames without the language suffix (e.g., "crm_models").
@@ -1328,6 +1473,27 @@ def run_agentic_sync(
         stripped = extract_module_from_include(m + ".prompt")
         stripped_modules.append(stripped if stripped else m)
     modules_to_sync = list(dict.fromkeys(stripped_modules))
+
+    # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it can
+    # reach _filter_invalid_basenames or dry-run. These templates are consumed
+    # directly by their owning code module and have no language-suffixed sync
+    # companion, so pdd sync would always fail on them.
+    pre_filter_modules = list(modules_to_sync)
+    modules_to_sync = [m for m in pre_filter_modules if not _is_runtime_llm_template(m)]
+    dropped_llm_templates = [m for m in pre_filter_modules if _is_runtime_llm_template(m)]
+    if dropped_llm_templates and not quiet:
+        for dropped in dropped_llm_templates:
+            console.print(
+                f"[yellow]Dropping runtime LLM template basename (not syncable): {dropped}[/yellow]"
+            )
+    if not modules_to_sync:
+        # Issues that touch only runtime *_LLM.prompt templates are a successful
+        # no-op — those templates are already consumed directly by their owning
+        # code modules and there is nothing to regenerate.
+        msg = "All modules are already synced — nothing to do."
+        if not quiet:
+            console.print(f"[green]{msg}[/green]")
+        return True, msg, llm_cost, provider
 
     # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
     architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
@@ -1348,9 +1514,16 @@ def run_agentic_sync(
 
     # 10. Apply dependency corrections if needed
     if not deps_valid and deps_corrections and architecture is not None:
-        if not quiet:
+        if dry_run:
+            if not quiet:
+                console.print(
+                    "[yellow]Dry run: dependency corrections were suggested; "
+                    "architecture.json was not modified.[/yellow]"
+                )
+        elif not quiet:
             console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
-        architecture = _apply_architecture_corrections(arch_path, architecture, deps_corrections, quiet)
+        if not dry_run:
+            architecture = _apply_architecture_corrections(arch_path, architecture, deps_corrections, quiet)
 
     # 11. Build dependency graph
     if architecture is not None:
@@ -1422,6 +1595,13 @@ def run_agentic_sync(
     modules_to_sync = _filter_already_synced(modules_to_sync, module_cwds, quiet=quiet)
     if not modules_to_sync:
         msg = "All modules are already synced — nothing to do."
+        if not quiet:
+            console.print(f"[green]{msg}[/green]")
+        return True, msg, llm_cost, provider
+
+    if dry_run:
+        module_list = ", ".join(modules_to_sync)
+        msg = f"Dry run complete: {len(modules_to_sync)} module(s) would sync: {module_list}"
         if not quiet:
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
