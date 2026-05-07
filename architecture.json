@@ -5280,7 +5280,7 @@
   },
   {
     "reason": "Architecture registry: tracks per-issue generation provenance, merges entries, and resolves project root via tiered marker precedence.",
-    "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root: PDD markers (.pddrc/.pdd/ Tier A or sources/ + PRD/spec markdown Tier B) and .git (Tier C) are project boundaries, and the nearest boundary found while walking upward wins. A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root, while an outer PDD marker cannot override a nearer inner git repository.",
+    "description": "Maintains .pdd/architecture_registry.json (provenance of which modules came from which GitHub issue), provides architecture-merging and topological priority renumbering, discovers nested architecture.json files, and resolves the project root: PDD markers (.pddrc/.pdd/ Tier A or sources/ + PRD/spec markdown Tier B) and .git (Tier C) are project boundaries, and the nearest boundary found while walking upward wins. It skips Path.home() and system temp roots (/tmp, TMPDIR, tempfile.gettempdir()) for PDD-marker checks so user-global or CI cache markers do not anchor unrelated projects. A self-contained pdd project nested inside an unrelated outer git repo is correctly identified as its own project root, while an outer PDD marker cannot override a nearer inner git repository.",
     "dependencies": [],
     "priority": 208,
     "filename": "architecture_registry_python.prompt",
@@ -7792,7 +7792,7 @@
   },
   {
     "reason": "Standalone CI script for detecting and auto-healing prompt/example drift with budget-capped execution.",
-    "description": "CI script that detects prompt/example drift across PDD modules using sync_determine_operation, heals drifted modules via pdd update/sync subprocesses, tracks LLM costs against a budget cap, and commits/pushes changes automatically.",
+    "description": "CI script that detects prompt/example drift across PDD modules using sync_determine_operation, optionally reclassifies auto-deps/generate drift against a git diff base, skips existing review-only example rewrites in PR auto-heal, heals drifted modules via pdd update/sync/example subprocesses, tracks LLM costs against a budget cap, and commits/pushes checkpointed changes automatically.",
     "dependencies": [
       "sync_determine_operation_python.prompt",
       "operation_log_python.prompt",
@@ -7815,22 +7815,22 @@
         "functions": [
           {
             "name": "main",
-            "signature": "(modules: Optional[List[str]], budget_cap: Optional[float], skip_ci: bool)",
+            "signature": "(modules: Optional[List[str]], budget_cap: Optional[float], skip_ci: bool, diff_base: Optional[str])",
             "returns": "int"
           },
           {
             "name": "detect_drift",
-            "signature": "(modules: Optional[List[str]])",
+            "signature": "(modules: Optional[List[str]], diff_base: Optional[str])",
             "returns": "Tuple[List[DriftInfo], List[DriftInfo]]"
           },
           {
             "name": "heal_module",
             "signature": "(drift: DriftInfo, env: Dict[str, str])",
-            "returns": "bool"
+            "returns": "Optional[bool]"
           },
           {
             "name": "commit_and_push",
-            "signature": "(healed_modules: List[str], skip_ci: bool)",
+            "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool)",
             "returns": "bool"
           }
         ]
@@ -7843,7 +7843,7 @@
   },
   {
     "reason": "Orchestrates the agentic split workflow for diagnosing and splitting large PDD dev units.",
-    "description": "State machine for agentic split: intent, survey, diagnose, investigate, propose options, setup worktree, phase-extract, extract children, verify, regen gate, arch sync, assess, repair, and refine_check.",
+    "description": "State machine for agentic split: intent, survey, diagnose, investigate, propose options, setup worktree, phase-extract, extract children with per-child 6v validation/repair gates, final cross-cutting verify/checkup, regen gate, arch sync, assess, global repair, and refine_check. Resume state tracks per-child status, repair attempts, terminal child failure detail, stops immediately on unrecovered extraction or terminal per-child verify failure, clears stale child failure detail when a child recovers, and migrates legacy extracted children as extracted (not verified) so the new 6v gate still runs.",
     "dependencies": [
       "agentic_common_worktree_python.prompt",
       "split_validation_python.prompt",
@@ -8079,7 +8079,7 @@
   },
   {
     "reason": "LLM prompt for agentic split step 8: repair verification failures with accumulator.",
-    "description": "Step 8 of agentic split. Fixes verification failures (patch preservation, byte-equivalence, test failures, lint errors) with max 5 iterations per child.",
+    "description": "Step 8 of agentic split. Fixes final cross-cutting verification failures after all children pass 6v, with max 5 global iterations; per-child 6v repair is capped at 2 attempts per child.",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
     ],
@@ -8187,7 +8187,7 @@
   },
   {
     "reason": "Post-extraction validation for the agentic split orchestrator (git sanity, completeness, metadata, test seams, parent wiring).",
-    "description": "Runs checks (a-g) on a worktree after extraction: byte_equivalence, children_completeness, prompt_metadata, example_file, test_ownership, test_seam_resolution, parent_wiring. Also exposes deterministic resolvers for test/lint commands (delegating to get_test_command and get_lint_commands; returns None / empty list when no deterministic command exists).",
+    "description": "Runs checks (a-g) on a worktree after extraction: byte_equivalence, children_completeness, prompt_metadata, explicit new_example/example_file and new_test/test_file existence with conventional fallbacks, test_ownership, test_seam_resolution, and parent_wiring. Works with full or single-child plan views for the split orchestrator's per-child 6v gate. Also exposes deterministic resolvers for test/lint commands (delegating to get_test_command and get_lint_commands; returns None / empty list when no deterministic command exists).",
     "dependencies": [
       "get_test_command_python.prompt",
       "get_lint_commands_python.prompt"
