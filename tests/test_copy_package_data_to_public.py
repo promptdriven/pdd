@@ -37,6 +37,7 @@ def test_sync_config_includes_public_ci_dependencies():
     config = module.load_sync_config(str(REPO_ROOT / ".sync-config.yml"))
 
     assert ".sync-config.yml" in config["shared"]
+    assert "project_dependencies.csv" in config["shared"]
     assert "scripts/ci_detect_changed_modules.py" in config["shared"]
     assert "scripts/copy_package_data_to_public.py" in config["shared"]
     assert "utils/mcp/prompts/" in config["shared"]
