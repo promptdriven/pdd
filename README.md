@@ -2161,7 +2161,7 @@ Options:
 - `--propose-only`: Run steps 0-4 only, show all options with scores (cheap plan preview)
 - `--intent [reduce|parallel|reuse|tests]`: Skip step 0 and set intent explicitly (reduce = REDUCE_MONOLITH, etc.)
 - `--no-phase-extraction`: Skip step 6a (only move whole symbols, no refactoring inside functions)
-- `--strangler`: Produce N sequential PRs, one child per PR (reviewable, reversible)
+- `--strangler`: Use the first proposed plan only to determine N (number of children), then run N independent full orchestrator passes (each pass starts fresh, picks its own plan, and extracts whatever children that pass's plan contains); see issue #1402 for true one-child-per-PR enforcement
 - `--delete-dead`: Opt-in dead symbol deletion (default: surface candidates for human review)
 - `--force-split`: Override `LEAVE_ALONE` diagnosis
 - `--no-verify`: Skip step 7a test gate (dev only)

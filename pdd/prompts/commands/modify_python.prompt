@@ -38,7 +38,7 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 2. **split**:
    - Doc: "Split large dev units into smaller, more manageable ones."
    - **Agentic (default)**: 1 arg (`target_file`). Calls `run_agentic_split(target_file, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Exit(1) on failure.
-   - Options (agentic mode): `--diagnose` (steps 1-2 only), `--propose-only` (steps 1-4 only), `--delete-dead` (opt-in dead symbol deletion), `--force-split` (override LEAVE_ALONE diagnosis), `--no-verify` (skip test gate, dev only), `--skip-regen-gate` (skip regen, dev only, logged loudly), `--experimental-language` (opt-in for non-Python), `--no-github-state`, `--timeout-adder` (0.0), `--intent` (reduce|parallel|reuse|tests), `--no-phase-extraction` (skip phase helpers), `--strangler` (one-child-per-PR mode).
+   - Options (agentic mode): `--diagnose` (steps 0-2 only), `--propose-only` (steps 0-4 only), `--delete-dead` (opt-in dead symbol deletion), `--force-split` (override LEAVE_ALONE diagnosis), `--no-verify` (skip test gate, dev only), `--skip-regen-gate` (skip regen, dev only, logged loudly), `--experimental-language` (opt-in for non-Python), `--no-github-state`, `--timeout-adder` (0.0), `--intent` (reduce|parallel|reuse|tests; skips step 0), `--no-phase-extraction` (skip phase helpers), `--strangler` (sequence N orchestrator passes; see issue #1402 for per-child enforcement).
    - **Legacy (`--legacy`)**: 3 args (`input_prompt`, `input_code`, `example_code`, all `exists=True`). Options: `--output-sub`, `--output-modified`. Calls `split_main` with named file arguments and `ctx`.
 
 3. **change**:
@@ -53,31 +53,37 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 4. **update**:
    - Doc: "Update the original prompt file based on code changes."
-   - Args: `files` (nargs=-1). Options: `--extensions`, `--directory`, `--git`, `--output`, `--simple`.
-   - Decorators: `@log_operation(operation="update", clears_run_report=True)` then `@track_cost`.
-   - **Validation** (UsageError): Max 3 args. 2 args requires `--git`; 3 args forbids it. Repo mode (0 args) forbids `--git`/`--output`. File mode (1-3 args) forbids `--extensions`/`--directory`.
+   - Args: `files` (nargs=-1). Options: `--all` (param `all_`), `--extensions`, `--directory`, `--git`, `--output`, `--simple`, `--base-branch` (default `"main"`), `--budget` (float, default `None`), `--dry-run`.
+   - Decorators (in order): `@click.pass_context`, `@log_operation(operation="update", clears_run_report=True)`, `@track_cost`.
+   - **Validation** (UsageError, raised before try/except so they propagate):
+     - 2 args requires `--git`; 3 args forbids `--git`; max 3 args.
+     - `--all` forbidden with file paths.
+     - `--budget`, when set, must be > 0.
+     - Repo mode (0 args or `--all`) forbids `--git` and `--output`.
+     - File modes forbid `--extensions`, `--directory`, non-default `--base-branch`, `--dry-run`, and `--budget`.
    - **Modes**:
-     - 0 args: `repo=True`.
-     - 1 arg: `modified_code_file=files[0]`.
-     - 2 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]`.
+     - 0 args or `--all`: `repo=True`, all file params `None`.
+     - 1 arg: `modified_code_file=files[0]` (regeneration).
+     - 2 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]` (git-based).
      - 3 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]`, `input_code_file=files[2]`.
-   - Calls `update_main` with `ctx`, `repo`, `simple`, `use_git=git`, and all file/dir paths.
+   - Calls `update_main(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git=git, repo, extensions, directory, simple, base_branch, budget, dry_run)` and returns its result (or `None` if it returns `None`).
 
 % Error Handling
-- Re-raise: `click.Abort`, `click.UsageError`, `click.exceptions.Exit`.
-- Others: Call `handle_error(e, command_name, quiet)` and return `None`.
+- `split` and `change`: re-raise `click.Abort`, `click.UsageError`, `click.exceptions.Exit`.
+- `update`: re-raise `click.Abort`, `click.UsageError` (pre-try validation lets `Exit` propagate naturally).
+- Otherwise call `handle_error(e, command_name, quiet)` and return `None`.
 
 % Dependencies
 <include>context/command_logging.prompt</include>
 <module_dependencies>
   <pdd.split_main><include>context/split_main_example.py</include></pdd.split_main>
   <pdd.agentic_split><include optional>context/agentic_split_example.py</include></pdd.agentic_split>
-  <pdd.change_main><include>context/change_main_example.py</include></pdd.change_main>
+  <pdd.change_main><include select="def:change_main">context/change_main_example.py</include></pdd.change_main>
   <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
-  <pdd.update_main><include>context/update_main_example.py</include></pdd.update_main>
+  <pdd.update_main><include select="def:update_main">context/update_main_example.py</include></pdd.update_main>
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
-  <pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
-  <pdd.operation_log><include>context/operation_log_example.py</include></pdd.operation_log>
+  <pdd.core.errors><include select="def:handle_error">context/core/errors_example.py</include></pdd.core.errors>
+  <pdd.operation_log><include select="def:log_operation">context/operation_log_example.py</include></pdd.operation_log>
 </module_dependencies>
 
 % Deliverables

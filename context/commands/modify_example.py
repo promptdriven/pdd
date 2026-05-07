@@ -452,14 +452,16 @@ def get_time_of_day() -> str:
 
 def example_split_command():
     """
-    Demonstrate the split command.
-    
-    The split command takes a large prompt file and splits it into:
+    Demonstrate the legacy split command.
+
+    The default `pdd split` is now agentic and takes a single TARGET_FILE.
+    This example exercises the legacy path via `--legacy`, which takes a
+    large prompt file and splits it into:
     - A sub-prompt file containing extracted functionality
     - A modified prompt file with the extracted parts replaced by references
-    
-    Command signature:
-        pdd split INPUT_PROMPT INPUT_CODE EXAMPLE_CODE [OPTIONS]
+
+    Command signature (legacy):
+        pdd split --legacy INPUT_PROMPT INPUT_CODE EXAMPLE_CODE [OPTIONS]
     
     Arguments:
         INPUT_PROMPT: Path to the large prompt file to split (must exist)
@@ -496,11 +498,13 @@ def example_split_command():
 
     runner = CliRunner()
 
-    # Run the split command
+    # Run the legacy split command (the default split is now agentic and
+    # takes a single TARGET_FILE — see `pdd split --help`).
     result = runner.invoke(
         cli,
         [
             "split",
+            "--legacy",
             files["input_prompt"],
             files["input_code"],
             files["example_code"],
@@ -510,7 +514,7 @@ def example_split_command():
         catch_exceptions=False,
     )
 
-    print(f"\nCommand: pdd split {files['input_prompt']} {files['input_code']} {files['example_code']}")
+    print(f"\nCommand: pdd split --legacy {files['input_prompt']} {files['input_code']} {files['example_code']}")
     print(f"Exit code: {result.exit_code}")
     print(f"Output:\n{result.output}")
 
