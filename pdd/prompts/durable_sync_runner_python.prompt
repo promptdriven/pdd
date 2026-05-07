@@ -1,5 +1,6 @@
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>progress_events_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/durable_sync_runner.py` module.
@@ -22,6 +23,7 @@ Durable execution engine for `pdd sync <github issue url> --durable`. It must pr
 12. Remove successful module worktrees; retain failed module worktrees for inspection. Startup cleanup may remove only stale worktrees for the current issue.
 13. Honor dependency ordering and `durable_max_parallel`. Parallel execution must never let dependent modules run before all in-scope dependencies have checkpointed successfully.
 14. Durable runs still update the same GitHub progress comment path as standard `AsyncSyncRunner` runs; fresh reruns must patch the existing progress comment rather than posting duplicates.
+15. Structured progress events: durable runs MUST emit the same opt-in JSONL events as `AsyncSyncRunner` (run_started / module_started / phase_* / output_progress / cost_progress / heartbeat / module_completed / run_completed) when `progress_events.is_enabled()` is True. The hard `PDD_MODULE_TIMEOUT_SECONDS` backstop and the soft `PDD_PROGRESS_STALL_SECONDS` watchdog apply per module worktree exactly as in the standard runner. Per-module subprocess env MUST forward `PDD_PROGRESS_EVENTS_PATH`, `PDD_PROGRESS_STALL_SECONDS`, and `PDD_MODULE_TIMEOUT_SECONDS` unchanged from the parent environment, and MUST set `PDD_PROGRESS_RUN_ID=<durable runner run_id>` whenever `progress_events.is_enabled()` is True, so `one_session_sync` and other child emitters correlate to the same run id as the durable runner. When progress events are disabled, durable behavior is byte-identical to today and `PDD_PROGRESS_RUN_ID` MUST NOT be set.
 
 % Dependencies
 <pdd.agentic_sync_runner>
@@ -32,6 +34,9 @@ Durable execution engine for `pdd sync <github issue url> --durable`. It must pr
 <pdd.agentic_sync>
     <include query="URL detection and LLM response parsing for sync tasks">context/agentic_sync_example.py</include>
 </pdd.agentic_sync>
+<pdd.progress_events>
+    <include select="def:example_run_with_progress_events,def:example_classify_event_kinds,def:example_watchdog_stall_loop">context/progress_events_example.py</include>
+</pdd.progress_events>
 
 % Error Handling
 - Fail clearly when git prerequisites are missing or unsafe.

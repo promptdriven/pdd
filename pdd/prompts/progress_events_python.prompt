@@ -1,0 +1,116 @@
+<include>context/python_preamble.prompt</include>
+<pdd-dependency>api_key_scanner_python.prompt</pdd-dependency>
+
+<pdd-reason>Versioned, redacted, bounded JSONL progress-event channel for long-running PDD commands and the progress-aware sync watchdog.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "is_enabled", "signature": "()", "returns": "bool"},
+      {"name": "get_sink_path", "signature": "()", "returns": "Optional[Path]"},
+      {"name": "new_run_id", "signature": "()", "returns": "str"},
+      {"name": "emit", "signature": "(kind: str, *, run_id: str, phase: Optional[str] = None, step: Optional[str] = None, activity: Optional[str] = None, activity_deadline: Optional[float] = None, markers: Optional[Dict[str, Any]] = None, summary: Optional[Dict[str, Any]] = None)", "returns": "None"},
+      {"name": "is_real_progress_kind", "signature": "(kind: str)", "returns": "bool"},
+      {"name": "redact", "signature": "(value: Any)", "returns": "Any"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Write the `pdd/progress_events.py` module: an opt-in, versioned, redacted, bounded JSON Lines progress-event channel for long-running PDD commands. It is the single source of truth for what counts as "real progress" vs liveness-only output and is consumed by the sync watchdog and (later) by PDD Cloud.
+
+% Role & Scope
+Provides a lightweight, append-only JSONL writer plus helpers for emitting structured progress events. Must be byte-identical no-op when disabled. Must never raise on emit failure (best-effort logging channel). Must never include secrets or unbounded payloads.
+
+% Responsibility
+- Define the event schema (versioned, stable field names).
+- Gate enablement on a single env var sink path.
+- Classify event kinds as "real progress" or "liveness-only" so the watchdog can distinguish meaningful work from noise.
+- Redact API keys / bearer tokens / generic high-entropy secrets before write.
+- Bound each event payload (default ~4 KiB per line) and flag truncation.
+- Write atomically via `O_APPEND` so concurrent producers (parent + child sync subprocesses) cannot interleave partial lines.
+
+% Non-responsibilities
+- DOES NOT consume events. The watchdog (`agentic_sync_runner`) and any cloud reader are separate consumers.
+- DOES NOT replace or alter normal stdout/stderr CLI output. Default UX must be unchanged when disabled.
+- DOES NOT manage rotation, retention, or shipping. The sink is a local file owned by the caller.
+
+% Vocabulary
+- **Run id**: stable opaque id for one CLI invocation. Generated once via `new_run_id()` and reused for every event in that run.
+- **Real-progress event**: an event whose `kind` indicates that meaningful work happened (a phase changed, a step completed, code/test files changed, cost increased, output appeared on a previously-silent stream). The watchdog resets its stall timer on these.
+- **Liveness-only event**: an event whose `kind` indicates the process is alive but no semantic progress was made (heartbeat, repeated identical message). The watchdog does NOT reset its stall timer on these.
+- **Disabled mode**: `PDD_PROGRESS_EVENTS_PATH` is unset or empty. `is_enabled()` returns False; `emit()` is a no-op.
+
+% Contract Rules
+
+R1 - Disabled mode is a strict no-op
+When `PDD_PROGRESS_EVENTS_PATH` is unset or empty, `is_enabled()` MUST return False, `get_sink_path()` MUST return None, and `emit(...)` MUST NOT open, create, or write any file. CLI behavior MUST be byte-identical to a build without progress events.
+
+R2 - Versioned schema
+Every emitted line MUST be a single-line JSON object with `schema_version` (currently the integer `1`), `run_id` (string), `kind` (string), and `time` (ISO-8601 UTC string with `Z` suffix, microsecond precision). Never break or rename these fields without bumping `schema_version`.
+
+R3 - Append-only, atomic-per-line writes
+The writer MUST open the sink with `O_WRONLY | O_APPEND | O_CREAT` (mode `0o600`) and write exactly one `json.dumps(...) + "\n"` per call using a single `os.write` so concurrent processes cannot interleave partial lines. Output MUST be valid JSONL: every line MUST parse independently.
+
+R4 - Bounded payloads
+Each serialized event line MUST be at most `_MAX_EVENT_BYTES` (default 4096) bytes including the trailing newline. If serialization would exceed the cap, emitter MUST truncate the largest string field(s) inside `markers`/`summary`/`activity` first, then set `truncated: true` at the top level, then re-serialize. Never silently drop events.
+
+R5 - Redaction
+Before serialization, `redact(value)` MUST scrub any string that matches a known provider API key name, a generic bearer-style token (`Bearer <opaque>`, `sk-...`, `xoxb-...`, `ghp_...`, etc.), or any value of an environment key returned by `api_key_scanner.get_provider_key_names()`. Redacted spans MUST be replaced with the literal string `"[REDACTED]"`. Recursion MUST cover nested dicts and lists in `markers` and `summary`.
+
+R6 - No raw exceptions
+`emit(...)` MUST NOT raise. On any IO, serialization, or redaction error it MUST swallow the exception and best-effort log a single warning at most once per process to stderr (gated by a module-level flag). Failure to emit MUST never abort the calling command.
+
+R7 - Real-progress vs liveness-only classification
+`is_real_progress_kind(kind)` MUST return True for: `run_started`, `phase_started`, `phase_completed`, `step_started`, `step_completed`, `output_progress`, `cost_progress`, `file_progress`, `module_started`, `module_completed`, `run_completed`. It MUST return False for: `heartbeat`, `repeat_message`, `liveness`. Unknown kinds MUST default to False (liveness-only) so unrecognized events never reset the watchdog stall timer.
+
+R8 - Stable field names
+Top-level fields MUST be exactly: `schema_version`, `run_id`, `kind`, `time`, optional `phase` (string), optional `step` (string), optional `activity` (string, short human-readable label), optional `activity_deadline` (float epoch seconds), optional `markers` (dict of small bounded counters/flags such as `{"output_lines": int, "cost_delta": float, "stream": "stdout"|"stderr"}`), optional `summary` (dict, only on terminal events such as `run_completed`/`module_completed`), optional `truncated` (bool, only when R4 applied). No other top-level keys.
+
+R9 - No secrets in markers/summary
+The redactor MUST be applied to `markers` and `summary` before bound-checking. The module MUST NOT include unbounded log tails, raw subprocess stdout/stderr blobs, full file contents, or environment variable dumps in `markers` or `summary`.
+
+R10 - Sink path safety
+`get_sink_path()` MUST return the resolved `Path` from `PDD_PROGRESS_EVENTS_PATH` without creating it. The first `emit()` call creates the parent directory if missing (`parents=True, exist_ok=True`) and the file with mode `0o600`. The path MUST NOT be silently rewritten or relocated.
+
+% Capabilities
+- MAY read the env var `PDD_PROGRESS_EVENTS_PATH`.
+- MAY create the sink file and its parent directory on first emit.
+- MAY append JSONL lines to the sink.
+- MAY call `api_key_scanner.get_provider_key_names()` to learn which env keys to redact.
+- MUST NOT read or write any other path.
+- MUST NOT call subprocesses, network, or any LLM.
+- MUST NOT modify environment variables.
+- MUST NOT include secrets, raw tokens, raw stdout/stderr blobs, or full file contents in any event.
+- MUST NOT print to the user's stdout in disabled mode.
+
+% Inputs and Outputs
+- `is_enabled() -> bool`: True iff `PDD_PROGRESS_EVENTS_PATH` is non-empty.
+- `get_sink_path() -> Optional[Path]`: resolved sink path, or None.
+- `new_run_id() -> str`: opaque short id (e.g., `uuid4().hex[:16]`); stable for the run.
+- `emit(kind, *, run_id, phase=None, step=None, activity=None, activity_deadline=None, markers=None, summary=None) -> None`: append one event. No-op when disabled. Never raises.
+- `is_real_progress_kind(kind: str) -> bool`: classifier per R7.
+- `redact(value)`: idempotent recursive redaction; accepts str/dict/list/scalars; returns same shape with sensitive substrings replaced by `"[REDACTED]"`.
+
+% Module-level constants
+- `SCHEMA_VERSION: int = 1`
+- `_MAX_EVENT_BYTES: int = 4096`
+- `_REAL_PROGRESS_KINDS: frozenset[str]` per R7
+- `_LIVENESS_KINDS: frozenset[str]` per R7
+- `_BEARER_TOKEN_PATTERNS: tuple[re.Pattern, ...]` covering `sk-...`, `xoxb-...`, `ghp_...`, `Bearer <opaque>`, generic high-entropy 32+ char hex/base64 stretches following `key=`, `token=`, `secret=`, `password=` (case-insensitive)
+
+% Dependencies
+<pdd.api_key_scanner>
+    <include select="def:main">context/api_key_scanner_example.py</include>
+</pdd.api_key_scanner>
+
+% Error Handling
+- Disabled mode: every public function MUST behave per R1 (no IO, no warnings).
+- Enabled mode IO failure (permission denied, disk full, etc.): swallow and warn-once per R6; never raise.
+- Serialization failure (non-JSON-serializable value in `markers`/`summary`): coerce via `repr()` of the offending value, mark the event `truncated: true`, then retry once. If still failing, swallow per R6.
+
+% Deliverables
+- Code: `pdd/progress_events.py`
