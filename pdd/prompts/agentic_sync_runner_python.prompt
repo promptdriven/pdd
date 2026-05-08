@@ -2,12 +2,39 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>progress_events_python.prompt</pdd-dependency>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)", "returns": "AsyncSyncRunner"},
+      {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
+      {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
+      {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = \"architecture.json\") -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"}
+    ]
+  }
+}
+</pdd-interface>
 
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
 
 % Role & Scope
 Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
+
+% Architecture Conformance
+- Treat this as an incremental extension of the existing runner, not a replacement of its public API.
+- The generated module MUST define and export the exact architecture-declared symbols in the `<pdd-interface>` block: class `AsyncSyncRunner`, method `AsyncSyncRunner.run`, function `build_dep_graph_from_architecture`, and function `build_dep_graph_from_architecture_data`.
+- Do not rename, remove, privatize, nest, or replace these symbols with aliases. Keep their call signatures compatible with the interface and architecture.json so conformance verification passes.
+- Before returning final code, self-check that Python `ast.parse(...)` would find these concrete definitions:
+  - a top-level `ClassDef` named `AsyncSyncRunner`
+  - a `FunctionDef` or `AsyncFunctionDef` named `run` directly inside `AsyncSyncRunner`
+  - a top-level `FunctionDef` named `build_dep_graph_from_architecture`
+  - a top-level `FunctionDef` named `build_dep_graph_from_architecture_data`
+- These exports must be real definitions in this module, not imported aliases, conditional definitions, nested helpers, lambdas assigned to those names, or documentation-only examples.
+- If changing unrelated internals is unnecessary, preserve the existing module structure and make the smallest implementation change that satisfies the progress-event requirements and the export contract.
 
 % Requirements
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0)`
@@ -28,7 +55,10 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
 9a. Failed-module error-summary contract (issue #1399): the `error` string returned for a failed module MUST start with a deterministic failure reason — the `Overall status: Failed` line if present in stdout, otherwise `f"Exit code {exit_code}"`. Then append high-signal lines from stdout+stderr (those containing `error`/`failed`/`traceback`/`exception`/`abort`, lowercased), filtering out `INFO`/`DEBUG` log lines and known nonfatal warnings (module-level constant `_NONFATAL_WARNING_SUBSTRINGS`, currently `("ContentSelector failed",)`, exposed via helper `_is_nonfatal_warning(line)`). Drop any candidate line equal to the failure reason so it is not echoed twice. If no high-signal line exists, fall back to labeled `--- stderr tail ---` and `--- stdout tail ---` blocks (last 10 non-blank, non-warning, non-failure-reason lines each). Cap keyword-line summary at last 20 lines. Console preview: `error[:500]`.
-10. Per-module timeout: `MODULE_TIMEOUT = int(os.environ.get('PDD_MODULE_TIMEOUT_SECONDS', '2700'))` seconds (default 45 minutes); effective cap per module is `MODULE_TIMEOUT + max(0.0, float(sync_options.get('timeout_adder') or 0.0))` so `--timeout-adder` extends without ever shrinking it. Timeout-error message reports the effective seconds.
+10. Per-module timeout (two-tier watchdog):
+    - **Hard backstop:** `MODULE_TIMEOUT = int(os.environ.get('PDD_MODULE_TIMEOUT_SECONDS', '2700'))` seconds (default 45 minutes); effective hard cap per module is `MODULE_TIMEOUT + max(0.0, float(sync_options.get('timeout_adder') or 0.0))` so `--timeout-adder` extends without ever shrinking it. Always enforced; never disabled. Timeout-error message reports the effective seconds and labels it as "hard backstop".
+    - **Soft progress-aware stall (only when progress events are enabled and `progress_events.is_enabled()` is True):** `STALL_SECONDS = int(os.environ.get('PDD_PROGRESS_STALL_SECONDS', '600'))` seconds (default 10 minutes). Maintain a per-module `last_real_progress_at` timestamp. On every emitted real-progress event (`progress_events.is_real_progress_kind(kind) is True`), update `last_real_progress_at = time.monotonic()`. Liveness-only events (heartbeats, repeat messages) MUST NOT update it. If `time.monotonic() - last_real_progress_at > STALL_SECONDS`, terminate the module's child process group with a clear stall reason recorded in `error` (e.g., `"Stalled: no real progress for {N}s (last phase: {current_phase})"`) and emit a terminal `module_completed` event with `summary={"reason": "stall", "stall_seconds": ...}`. The hard backstop still fires independently.
+    - When progress events are disabled, the soft stall watchdog MUST be inactive — only the hard `PDD_MODULE_TIMEOUT_SECONDS` backstop applies, preserving today's behavior byte-identically.
 11. State persistence: save state to `.pdd/agentic_sync_state.json` after each module completion; restore on init if issue_url matches
 12. Resumability: skip modules with status "success" in saved state; allow partial resumption when module lists differ
 13. Delete state file on full success; preserve on failure
@@ -40,6 +70,17 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 19. Subprocess env: include `PYTHONUNBUFFERED=1` for real-time output
 20. Forward "Successfully submitted example" messages from child stdout to parent console
 21. Heartbeat logging: during long-running syncs, print progress updates every 60s. Prefer parsed `PDD_PHASE` state — `f" — phase: {current_phase} ({len(completed_phases)} done)"` — so operators see real progress through the generate/test/fix phases instead of a stale `Preprocessing complete` line. Fall back to the last non-box-drawing stdout line only when no phase has been reported yet.
+22. Structured progress events (opt-in): when `progress_events.is_enabled()` is True, emit JSONL events via `progress_events.emit(...)` at these points:
+    - `run_started` once at the start of `run()`, with `summary={"basenames": [...], "max_workers": ..., "module_timeout": ..., "stall_seconds": ...}` (treated as real progress).
+    - `module_started` when a module transitions pending -> running.
+    - `phase_started` / `phase_completed` from the `PDD_PHASE:` parser (real progress).
+    - `output_progress` when a child writes a new non-empty, non-box-drawing line on a previously-silent stream (real progress; rate-limit to at most one event per stream per 5s).
+    - `cost_progress` when the cost CSV grows by a non-zero delta (real progress; carry `markers={"cost_delta": float}`).
+    - `heartbeat` from the existing 60s heartbeat path (liveness-only).
+    - `repeat_message` when the same stdout line repeats N times within a short window (liveness-only).
+    - `module_completed` on success/failure/timeout/stall, with `summary={"status": "success"|"failed"|"timeout"|"stall", "duration_s": ..., "cost": ..., "completed_phases": [...]}`.
+    - `run_completed` once at the end of `run()`, with `summary={"all_success": bool, "total_cost": float, "module_count": int, "succeeded": int, "failed": int}`.
+    Each event MUST include `run_id` (one id per `AsyncSyncRunner` instance, generated via `progress_events.new_run_id()`), `phase`/`step`/`activity` where applicable, and bounded `markers`/`summary`. When `progress_events.is_enabled()` is False, NO events are emitted and there is zero behavior change.
 
 % Dataclass: `ModuleState`
 - `status: str` — "pending", "running", "success", "failed"
@@ -133,11 +174,16 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 <pdd.agentic_test_orchestrator>
     <include select="def:example_state_resumption">context/agentic_test_orchestrator_example.py</include>
 </pdd.agentic_test_orchestrator>
+<pdd.progress_events>
+    <include>context/progress_events_example.py</include>
+</pdd.progress_events>
 
 % Instructions
 - Use `threading.Lock` for thread-safe state updates
 - Reuse `_run_gh_command` from `agentic_change.py` for GitHub comment API calls
 - Set subprocess env: `CI=1`, `PDD_FORCE=1`, `TERM=dumb`, `PDD_AUTO_UPDATE=false`, `PYTHONUNBUFFERED=1` for headless execution
+- Forward `PDD_PROGRESS_EVENTS_PATH`, `PDD_PROGRESS_STALL_SECONDS`, and `PDD_MODULE_TIMEOUT_SECONDS` from the parent environment unchanged so child `pdd sync` subprocesses share the same sink file (concurrent-append-safe per `progress_events` R3) and respect the same watchdog windows. Do not synthesize new sink paths per child; if the parent's `PDD_PROGRESS_EVENTS_PATH` is unset, leave it unset in the child so disabled-mode stays a strict no-op.
+- Propagate the runner's `run_id` to child `pdd sync` subprocesses by setting `PDD_PROGRESS_RUN_ID=<self.run_id>` in the child env whenever `progress_events.is_enabled()` is True, so child processes (e.g., `one_session_sync`) emit events under the same correlation id as the parent runner. When `progress_events.is_enabled()` is False, do not set `PDD_PROGRESS_RUN_ID` (keep disabled-mode a strict no-op).
 - Fallback to `sys.executable -m pdd` if `_find_pdd_executable()` returns None
 - Separate `run()` into `run()` (signal handler setup) and `_run_inner()` (actual execution loop)
 - `_record_result()`: finalize current_phase by moving to completed_phases (unless skip: prefixed), then persist state

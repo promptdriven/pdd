@@ -1,4 +1,20 @@
 <include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>progress_events_python.prompt</pdd-dependency>
+
+<pdd-reason>Single-session agentic sync: builds mega-prompt, runs example/crash/verify/test in one session, emits PDD_PHASE markers and progress events.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "build_one_session_prompt", "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0)", "returns": "str"},
+      {"name": "run_one_session_sync", "signature": "(basename, language, pdd_files, project_root, *, target_coverage=90.0, budget=None, verbose=False, quiet=False, timeout=None)", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
 
 % Goal
 Write the `pdd/one_session_sync.py` module.
@@ -25,6 +41,8 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 16. Cleans up stale progress files before starting and after completion
 17. `_STEP_TO_PHASE` mapping translates step markers to PDD phase names (e.g., `example_generate`→`example`, `crash_fix`→`crash`, `verify`→`verify`, `test_generate`→`test`, `done`→`synced`); heartbeat and post-run drain emit `PDD_PHASE: {phase}` to stdout for each mapped step
 18. After task completes, emit final `PDD_PHASE: synced` on success or `PDD_PHASE: conflict` on failure (always, regardless of `quiet`)
+19. Structured progress events (opt-in): when `progress_events.is_enabled()` is True, emit a `step_started` / `step_completed` JSONL event each time a `STEP_COMPLETE:<step>` line is observed by the heartbeat thread. Use the same `run_id` that the parent `AsyncSyncRunner` set in `os.environ` (read from a shared env var such as `PDD_PROGRESS_RUN_ID` if present, otherwise call `progress_events.new_run_id()` and reuse for the duration of the call) so events can be correlated across processes. When `progress_events.is_enabled()` is False, no events are emitted and behavior is byte-identical to today.
+20. Do not execute placeholder command names or prose fragments such as `cmd`, `command`, or strings extracted from documentation tables. The only external execution in this module is the delegated `run_agentic_task(...)` call; verification/test shell commands are handled inside the agentic task/template flow, not by this wrapper.
 
 % Helper Functions
 - `_compute_import_base(code_path: Path, project_root: Path) -> str`: dotted module path from code file path; falls back to stem if path is not relative to project root
@@ -41,6 +59,9 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
 </pdd.agentic_langtest>
+<pdd.progress_events>
+    <include>context/progress_events_example.py</include>
+</pdd.progress_events>
 
 % Error Handling
 - Raise `FileNotFoundError` if code file missing: "Code file not found: {path}\nRun `pdd generate {basename}` first."

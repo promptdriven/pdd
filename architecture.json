@@ -7192,12 +7192,13 @@
     }
   },
   {
-    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, and pauses on failure.",
+    "reason": "Parallel sync engine with two-tier watchdog: hard PDD_MODULE_TIMEOUT_SECONDS backstop plus opt-in progress-aware soft stall (PDD_PROGRESS_STALL_SECONDS) driven by structured progress events.",
+    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, and pauses on failure. Emits structured JSONL progress events (run_started, module_started, phase_started/completed, output_progress, cost_progress, file_progress, heartbeat, repeat_message, module_completed, run_completed) when PDD_PROGRESS_EVENTS_PATH is set, and uses the real-progress vs liveness-only classifier to drive the soft stall watchdog while keeping PDD_MODULE_TIMEOUT_SECONDS as a hard backstop.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
-      "agentic_test_orchestrator_python.prompt"
+      "agentic_test_orchestrator_python.prompt",
+      "progress_events_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7255,7 +7256,8 @@
     "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
     "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
     "dependencies": [
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "progress_events_python.prompt"
     ],
     "priority": 216,
     "filename": "durable_sync_runner_python.prompt",
@@ -7291,6 +7293,125 @@
     "position": {
       "x": 15800,
       "y": 2000
+    }
+  },
+  {
+    "reason": "Versioned, redacted, bounded JSONL progress-event channel for long-running PDD commands and the progress-aware sync watchdog.",
+    "description": "Opt-in append-only JSON Lines progress event writer for long-running PDD commands. Gated by the PDD_PROGRESS_EVENTS_PATH env var; byte-identical no-op when disabled. Defines schema_version=1, run_id, kind, time fields with optional phase/step/activity/markers/summary. Classifies kinds as real-progress (run_started, phase_started/completed, step_started/completed, output_progress, cost_progress, file_progress, module_started/completed, run_completed) vs liveness-only (heartbeat, repeat_message, liveness) so consumers like the sync watchdog can distinguish meaningful work from noise. Writes are atomic-per-line via O_APPEND, payloads are bounded (~4 KiB) with truncation flagging, and provider API keys / bearer tokens are redacted before write.",
+    "dependencies": [
+      "api_key_scanner_python.prompt"
+    ],
+    "priority": 215.5,
+    "filename": "progress_events_python.prompt",
+    "filepath": "pdd/progress_events.py",
+    "tags": [
+      "module",
+      "python",
+      "progress-events",
+      "watchdog"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "is_enabled",
+            "signature": "() -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "Reads PDD_PROGRESS_EVENTS_PATH env var"
+            ]
+          },
+          {
+            "name": "get_sink_path",
+            "signature": "() -> Optional[Path]",
+            "returns": "Optional[Path]",
+            "sideEffects": [
+              "Reads PDD_PROGRESS_EVENTS_PATH env var; does not create the file"
+            ]
+          },
+          {
+            "name": "new_run_id",
+            "signature": "() -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "emit",
+            "signature": "(kind: str, *, run_id: str, phase: Optional[str] = None, step: Optional[str] = None, activity: Optional[str] = None, activity_deadline: Optional[float] = None, markers: Optional[Dict[str, Any]] = None, summary: Optional[Dict[str, Any]] = None) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Best-effort append of one JSONL line to PDD_PROGRESS_EVENTS_PATH; creates parent directory and file with mode 0o600 on first call; never raises; no-op when disabled"
+            ]
+          },
+          {
+            "name": "is_real_progress_kind",
+            "signature": "(kind: str) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "redact",
+            "signature": "(value: Any) -> Any",
+            "returns": "Any",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 15400,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Single-session agentic sync that runs example/crash/verify/test in one agent session and emits PDD_PHASE markers plus opt-in progress events.",
+    "description": "Builds a mega-prompt from a module's spec and generated code, delegates execution to run_agentic_task in a single agentic session, and reports step-level progress via a file-based heartbeat. Emits PDD_PHASE markers to stdout for AsyncSyncRunner to parse, and when PDD_PROGRESS_EVENTS_PATH is set also emits step_started/step_completed JSONL progress events using a run id correlated with the parent runner via PDD_PROGRESS_RUN_ID.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "progress_events_python.prompt"
+    ],
+    "priority": 216.5,
+    "filename": "one_session_sync_python.prompt",
+    "filepath": "pdd/one_session_sync.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_one_session_prompt",
+            "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Reads module prompt and generated code; preprocesses includes; loads one_session_agent_LLM template"
+            ]
+          },
+          {
+            "name": "run_one_session_sync",
+            "signature": "(basename: str, language: str, pdd_files: Dict[str, Path], project_root: Path, *, target_coverage: float = 90.0, budget: Optional[float] = None, verbose: bool = False, quiet: bool = False, timeout: Optional[int] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]",
+            "sideEffects": [
+              "Invokes run_agentic_task; writes/reads progress file at .pdd_one_session_progress_<safe_basename>; emits PDD_PHASE markers to stdout; emits opt-in step_started/step_completed progress events when PDD_PROGRESS_EVENTS_PATH is set"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 15200,
+      "y": 2200
     }
   },
   {
