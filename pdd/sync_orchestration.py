@@ -2202,8 +2202,41 @@ def sync_orchestration(
                             elif operation == 'generate':
                                 # Ensure code directory exists before generating
                                 pdd_files['code'].parent.mkdir(parents=True, exist_ok=True)
-                                # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True)
+                                # Architecture-conformance repair loop (#866). Retry generation when
+                                # the generated code is missing declared interface symbols, injecting
+                                # the repair directive via PDD_REPAIR_DIRECTIVE so the next attempt
+                                # sees the missing-export instruction. Mirrors the loop in
+                                # sync_main.py / agentic_sync_runner.py for parity across all
+                                # `pdd sync` entry points.
+                                from .code_generator_main import ArchitectureConformanceError
+                                from .agentic_sync_runner import MAX_CONFORMANCE_ATTEMPTS
+                                _prev_repair = os.environ.get("PDD_REPAIR_DIRECTIVE")
+                                try:
+                                    last_conform_exc: Optional[ArchitectureConformanceError] = None
+                                    last_conform_missing: Optional[tuple] = None
+                                    for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
+                                        try:
+                                            # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
+                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True)
+                                            last_conform_exc = None
+                                            break
+                                        except ArchitectureConformanceError as _conform_exc:
+                                            new_missing = tuple(sorted(set(_conform_exc.missing_symbols)))
+                                            if last_conform_missing is not None and new_missing == last_conform_missing:
+                                                last_conform_exc = _conform_exc
+                                                break
+                                            last_conform_missing = new_missing
+                                            last_conform_exc = _conform_exc
+                                            if _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                                break
+                                            os.environ["PDD_REPAIR_DIRECTIVE"] = _conform_exc.repair_directive
+                                    if last_conform_exc is not None:
+                                        raise last_conform_exc
+                                finally:
+                                    if _prev_repair is None:
+                                        os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
+                                    else:
+                                        os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
                                 # Clear stale run_report so crash/verify is required for newly generated code
                                 clear_run_report(basename, language)
                                 # Issue #572: Validate Python imports after generation in agentic mode

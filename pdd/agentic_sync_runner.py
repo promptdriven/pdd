@@ -1384,14 +1384,31 @@ class AsyncSyncRunner:
                 prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
                 break
 
+        # Extract Expected:/Found:/Output: fields emitted by
+        # ArchitectureConformanceError so the diagnostic block has the
+        # contract details users need to debug locally (#866 follow-up).
+        def _last(pattern: str, flags: int = 0) -> str:
+            matches = list(re.finditer(pattern, combined, flags))
+            return matches[-1].group(1).strip() if matches else "<unknown>"
+
+        expected_field = _last(r"Expected:\s*(.+?)\.\s+Found:")
+        found_field = _last(
+            r"Found:\s*(.+?)\.(?:\s+Output:|\s*\n|\s*$)",
+            re.MULTILINE,
+        )
+        output_field = _last(
+            r"Output:\s*([^\n]+?)\.?(?=\s*\n|\s*$)",
+            re.MULTILINE,
+        )
+
         block_lines = [
             failure_summary or "Architecture conformance failure",
             "",
             "=== architecture conformance failure ===",
             f"prompt: {prompt_field}",
-            "output: <unknown>",
-            "expected: <unknown>",
-            "found: <unknown>",
+            f"output: {output_field}",
+            f"expected: {expected_field}",
+            f"found: {found_field}",
             "missing: "
             + (", ".join(missing_symbols) if missing_symbols else "<none>"),
             "",

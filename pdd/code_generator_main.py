@@ -70,6 +70,8 @@ class ArchitectureConformanceError(click.UsageError):
                 f"{', '.join(self.missing_symbols)}. "
                 f"Expected: {self.expected_symbols}. Found: {self.found_symbols}."
             )
+            if self.output_path:
+                message = f"{message} Output: {self.output_path}."
         super().__init__(message)
 
     @property
@@ -355,6 +357,7 @@ def _verify_architecture_conformance(
     arch_path: Optional[str],
     language: Optional[str],
     verbose: bool,
+    output_path: Optional[str] = None,
 ) -> None:
     """Check generated code exports against architecture.json interface declarations.
 
@@ -441,7 +444,7 @@ def _verify_architecture_conformance(
     if missing:
         raise ArchitectureConformanceError(
             prompt_name=prompt_name,
-            output_path="",
+            output_path=output_path or "",
             architecture_entry=entry or {},
             expected_symbols=declared_symbols,
             found_symbols=actual_symbols,
@@ -466,9 +469,11 @@ def _verify_architecture_conformance(
                 f"but Python convention requires snake_case. "
                 f"Expected: {declared_symbols}. Found: {actual_symbols}."
             )
+            if output_path:
+                camel_message = f"{camel_message} Output: {output_path}."
             raise ArchitectureConformanceError(
                 prompt_name=prompt_name,
-                output_path="",
+                output_path=output_path or "",
                 architecture_entry=entry or {},
                 expected_symbols=declared_symbols,
                 found_symbols=actual_symbols,
@@ -1622,6 +1627,7 @@ def code_generator_main(
                         arch_path=None,  # Uses default architecture.json
                         language=language,
                         verbose=verbose,
+                        output_path=output_path,
                     )
                 except click.UsageError:
                     raise  # Re-raise conformance errors as hard failures
