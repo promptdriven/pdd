@@ -157,12 +157,23 @@ class _IncludeReference:
     attrs: Dict[str, str]
 
     @property
+    def is_interface_mode(self) -> bool:
+        """Return True when the include asks preprocessing to strip bodies."""
+        return self.attrs.get("mode", "").strip().lower() == "interface"
+
+    @property
     def is_partial(self) -> bool:
-        """Return True when the include selects only part of a source file."""
-        return any(self.attrs.get(k, "").strip() for k in ("select", "lines", "query"))
+        """Return True when the include does not provide full implementation source."""
+        return self.is_interface_mode or any(
+            self.attrs.get(k, "").strip() for k in ("select", "lines", "query")
+        )
 
 
-_INCLUDE_RE = re.compile(r"<include\b([^>]*)>(.*?)</include>", re.IGNORECASE | re.DOTALL)
+_INCLUDE_RE = re.compile(
+    r"<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|"
+    r"<include(?P<attrs_self>\s+[^>]*?)\s*/>",
+    re.IGNORECASE | re.DOTALL,
+)
 _ATTR_RE = re.compile(
     r"""([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"""
 )
@@ -185,11 +196,40 @@ def _extract_include_references(prompt_content: str) -> List[_IncludeReference]:
     """Return parsed ``<include>`` tags with their target paths and attributes."""
     refs: List[_IncludeReference] = []
     for match in _INCLUDE_RE.finditer(prompt_content or ""):
-        path = (match.group(2) or "").strip()
+        attrs = _parse_include_attrs(
+            match.group("attrs") or match.group("attrs_self") or ""
+        )
+        body_path = (match.group("content") or "").strip()
+        path = (attrs.get("path") or body_path).strip()
         if not path:
             continue
-        refs.append(_IncludeReference(path=path, attrs=_parse_include_attrs(match.group(1))))
+        refs.append(_IncludeReference(path=path, attrs=attrs))
     return refs
+
+
+@dataclass(frozen=True)
+class _PythonSymbolSpan:
+    """A public Python symbol and its 1-based inclusive source line span."""
+
+    name: str
+    start_line: int
+    end_line: int
+
+
+def _node_line_span(node: ast.AST) -> tuple[int, int]:
+    """Return the 1-based inclusive source span for an AST node."""
+    start_line = getattr(node, "lineno", 0) or 0
+    decorators = getattr(node, "decorator_list", [])
+    if decorators:
+        start_line = min(
+            [start_line]
+            + [
+                getattr(decorator, "lineno", start_line) or start_line
+                for decorator in decorators
+            ]
+        )
+    end_line = getattr(node, "end_lineno", None) or start_line
+    return start_line, end_line
 
 
 def _collect_python_public_symbols(body: List[ast.stmt], prefix: str = "") -> List[str]:
@@ -219,6 +259,43 @@ def _collect_python_public_symbols(body: List[ast.stmt], prefix: str = "") -> Li
     return symbols
 
 
+def _collect_python_public_symbol_spans(
+    body: List[ast.stmt], prefix: str = ""
+) -> List[_PythonSymbolSpan]:
+    """Collect public Python exports with their source line spans."""
+    spans: List[_PythonSymbolSpan] = []
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not node.name.startswith("_"):
+                start_line, end_line = _node_line_span(node)
+                spans.append(
+                    _PythonSymbolSpan(f"{prefix}{node.name}", start_line, end_line)
+                )
+        elif isinstance(node, ast.ClassDef):
+            if not node.name.startswith("_"):
+                class_name = f"{prefix}{node.name}"
+                start_line, end_line = _node_line_span(node)
+                spans.append(_PythonSymbolSpan(class_name, start_line, end_line))
+                spans.extend(
+                    _collect_python_public_symbol_spans(node.body, f"{class_name}.")
+                )
+        elif not prefix and isinstance(node, ast.Assign):
+            start_line, end_line = _node_line_span(node)
+            for target in node.targets:
+                if isinstance(target, ast.Name) and not target.id.startswith("_"):
+                    spans.append(_PythonSymbolSpan(target.id, start_line, end_line))
+        elif (
+            not prefix
+            and isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+            and not node.target.id.startswith("_")
+        ):
+            start_line, end_line = _node_line_span(node)
+            spans.append(_PythonSymbolSpan(node.target.id, start_line, end_line))
+    return spans
+
+
 def _python_top_level_public_symbols(source: str) -> List[str]:
     """Return public symbols exported by a Python source file."""
     try:
@@ -232,6 +309,19 @@ def _python_top_level_public_symbols(source: str) -> List[str]:
             seen.add(symbol)
             ordered.append(symbol)
     return ordered
+
+
+def _python_public_symbol_spans(source: str) -> Dict[str, _PythonSymbolSpan]:
+    """Return public Python symbol source spans keyed by symbol name."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+
+    spans: Dict[str, _PythonSymbolSpan] = {}
+    for span in _collect_python_public_symbol_spans(tree.body):
+        spans.setdefault(span.name, span)
+    return spans
 
 
 def _interface_function_names(interface: Any) -> List[str]:
@@ -348,7 +438,59 @@ def _include_matches_output(include_path: str, output_path: Path, project_root: 
         return False
 
 
-def _symbols_covered_by_selectors(selectors: List[str], existing_symbols: List[str]) -> Set[str]:
+def _parse_line_ranges(lines_value: str, total_lines: int) -> List[tuple[int, int]]:
+    """
+    Parse ContentSelector ``lines:`` syntax into 1-based inclusive spans.
+
+    Supported forms intentionally mirror ``pdd.content_selector``: ``N``, ``N-M``,
+    ``N-``, ``-M``, and comma-separated combinations.
+    """
+    ranges: List[tuple[int, int]] = []
+    for part in (lines_value or "").split(","):
+        token = part.strip()
+        if not token:
+            continue
+        try:
+            if "-" in token:
+                split_at = token.index("-")
+                left = token[:split_at].strip()
+                right = token[split_at + 1 :].strip()
+                if left == "" and right == "":
+                    continue
+                start = int(left) if left else 1
+                end = int(right) if right else total_lines
+            else:
+                start = end = int(token)
+        except ValueError:
+            continue
+
+        start = max(1, start)
+        end = min(total_lines, end)
+        if start <= end:
+            ranges.append((start, end))
+    return ranges
+
+
+def _symbols_covered_by_line_ranges(source: str, lines_value: str) -> Set[str]:
+    """Map deterministic ``lines=``/``lines:`` selectors to covered symbols."""
+    line_ranges = _parse_line_ranges(lines_value, len(source.splitlines()))
+    if not line_ranges:
+        return set()
+
+    covered: Set[str] = set()
+    for symbol, span in _python_public_symbol_spans(source).items():
+        if any(
+            start <= span.start_line and span.end_line <= end for start, end in line_ranges
+        ):
+            covered.add(symbol)
+    return covered
+
+
+def _symbols_covered_by_selectors(
+    selectors: List[str],
+    existing_symbols: List[str],
+    existing_source: str,
+) -> Set[str]:
     """Map ``<include select=...>`` selectors to covered source symbols."""
     covered: Set[str] = set()
     symbol_set = set(existing_symbols)
@@ -369,9 +511,53 @@ def _symbols_covered_by_selectors(selectors: List[str], existing_symbols: List[s
                 for symbol in existing_symbols:
                     if symbol == value or symbol.startswith(f"{value}."):
                         covered.add(symbol)
+            elif kind == "lines":
+                covered.update(_symbols_covered_by_line_ranges(existing_source, value))
             elif value in symbol_set:
                 covered.add(value)
     return covered
+
+
+def _symbols_covered_by_partial_includes(
+    self_includes: List[_IncludeReference],
+    existing_symbols: List[str],
+    existing_source: str,
+) -> tuple[Set[str], List[str]]:
+    """Return deterministic implementation symbols covered by partial self-includes."""
+    covered: Set[str] = set()
+    unsupported: List[str] = []
+
+    for ref in self_includes:
+        select_value = ref.attrs.get("select", "").strip()
+        query_value = ref.attrs.get("query", "").strip()
+        lines_value = ref.attrs.get("lines", "").strip()
+
+        if ref.is_interface_mode:
+            unsupported.append(
+                'mode="interface" self-include does not provide implementation context'
+            )
+            continue
+
+        if select_value:
+            covered.update(
+                _symbols_covered_by_selectors(
+                    [select_value],
+                    existing_symbols,
+                    existing_source,
+                )
+            )
+            if lines_value:
+                covered.update(_symbols_covered_by_line_ranges(existing_source, lines_value))
+            continue
+
+        if query_value:
+            unsupported.append("query= self-include cannot prove symbol coverage")
+            continue
+
+        if lines_value:
+            covered.update(_symbols_covered_by_line_ranges(existing_source, lines_value))
+
+    return covered, unsupported
 
 
 def validate_prompt_contract_context(
@@ -435,22 +621,28 @@ def validate_prompt_contract_context(
     if any(not ref.is_partial for ref in self_includes):
         return []
 
-    covered = _symbols_covered_by_selectors(
-        [ref.attrs.get("select", "") for ref in self_includes if ref.attrs.get("select")],
+    covered, unsupported = _symbols_covered_by_partial_includes(
+        self_includes,
         existing_symbols,
+        existing_source,
     )
     missing = [symbol for symbol in declared_existing if symbol not in covered]
     if not missing:
         return []
 
     covered_declared_count = len([s for s in declared_existing if s in covered])
+    unsupported_note = ""
+    if unsupported:
+        unsupported_note = " Unsupported partial self-include context: " + "; ".join(
+            sorted(set(unsupported))
+        ) + "."
     return [
         (
             f"{prompt_path}: prompt declares {len(declared_existing)} public symbols "
             f"already present in {output_path} but only includes source context for "
             f"{covered_declared_count}: missing {', '.join(missing)}. "
             "Use a full <include> of the existing module or select every declared "
-            "existing public symbol."
+            f"existing public symbol.{unsupported_note}"
         )
     ]
 

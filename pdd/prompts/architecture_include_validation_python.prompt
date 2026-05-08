@@ -72,10 +72,18 @@
 
 % _IncludeReference dataclass
 %   - Fields: path: str, attrs: Dict[str, str].
-%   - Property is_partial: True when select=, lines=, or query= is present.
+%   - Property is_interface_mode: True when mode="interface".
+%   - Property is_partial: True when select=, lines=, query=, or mode="interface"
+%     is present, because those forms do not guarantee full implementation source.
 
 % _extract_include_references(prompt_content: str) -> List[_IncludeReference]
-%   - Parse raw <include ...>target</include> tags, preserving include attributes.
+%   - Parse raw <include ...>target</include> and self-closing
+%     <include path="..." /> tags, preserving include attributes.
+%   - Match preprocess include grammar:
+%       * body path: <include>path.py</include>
+%       * path attribute: <include path="path.py">ignored_body.py</include>
+%       * self-closing path attribute: <include path="path.py" />
+%   - When path= is present, it takes precedence over body content.
 %   - This must parse plain prompt text and not require the prompt to be valid XML.
 
 % _interface_function_names(interface: Any) -> List[str]
@@ -85,6 +93,31 @@
 % _python_top_level_public_symbols(source: str) -> List[str]
 %   - Parse Python source with ast and return public top-level functions/classes/constants.
 %   - Include class methods as dotted symbols when discovered.
+%
+% _python_public_symbol_spans(source: str) -> Dict[str, _PythonSymbolSpan]
+%   - Parse Python source with ast and return public symbols with 1-based inclusive
+%     line spans.
+%   - Use the same public symbol shape as _python_top_level_public_symbols.
+%
+% _symbols_covered_by_line_ranges(source: str, lines_value: str) -> Set[str]
+%   - Map deterministic ContentSelector line ranges to public symbols whose full
+%     source span is contained in the selected range.
+%   - Support the same line syntax as ContentSelector: N, N-M, N-, -M, comma-separated.
+%
+% _symbols_covered_by_selectors(selectors, existing_symbols, existing_source) -> Set[str]
+%   - Map deterministic select= tokens to covered public symbols.
+%   - def:name covers that symbol; class:Name covers the class and dotted members.
+%   - lines:N-M selectors cover symbols via _symbols_covered_by_line_ranges.
+%
+% _symbols_covered_by_partial_includes(self_includes, existing_symbols, existing_source)
+%   -> tuple[Set[str], List[str]]
+%   - Return symbols covered by deterministic implementation-bearing partial
+%     self-includes plus explicit unsupported context notes.
+%   - select= wins over query=, matching preprocess behavior.
+%   - query= without select= is unsupported for this preflight because semantic
+%     extraction is non-deterministic and cannot prove symbol coverage.
+%   - mode="interface" self-includes do not count as implementation context because
+%     interface mode strips bodies.
 
 % validate_prompt_contract_context(
 %     prompt_path: Path,
@@ -96,9 +129,11 @@
 %   - Generation-time preflight used before the LLM is called.
 %   - Load declared module symbols from both <pdd-interface> and matching architecture.json.
 %   - If the prompt includes the output source file with a full <include>, return [].
-%   - If the prompt includes the output source file with select=/lines=/query=, require
-%     selected context to cover every declared public symbol that already exists in
-%     output_path.
+%   - If the prompt includes the output source file with select=/lines=/query= or
+%     mode="interface", require deterministic implementation context to cover every
+%     declared public symbol that already exists in output_path.
+%   - Treat query-only self-includes and mode="interface" self-includes as unsupported
+%     partial context and include that reason in the hard-failure message.
 %   - Return a hard-failure message when declared existing symbols are missing from
 %     partial self-include context.
 %   - Return [] when the prompt has no self-include so legacy prompts are not broken by

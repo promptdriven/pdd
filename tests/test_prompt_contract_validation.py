@@ -17,6 +17,7 @@ def _write_issue_798_shape(
     *,
     full_include: bool = False,
     prompt_dir: str = "prompts",
+    include_override: str | None = None,
 ) -> tuple[Path, Path, Path]:
     prompts = root / prompt_dir
     prompts.mkdir(parents=True)
@@ -30,11 +31,14 @@ def _write_issue_798_shape(
         encoding="utf-8",
     )
 
-    include = (
-        "<include>pdd/agentic_common.py</include>"
-        if full_include
-        else '<include select="def:keep_me">pdd/agentic_common.py</include>'
-    )
+    if include_override is not None:
+        include = include_override
+    else:
+        include = (
+            "<include>pdd/agentic_common.py</include>"
+            if full_include
+            else '<include select="def:keep_me">pdd/agentic_common.py</include>'
+        )
     prompt = prompts / "agentic_common_python.prompt"
     prompt.write_text(
         '<pdd-interface>{"type":"module","module":{"functions":['
@@ -96,6 +100,148 @@ def test_full_existing_source_include_satisfies_contract(tmp_path: Path) -> None
             architecture_path=arch,
         )
         == []
+    )
+
+
+def test_self_closing_path_attribute_partial_self_include_fails_contract_preflight(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override='<include select="def:keep_me" path="pdd/agentic_common.py" />',
+    )
+
+    errors = validate_prompt_contract_context(
+        prompt_path=prompt,
+        output_path=source,
+        project_root=tmp_path,
+        architecture_path=arch,
+    )
+
+    assert len(errors) == 1
+    assert "missing_from_context" in errors[0]
+    assert "only includes source context for 1" in errors[0]
+
+
+def test_body_include_path_attribute_takes_precedence_for_self_include(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override=(
+            '<include select="def:keep_me" path="pdd/agentic_common.py">'
+            "context/not_the_output.py"
+            "</include>"
+        ),
+    )
+
+    errors = validate_prompt_contract_context(
+        prompt_path=prompt,
+        output_path=source,
+        project_root=tmp_path,
+        architecture_path=arch,
+    )
+
+    assert len(errors) == 1
+    assert "missing_from_context" in errors[0]
+
+
+def test_line_range_self_include_covers_declared_existing_symbols(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override='<include lines="1-5">pdd/agentic_common.py</include>',
+    )
+
+    assert (
+        validate_prompt_contract_context(
+            prompt_path=prompt,
+            output_path=source,
+            project_root=tmp_path,
+            architecture_path=arch,
+        )
+        == []
+    )
+
+
+def test_select_lines_selector_covers_declared_existing_symbols(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override='<include select="lines:1-5">pdd/agentic_common.py</include>',
+    )
+
+    assert (
+        validate_prompt_contract_context(
+            prompt_path=prompt,
+            output_path=source,
+            project_root=tmp_path,
+            architecture_path=arch,
+        )
+        == []
+    )
+
+
+def test_line_range_self_include_reports_symbols_outside_range(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override='<include lines="1-2">pdd/agentic_common.py</include>',
+    )
+
+    errors = validate_prompt_contract_context(
+        prompt_path=prompt,
+        output_path=source,
+        project_root=tmp_path,
+        architecture_path=arch,
+    )
+
+    assert len(errors) == 1
+    assert "missing_from_context" in errors[0]
+    assert "only includes source context for 1" in errors[0]
+
+
+def test_query_self_include_fails_with_explicit_unsupported_context_message(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override='<include query="implementation details">pdd/agentic_common.py</include>',
+    )
+
+    errors = validate_prompt_contract_context(
+        prompt_path=prompt,
+        output_path=source,
+        project_root=tmp_path,
+        architecture_path=arch,
+    )
+
+    assert len(errors) == 1
+    assert "query= self-include cannot prove symbol coverage" in errors[0]
+
+
+def test_interface_mode_self_include_is_not_full_source_context(
+    tmp_path: Path,
+) -> None:
+    prompt, source, arch = _write_issue_798_shape(
+        tmp_path,
+        include_override='<include mode="interface">pdd/agentic_common.py</include>',
+    )
+
+    errors = validate_prompt_contract_context(
+        prompt_path=prompt,
+        output_path=source,
+        project_root=tmp_path,
+        architecture_path=arch,
+    )
+
+    assert len(errors) == 1
+    assert (
+        'mode="interface" self-include does not provide implementation context'
+        in errors[0]
     )
 
 
