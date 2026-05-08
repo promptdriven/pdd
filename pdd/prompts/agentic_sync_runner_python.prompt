@@ -23,7 +23,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`; when `sync_options["total_budget"]` is set, run sequentially and pass only the remaining total budget to each child process so the total budget is not multiplied per module.
 4. Dependency-aware scheduling: a module starts only when all its dependencies (within target set) have status "success"
 5. Dependencies outside `basenames` are omitted from `dep_graph` (partial sync). Callers should rely on `build_dep_graph_from_architecture` warnings for visibility when an architecture edge points outside the target set; the runner still assumes those deps are out of scope for this run.
-6. Pause-on-failure: when any module fails, set `self.failed = True`; let running modules finish but don't start new ones
+6. Failure scheduling: when a module fails, set `self.failed = True`, but do not globally pause the queue. Failed modules block only modules that depend on them through `dep_graph`; unrelated modules whose own dependencies are satisfied must continue to run so partial progress is preserved and future retries can resume from more completed modules. Blocked-module classification must be transitive: if `a` fails and `b` depends on `a`, then pending modules that depend on `b` are also blocked. Only total-budget exhaustion stops new scheduling globally, and `_budget_exhausted()` must be checked after every completed future, including failed module results, before scheduling more work.
 7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append global `--local` before `sync` if `sync_options["local"]` is truthy; append `--target-coverage` if `sync_options["target_coverage"]` is not None; append `--one-session` if `sync_options["one_session"]` is truthy
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
@@ -58,7 +58,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - Markdown table format: Module | Status | Phase | Duration | Cost
 - Phase column: running modules show `current_phase (N done)`, completed modules show `N phases` or `-`
 - Status icons: pending (hourglass), running (sync), success (checkmark), failed (cross)
-- Footer: total cost (initial_cost + sum of per-module costs), overall status (in progress / paused / all success)
+- Footer: total cost (initial_cost + sum of per-module costs), overall status (in progress / continuing independent modules after failure / paused / all success)
 
 % NamedTuple: `DepGraphFromArchitectureResult`
 - `graph: Dict[str, List[str]]` — basename -> list of dependency basenames **within the target set only** (scheduled subgraph)

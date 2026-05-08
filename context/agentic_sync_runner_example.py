@@ -98,6 +98,12 @@ def main():
     print("\n--- Module States ---")
     for name, state in runner.module_states.items():
         print(f"  {name}: {state.status} (cost: ${state.cost:.2f})")
+    print(
+        "A failed module blocks only modules that depend on it; unrelated "
+        "modules continue when their own dependencies are satisfied. The "
+        "blocked set is transitive, and total-budget exhaustion still stops "
+        "all new scheduling."
+    )
 
     # --- Comment Body Preview ---
     print("\n--- GitHub Comment Preview ---")
