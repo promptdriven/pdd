@@ -74,7 +74,7 @@ from .agentic_common_worktree import get_git_root, worktree_exists, branch_exist
 from .get_lint_commands import LintCommand, get_lint_commands
 from .split_main import split_main
 from .split_validation import ValidationFailure, ValidationResult, validate_extraction
-from .agentic_split_orchestrator import run_agentic_split_orchestrator
+from .agentic_split_orchestrator import run_agentic_split_orchestrator, Diagnosis, ModuleInvestigation, TestOwnership, PromptMetadata, Child, ParentChanges, SplitPlan, SplitOption, OptionsConsidered, QualitativeAssessment
 from .agentic_split import run_agentic_split
 from .ci_detect_changed_modules import main
 from .agentic_architecture_orchestrator import load_workflow_state, save_workflow_state, clear_workflow_state, run_agentic_architecture_orchestrator

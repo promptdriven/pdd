@@ -67,6 +67,7 @@ _CHECK_TO_CATEGORY: dict[str, str] = {
     "prompt_metadata": "metadata",
     "children_completeness": "completeness",
     "example_file": "completeness",
+    "test_file": "completeness",
     "test_ownership": "completeness",
     "test_seam_resolution": "extraction",
 }
@@ -349,10 +350,22 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
             return SimpleNamespace(
                 prompt_file=c.get("new_prompt") or c.get("prompt_file") or "",
                 code_file=c.get("new_source") or c.get("code_file") or "",
+                example_file=c.get("new_example") or c.get("example_file") or "",
+                new_example=c.get("new_example") or "",
+                test_file=c.get("new_test") or c.get("test_file") or "",
+                new_test=c.get("new_test") or "",
                 name=c.get("name", ""),
             )
         return c
     children = [_as_child(c) for c in raw_children]
+
+    def _child_path(child: Any, *attrs: str) -> Optional[Path]:
+        for attr in attrs:
+            raw = getattr(child, attr, "") or ""
+            if raw:
+                path = Path(str(raw))
+                return path if path.is_absolute() else worktree / path
+        return None
     # Filter out children with empty paths — they crash path operations
     # (worktree / "" returns worktree itself, which fails as a file).
     # These are LLM output defects and should be flagged but not crash.
@@ -488,14 +501,18 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
             continue  # defensive: empty stem would make with_suffix crash
         for lang_suffix in ("_python", "_typescript", "_go", "_rust"):
             stem = stem.replace(lang_suffix, "")
-        # Check multiple conventional locations.
+        # Check explicit first-class plan paths, then conventional locations.
         # Use the actual code file suffix so non-Python languages work too.
         example_suffix = Path(child.code_file).suffix or ".py"
-        candidates = [
+        candidates: list[Path] = []
+        explicit_example = _child_path(child, "new_example", "example_file")
+        if explicit_example is not None:
+            candidates.append(explicit_example)
+        candidates.extend([
             worktree / "examples" / f"{stem}_example{example_suffix}",
             worktree / "examples" / f"{prompt_path.stem}_example{example_suffix}",
             worktree / prompt_path.with_suffix(example_suffix),
-        ]
+        ])
         if not any(c.exists() for c in candidates):
             checked = [str(_relative_to_safe(c, worktree)) for c in candidates]
             failures.append(
@@ -527,10 +544,14 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
             continue
 
         test_file_name = f"test_{module_name}{code_path.suffix}"
-        candidates = [
+        candidates: list[Path] = []
+        explicit_test = _child_path(child, "new_test", "test_file")
+        if explicit_test is not None:
+            candidates.append(explicit_test)
+        candidates.extend([
             worktree / code_path.parent / test_file_name,
             worktree / "tests" / test_file_name,
-        ]
+        ])
 
         test_path: Optional[Path] = None
         for candidate in candidates:
@@ -539,6 +560,16 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
                 break
 
         if test_path is None:
+            checked = [str(_relative_to_safe(c, worktree)) for c in candidates]
+            failures.append(
+                ValidationFailure(
+                    check="test_file",
+                    message=(
+                        f"Test file not found for {child.code_file}. "
+                        f"Checked: {checked}"
+                    ),
+                )
+            )
             continue
 
         try:
@@ -580,12 +611,17 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
         if not code_path.stem:
             continue
         test_file_name = f"test_{code_path.stem}{code_path.suffix}"
-        for candidate in (
+        explicit_test = _child_path(child, "new_test", "test_file")
+        candidate_paths = []
+        if explicit_test is not None:
+            candidate_paths.append(explicit_test)
+        candidate_paths.extend([
             worktree / code_path.parent / test_file_name,
             worktree / "tests" / test_file_name,
             # Extensions convention
             worktree / "extensions" / "*" / "tests" / test_file_name,
-        ):
+        ])
+        for candidate in candidate_paths:
             # Star-glob needs expansion
             if "*" in str(candidate):
                 parent = Path(str(candidate).split("*")[0].rstrip("/"))
