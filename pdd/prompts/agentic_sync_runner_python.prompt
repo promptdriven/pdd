@@ -1,4 +1,21 @@
 <include>context/python_preamble.prompt</include>
+
+<pdd-reason>Parallel sync engine running `pdd sync` per module with dependency-aware scheduling, phase tracking, and pinned conformance diagnostics in failed-module summaries.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)", "returns": "AsyncSyncRunner", "sideEffects": ["Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child remaining-budget caps"]},
+      {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]", "sideEffects": ["None"]},
+      {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult", "sideEffects": ["None"]},
+      {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult", "sideEffects": ["None"]}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
@@ -28,6 +45,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
 9a. Failed-module error-summary contract (issue #1399): the `error` string returned for a failed module MUST start with a deterministic failure reason — the `Overall status: Failed` line if present in stdout, otherwise `f"Exit code {exit_code}"`. Then append high-signal lines from stdout+stderr (those containing `error`/`failed`/`traceback`/`exception`/`abort`, lowercased), filtering out `INFO`/`DEBUG` log lines and known nonfatal warnings (module-level constant `_NONFATAL_WARNING_SUBSTRINGS`, currently `("ContentSelector failed",)`, exposed via helper `_is_nonfatal_warning(line)`). Drop any candidate line equal to the failure reason so it is not echoed twice. If no high-signal line exists, fall back to labeled `--- stderr tail ---` and `--- stdout tail ---` blocks (last 10 non-blank, non-warning, non-failure-reason lines each). Cap keyword-line summary at last 20 lines. Console preview: `error[:500]`.
+9b. Conformance pinning (issue #861): when a line containing `Architecture conformance error` is detected anywhere in the merged stdout+stderr, extract the headline plus up to 12 immediately following diagnostic lines whose stripped form starts with one of the prefixes `prompt:`, `generated:`, `missing:`, `detected:`, or `repro:` (stop at the first non-matching, non-blank line) and pin that block at the top of the failed-module `error` string — between the deterministic failure reason and the keyword-tail / `--- *** tail ---` sections — so GitHub comments and Cloud Run logs surface the missing symbol names instead of being dominated by benign `ContentSelector failed` warnings or generic `declared symbols missing` text. Pinning MUST happen at most once per error string (deduplicate if the headline appears multiple times). Add helper `_extract_conformance_block(text: str) -> Optional[str]` to the helper list to perform the extraction; return `None` when no headline is present.
 10. Per-module timeout: `MODULE_TIMEOUT = int(os.environ.get('PDD_MODULE_TIMEOUT_SECONDS', '2700'))` seconds (default 45 minutes); effective cap per module is `MODULE_TIMEOUT + max(0.0, float(sync_options.get('timeout_adder') or 0.0))` so `--timeout-adder` extends without ever shrinking it. Timeout-error message reports the effective seconds.
 11. State persistence: save state to `.pdd/agentic_sync_state.json` after each module completion; restore on init if issue_url matches
 12. Resumability: skip modules with status "success" in saved state; allow partial resumption when module lists differ
@@ -96,6 +114,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - `_find_pdd_executable() -> Optional[str]`: find pdd binary (same pattern as `server/jobs.py`)
 - `_parse_cost_from_csv(csv_path: str) -> float`: sum cost column from PDD_OUTPUT_COST_PATH CSV
 - `_format_duration(start, end) -> str`: format seconds as "Xs" or "Xm Ys"
+- `_extract_conformance_block(text: str) -> Optional[str]`: detect an `Architecture conformance error` headline in `text` and return the headline plus up to 12 immediately following `prompt:`/`generated:`/`missing:`/`detected:`/`repro:` lines (issue #861); return `None` when no headline is present
 
 % State Management (Private Methods)
 - `_state_file_path() -> Path`: return `.pdd/agentic_sync_state.json` path

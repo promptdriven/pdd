@@ -1,3 +1,20 @@
+<pdd-reason>CLI entry point orchestrating prompt-to-code generation, with architecture conformance diagnostics.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "is_git_repository", "signature": "(path: Optional[str] = None) -> bool"},
+      {"name": "get_git_content_at_ref", "signature": "(file_path: str, git_ref: str = 'HEAD') -> Optional[str]"},
+      {"name": "get_file_git_status", "signature": "(file_path: str) -> str"},
+      {"name": "git_add_files", "signature": "(file_paths: List[str], verbose: bool = False) -> bool"},
+      {"name": "code_generator_main", "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False) -> Tuple[str, bool, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
@@ -31,6 +48,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Validate generated JSON against `output_schema` if provided.
     - Perform "Architecture Conformance" checks: verify that the generated code's exported symbols (Functions/Classes) match the interface defined in `architecture.json`.
     - Enforce language-specific naming conventions (e.g., snake_case for Python).
+    - Conformance failure diagnostics (issue #861): when a conformance check fails, the `click.UsageError` message MUST begin with a stable headline `Architecture conformance error for <prompt_filename>:` and MUST be followed by a structured diagnostic block whose lines start with the prefixes `prompt:`, `generated:`, `missing:`, `detected:`, and `repro:` (one per line, in that order). `prompt:` is the prompt filename, `generated:` is the resolved output filepath, `missing:` is a comma-separated list of every required-but-absent symbol, `detected:` is a comma-separated list of top-level classes/functions found in the generated source (capped at 50, suffixed with `, ...` when truncated), and `repro:` is the local reproduction hint `pdd sync <basename>` (or `python -m pdd sync <basename>` when a basename is unavailable). `_verify_architecture_conformance` MUST accept an optional `generated_path` keyword argument so callers can supply the output filepath; the existing call site MUST pass `output_path` for that parameter.
 6. **Integration & Wiring**:
     - Implement opt-in "Auto-Wiring": detect public exports in generated Python files and insert/update import statements in the parent `__init__.py` only when `PDD_ENABLE_WIRING=1` is set. The default must not mutate sibling files; `PDD_SKIP_WIRING=1` must continue to override and disable wiring for backward compatibility.
     - Validate `<include>` tags in generated `.prompt` files to ensure they point to existing files.
@@ -82,7 +100,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 # Instructions
 - **Input Parsing**: Use `_parse_front_matter` to separate YAML metadata from the prompt body. `_parse_front_matter` MUST accept LF (`\n`) and CRLF (`\r\n`) line endings on the opening and closing `---` fences (tolerating trailing `[ \t]*` on fence lines), and MUST strip a leading UTF-8 BOM (`﻿`) if present, so prompts authored on Windows parse correctly (#1276). When BOTH fences are present but the YAML between them is malformed, log a single `logger.warning` naming the YAML error and fall back to `(None, text)`. Do NOT log a warning when the opener `---\r?\n` is present without a closing fence: that pattern is indistinguishable from a markdown horizontal rule at the start of a prompt and would produce false positives on valid content. Use `_expand_vars` to handle `$VAR` and `${VAR}` substitutions in paths and configurations.
 - **Git Helpers**: Implement `_run_git_command` using `subprocess` with robust error handling for environments where Git might not be installed.
-- **Architecture Logic**: In `_verify_architecture_conformance`, use the `ast` module to parse Python code and regex for TypeScript/JavaScript to identify exported symbols. Delegate Python symbol collection to a recursive helper (`_collect_python_symbols`) that yields top-level functions/classes/constants and, inside a class body, direct-child methods plus nested classes producing dotted names (e.g. `Outer.Inner.method`). Do NOT descend into `if`/`try`/`with` inside class bodies: conformance is a hard validator and must not accept methods whose existence depends on branch evaluation. The snake_case guard splits dotted symbols on `.` and inspects each segment so camelCase method names (e.g. `MyClass.processData`) still fail. Raise `click.UsageError` for mismatches.
+- **Architecture Logic**: In `_verify_architecture_conformance`, use the `ast` module to parse Python code and regex for TypeScript/JavaScript to identify exported symbols. Delegate Python symbol collection to a recursive helper (`_collect_python_symbols`) that yields top-level functions/classes/constants and, inside a class body, direct-child methods plus nested classes producing dotted names (e.g. `Outer.Inner.method`). Do NOT descend into `if`/`try`/`with` inside class bodies: conformance is a hard validator and must not accept methods whose existence depends on branch evaluation. The snake_case guard splits dotted symbols on `.` and inspects each segment so camelCase method names (e.g. `MyClass.processData`) still fail. Raise `click.UsageError` for mismatches; the raised message MUST follow the diagnostic format specified in Requirement 5 (stable `Architecture conformance error for <prompt>:` headline followed by `prompt:`/`generated:`/`missing:`/`detected:`/`repro:` lines), so downstream log scrapers and the agentic sync runner can pin the real cause instead of truncating to "declared symbols missing". `_verify_architecture_conformance` accepts an optional `generated_path` keyword used to populate the `generated:` line; when omitted, fall back to the basename derived from `architecture.json`.
 - **Discovery**: Implement a `_run_discovery` helper that scans the filesystem based on `discover` patterns in front-matter to populate template variables.
 - **Incremental Logic**: If `force_incremental_flag` is set, but no original prompt is found via Git or file arguments, warn the user and fallback to full generation.
 - **Context Handling**: Ensure all Rich console outputs honor the `quiet` and `verbose` flags to maintain a clean CLI experience.

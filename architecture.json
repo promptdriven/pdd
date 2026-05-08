@@ -1865,7 +1865,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the code generator command.",
+    "reason": "CLI entry point orchestrating prompt-to-code generation, with architecture conformance diagnostics.",
     "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
@@ -7192,7 +7192,7 @@
     }
   },
   {
-    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
+    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates; pins architecture conformance diagnostics in failed-module summaries (#861).",
     "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted.",
     "dependencies": [
       "architecture_sync_python.prompt",
