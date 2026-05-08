@@ -41,8 +41,8 @@
           },
           {
             "name": "classify_step_output",
-            "signature": "(output, tokens, quiet=False) -> Optional[str]",
-            "returns": "Optional[str]"
+            "signature": "(output, expected_tokens, model=\"gemini/gemini-3-flash\") -> Optional[TokenMatch]",
+            "returns": "Optional[TokenMatch]"
           },
           {
             "name": "substitute_template_variables",

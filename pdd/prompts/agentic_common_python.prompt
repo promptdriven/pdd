@@ -9,7 +9,7 @@
       {"name": "get_available_agents", "signature": "() -> List[str]", "returns": "List[str]"},
       {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
       {"name": "detect_control_token", "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
-      {"name": "classify_step_output", "signature": "(output, tokens, quiet=False) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "classify_step_output", "signature": "(output, expected_tokens, model=\"gemini/gemini-3-flash\") -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
       {"name": "substitute_template_variables", "signature": "(template, variables) -> str", "returns": "str"},
       {"name": "set_agentic_progress", "signature": "(workflow, current_step, total_steps, step_name, completed_steps) -> None", "returns": "None"},
       {"name": "clear_agentic_progress", "signature": "() -> None", "returns": "None"},
@@ -87,7 +87,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, O
    - `SEMANTIC_PATTERNS: Dict[str, List[str]]`: Regex patterns for each control token (ALL_TESTS_PASS, NOT_A_BUG, MAX_CYCLES_REACHED, CONTINUE_CYCLE, etc.). Patterns match paraphrased forms like "all N tests pass", "not a bug", "tests still failing".
    - `_SEMANTIC_TAIL_LINES = 30`: Only scan the last 30 lines for semantic patterns (prevents false positives from step output containing these phrases in quoted context).
    - `detect_control_token(output, token, tail_lines=30) -> Optional[TokenMatch]`: 3-tier detection: (1) exact substring, (2) case-insensitive, (3) semantic regex on tail. Returns `TokenMatch` with tier info or `None`. **Tier-3 line splitting must use `str.splitlines()` (portable line-boundary handling for `\n`, `\r\n`, and lone `\r`) — never `str.split('\n')`, which leaves trailing `\r` on each line and produces an extra empty element on CRLF input, shifting the `[-30:]` tail window by one and either excluding semantic phrases at the boundary (CRLF) or collapsing the whole output into one "line" and bypassing the tail restriction (lone `\r`). See Issue #1087.
-   - `classify_step_output(output, tokens, quiet=False) -> Optional[str]`: Tier-4 fallback — cheap LLM API call with structured JSON to classify output when tiers 1-3 fail. Only call after `detect_control_token` returns `None`.
+   - `classify_step_output(output, expected_tokens, model="gemini/gemini-3-flash") -> Optional[TokenMatch]`: Tier-4 fallback — cheap LLM API call with structured JSON to classify output when tiers 1-3 fail. Only call after `detect_control_token` returns `None`. Returns a `TokenMatch` (whose `.token` carries the classified status, e.g. `ALL_TESTS_PASS`, or `CLASSIFICATION_ERROR` when the classifier itself fails) — callers dereference `.token` rather than treating the return as a bare string. Returns `None` only when the classifier confidently picks `NONE`.
 13. **Retry with Exponential Backoff and Jitter**: `run_agentic_task` retries failed attempts with exponential backoff: `retry_delay * (2 ** (attempt - 1)) + random.uniform(0, retry_delay)`. This prevents thundering herd when concurrent jobs retry simultaneously. Cap maximum backoff at `MAX_RETRY_DELAY = 120`.
 14. **Error Classification**: Classify errors from `_run_with_provider` as permanent or transient before deciding to retry:
    - **Permanent** (skip retries, move to next provider): authentication failure, invalid parameter, model not found, unsupported feature, quota exhaustion (TerminalQuotaError, "quota exhausted", "daily quota"). Match via `_is_permanent_error(error_msg) -> bool`. OpenCode-specific permanent patterns include `provider not configured`, `model not found in provider`, `no provider configured for model`, and errors telling the user to configure a provider or run `opencode auth login`.
@@ -115,7 +115,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, O
 - Enforces aggregate per-step timeout (`2 * effective_timeout` when no deadline set).
 - `reasoning_time` accepts an explicit user-supplied `--time` value forwarded by command modules and is `None` when the command used only the global default.
 `detect_control_token(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]`
-`classify_step_output(output, tokens, quiet=False) -> Optional[str]`
+`classify_step_output(output, expected_tokens, model="gemini/gemini-3-flash") -> Optional[TokenMatch]`
 `_codex_auth_failure_message(error_detail: str) -> Optional[str]`
 `substitute_template_variables(template, variables) -> str`
 `set_agentic_progress(workflow, current_step, total_steps, step_name, completed_steps) -> None`
