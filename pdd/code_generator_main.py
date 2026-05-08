@@ -246,18 +246,71 @@ def _collect_python_symbols(body: List[ast.stmt], prefix: str) -> List[str]:
     return symbols
 
 
+def _format_conformance_error(
+    prompt_name: str,
+    generated_path: Optional[str],
+    missing: List[str],
+    detected: List[str],
+    summary: str,
+) -> str:
+    """Build the structured ``Architecture conformance error`` message.
+
+    Issue #861: emit a stable headline followed by ``prompt:`` /
+    ``generated:`` / ``missing:`` / ``detected:`` / ``repro:`` lines (in
+    that order) so downstream log scrapers and the agentic sync runner can
+    pin the real cause instead of truncating to "declared symbols missing".
+    """
+    basename = pathlib.Path(prompt_name).stem
+    # Drop a trailing language token like ``_Python`` / ``_TypeScript`` from
+    # the basename so the repro hint matches what users actually pass to
+    # ``pdd sync``.
+    sync_basename = re.sub(
+        r"_(Python|TypeScript|TypeScriptReact|JavaScript|JavaScriptReact)$",
+        "",
+        basename,
+    )
+    if sync_basename:
+        repro = f"pdd sync {sync_basename}"
+    else:
+        repro = "python -m pdd sync <basename>"
+
+    detected_capped = list(detected[:50])
+    detected_str = ", ".join(detected_capped)
+    if len(detected) > 50:
+        detected_str = f"{detected_str}, ..."
+
+    generated_display = generated_path or pathlib.Path(prompt_name).with_suffix(".py").name
+
+    lines = [
+        f"Architecture conformance error for {prompt_name}: {summary}",
+        f"prompt: {prompt_name}",
+        f"generated: {generated_display}",
+        f"missing: {', '.join(missing)}",
+        f"detected: {detected_str}",
+        f"repro: {repro}",
+    ]
+    return "\n".join(lines)
+
+
 def _verify_architecture_conformance(
     generated_code: str,
     prompt_name: str,
     arch_path: Optional[str],
     language: Optional[str],
     verbose: bool,
+    *,
+    generated_path: Optional[str] = None,
 ) -> None:
     """Check generated code exports against architecture.json interface declarations.
 
     Raises ``click.UsageError`` on hard mismatch (missing declared symbols or
     naming convention violations).  Silently returns when no architecture entry
     exists or when the interface section is absent.
+
+    ``generated_path`` is the resolved output filepath of the generated code,
+    used to populate the ``generated:`` line of the structured diagnostic
+    block (issue #861). When omitted, the basename derived from the prompt
+    name (with a Python suffix) is used as a fallback.
     """
     if not arch_path:
         arch_path = "architecture.json"
@@ -337,9 +390,16 @@ def _verify_architecture_conformance(
     missing = [s for s in declared_symbols if s not in actual_symbols]
     if missing:
         raise click.UsageError(
-            f"Architecture conformance error for {prompt_name}: "
-            f"declared symbols missing from generated code: {', '.join(missing)}. "
-            f"Expected: {declared_symbols}. Found: {actual_symbols}."
+            _format_conformance_error(
+                prompt_name=prompt_name,
+                generated_path=generated_path,
+                missing=missing,
+                detected=actual_symbols,
+                summary=(
+                    f"declared symbols missing from generated code: "
+                    f"{', '.join(missing)}."
+                ),
+            )
         )
 
     # Check naming convention: if architecture specifies snake_case but code has camelCase.
@@ -355,9 +415,17 @@ def _verify_architecture_conformance(
                     break
         if camel_exports:
             raise click.UsageError(
-                f"Architecture conformance error for {prompt_name}: "
-                f"Python code uses camelCase names ({', '.join(camel_exports[:5])}) "
-                f"but Python convention requires snake_case."
+                _format_conformance_error(
+                    prompt_name=prompt_name,
+                    generated_path=generated_path,
+                    missing=camel_exports,
+                    detected=actual_symbols,
+                    summary=(
+                        f"Python code uses camelCase names "
+                        f"({', '.join(camel_exports[:5])}) but Python "
+                        f"convention requires snake_case."
+                    ),
+                )
             )
 
 
@@ -1473,6 +1541,7 @@ def code_generator_main(
                         arch_path=None,  # Uses default architecture.json
                         language=language,
                         verbose=verbose,
+                        generated_path=output_path,
                     )
                 except click.UsageError:
                     raise  # Re-raise conformance errors as hard failures

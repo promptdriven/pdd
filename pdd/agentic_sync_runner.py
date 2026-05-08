@@ -46,6 +46,57 @@ def _is_nonfatal_warning(line: str) -> bool:
     """Return True if `line` matches a known nonfatal-warning substring."""
     return any(s in line for s in _NONFATAL_WARNING_SUBSTRINGS)
 
+
+# Diagnostic-line prefixes emitted by `_verify_architecture_conformance`
+# (issue #861). The runner pins the headline plus up to this many immediately
+# following lines into the failed-module error summary so GitHub comments and
+# Cloud Run logs surface the missing symbol names instead of being dominated
+# by benign warnings or generic truncation.
+_CONFORMANCE_DIAG_PREFIXES: Tuple[str, ...] = (
+    "prompt:",
+    "generated:",
+    "missing:",
+    "detected:",
+    "repro:",
+)
+_CONFORMANCE_DIAG_MAX_LINES = 12
+
+
+def _extract_conformance_block(text: str) -> Optional[str]:
+    """Return the first ``Architecture conformance error`` block from ``text``.
+
+    Walks the lines of ``text`` and, on encountering a line that contains the
+    headline ``Architecture conformance error``, captures the headline plus
+    up to ``_CONFORMANCE_DIAG_MAX_LINES`` immediately following lines whose
+    stripped form starts with one of ``_CONFORMANCE_DIAG_PREFIXES``. Stops at
+    the first non-matching, non-blank line so unrelated downstream output is
+    not pulled in.
+
+    Returns ``None`` when no headline is present.
+    """
+    if not text:
+        return None
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        if "Architecture conformance error" not in line:
+            continue
+        # Strip a leading log/level prefix so the pinned block reads cleanly.
+        block = [line.rstrip()]
+        following = 0
+        for follow in lines[idx + 1:]:
+            stripped = follow.strip()
+            if not stripped:
+                # Blank line breaks the diagnostic block.
+                break
+            if not stripped.startswith(_CONFORMANCE_DIAG_PREFIXES):
+                break
+            block.append(follow.rstrip())
+            following += 1
+            if following >= _CONFORMANCE_DIAG_MAX_LINES:
+                break
+        return "\n".join(block)
+    return None
+
 # Maximum concurrent syncs
 MAX_WORKERS = 4
 # Per-module timeout in seconds. Large modules (200KB+) routinely need the full
@@ -559,12 +610,21 @@ class AsyncSyncRunner:
                 msg += f" Skipped (blocked): {blocked}."
             if not_run:
                 msg += f" Skipped (not run): {not_run}."
-            # Include error details for failed modules
+            # Include error details for failed modules. Issue #861: prefer
+            # the structured `Architecture conformance error` block (when
+            # present) over the generic head of the error string so the
+            # 500-char window surfaces the missing symbol names instead of
+            # being dominated by the failure-reason headline plus benign
+            # warnings.
             for b in failed:
                 err = self.module_states[b].error
                 if err:
-                    # Truncate long errors but keep enough context
-                    err_summary = err.strip()[:500]
+                    conformance_block = _extract_conformance_block(err)
+                    if conformance_block:
+                        err_summary = conformance_block.strip()[:500]
+                    else:
+                        # Truncate long errors but keep enough context
+                        err_summary = err.strip()[:500]
                     msg += f"\n  {b}: {err_summary}"
             self._save_state()
             return False, msg, total_cost
@@ -965,6 +1025,23 @@ class AsyncSyncRunner:
             ]
 
             summary_parts: List[str] = [failure_reason]
+
+            # Issue #861: pin the structured conformance diagnostic block (if
+            # any) immediately after the failure reason so GitHub comments and
+            # Cloud Run logs surface the missing symbol names instead of being
+            # dominated by benign `ContentSelector failed` warnings or generic
+            # `declared symbols missing` text. Pinning happens at most once.
+            conformance_block = _extract_conformance_block(all_output)
+            if conformance_block:
+                summary_parts.append(conformance_block)
+                # Drop any keyword lines that the pinned block already covers
+                # so the headline does not echo twice.
+                pinned_lines = set(conformance_block.splitlines())
+                keyword_lines = [
+                    line for line in keyword_lines
+                    if line.rstrip() not in pinned_lines
+                ]
+
             if keyword_lines:
                 summary_parts.append("\n".join(keyword_lines[-20:]))
             else:
