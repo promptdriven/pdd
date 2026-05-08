@@ -91,6 +91,51 @@ def ctx():
     }
     return context
 
+
+@pytest.fixture(autouse=True)
+def mock_local_crash_fixers(monkeypatch):
+    """Keep crash_main unit tests off live LLM repair paths by default."""
+
+    def fake_fix_code_module_errors(
+        program_content,
+        prompt_content,
+        code_content,
+        error_content,
+        *args,
+        **kwargs,
+    ):
+        return (
+            True,
+            True,
+            program_content + "\n# fixed program\n",
+            code_content + "\n# fixed code\n",
+            "mock analysis",
+            0.01,
+            "mock-model",
+        )
+
+    def fake_fix_code_loop(
+        code_file,
+        prompt_content,
+        program_file,
+        *args,
+        **kwargs,
+    ):
+        code_content = Path(code_file).read_text()
+        program_content = Path(program_file).read_text()
+        return (
+            True,
+            program_content + "\n# fixed program loop\n",
+            code_content + "\n# fixed code loop\n",
+            1,
+            0.01,
+            "mock-loop-model",
+        )
+
+    monkeypatch.setattr("pdd.crash_main.fix_code_module_errors", fake_fix_code_module_errors)
+    monkeypatch.setattr("pdd.crash_main.fix_code_loop", fake_fix_code_loop)
+
+
 def test_basic_crash_fix(ctx, test_files):
     """Test basic crash fix without loop option"""
     output_dir = test_files["output_dir"]

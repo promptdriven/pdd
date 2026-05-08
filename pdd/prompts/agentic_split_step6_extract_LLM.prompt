@@ -293,11 +293,42 @@ For the assigned child, produce ALL of the following in a single call:
     - `FILES_CREATED: <comma-separated list of new files — include child prompt, source, example, test>`
     - `FILES_MODIFIED: <comma-separated list of modified files — include modified parent prompt, source, example, test>`
 
-After your output, the orchestrator verifies every file in FILES_CREATED
-exists on disk. If any are missing, you will be invoked again with the
-missing-file list appended to this prompt. Per-child retry budget is 2.
-After that, `split_validation.validate_extraction()` runs and any
-remaining failures route to step 8 repair (max 5 iterations/child).
+After your output, the orchestrator runs a **four-tier verification flow** for
+this child before moving on to the next one:
+
+1. **File-existence retry (this prompt's retry budget).** The orchestrator
+   verifies every file in FILES_CREATED exists on disk. If any are missing,
+   you will be invoked again with the missing-file list appended to this
+   prompt. Per-child file-existence retry budget is 2 (re-invocations of
+   THIS step 6 prompt).
+
+2. **Per-child verify gate (6v, deterministic Python).** Once all claimed
+   files exist, the orchestrator filters `plan.children` to just THIS
+   child and runs `split_validation.validate_extraction(scoped_plan,
+   current_work_dir)`. Error-severity `ValidationFailure`s for this
+   child's files are surfaced as a structured RETRY NOTICE.
+
+3. **Per-child step-8 repair sub-loop (N=2 attempts/child).** If the
+   per-child gate fails, the orchestrator routes the failures into
+   `agentic_split_step8_repair_LLM` for up to 2 attempts on THIS child
+   only. State transitions through `extracted -> failed_verify ->
+   verified` (or `-> failed` if the budget is exhausted). Each
+   transition is persisted before the next agent call so a crash never
+   loses progress.
+
+4. **Final cross-cutting cycle (after all children pass 6v).** The
+   orchestrator then runs the full-plan `validate_extraction()` plus
+   `pdd checkup --validate-arch-includes --project-root <worktree>`
+   at step 7a. Any failures only visible at full-package scope (e.g.
+   circular imports between siblings, architecture↔include drift
+   detected by `pdd checkup`) route to step 8 repair with a higher
+   budget of N=5 iterations across the whole plan.
+
+The four-tier flow means YOUR child's failure budget is bounded
+independently of the rest of the pipeline. Don't assume a later
+cross-cutting pass will quietly fix sloppy work — if your output is
+broken, it'll bounce back to you within seconds with the validator's
+exact `failure.message` strings as feedback.
 
 % Important
 - Do NOT modify symbols you aren't assigned. Do NOT rename anything.

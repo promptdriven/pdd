@@ -14,7 +14,24 @@ such output correctly and does not reintroduce the original Issue #485 behavior.
 """
 
 import textwrap
+import sys
 from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_pytest_subprocess_env(monkeypatch, tmp_path):
+    """Run nested pytest checks with this test process's Python and temp root."""
+    (tmp_path / ".pddrc").write_text("contexts: []\n")
+    monkeypatch.setattr(
+        "pdd.pytest_output.detect_host_python_executable",
+        lambda: sys.executable,
+    )
+    monkeypatch.setattr(
+        "pdd.fix_error_loop.detect_host_python_executable",
+        lambda: sys.executable,
+    )
 
 
 class TestIssue485WarningFalseNegativeE2E:

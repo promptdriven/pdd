@@ -46,6 +46,7 @@ SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
     "7a_verify_local": 900.0,
     "7b_regen_gate": 1800.0,
     "7c_arch_sync": 60.0,
+    "7d_checkup": 600.0,
     "7_assess": 300.0,
     "8_repair": 600.0,
     "9_refine_check": 300.0,
@@ -61,6 +62,22 @@ SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
 # added more). A re-run of `pdd split` on the output always gives the
 # user another refinement pass if they want one.
 MAX_REFINEMENT_ITERATIONS = 1
+MAX_CHILD_VERIFY_REPAIR_ATTEMPTS = 2
+CHILD_EXTRACT_STATUSES = {
+    "pending",
+    "extracted",
+    "verified",
+    "failed_extract",
+    "failed_verify",
+    "failed",
+}
+# Statuses where the child should not be re-extracted on resume. ``verified``
+# is the success terminal; ``failed`` is the budget-exhausted failure terminal
+# and blocks the workflow at step 6 until a human intervenes. ``failed_verify``
+# is non-terminal: it means the verify gate failed but the repair budget is not
+# yet exhausted, so resume retries it.
+CHILD_TERMINAL_STATUSES = {"verified", "failed"}
+PARTIAL_EXTRACTION_PREFIX = "Partial extraction:"
 
 # Valid intent values (U5).
 VALID_INTENTS = {
@@ -116,6 +133,74 @@ class Diagnosis:
 class ModuleInvestigation:
     test_seams: List[str] = field(default_factory=list)
     test_ownership: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Child:
+    """Parsed child entry from a SplitPlan.
+
+    Children may be represented either as dicts (raw LLM JSON) or as this
+    dataclass for callers preferring attribute access. The split orchestrator
+    works with the dict form internally; ``Child`` is exposed for typed
+    consumers (e.g., the per-child verify gate at step 6v).
+    """
+    name: str = ""
+    prompt_file: str = ""
+    code_file: str = ""
+    example_file: str = ""
+    test_file: str = ""
+    new_prompt: str = ""
+    new_source: str = ""
+    new_example: str = ""
+    new_test: str = ""
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Child":
+        """Build a Child from a raw dict, preferring known keys."""
+        if not isinstance(data, dict):
+            return cls()
+        name = (
+            data.get("name")
+            or data.get("child_name")
+            or Path(data.get("prompt_file") or data.get("new_prompt") or "").stem
+            or "child"
+        )
+        return cls(
+            name=str(name),
+            prompt_file=str(data.get("prompt_file") or data.get("new_prompt", "")),
+            code_file=str(data.get("code_file") or data.get("new_source", "")),
+            example_file=str(data.get("example_file", "")),
+            test_file=str(data.get("test_file") or data.get("new_test", "")),
+            new_prompt=str(data.get("new_prompt", "")),
+            new_source=str(data.get("new_source", "")),
+            new_example=str(data.get("new_example", "")),
+            new_test=str(data.get("new_test", "")),
+        )
+
+
+@dataclass
+class ParentChanges:
+    """Parent-file changes contained in a SplitPlan."""
+    delete_lines: List[int] = field(default_factory=list)
+    keep_lines: List[int] = field(default_factory=list)
+    new_imports: List[str] = field(default_factory=list)
+    rationale: str = ""
+
+
+@dataclass
+class PromptMetadata:
+    """Metadata for a child prompt file (PDD tags)."""
+    reason: str = ""
+    interface: Dict[str, Any] = field(default_factory=dict)
+    dependencies: List[str] = field(default_factory=list)
+
+
+@dataclass
+class TestOwnership:
+    """Per-test ownership classification from step 3."""
+    test_to_child: Dict[str, str] = field(default_factory=dict)
+    parent_only: List[str] = field(default_factory=list)
+    shared: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -474,6 +559,490 @@ def _sanitize_split_paths(option: "SplitOption") -> None:
                     child[key] = _sanitize_path_string(child[key])
 
 
+def _child_state_key(child: Any, index: int) -> str:
+    """Base state key for a split child: explicit name, then file stem, then index."""
+    if isinstance(child, dict):
+        for key in ("name", "child_name"):
+            value = child.get(key)
+            if value:
+                return str(value)
+        for key in (
+            "prompt_file",
+            "new_prompt",
+            "code_file",
+            "new_source",
+            "example_file",
+            "new_example",
+            "test_file",
+            "new_test",
+        ):
+            value = child.get(key)
+            if value:
+                stem = Path(str(value)).stem
+                if stem:
+                    return stem
+    value = getattr(child, "name", "")
+    if value:
+        return str(value)
+    return f"child_{index + 1}"
+
+
+def _child_state_path_key(child: Any, index: int, base_key: str) -> str:
+    """Path-qualified state key used only when base keys collide."""
+    path_value = ""
+    path_keys = (
+        "code_file",
+        "new_source",
+        "example_file",
+        "new_example",
+        "prompt_file",
+        "new_prompt",
+        "test_file",
+        "new_test",
+    )
+    if isinstance(child, dict):
+        for key in path_keys:
+            value = child.get(key)
+            if value:
+                path_value = str(value)
+                break
+    else:
+        for key in path_keys:
+            value = getattr(child, key, "")
+            if value:
+                path_value = str(value)
+                break
+    if not path_value:
+        return f"{base_key}#{index + 1}"
+    normalized = path_value.replace("\\", "/").lstrip("./")
+    without_suffix = str(Path(normalized).with_suffix(""))
+    return f"{base_key}@{without_suffix}"
+
+
+def _child_state_keys(plan: "SplitPlan") -> List[str]:
+    """Return unique state keys for all children in a plan.
+
+    Human-readable child names stay as-is when unique. If two children share a
+    name or file stem, the duplicate set is qualified by child path so resume
+    state cannot collide for layouts such as ``pkg/a/foo.py`` and
+    ``pkg/b/foo.py``.
+    """
+    children = list(getattr(plan, "children", []) or [])
+    base_keys = [_child_state_key(child, i) for i, child in enumerate(children)]
+    duplicate_bases = {key for key in base_keys if base_keys.count(key) > 1}
+    keys: List[str] = []
+    used: set[str] = set()
+    for index, child in enumerate(children):
+        base_key = base_keys[index]
+        key = (
+            _child_state_path_key(child, index, base_key)
+            if base_key in duplicate_bases
+            else base_key
+        )
+        if key in used:
+            key = f"{key}#{index + 1}"
+        keys.append(key)
+        used.add(key)
+    return keys
+
+
+def _format_nonverified_children(
+    plan: "SplitPlan",
+    statuses: Dict[str, str],
+    terminal_child_failures: Optional[Dict[str, List[str]]] = None,
+) -> str:
+    """Return a compact summary of children that are not verified."""
+    parts: List[str] = []
+    terminal_child_failures = terminal_child_failures or {}
+    for key in _child_state_keys(plan):
+        status = statuses.get(key, "pending")
+        if status == "verified":
+            continue
+        messages = terminal_child_failures.get(key) or []
+        if messages:
+            detail = "; ".join(str(msg) for msg in messages)
+            if len(detail) > 180:
+                detail = detail[:177] + "..."
+            parts.append(f"{key}={status} ({detail})")
+        else:
+            parts.append(f"{key}={status}")
+    return ", ".join(parts)
+
+
+def _clear_child_failure_markers(verify_failures: List[str], child_key: str) -> None:
+    """Drop stale child-scoped markers once that child is retried."""
+    prefixes = (
+        f"Child {child_key} failed per-child verify:",
+        f"Child {child_key} extraction incomplete:",
+    )
+    verify_failures[:] = [
+        vf for vf in verify_failures
+        if not vf.startswith(prefixes)
+    ]
+
+
+def _initialize_child_extraction_state(
+    plan: "SplitPlan",
+    state: Dict[str, Any],
+) -> Tuple[Dict[str, str], Dict[str, int]]:
+    """Initialize/migrate per-child extraction state for resume.
+
+    New state is keyed by child name/file stem, path-qualified only when names
+    collide. Legacy ``children_extracted`` was a positional list; if present,
+    already-extracted entries are treated as extracted, then re-validated by
+    the per-child gate so pre-schema resumes cannot skip verification.
+    """
+    raw_statuses = state.get("children_extracted_status") or {}
+    statuses: Dict[str, str] = {
+        str(key): str(value)
+        for key, value in raw_statuses.items()
+        if str(value) in CHILD_EXTRACT_STATUSES
+    } if isinstance(raw_statuses, dict) else {}
+
+    legacy_statuses = state.get("children_status") or {}
+    if isinstance(legacy_statuses, dict):
+        for index, key in enumerate(_child_state_keys(plan)):
+            legacy_value = legacy_statuses.get(str(index))
+            if legacy_value in CHILD_EXTRACT_STATUSES and key not in statuses:
+                statuses[key] = str(legacy_value)
+
+    raw_attempts = state.get("repair_attempts") or {}
+    attempts: Dict[str, int] = {}
+    if isinstance(raw_attempts, dict):
+        for key, value in raw_attempts.items():
+            try:
+                attempts[str(key)] = max(0, int(value))
+            except (TypeError, ValueError):
+                attempts[str(key)] = 0
+
+    legacy_extracted = state.get("children_extracted") or []
+    if not isinstance(legacy_extracted, list):
+        legacy_extracted = []
+
+    state_keys = _child_state_keys(plan)
+    for index, key in enumerate(state_keys):
+        if key not in statuses:
+            statuses[key] = (
+                "extracted"
+                if index < len(legacy_extracted) and bool(legacy_extracted[index])
+                else "pending"
+            )
+        attempts.setdefault(key, 0)
+
+    return statuses, attempts
+
+
+def _first_nonverified_child_index(plan: "SplitPlan", statuses: Dict[str, str]) -> Optional[int]:
+    """Return the first child index whose status is not verified, else None.
+
+    Step 6 is complete only after every child passes the per-child verify gate.
+    Terminal ``failed`` children are not re-extracted automatically, but they
+    still block later final verification, checkup, and assessment steps until
+    a human fixes or restarts the split.
+    """
+    for index, key in enumerate(_child_state_keys(plan)):
+        if statuses.get(key) != "verified":
+            return index
+    return None
+
+
+def _validate_single_child(
+    plan: "SplitPlan",
+    child_index: int,
+    worktree: Path,
+) -> List[str]:
+    """Run validate_extraction against only one child and return error messages.
+
+    The validator's structural checks (children completeness, prompt
+    metadata, example file, byte equivalence) are scoped automatically by
+    narrowing ``plan.children``. The ``test_seam_resolution`` check is
+    cross-cutting by design — it scans every ``test_*`` file under the
+    repo root looking for unresolved patch paths — so its raw output can
+    surface failures rooted in *sibling* tests when called per-child.
+    The per-child gate is supposed to give isolated feedback for the
+    child the agent just wrote, so we filter test-seam failures here to
+    only those whose message references this child's own test file.
+    Cross-cutting test-seam coverage is the job of the final 7a verify
+    pass over the full plan.
+    """
+    children = list(getattr(plan, "children", []) or [])
+    if child_index < 0 or child_index >= len(children):
+        return []
+    target_child = children[child_index]
+    scoped = SplitPlan(
+        children=[target_child],
+        parent_changes=getattr(plan, "parent_changes", {}) or {},
+        reference_updates=getattr(plan, "reference_updates", []) or [],
+        test_ownership=getattr(plan, "test_ownership", {}) or {},
+        surfaced_dead_candidates=getattr(plan, "surfaced_dead_candidates", []) or [],
+    )
+    try:
+        result = validate_extraction(scoped, worktree)
+    except Exception as exc:
+        return [f"validate_extraction crashed for child {child_index + 1}: {exc}"]
+
+    # Compute this child's expected test-file identifiers so we can drop
+    # cross-cutting test-seam failures that don't reference it. Plans may use
+    # explicit/custom test paths such as custom_tests/foo_spec.py, so include
+    # both declared test paths and conventional test_<module> fallbacks.
+    if isinstance(target_child, dict):
+        code_file = (
+            target_child.get("code_file")
+            or target_child.get("new_source")
+            or ""
+        )
+        test_file = (
+            target_child.get("new_test")
+            or target_child.get("test_file")
+            or ""
+        )
+    else:
+        code_file = (
+            getattr(target_child, "code_file", "")
+            or getattr(target_child, "new_source", "")
+        )
+        test_file = (
+            getattr(target_child, "new_test", "")
+            or getattr(target_child, "test_file", "")
+        )
+    def _normalized_test_paths(path_value: str) -> set[str]:
+        normalized = str(path_value).replace("\\", "/").strip().strip("'\"`")
+        normalized = normalized.lstrip("./")
+        if not normalized:
+            return set()
+        paths = {normalized}
+        path = Path(normalized)
+        if path.is_absolute():
+            try:
+                paths.add(path.relative_to(worktree).as_posix())
+            except ValueError:
+                pass
+        return {p.lstrip("./") for p in paths if p}
+
+    def _test_fallback_tokens(paths: set[str]) -> set[str]:
+        tokens: set[str] = set()
+        for path_value in paths:
+            path = Path(path_value)
+            tokens.update({path.name, path.stem})
+        return {token for token in tokens if token}
+
+    def _message_mentions_fallback_token(message: str, tokens: set[str]) -> bool:
+        for token in sorted(tokens, key=len, reverse=True):
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])"
+            if re.search(pattern, message):
+                return True
+        return False
+
+    own_test_paths: set[str] = set()
+    own_test_fallback_tokens: set[str] = set()
+    if test_file:
+        paths = _normalized_test_paths(str(test_file))
+        own_test_paths.update(paths)
+        own_test_fallback_tokens.update(_test_fallback_tokens(paths))
+    if code_file:
+        code_path = Path(str(code_file).replace("\\", "/"))
+        conventional = f"test_{code_path.stem}{code_path.suffix or '.py'}"
+        for path_value in (
+            conventional,
+            str(code_path.parent / conventional),
+            f"tests/{conventional}",
+        ):
+            paths = _normalized_test_paths(path_value)
+            own_test_paths.update(paths)
+            own_test_fallback_tokens.update(_test_fallback_tokens(paths))
+
+    messages: List[str] = []
+    for failure in getattr(result, "failures", []) or []:
+        if getattr(failure, "severity", "error") != "error":
+            continue
+        msg = str(getattr(failure, "message", failure))
+        normalized_msg = msg.replace("\\", "/")
+        test_match = re.search(
+            r"Test seam unresolved:\s*(?P<path>.*?)\s+patches\s+",
+            normalized_msg,
+        )
+        failure_test_paths = (
+            _normalized_test_paths(test_match.group("path"))
+            if test_match
+            else set()
+        )
+        if (
+            getattr(failure, "check", "") == "test_seam_resolution"
+            and own_test_paths
+            and failure_test_paths
+            and own_test_paths.isdisjoint(failure_test_paths)
+        ):
+            # Sibling/parent test seam failure — out of scope for this
+            # child's gate. The cross-cutting 7a verify will catch it.
+            continue
+        if (
+            getattr(failure, "check", "") == "test_seam_resolution"
+            and own_test_paths
+            and not failure_test_paths
+            and own_test_fallback_tokens
+            and not _message_mentions_fallback_token(
+                normalized_msg,
+                own_test_fallback_tokens,
+            )
+        ):
+            continue
+        messages.append(msg)
+    return messages
+
+
+def _parse_file_markers(output: str) -> Tuple[List[str], List[str]]:
+    """Parse FILES_CREATED and FILES_MODIFIED markers from agent output."""
+    claimed_created: List[str] = []
+    claimed_modified: List[str] = []
+    for marker, bucket in (
+        ("FILES_CREATED:", claimed_created),
+        ("FILES_MODIFIED:", claimed_modified),
+    ):
+        match = re.search(
+            rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
+            output,
+        )
+        if match:
+            for item in match.group(1).split(","):
+                filename = item.strip().strip(",").strip("`").strip()
+                if filename:
+                    bucket.append(filename)
+    return claimed_created, claimed_modified
+
+
+def _run_split_checkup(worktree: Path, timeout: float) -> List[str]:
+    """Run the final local checkup gate and return failure messages."""
+    if not _worktree_has_architecture_json(worktree):
+        return []
+    command = [
+        "pdd",
+        "checkup",
+        "--validate-arch-includes",
+        "--project-root",
+        str(worktree),
+    ]
+    try:
+        subprocess.run(
+            command,
+            cwd=str(worktree),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return ["CHECKUP_FAILURE: pdd executable not found"]
+    except subprocess.CalledProcessError as exc:
+        output = (exc.stderr or exc.stdout or "")[:1000]
+        return [f"CHECKUP_FAILURE: {output}"]
+    except subprocess.TimeoutExpired:
+        return [f"CHECKUP_FAILURE: pdd checkup timed out after {timeout:.0f}s"]
+    return []
+
+
+def _worktree_has_architecture_json(worktree: Path) -> bool:
+    """Return True when checkup has a root or nested architecture file to scan."""
+    if not worktree.is_dir():
+        return False
+    if (worktree / "architecture.json").is_file():
+        return True
+    try:
+        return any(path.is_file() for path in worktree.rglob("architecture.json"))
+    except OSError:
+        return False
+
+
+def _target_path_in_worktree(
+    target_file: Union[str, Path],
+    cwd: Path,
+    worktree: Path,
+) -> Path:
+    """Map the original target path into the active split worktree."""
+    target_path = Path(target_file)
+    target_abs = (
+        target_path
+        if target_path.is_absolute()
+        else cwd / target_path
+    ).resolve(strict=False)
+    base = get_git_root(cwd) or cwd
+    try:
+        return worktree / target_abs.relative_to(base.resolve(strict=False))
+    except ValueError:
+        return target_abs
+
+
+def _find_nearest_prompts_dir(target_abs: Path) -> Optional[Path]:
+    """Find the nearest prompts directory around a target file."""
+    candidate = target_abs.parent
+    for _ in range(8):
+        for prompts_name in ("prompts", "prompts/src"):
+            maybe = candidate / prompts_name
+            if maybe.is_dir():
+                return maybe
+        if candidate.parent == candidate:
+            break
+        candidate = candidate.parent
+    return None
+
+
+def _find_nearest_architecture_file(target_abs: Path) -> Optional[Path]:
+    """Find the nearest architecture.json around a target file."""
+    candidate = target_abs.parent
+    for _ in range(8):
+        maybe = candidate / "architecture.json"
+        if maybe.is_file():
+            return maybe
+        if candidate.parent == candidate:
+            break
+        candidate = candidate.parent
+    return None
+
+
+def _sync_split_architecture(
+    target_file: Union[str, Path],
+    cwd: Path,
+    worktree: Path,
+    changed_files: List[str],
+    quiet: bool,
+) -> List[str]:
+    """Refresh architecture metadata in the split worktree.
+
+    Returns failure messages that should feed the global repair loop.
+    """
+    target_abs = _target_path_in_worktree(target_file, cwd, worktree)
+    prompts_dir = _find_nearest_prompts_dir(target_abs)
+    architecture_path = _find_nearest_architecture_file(target_abs)
+    if prompts_dir is None or architecture_path is None:
+        if not quiet:
+            console.print(
+                "[yellow]Skipping arch sync — no prompts/ or "
+                "architecture.json found near target[/yellow]"
+            )
+        return []
+
+    try:
+        sync_result = sync_all_prompts_to_architecture(
+            prompts_dir, architecture_path, dry_run=False
+        )
+    except Exception as exc:
+        if not quiet:
+            console.print(f"[yellow]Arch sync errored: {exc}[/yellow]")
+        return [f"Arch sync errored: {exc}"]
+
+    if sync_result.get("success", False):
+        return []
+
+    errors = sync_result.get("errors", [])
+    own_stems = {Path(filename).stem for filename in changed_files}
+    relevant_errors = [
+        error for error in errors
+        if any(stem in str(error) for stem in own_stems)
+    ]
+    if relevant_errors:
+        return [f"Arch sync failed: {relevant_errors}"]
+    return []
+
+
 def _check_hard_stop(step: str, output: str, force_split: bool) -> Optional[str]:
     """Check for hard stop markers in agent output.
 
@@ -655,6 +1224,8 @@ def run_agentic_split_orchestrator(
             "model_used": "",
             "changed_files": [],
             "children_extracted": [],
+            "children_extracted_status": {},
+            "repair_attempts": {},
             "phase_plans": [],
             "intent": _normalize_intent(intent) or "",
             "iteration_count": 0,
@@ -668,6 +1239,16 @@ def run_agentic_split_orchestrator(
     verify_failures: List[str] = state.get("verify_failures", [])
     quant_metrics: Dict[str, float] = state.get("quant_metrics", {})
     phase_plans: List[Dict[str, Any]] = state.get("phase_plans", [])
+    children_extracted_status: Dict[str, str] = state.get("children_extracted_status", {}) or {}
+    repair_attempts: Dict[str, int] = state.get("repair_attempts", {}) or {}
+    # Per-child terminal-failure detail. When a child exhausts its
+    # MAX_CHILD_VERIFY_REPAIR_ATTEMPTS, its ValidationFailure messages are
+    # cleared from verify_failures (so the global step-8 loop doesn't waste
+    # its budget on them) but the messages themselves are saved here so the
+    # final HUMAN_REVIEW_REQUIRED summary can show the user what broke.
+    terminal_child_failures: Dict[str, List[str]] = (
+        state.get("terminal_child_failures", {}) or {}
+    )
     # Intent may arrive from CLI (user flag) or get inferred by step 0.
     # Precedence: user_intent_hint (CLI) > step 0 inference > default.
     current_intent: str = state.get("intent", "") or (_normalize_intent(intent) or "")
@@ -687,6 +1268,8 @@ def run_agentic_split_orchestrator(
         state["total_cost"] = total_cost
         state["model_used"] = model_used
         state["changed_files"] = changed_files
+        state["children_extracted_status"] = children_extracted_status
+        state["repair_attempts"] = repair_attempts
         save_workflow_state(
             cwd, split_id, "split", state, state_dir,
             "", "", use_github_state, github_comment_id,
@@ -759,7 +1342,8 @@ def run_agentic_split_orchestrator(
         "5_setup_worktree",
         "6a_phase_extract",
         "6_extract",
-        "7a_verify_local", "7b_regen_gate", "7c_arch_sync", "7_assess",
+        "7a_verify_local", "7b_regen_gate", "7c_arch_sync", "7d_checkup",
+        "7_assess",
         "8_repair",
         "9_refine_check",
     ]
@@ -1418,73 +2002,107 @@ def run_agentic_split_orchestrator(
                 clear_agentic_progress()
                 _restore_signals()
                 return False, "No selected option — step 4 may have failed", total_cost, model_used, changed_files
-            total_children = len(selected_option.plan.children)
+            plan = selected_option.plan
+            total_children = len(plan.children)
             children_extracted = state.get("children_extracted", [])
-            for i in range(len(children_extracted), total_children):
-                child = selected_option.plan.children[i]
-                child_name = child.get("name", f"child_{i+1}") if isinstance(child, dict) else str(child)
+            if not isinstance(children_extracted, list):
+                children_extracted = []
+            (
+                children_extracted_status,
+                repair_attempts,
+            ) = _initialize_child_extraction_state(plan, state)
 
-                # Resume guard (Issue #1384): if a prior --max-cost
-                # abort fired mid-retry AFTER the retry's files made it
-                # onto disk (and into changed_files via the post-retry
-                # promotion at line ~1577), then on resume those files
-                # already exist. Skip the LLM call and credit the child
-                # as extracted directly — paying again would be the
-                # double-charge bug.
-                #
-                # Gating: ONLY engage on resume from a max-cost abort.
-                # On a normal run a child's planned paths might happen
-                # to exist (e.g. left over from an earlier user split
-                # attempt or a partial worktree); a blanket existence
-                # check would silently skip real extraction work.
-                # `state["max_cost_reached"]` is set ONLY by the budget
-                # guard, so it cleanly identifies the resume case.
-                # We also require ALL FOUR Step-4 path fields to exist
-                # (code_file/prompt_file plus new_example/new_test if
-                # the plan declares them) — Step 6 says examples and
-                # tests are first-class artifacts, not optional.
-                expected_files: List[str] = []
-                if isinstance(child, dict):
-                    for key in (
-                        "code_file", "prompt_file", "example_file", "test_file",
-                        "new_source", "new_prompt", "new_example", "new_test",
-                    ):
-                        v = child.get(key)
-                        if isinstance(v, str) and v:
-                            expected_files.append(v)
-                if (
-                    state.get("max_cost_reached")
-                    and expected_files
-                    and all(
-                        _safe_path_exists(current_work_dir / f)
-                        for f in expected_files
-                    )
-                ):
-                    if not quiet:
-                        console.print(
-                            f"[dim]Child {i+1}/{total_children} ({child_name}): "
-                            f"all planned files present on disk — skipping "
-                            f"re-extraction (resume after prior --max-cost abort).[/dim]"
-                        )
-                    children_extracted.append(
-                        f"RESUMED: child {i+1} files present on disk: {expected_files}"
-                    )
-                    state["children_extracted"] = children_extracted
-                    # Clear max_cost_reached AFTER consuming it, so
-                    # subsequent children don't also skip via this path
-                    # (each child's resume credit is one-shot).
-                    state["max_cost_reached"] = False
-                    github_comment_id = save_workflow_state(
-                        cwd, split_id, "split", state, state_dir,
-                        "", "", use_github_state, github_comment_id,
-                    )
+            def _save_child_progress() -> None:
+                nonlocal github_comment_id
+                state["children_extracted"] = children_extracted
+                state["children_extracted_status"] = children_extracted_status
+                state["repair_attempts"] = repair_attempts
+                state["terminal_child_failures"] = terminal_child_failures
+                state["changed_files"] = changed_files
+                state["verify_failures"] = verify_failures
+                state["total_cost"] = total_cost
+                state["model_used"] = model_used
+                github_comment_id = save_workflow_state(
+                    cwd, split_id, "split", state, state_dir,
+                    "", "", use_github_state, github_comment_id,
+                )
+
+            def _return_step6_incomplete() -> Tuple[bool, str, float, str, List[str]]:
+                nonlocal github_comment_id
+                verified_count = sum(
+                    1
+                    for key in _child_state_keys(plan)
+                    if children_extracted_status.get(key) == "verified"
+                )
+                extract_msg = (
+                    f"{verified_count}/{total_children} children verified"
+                    if verified_count < total_children
+                    else "All children verified"
+                )
+                state["step_outputs"]["6"] = extract_msg
+                context["step6_output"] = extract_msg
+                step6_idx = ordered_steps.index("6_extract")
+                if step6_idx > 0:
+                    state["last_completed_step"] = ordered_steps[step6_idx - 1]
+                else:
+                    state["last_completed_step"] = None
+                state["children_extracted_status"] = children_extracted_status
+                state["repair_attempts"] = repair_attempts
+                state["children_extracted"] = children_extracted
+                state["terminal_child_failures"] = terminal_child_failures
+                state["changed_files"] = changed_files
+                state["verify_failures"] = verify_failures
+                state["total_cost"] = total_cost
+                state["model_used"] = model_used
+                github_comment_id = save_workflow_state(
+                    cwd, split_id, "split", state, state_dir,
+                    "", "", use_github_state, github_comment_id,
+                )
+                nonverified_summary = _format_nonverified_children(
+                    plan,
+                    children_extracted_status,
+                    terminal_child_failures,
+                )
+                clear_agentic_progress()
+                _restore_signals()
+                return (
+                    False,
+                    (
+                        f"Step 6 incomplete: {extract_msg}; non-verified "
+                        f"children: {nonverified_summary}"
+                    ),
+                    total_cost,
+                    model_used,
+                    changed_files,
+                )
+
+            _save_child_progress()
+
+            child_state_keys = _child_state_keys(plan)
+            for i, child in enumerate(plan.children):
+                child_key = child_state_keys[i]
+                status = children_extracted_status.get(child_key, "pending")
+                # Skip both terminals (verified=success, failed=budget exhausted).
+                # Non-terminal failures (failed_verify, failed_extract) are
+                # re-attempted on resume to make further progress.
+                if status == "verified":
+                    if terminal_child_failures.pop(child_key, None) is not None:
+                        _save_child_progress()
                     continue
+                if status in CHILD_TERMINAL_STATUSES:
+                    return _return_step6_incomplete()
 
+                child = selected_option.plan.children[i]
+                child_name = child_key
                 if not quiet:
-                    console.print(f"Extracting child {i+1}/{total_children}: {child_name}...")
+                    console.print(
+                        f"Extracting child {i+1}/{total_children}: {child_name}..."
+                    )
                 context["current_child_index"] = i + 1
                 context["current_child"] = child
-                context["delete_dead_this_child"] = (i + 1 == total_children and delete_dead)
+                context["delete_dead_this_child"] = (
+                    i + 1 == total_children and delete_dead
+                )
                 # Expose the full selected_option and children_extracted lists
                 # so the step 6 prompt's template placeholders resolve.
                 context["selected_option"] = json.dumps({
@@ -1499,7 +2117,15 @@ def run_agentic_split_orchestrator(
                     "risk": selected_option.risk,
                     "rationale": selected_option.rationale,
                 }, default=str)
-                context["children_extracted"] = json.dumps(children_extracted, default=str)
+                context["children_extracted"] = json.dumps(
+                    children_extracted,
+                    default=str,
+                )
+                context["children_extracted_status"] = json.dumps(
+                    children_extracted_status,
+                    default=str,
+                )
+                context["repair_attempts"] = json.dumps(repair_attempts, default=str)
 
                 # Attach per-child phase plan (from step 6a). Empty string
                 # when no plan / no-extract — the step 6 prompt treats
@@ -1509,239 +2135,429 @@ def run_agentic_split_orchestrator(
                 else:
                     context["phase_plan"] = ""
 
-                template_name = "agentic_split_step6_extract_LLM"
-                prompt_template = load_prompt_template(template_name)
-                if not prompt_template:
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, f"Missing template: {template_name}", total_cost, model_used, changed_files
-                processed = preprocess(
-                    prompt_template, recursive=True,
-                    double_curly_brackets=True, exclude_keys=list(context.keys()),
-                )
-                formatted_prompt = substitute_template_variables(processed, context)
-                success, output, step_cost, step_model = run_agentic_task(
-                    instruction=formatted_prompt,
-                    cwd=current_work_dir,
-                    verbose=verbose, quiet=quiet,
-                    timeout=SPLIT_STEP_TIMEOUTS["6_extract"] + timeout_adder,
-                    label=f"6_extract_child_{i+1}",
-                    max_retries=DEFAULT_MAX_RETRIES,
-                )
-                total_cost += step_cost
-                model_used = step_model
-
-                # Always check for hard-stop markers (agent may return success=True
-                # with EXTRACTION_BLOCKED embedded in output).
-                stop_reason = _check_hard_stop("6_extract", output, force_split)
-                if stop_reason:
-                    if not quiet:
-                        console.print(f"[red]Extraction blocked for child {i+1}: {stop_reason}[/red]")
-                    state["children_extracted"] = children_extracted
-                    state["changed_files"] = changed_files
-                    state["total_cost"] = total_cost
-                    # Budget check before hard-stop return so a 6_extract
-                    # cost-add that crosses --max-cost flips to a
-                    # resumable max_cost_reached exit instead of a
-                    # non-resumable EXTRACTION_BLOCKED stop.
-                    budget_abort = _check_budget("6_extract")
-                    if budget_abort is not None:
-                        return budget_abort
-                    github_comment_id = save_workflow_state(
-                        cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id,
+                expected_files: List[str] = []
+                if isinstance(child, dict):
+                    for key in (
+                        "code_file", "prompt_file", "example_file", "test_file",
+                        "new_source", "new_prompt", "new_example", "new_test",
+                    ):
+                        value = child.get(key)
+                        if isinstance(value, str) and value:
+                            expected_files.append(value)
+                if (
+                    state.get("max_cost_reached")
+                    and status != "extracted"
+                    and expected_files
+                    and all(
+                        _safe_path_exists(current_work_dir / filename)
+                        for filename in expected_files
                     )
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, f"Stopped: {stop_reason}", total_cost, model_used, changed_files
-
-                if not success:
-                    if not quiet:
-                        console.print(f"[yellow]Warning: extraction failed for child {i+1}[/yellow]")
-
-                # Parse FILES_CREATED / FILES_MODIFIED markers from agent output.
-                # Do NOT add to changed_files yet — wait until we verify the
-                # files actually exist on disk (Bug #4: phantom files).
-                claimed_created: List[str] = []
-                claimed_modified: List[str] = []
-                for marker, bucket in (("FILES_CREATED:", claimed_created),
-                                        ("FILES_MODIFIED:", claimed_modified)):
-                    match = re.search(
-                        rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
-                        output,
-                    )
-                    if match:
-                        files_list = [
-                            f.strip().strip(",").strip("`").strip()
-                            for f in match.group(1).split(",")
-                        ]
-                        for f in files_list:
-                            if f:
-                                bucket.append(f)
-
-                # VERIFY: agent often claims file creation via FILES_CREATED
-                # marker without actually using Write/Edit tools. Check the
-                # filesystem and retry if any claimed-created file is missing.
-                missing = [
-                    f for f in claimed_created
-                    if not _safe_path_exists(current_work_dir / f)
-                ]
-                retry_count = 0
-                max_extract_retries = 2
-                while missing and retry_count < max_extract_retries:
-                    retry_count += 1
+                ):
                     if not quiet:
                         console.print(
-                            f"[yellow]Child {i+1} claimed {len(claimed_created)} files "
-                            f"but {len(missing)} missing. Retry {retry_count}/{max_extract_retries}...[/yellow]"
+                            f"[dim]Child {i+1}/{total_children} ({child_name}): "
+                            "all planned files present on disk — resuming from "
+                            "saved extraction after prior --max-cost abort.[/dim]"
                         )
-                    context["missing_files"] = ", ".join(missing)
-                    context["retry_reason"] = (
-                        f"The agent claimed FILES_CREATED but these files "
-                        f"do not exist on disk: {missing}. "
-                        f"The agent MUST actually write every file using the Write tool."
+                    while len(children_extracted) <= i:
+                        children_extracted.append("")
+                    children_extracted[i] = (
+                        f"RESUMED: child {i+1} files present on disk: "
+                        f"{expected_files}"
                     )
-                    retry_prompt_template = load_prompt_template(template_name)
-                    if retry_prompt_template is None:
-                        if not quiet:
-                            console.print(
-                                f"[red]Retry: could not load template "
-                                f"{template_name}[/red]"
-                            )
-                        break
-                    processed_retry = preprocess(
-                        retry_prompt_template, recursive=True,
+                    terminal_child_failures.pop(child_key, None)
+                    children_extracted_status[child_key] = "extracted"
+                    state["max_cost_reached"] = False
+                    _save_child_progress()
+                    status = "extracted"
+
+                already_extracted = (
+                    status == "extracted"
+                    and i < len(children_extracted)
+                    and bool(children_extracted[i])
+                )
+                output = children_extracted[i] if already_extracted else ""
+                claimed_created: List[str] = []
+                claimed_modified: List[str] = []
+                missing: List[str] = []
+                success = True
+
+                if not already_extracted:
+                    template_name = "agentic_split_step6_extract_LLM"
+                    prompt_template = load_prompt_template(template_name)
+                    if not prompt_template:
+                        clear_agentic_progress()
+                        _restore_signals()
+                        return (
+                            False,
+                            f"Missing template: {template_name}",
+                            total_cost,
+                            model_used,
+                            changed_files,
+                        )
+                    processed = preprocess(
+                        prompt_template, recursive=True,
                         double_curly_brackets=True, exclude_keys=list(context.keys()),
                     )
-                    retry_prompt = substitute_template_variables(processed_retry, context)
-                    retry_prompt += (
-                        "\n\n% RETRY NOTICE — MUST CREATE MISSING FILES\n"
-                        f"A prior extraction attempt claimed FILES_CREATED "
-                        f"but these are missing on disk: {missing}.\n"
-                        "You MUST use the Write tool to actually create each of "
-                        "these files with the correct content. Do not just emit "
-                        "markers — the orchestrator verifies files exist."
-                    )
-                    r_success, r_output, r_cost, r_model = run_agentic_task(
-                        instruction=retry_prompt,
+                    formatted_prompt = substitute_template_variables(processed, context)
+                    success, output, step_cost, step_model = run_agentic_task(
+                        instruction=formatted_prompt,
                         cwd=current_work_dir,
                         verbose=verbose, quiet=quiet,
                         timeout=SPLIT_STEP_TIMEOUTS["6_extract"] + timeout_adder,
-                        label=f"6_extract_child_{i+1}_retry_{retry_count}",
+                        label=f"6_extract_child_{i+1}",
                         max_retries=DEFAULT_MAX_RETRIES,
                     )
-                    total_cost += r_cost
-                    model_used = r_model
-                    output += f"\n---RETRY {retry_count}---\n{r_output}"
-                    # Recompute missing FIRST (before the budget check)
-                    # so a retry that actually created the files credits
-                    # them to changed_files BEFORE any abort. Without
-                    # this ordering, a retry that both created files
-                    # AND crossed --max-cost would abort with files on
-                    # disk but no record in state — resume re-runs the
-                    # child and pays again. (children_extracted append
-                    # still happens once at post-loop, gated by `success
-                    # and not missing`, so no double append.)
+                    total_cost += step_cost
+                    model_used = step_model
+
+                    # Always check for hard-stop markers (agent may return success=True
+                    # with EXTRACTION_BLOCKED embedded in output).
+                    stop_reason = _check_hard_stop("6_extract", output, force_split)
+                    if stop_reason:
+                        if not quiet:
+                            console.print(
+                                f"[red]Extraction blocked for child {i+1}: "
+                                f"{stop_reason}[/red]"
+                            )
+                        children_extracted_status[child_key] = "failed_extract"
+                        _save_child_progress()
+                        clear_agentic_progress()
+                        _restore_signals()
+                        return (
+                            False,
+                            f"Stopped: {stop_reason}",
+                            total_cost,
+                            model_used,
+                            changed_files,
+                        )
+
+                    if not success and not quiet:
+                        console.print(
+                            f"[yellow]Warning: extraction failed for child {i+1}[/yellow]"
+                        )
+
+                    # Parse FILES_CREATED / FILES_MODIFIED markers from agent
+                    # output. Do not add to changed_files until the files exist
+                    # on disk.
+                    claimed_created, claimed_modified = _parse_file_markers(output)
+
                     missing = [
                         f for f in claimed_created
                         if not _safe_path_exists(current_work_dir / f)
                     ]
-                    if not missing:
-                        for f in claimed_created + claimed_modified:
-                            if f and f not in changed_files and _safe_path_exists(current_work_dir / f):
-                                changed_files.append(f)
-                        state["changed_files"] = changed_files
-                    # Budget check INSIDE the retry loop: each retry
-                    # adds another full extract-LLM-call cost, and the
-                    # post-loop check only fires once. Without this,
-                    # 2 retries can push past --max-cost before we abort.
-                    state["total_cost"] = total_cost
-                    # Persist progress so a budget abort here doesn't
-                    # lose the just-completed retry's work. Note:
-                    # children_extracted is NOT touched yet — the post-
-                    # loop block is the single source of truth for that
-                    # to avoid duplicate appends. On a budget abort
-                    # mid-retry, the next strangler/resume invocation
-                    # will see the verified files in changed_files but
-                    # NOT in children_extracted, so it correctly re-
-                    # enters this child's extraction loop. The retry's
-                    # already-created files remain on disk; the loop's
-                    # _safe_path_exists check will detect missing=[]
-                    # immediately and skip directly to the post-loop
-                    # block without paying for another LLM call.
-                    github_comment_id = save_workflow_state(
-                        cwd, split_id, "split", state, state_dir,
-                        "", "", use_github_state, github_comment_id,
-                    )
-                    budget_abort = _check_budget("6_extract")
-                    if budget_abort is not None:
-                        return budget_abort
+                    retry_count = 0
+                    max_extract_retries = 2
+                    while missing and retry_count < max_extract_retries:
+                        retry_count += 1
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Child {i+1} claimed {len(claimed_created)} "
+                                f"files but {len(missing)} missing. Retry "
+                                f"{retry_count}/{max_extract_retries}...[/yellow]"
+                            )
+                        context["missing_files"] = ", ".join(missing)
+                        context["retry_reason"] = (
+                            "The agent claimed FILES_CREATED but these files "
+                            f"do not exist on disk: {missing}. The agent MUST "
+                            "actually write every file using the Write tool."
+                        )
+                        retry_prompt_template = load_prompt_template(template_name)
+                        if retry_prompt_template is None:
+                            if not quiet:
+                                console.print(
+                                    f"[red]Retry: could not load template "
+                                    f"{template_name}[/red]"
+                                )
+                            break
+                        processed_retry = preprocess(
+                            retry_prompt_template, recursive=True,
+                            double_curly_brackets=True,
+                            exclude_keys=list(context.keys()),
+                        )
+                        retry_prompt = substitute_template_variables(
+                            processed_retry,
+                            context,
+                        )
+                        retry_prompt += (
+                            "\n\n% RETRY NOTICE — MUST CREATE MISSING FILES\n"
+                            "A prior extraction attempt claimed FILES_CREATED "
+                            f"but these are missing on disk: {missing}.\n"
+                            "You MUST use the Write tool to actually create each "
+                            "of these files with the correct content. Do not just "
+                            "emit markers — the orchestrator verifies files exist."
+                        )
+                        r_success, r_output, r_cost, r_model = run_agentic_task(
+                            instruction=retry_prompt,
+                            cwd=current_work_dir,
+                            verbose=verbose,
+                            quiet=quiet,
+                            timeout=(
+                                SPLIT_STEP_TIMEOUTS["6_extract"] + timeout_adder
+                            ),
+                            label=f"6_extract_child_{i+1}_retry_{retry_count}",
+                            max_retries=DEFAULT_MAX_RETRIES,
+                        )
+                        total_cost += r_cost
+                        model_used = r_model
+                        success = success or r_success
+                        output += f"\n---RETRY {retry_count}---\n{r_output}"
+                        r_created, r_modified = _parse_file_markers(r_output)
+                        for filename in r_created:
+                            if filename not in claimed_created:
+                                claimed_created.append(filename)
+                        for filename in r_modified:
+                            if filename not in claimed_modified:
+                                claimed_modified.append(filename)
+                        missing = [
+                            f for f in claimed_created
+                            if not _safe_path_exists(current_work_dir / f)
+                        ]
+                        if not missing:
+                            while len(children_extracted) <= i:
+                                children_extracted.append("")
+                            for filename in claimed_created + claimed_modified:
+                                if (
+                                    filename
+                                    and filename not in changed_files
+                                    and _safe_path_exists(current_work_dir / filename)
+                                ):
+                                    changed_files.append(filename)
+                            children_extracted[i] = output
+                            children_extracted_status[child_key] = "extracted"
+                            _save_child_progress()
+                        budget_abort = _check_budget("6_extract")
+                        if budget_abort is not None:
+                            return budget_abort
                 if missing and not quiet:
                     console.print(
                         f"[red]Child {i+1}: {len(missing)} files still missing "
-                        f"after {retry_count} retries[/red]"
+                        "after retries[/red]"
                     )
 
-                # NOW add verified files to changed_files (Bug #4 fix:
-                # only track files that actually exist on disk).
-                for f in claimed_created + claimed_modified:
-                    if f and f not in changed_files and _safe_path_exists(current_work_dir / f):
-                        changed_files.append(f)
+                # Only track files that actually exist on disk.
+                for filename in claimed_created + claimed_modified:
+                    if (
+                        filename
+                        and filename not in changed_files
+                        and _safe_path_exists(current_work_dir / filename)
+                    ):
+                        changed_files.append(filename)
 
-                # Only count as extracted if the agent succeeded and all
-                # claimed files exist. Otherwise on resume we'd skip this
-                # child (the loop starts at len(children_extracted)).
-                if success and not missing:
-                    children_extracted.append(output)
-                elif not missing:
-                    # Agent reported failure but files were created — count it
-                    children_extracted.append(output)
-                else:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Child {i+1} extraction incomplete — "
-                            f"will retry on next run[/yellow]"
-                        )
-                state["children_extracted"] = children_extracted
-                state["changed_files"] = changed_files
-                state["total_cost"] = total_cost
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-                )
-                # Per-child fan-out budget check: after each child's
-                # extract LLM cost (and any retry costs) is added AND the
-                # child is recorded in children_extracted / changed_files.
-                # Without this, a multi-child split can blow past --max-cost
-                # by total_children × per_child_cost in one fan-out before
-                # the next outer-loop check.
+                while len(children_extracted) <= i:
+                    children_extracted.append("")
+
+                if missing:
+                    children_extracted_status[child_key] = "failed_extract"
+                    # Persist the missing-file reason to terminal_child_failures
+                    # so the final HUMAN_REVIEW_REQUIRED summary can surface
+                    # the detail (matches the failed/per-child-verify path).
+                    terminal_child_failures[child_key] = [
+                        f"extraction incomplete: missing {missing}"
+                    ]
+                    _clear_child_failure_markers(verify_failures, child_key)
+                    verify_failures.append(
+                        f"Child {child_key} extraction incomplete: missing {missing}"
+                    )
+                    _save_child_progress()
+                    return _return_step6_incomplete()
+
+                if success:
+                    children_extracted[i] = output
+                elif not children_extracted[i]:
+                    children_extracted[i] = output
+
+                terminal_child_failures.pop(child_key, None)
+                children_extracted_status[child_key] = "extracted"
+                _save_child_progress()
                 budget_abort = _check_budget("6_extract")
                 if budget_abort is not None:
                     return budget_abort
-            extracted_count = len(state.get("children_extracted", []))
+
+                child_failures = _validate_single_child(plan, i, current_work_dir)
+                previous_fixes: List[str] = []
+                while (
+                    child_failures
+                    and repair_attempts.get(child_key, 0) < MAX_CHILD_VERIFY_REPAIR_ATTEMPTS
+                ):
+                    # Persist-before-act (Issue #850 contract):
+                    # increment the per-child attempt counter and mark the
+                    # child as ``failed_verify`` BEFORE the long-running
+                    # repair LLM call. A crash/timeout during the call must
+                    # not lose the consumed attempt — otherwise resume
+                    # could spend the budget over and over.
+                    repair_attempts[child_key] = (
+                        repair_attempts.get(child_key, 0) + 1
+                    )
+                    children_extracted_status[child_key] = "failed_verify"
+                    _save_child_progress()
+                    attempt = repair_attempts[child_key]
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Child {i+1} verify failed; repair "
+                            f"{attempt}/{MAX_CHILD_VERIFY_REPAIR_ATTEMPTS}...[/yellow]"
+                        )
+                    context["child_name"] = child_key
+                    context["child"] = json.dumps(child, default=str, indent=2)
+                    context["verify_failures"] = "\n".join(child_failures)
+                    context["previous_fixes"] = "\n---\n".join(previous_fixes[-3:])
+                    context["repair_iteration"] = attempt
+                    context["max_repair_iterations"] = MAX_CHILD_VERIFY_REPAIR_ATTEMPTS
+
+                    repair_template_name = "agentic_split_step8_repair_LLM"
+                    repair_template = load_prompt_template(repair_template_name)
+                    if not repair_template:
+                        child_failures.append(
+                            f"Missing template: {repair_template_name}"
+                        )
+                        break
+                    processed_repair = preprocess(
+                        repair_template,
+                        recursive=True,
+                        double_curly_brackets=True,
+                        exclude_keys=list(context.keys()),
+                    )
+                    repair_prompt = substitute_template_variables(
+                        processed_repair,
+                        context,
+                    )
+                    repair_prompt += (
+                        "\n\n% PER-CHILD VERIFY FAILURE\n"
+                        f"Repair only child '{child_key}'. The child-scoped "
+                        "validate_extraction gate reported:\n"
+                        + "\n".join(f"- {failure}" for failure in child_failures)
+                    )
+                    r_success, r_output, r_cost, r_model = run_agentic_task(
+                        instruction=repair_prompt,
+                        cwd=current_work_dir,
+                        verbose=verbose, quiet=quiet,
+                        timeout=SPLIT_STEP_TIMEOUTS["8_repair"] + timeout_adder,
+                        label=f"6v_repair_child_{i+1}_attempt_{attempt}",
+                        max_retries=DEFAULT_MAX_RETRIES,
+                    )
+                    total_cost += r_cost
+                    model_used = r_model
+                    previous_fixes.append(r_output)
+
+                    r_created, r_modified = _parse_file_markers(r_output)
+                    for filename in r_created + r_modified:
+                        if (
+                            filename
+                            and filename not in changed_files
+                            and _safe_path_exists(current_work_dir / filename)
+                        ):
+                            changed_files.append(filename)
+
+                    if not r_success:
+                        previous_fixes.append("Repair agent reported failure.")
+                    if _check_hard_stop("8_repair", r_output, force_split):
+                        break
+
+                    child_failures = _validate_single_child(plan, i, current_work_dir)
+                    _save_child_progress()
+                    budget_abort = _check_budget("6_extract")
+                    if budget_abort is not None:
+                        return budget_abort
+
+                # Determine terminal state. ``failed`` (budget exhausted) is
+                # distinct from ``failed_verify`` (still has budget) so resume
+                # can skip exhausted children instead of re-extracting them
+                # forever. See `_first_nonverified_child_index` and
+                # `CHILD_TERMINAL_STATUSES`.
+                if child_failures:
+                    if (
+                        repair_attempts.get(child_key, 0)
+                        >= MAX_CHILD_VERIFY_REPAIR_ATTEMPTS
+                    ):
+                        # Terminal `failed`: drop per-child failure markers
+                        # from verify_failures so the global step-8 repair
+                        # loop doesn't waste its N=5 budget on a failure
+                        # the per-child gate already exhausted N=2 on. The
+                        # improvement-gate downgrade still surfaces this
+                        # to the human via HUMAN_REVIEW_REQUIRED, and the
+                        # ValidationFailure messages are persisted to
+                        # ``terminal_child_failures[child_key]`` so the
+                        # final summary can show the user what broke.
+                        children_extracted_status[child_key] = "failed"
+                        terminal_child_failures[child_key] = list(child_failures)
+                        _clear_child_failure_markers(verify_failures, child_key)
+                        _save_child_progress()
+                        return _return_step6_incomplete()
+                    else:
+                        # Non-terminal: still has budget on next resume.
+                        # Keep the failure marker in verify_failures so the
+                        # current run's step 8 (or the next run's per-child
+                        # gate) can attempt a fix.
+                        children_extracted_status[child_key] = "failed_verify"
+                        _clear_child_failure_markers(verify_failures, child_key)
+                        verify_failures.append(
+                            f"Child {child_key} failed per-child verify: "
+                            + "; ".join(child_failures)
+                        )
+                else:
+                    children_extracted_status[child_key] = "verified"
+                    # Clear any stale failure messages this child contributed
+                    # in earlier attempts so step 7a/8 don't repair against
+                    # already-fixed problems. Mutate in place so the closure
+                    # in _save_child_progress observes the same list object.
+                    _clear_child_failure_markers(verify_failures, child_key)
+                    terminal_child_failures.pop(child_key, None)
+                _save_child_progress()
+                budget_abort = _check_budget("6_extract")
+                if budget_abort is not None:
+                    return budget_abort
+
+            verified_count = sum(
+                1
+                for key in _child_state_keys(plan)
+                if children_extracted_status.get(key) == "verified"
+            )
             extract_msg = (
-                f"{extracted_count}/{total_children} children extracted"
-                if extracted_count < total_children
-                else "All children extracted"
+                f"{verified_count}/{total_children} children verified"
+                if verified_count < total_children
+                else "All children verified"
             )
             state["step_outputs"]["6"] = extract_msg
             context["step6_output"] = extract_msg
+            if verified_count == total_children:
+                verify_failures[:] = [
+                    vf for vf in verify_failures
+                    if not vf.startswith(PARTIAL_EXTRACTION_PREFIX)
+                ]
             # If some children failed, DON'T mark step 6 as complete so
             # resume re-enters this step and retries the failed children.
-            if extracted_count < total_children:
-                step6_idx = ordered_steps.index("6_extract")
-                if step6_idx > 0:
-                    state["last_completed_step"] = ordered_steps[step6_idx - 1]
-                else:
-                    state["last_completed_step"] = None
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-                )
-                verify_failures.append(
-                    f"Partial extraction: {extracted_count}/{total_children} children"
-                )
-                continue
+            if _first_nonverified_child_index(plan, children_extracted_status) is not None:
+                return _return_step6_incomplete()
 
         # ── Repair loop ────────────────────────────────────────────
         elif step == "8_repair":
+            # If any child is in terminal ``failed`` (per-child repair
+            # budget exhausted), the global step-8 repair loop CANNOT
+            # help: it would just re-attempt the same fix the per-child
+            # gate already burned 2 attempts on. Short-circuit so the
+            # global N=5 budget isn't wasted on the same root cause, and
+            # surface to the human via the improvement gate's
+            # HUMAN_REVIEW_REQUIRED downgrade. Drop the per-child failure
+            # markers from verify_failures so the improvement gate /
+            # final summary doesn't double-count them.
+            failed_terminal_children = sorted(
+                key
+                for key, st in (children_extracted_status or {}).items()
+                if st == "failed"
+            )
+            if failed_terminal_children:
+                msg = (
+                    f"Skipped: {len(failed_terminal_children)} child(ren) terminal-failed "
+                    f"({', '.join(failed_terminal_children)}); the global repair loop "
+                    f"cannot recover what the per-child gate gave up on after "
+                    f"{MAX_CHILD_VERIFY_REPAIR_ATTEMPTS} attempts. The improvement gate "
+                    f"will surface HUMAN_REVIEW_REQUIRED."
+                )
+                if not quiet:
+                    console.print(f"[yellow]{msg}[/yellow]")
+                state["step_outputs"]["8"] = msg
+                context["step8_output"] = msg
+                continue
             if not verify_failures:
                 state["step_outputs"]["8"] = "No repairs needed"
                 context["step8_output"] = "No repairs needed"
@@ -1755,6 +2571,14 @@ def run_agentic_split_orchestrator(
                 if not verify_failures:
                     break
                 context["child_name"] = "all_children"
+                context["child"] = json.dumps(
+                    {
+                        "name": "all_children",
+                        "children": selected_option.plan.children,
+                    },
+                    default=str,
+                    indent=2,
+                )
                 context["verify_failures"] = "\n".join(verify_failures)
                 context["previous_fixes"] = "\n---\n".join(previous_fixes[-3:])
                 context["repair_iteration"] = iteration
@@ -1784,19 +2608,14 @@ def run_agentic_split_orchestrator(
                 # Parse FILES_CREATED / FILES_MODIFIED from repair output.
                 # Only track files that actually exist on disk (same guard
                 # as step 6 extraction — prevents phantom entries).
-                for marker in ("FILES_CREATED:", "FILES_MODIFIED:"):
-                    match = re.search(
-                        rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
-                        output,
-                    )
-                    if match:
-                        files_list = [
-                            f.strip().strip(",").strip("`").strip()
-                            for f in match.group(1).split(",")
-                        ]
-                        for f in files_list:
-                            if f and f not in changed_files and _safe_path_exists(current_work_dir / f):
-                                changed_files.append(f)
+                repair_created, repair_modified = _parse_file_markers(output)
+                for filename in repair_created + repair_modified:
+                    if (
+                        filename
+                        and filename not in changed_files
+                        and _safe_path_exists(current_work_dir / filename)
+                    ):
+                        changed_files.append(filename)
 
                 # If repair agent emits REPAIR_EXHAUSTED, stop trying.
                 # Use _check_hard_stop (line-start matching) instead of
@@ -1846,9 +2665,27 @@ def run_agentic_split_orchestrator(
                                 timeout=120,
                             )
                         except subprocess.CalledProcessError as e:
-                            new_failures.append(f"Lint failed: {(e.stderr or '')[:500]}")
+                            new_failures.append(
+                                f"Lint failed: {(e.stderr or '')[:500]}"
+                            )
                         except subprocess.TimeoutExpired:
                             new_failures.append("Lint timed out after 120s")
+
+                    new_failures.extend(
+                        _sync_split_architecture(
+                            target_file,
+                            cwd,
+                            current_work_dir,
+                            changed_files,
+                            quiet,
+                        )
+                    )
+                    new_failures.extend(
+                        _run_split_checkup(
+                            current_work_dir,
+                            SPLIT_STEP_TIMEOUTS["7d_checkup"] + timeout_adder,
+                        )
+                    )
 
                 if not quiet:
                     console.print(
@@ -1870,6 +2707,12 @@ def run_agentic_split_orchestrator(
                 # repair fixes all failures, and the improvement gate aborts
                 # a successful split as ABORT_REGRESSION.
                 quant_metrics["validation_pass"] = 1 if not verify_failures else -1
+                if _worktree_has_architecture_json(current_work_dir):
+                    quant_metrics["checkup_pass"] = (
+                        -1
+                        if any(f.startswith("CHECKUP_FAILURE") for f in verify_failures)
+                        else 1
+                    )
 
                 # Persist state after each iteration
                 state["verify_failures"] = verify_failures
@@ -2065,76 +2908,31 @@ def run_agentic_split_orchestrator(
                             verify_failures.append(f"Regen gate timed out for {basename}")
 
             elif step == "7c_arch_sync":
-                # Scope arch sync to the target file's directory tree. The
-                # sync_all_prompts_to_architecture function scans the entire
-                # prompts_dir recursively; if run on the project root it will
-                # also try to sync unrelated prompts (e.g. CRM, frontend) that
-                # aren't part of this split and may have broken references.
-                # Find the prompts dir closest to the target file.
-                target_abs = (Path(target_file)
-                              if Path(target_file).is_absolute()
-                              else cwd / target_file)
-                prompts_dir: Optional[Path] = None
-                # Walk up from target file's dir looking for a sibling prompts/
-                candidate = target_abs.parent
-                for _ in range(8):
-                    for p_name in ("prompts", "prompts/src"):
-                        maybe = candidate / p_name
-                        if maybe.is_dir():
-                            prompts_dir = maybe
-                            break
-                    if prompts_dir is not None:
-                        break
-                    if candidate.parent == candidate:
-                        break
-                    candidate = candidate.parent
-                # Similarly find an architecture.json near the target
-                architecture_path: Optional[Path] = None
-                candidate = target_abs.parent
-                for _ in range(8):
-                    maybe = candidate / "architecture.json"
-                    if maybe.is_file():
-                        architecture_path = maybe
-                        break
-                    if candidate.parent == candidate:
-                        break
-                    candidate = candidate.parent
-                if prompts_dir is None or architecture_path is None:
+                arch_sync_failures = _sync_split_architecture(
+                    target_file,
+                    cwd,
+                    current_work_dir,
+                    changed_files,
+                    quiet,
+                )
+                verify_failures.extend(arch_sync_failures)
+
+            elif step == "7d_checkup":
+                if no_verify:
                     if not quiet:
-                        console.print(
-                            "[yellow]Skipping arch sync — no prompts/ or "
-                            "architecture.json found near target[/yellow]"
-                        )
+                        console.print("[yellow]Skipping checkup (no_verify flag)[/yellow]")
                 else:
-                    try:
-                        sync_result = sync_all_prompts_to_architecture(
-                            prompts_dir, architecture_path, dry_run=False
-                        )
-                        if not sync_result.get("success", False):
-                            errors = sync_result.get("errors", [])
-                            # Filter out errors for unrelated prompts that
-                            # existed before this split (we only care about
-                            # prompts we created/modified).
-                            # changed_files has source paths (e.g. pdd/foo.py)
-                            # while errors reference .prompt paths — match on
-                            # basenames (stems) so e.g. "foo" matches both
-                            # "pdd/foo.py" and "prompts/foo.prompt".
-                            own_stems = {
-                                Path(f).stem for f in changed_files
-                            }
-                            relevant_errors = [
-                                e for e in errors
-                                if any(stem in str(e) for stem in own_stems)
-                            ]
-                            if relevant_errors:
-                                verify_failures.append(
-                                    f"Arch sync failed: {relevant_errors}"
-                                )
-                    except Exception as exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Arch sync errored (non-fatal): {exc}[/yellow]"
-                            )
+                    checkup_failures = _run_split_checkup(
+                        current_work_dir,
+                        SPLIT_STEP_TIMEOUTS["7d_checkup"] + timeout_adder,
+                    )
+                    if checkup_failures:
+                        for failure in checkup_failures:
+                            if failure not in verify_failures:
+                                verify_failures.append(failure)
+                        quant_metrics["checkup_pass"] = -1
+                    elif _worktree_has_architecture_json(current_work_dir):
+                        quant_metrics["checkup_pass"] = 1
 
         # Persist state after every step
         state["last_completed_step"] = step
@@ -2144,6 +2942,8 @@ def run_agentic_split_orchestrator(
         state["verify_failures"] = verify_failures
         state["quant_metrics"] = quant_metrics
         state["phase_plans"] = phase_plans
+        state["children_extracted_status"] = children_extracted_status
+        state["repair_attempts"] = repair_attempts
         state["intent"] = current_intent
         state["iteration_count"] = iteration_count
         github_comment_id = save_workflow_state(
@@ -2438,6 +3238,65 @@ def run_agentic_split_orchestrator(
             rationale="Defaulted: pipeline completed but no assessment parsed",
         )
     decision = _apply_improvement_gate(quant_metrics, qual_assess)
+
+    # A child stuck in terminal ``failed`` (per-child verify budget exhausted)
+    # MUST NOT auto-ship — even if the cross-cutting metrics + qualitative
+    # assessment came back clean (e.g., because step 7a's full-plan validate
+    # didn't catch what the per-child gate flagged, or the failed child's
+    # stale verify_failures got cleared). Surface the failed children and
+    # downgrade AUTO_SHIP / AUTO_SHIP_WARNING to HUMAN_REVIEW_REQUIRED so
+    # the user must inspect before merging. ABORT decisions are preserved
+    # as-is — already terminal.
+    # Block AUTO_SHIP for ANY child that didn't finish at terminal
+    # ``verified``. ``failed`` (per-child repair budget exhausted),
+    # ``failed_extract`` (file-existence retries exhausted), and any
+    # other non-verified status (``pending``, ``extracted``,
+    # ``failed_verify`` if the run somehow reached the gate without
+    # resolving them) all indicate the split is incomplete and the user
+    # must inspect before merging.
+    non_verified_children = sorted(
+        (key, status)
+        for key, status in (children_extracted_status or {}).items()
+        if status != "verified"
+    )
+    if non_verified_children and "ABORT" not in decision:
+        original_decision = decision
+        # Build a per-child reason summary including status. For terminal
+        # ``failed`` (and any other status with persisted detail) include
+        # the validate_extraction messages so the user sees not just
+        # *which* child failed but *why*.
+        reason_parts: List[str] = []
+        for key, status in non_verified_children:
+            msgs = (terminal_child_failures or {}).get(key) or []
+            if msgs:
+                joined = "; ".join(msgs)
+                # Cap each child's reason text so the final message stays
+                # readable when many children fail. Full detail remains
+                # in state['terminal_child_failures'] for the user to
+                # inspect.
+                if len(joined) > 240:
+                    joined = joined[:237] + "..."
+                reason_parts.append(f"{key}={status} ({joined})")
+            else:
+                reason_parts.append(f"{key}={status}")
+        decision = (
+            f"HUMAN_REVIEW_REQUIRED — child(ren) did not reach verified: "
+            f"{', '.join(reason_parts)} "
+            f"(was: {original_decision}; per-child failure detail in "
+            f"state['terminal_child_failures'], full status map in "
+            f"state['children_extracted_status'])"
+        )
+        if not quiet:
+            statuses_str = ", ".join(f"{k}={s}" for k, s in non_verified_children)
+            console.print(
+                f"[yellow]Non-verified child(ren): {statuses_str}. "
+                f"Downgrading {original_decision} -> HUMAN_REVIEW_REQUIRED.[/yellow]"
+            )
+            for key, _status in non_verified_children:
+                msgs = (terminal_child_failures or {}).get(key) or []
+                for msg in msgs:
+                    console.print(f"[yellow]  • {key}: {msg}[/yellow]")
+
     if "ABORT" in decision:
         clear_agentic_progress()
         _restore_signals()

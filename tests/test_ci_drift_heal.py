@@ -286,8 +286,8 @@ class TestDetectDriftWithDiffBase:
         assert prompt_drifts[0].code_path == "pdd/auth.py"
         assert len(example_drifts) == 0
 
-    def test_prompt_also_changed_stays_as_example(self):
-        """When both code and prompt changed, stays as example drift."""
+    def test_auto_deps_with_code_and_prompt_changed_reclassified_as_example(self):
+        """When both code and prompt changed, clean-CI auto-deps drift is example-only."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
         files, infer, sync = self._setup_mocks({"auth": decision})
         # Git reports prompt files via their canonical path (`pdd/prompts/...`)
@@ -305,6 +305,9 @@ class TestDetectDriftWithDiffBase:
 
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
+        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].prompt_path == "prompts/auth_python.prompt"
+        assert example_drifts[0].code_path == "pdd/auth.py"
 
     def test_no_diff_base_skips_reclassification(self):
         """Without diff_base, no git-based reclassification occurs."""
@@ -408,7 +411,7 @@ class TestDetectDriftWithDiffBase:
         assert len(example_drifts) == 0
 
     def test_only_prompt_changed_stays_as_example(self):
-        """When only prompt changed (not code), stays as example drift."""
+        """Prompt-only clean-CI auto-deps drift should not rewrite the prompt."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
         files, infer, sync = self._setup_mocks({"auth": decision})
         changed_files = {"pdd/prompts/auth_python.prompt"}
@@ -423,6 +426,9 @@ class TestDetectDriftWithDiffBase:
 
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 1
+        assert example_drifts[0].operation == "example"
+        assert example_drifts[0].prompt_path == "prompts/auth_python.prompt"
+        assert example_drifts[0].code_path == "pdd/auth.py"
 
     def test_git_changed_files_called_once(self):
         """_get_git_changed_files is called once, not per-module."""
@@ -792,6 +798,61 @@ class TestHealModule:
 
         assert result is None
         mock_run.assert_not_called()
+
+    def test_review_only_example_drift_can_be_skipped_when_existing(self, tmp_path):
+        """Git-reclassified PR example drift can skip reviewed existing examples."""
+        existing_example = tmp_path / "agentic_split_example.py"
+        existing_example.write_text("print('reviewed')", encoding="utf-8")
+        drift = DriftInfo(
+            "agentic_split",
+            "python",
+            "example",
+            "Prompt changed without code changes; refresh or review example",
+            code_path="/repo/agentic_split.py",
+            prompt_path="/repo/prompts/agentic_split_python.prompt",
+            example_path=str(existing_example),
+        )
+        env = {
+            **self._make_env(),
+            "PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT": "1",
+        }
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, env)
+
+        assert result is None
+        mock_run.assert_not_called()
+
+    def test_review_only_example_drift_missing_example_still_runs(self):
+        """Missing examples are still healed even for review-only drift."""
+        drift = DriftInfo(
+            "agentic_split",
+            "python",
+            "example",
+            "Prompt changed without code changes; refresh or review example",
+            code_path="/repo/agentic_split.py",
+            prompt_path="/repo/prompts/agentic_split_python.prompt",
+            example_path="/repo/context/agentic_split_example.py",
+        )
+        env = {
+            **self._make_env(),
+            "PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT": "1",
+        }
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, env)
+
+        assert result is True
+        assert mock_run.call_args[0][0] == [
+            "pdd",
+            "--force",
+            "--strength",
+            "0.5",
+            "example",
+            "/repo/prompts/agentic_split_python.prompt",
+            "/repo/agentic_split.py",
+        ]
 
     def test_verify_drift_runs_pdd_sync_to_preserve_semantics(self):
         """operation=='verify' (user-edited example needs validation) must NOT run pdd example.

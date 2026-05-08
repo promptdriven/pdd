@@ -2,13 +2,33 @@
 
 <pdd-dependency>agentic_split_orchestrator_python.prompt</pdd-dependency>
 
-% Step 7 verification failed. You're being asked to fix the issues so
-the verify step passes on the next iteration. This is repair iteration
-{repair_iteration} of {max_repair_iterations} for child {child_name}.
+% Verification failed. You're being asked to fix the issues so the next
+verify pass succeeds. This is repair iteration {repair_iteration} of
+{max_repair_iterations} for child {child_name}.
+
+% Repair Context
+
+The split orchestrator runs this repair prompt in two distinct contexts.
+Read which one you're in from `{max_repair_iterations}`:
+
+- **Per-child gate (6v) repair (max_repair_iterations == 2):** The
+  failures came from `split_validation.validate_extraction()` filtered
+  to THIS child's files only — siblings haven't been gated yet, so
+  `failures` does not include cross-child issues. Apply minimum fixes
+  scoped to this child. If the budget is exhausted, the orchestrator
+  marks the child `failed` in state, persists terminal failure detail,
+  and stops the run at Step 6 before final gates — emit
+  `REPAIR_EXHAUSTED` rather than guessing at structural fixes.
+- **Final cross-cutting (7a) repair (max_repair_iterations == 5):** The
+  failures came from the whole-plan validator and/or
+  `pdd checkup --validate-arch-includes --project-root <worktree>`
+  and may reference any child or cross-child interactions (circular
+  imports between siblings, architecture↔include drift surfaced only
+  at full-package scope, etc.). Treat the whole worktree as in-scope.
 
 % Inputs
 - target_file: {target_file}
-- child: {child}
+- child_payload: {child}
 - verification_failures: {verify_failures}
   (Structured list of failed gates with their error messages.)
 - previous_fixes_for_this_child: {previous_fixes}
@@ -67,6 +87,18 @@ Read the verification failures carefully. They will be one or more of:
   means the extraction was architecturally wrong, not just buggy.
   Emit `REPAIR_EXHAUSTED` — this child's extraction should be reverted
   and a different option chosen.
+- **CHECKUP_FAILURE (`pdd checkup --validate-arch-includes` reported drift)**:
+  only surfaces in the final cross-cutting (7a) repair context. The
+  new package shipped with architecture↔include drift that file-level
+  checks didn't catch — typically an `architecture.json` entry that
+  declares a dependency on a module whose prompt isn't actually
+  `<include>`'d (or vice versa), or a child prompt whose `<include>`
+  graph doesn't match its arch entry's declared dependencies. Fix:
+  read the checkup report's specific module references, then either
+  update the prompt's `<include>` / `<pdd-dependency>` graph to match
+  the arch declaration, or update the arch entry's dependencies to
+  match the prompt's actual includes. Do NOT silently rewrite the
+  checkup output to claim success.
 
 Apply the MINIMUM fix that resolves the failure. Do NOT reshuffle
 code, do NOT change signatures, do NOT introduce new abstractions.

@@ -143,7 +143,7 @@
 %     `prd*.md`, `spec*.md`, or `*_prd.md` / `*_spec.md`) at that directory.
 %   - Tier C (git): a directory containing `.git`.
 % - Walk parents from `start` upward. At each directory, check Tier A/B first
-%   (unless it is `Path.home()`), then Tier C. Return the first matching
+%   (unless it is `Path.home()` or a temp root such as `Path(tempfile.gettempdir())`, `$TMPDIR`, or `/tmp`), then Tier C. Return the first matching
 %   boundary. This lets a nested PDD marker beat an enclosing outer `.git`, but
 %   prevents an enclosing outer PDD marker from overriding a nearer inner git
 %   repository. If no boundary is found, return `start.resolve()`.
@@ -151,6 +151,10 @@
 %   user-global config installed by `pdd setup`, not project markers. Without this
 %   guard, any repo under `$HOME` lacking a closer PDD marker would resolve to
 %   `$HOME` itself. The Tier C `.git` check is unaffected.
+% - **Skip system temp roots for the PDD-marker check.** CI/test runners may
+%   create shared `.pdd` cache/config under `/tmp`, `$TMPDIR`, or the platform
+%   temp root; those ambient markers must not make unrelated pytest temp
+%   children resolve to a temp root. The Tier C `.git` check is unaffected.
 % - Limit to 20 parent traversals.
 % - This guarantees that a self-contained pdd project nested inside an unrelated
 %   outer git repo is correctly identified as its own project root, while a
