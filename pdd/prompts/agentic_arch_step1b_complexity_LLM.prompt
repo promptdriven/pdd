@@ -195,5 +195,9 @@ To override and generate as a single project, use:
 - When in doubt, lean toward MANAGEABLE — let Step 5b catch any coverage gaps
 - Always output `COMPLEXITY_RESULT: MANAGEABLE` or `COMPLEXITY_RESULT: COMPLEX`
 - If COMPLEX: MUST create sub-issues and post summary comment before outputting
-- Sub-issues should be self-contained enough to generate independently
+- Splitting is a last resort. Keep one issue when the work is a tightly coupled workflow or primarily changes one established module.
+- A split is valid only when every child sub-issue is independently implementable and independently verifiable.
+- Create 2 sub-issues by default; create 3 only when there are genuinely separate product or workflow ownership areas. Never create more than 3.
+- Do NOT create prompt-only, architecture-only, test-only, or review-only sub-issues. Split by independently shippable behavior, not by workflow phase.
+- Preserve one parent-level acceptance test/checklist that verifies the combined end-to-end behavior after all children are complete.
 - Each sub-issue should reference the parent issue number
