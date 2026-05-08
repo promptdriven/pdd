@@ -940,6 +940,7 @@ def sync_main(
                 if not _one_session_skipped:
                     # Phase 1: Run pdd generate to create the code file
                     pre_cost = 0.0
+                    pre_model = ""
                     if not pdd_files["code"].exists() or force:
                         from .code_generator_main import (
                             code_generator_main,
@@ -981,9 +982,14 @@ def sync_main(
                                     last_exc = None
                                     break
                                 except ArchitectureConformanceError as exc:
-                                    # Accumulate cost from prior attempt is not
-                                    # available because the exception aborts
-                                    # before return; retry with directive set.
+                                    attempt_cost = float(
+                                        getattr(exc, "total_cost", 0.0) or 0.0
+                                    )
+                                    pre_cost += attempt_cost
+                                    exc.total_cost = pre_cost
+                                    exc_model = getattr(exc, "model_name", "") or ""
+                                    if exc_model and exc_model != "unknown":
+                                        pre_model = exc_model
                                     new_missing = tuple(
                                         sorted(set(exc.missing_symbols))
                                     )
@@ -997,6 +1003,11 @@ def sync_main(
                                     last_missing = new_missing
                                     last_exc = exc
                                     if _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                        break
+                                    if (
+                                        remaining_budget is not None
+                                        and pre_cost >= remaining_budget
+                                    ):
                                         break
                                     if not quiet:
                                         rprint(
@@ -1022,7 +1033,8 @@ def sync_main(
                             else:
                                 _os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
                         # code_generator_main returns (content, was_incremental, cost, model)
-                        pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                        pre_cost += gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                        pre_model = gen_result[3] if gen_result and len(gen_result) > 3 else pre_model
                     elif not quiet:
                         rprint("[dim]Code file exists, skipping generate.[/dim]")
 
@@ -1043,7 +1055,7 @@ def sync_main(
                             pdd_files=pdd_files,
                             project_root=Path.cwd(),
                             target_coverage=final_target_coverage,
-                            budget=remaining_budget,
+                            budget=max(remaining_budget - pre_cost, 0.0),
                             verbose=verbose,
                             quiet=quiet,
                         )
@@ -1057,7 +1069,7 @@ def sync_main(
                             save_fingerprint(
                                 basename, resolved_language, "fix",
                                 pdd_files, one_session_result.get("total_cost", 0.0),
-                                one_session_result.get("model_name", "unknown"),
+                                one_session_result.get("model_name", "unknown") or pre_model or "unknown",
                             )
 
                         # Post-sync: auto-submit example to cloud on success
@@ -1126,8 +1138,21 @@ def sync_main(
                 rprint(f"[bold red]An unexpected error occurred during sync for '{lang}':[/bold red] {e}")
                 if verbose:
                     console.print_exception(show_locals=True)
+            exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)
+            exc_model = getattr(e, "model_name", "") or ""
+            if exc_cost:
+                total_cost += exc_cost
+                if remaining_budget is not None:
+                    remaining_budget -= exc_cost
+            if exc_model and exc_model != "unknown":
+                primary_model = exc_model
             overall_success = False
-            aggregated_results["results_by_language"][lang] = {"success": False, "error": str(e)}
+            aggregated_results["results_by_language"][lang] = {
+                "success": False,
+                "error": str(e),
+                "total_cost": exc_cost,
+                "model_name": exc_model,
+            }
 
     # 7. Final Summary Report
     if not quiet:

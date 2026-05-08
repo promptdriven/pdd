@@ -2217,6 +2217,8 @@ def sync_orchestration(
                                 try:
                                     last_conform_exc: Optional[ArchitectureConformanceError] = None
                                     last_conform_missing: Optional[tuple] = None
+                                    conformance_failed_cost = 0.0
+                                    conformance_failed_model = ""
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                         try:
                                             # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
@@ -2224,6 +2226,12 @@ def sync_orchestration(
                                             last_conform_exc = None
                                             break
                                         except ArchitectureConformanceError as _conform_exc:
+                                            attempt_cost = float(getattr(_conform_exc, "total_cost", 0.0) or 0.0)
+                                            conformance_failed_cost += attempt_cost
+                                            _conform_exc.total_cost = conformance_failed_cost
+                                            exc_model = getattr(_conform_exc, "model_name", "") or ""
+                                            if exc_model and exc_model != "unknown":
+                                                conformance_failed_model = exc_model
                                             new_missing = tuple(sorted(set(_conform_exc.missing_symbols)))
                                             if last_conform_missing is not None and new_missing == last_conform_missing:
                                                 last_conform_exc = _conform_exc
@@ -2231,6 +2239,8 @@ def sync_orchestration(
                                             last_conform_missing = new_missing
                                             last_conform_exc = _conform_exc
                                             if _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                                break
+                                            if conformance_failed_cost >= max(budget - current_cost_ref[0], 0.0):
                                                 break
                                             os.environ["PDD_REPAIR_DIRECTIVE"] = _conform_exc.repair_directive
                                     if last_conform_exc is not None:
@@ -2246,6 +2256,13 @@ def sync_orchestration(
                                         )
                                         print(hard_block, file=sys.stderr)
                                         raise last_conform_exc
+                                    if conformance_failed_cost and isinstance(result, tuple) and len(result) >= 4:
+                                        result = (
+                                            result[0],
+                                            result[1],
+                                            float(result[2] or 0.0) + conformance_failed_cost,
+                                            result[3] or conformance_failed_model or "unknown",
+                                        )
                                 finally:
                                     if _prev_repair is None:
                                         os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
@@ -2674,6 +2691,15 @@ def sync_orchestration(
                                 operation_rollback.restore()
                             error_msg = str(e) if str(e) else type(e).__name__
                             errors.append(f"Exception during '{operation}': {error_msg}")
+                            exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)
+                            exc_model = getattr(e, "model_name", "") or "unknown"
+                            if exc_cost:
+                                current_cost_ref[0] += exc_cost
+                                result = {
+                                    "success": False,
+                                    "cost": exc_cost,
+                                    "model": exc_model,
+                                }
                             success = False
                     
                         # Log update

@@ -2165,6 +2165,61 @@ def test_full_gen_local_includes_architecture_repair_directive(
     assert "</architecture_repair_directive>" in called_prompt
 
 
+def test_conformance_error_from_codegen_carries_generation_cost(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    monkeypatch,
+    mock_env_vars,
+):
+    """Failed conformance after generation must still expose spent cost/model."""
+    from pdd.code_generator_main import ArchitectureConformanceError
+
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+    mock_ctx.obj["local"] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "costed_python.prompt"
+    create_file(prompt_file_path, "Generate a costed module.")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "costed.py")
+    (temp_dir_setup["tmp_path"] / "architecture.json").write_text(json.dumps([
+        {
+            "filename": "costed_python.prompt",
+            "filepath": "output/costed.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {"name": "required_export", "signature": "def required_export()"},
+                    ]
+                },
+            },
+        }
+    ]))
+    mock_local_generator_fixture.return_value = (
+        "def other_export():\n    return None\n",
+        0.123,
+        "mock-cost-model",
+    )
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate a costed module."},
+        {"output": output_file_path_str},
+        "python",
+    )
+
+    with pytest.raises(ArchitectureConformanceError) as excinfo:
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            output_file_path_str,
+            None,
+            False,
+        )
+
+    assert excinfo.value.total_cost == pytest.approx(0.123)
+    assert excinfo.value.model_name == "mock-cost-model"
+
+
 def test_full_gen_local_with_unit_test_and_front_matter_conflict(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
 ):
@@ -4989,6 +5044,8 @@ class TestArchitectureConformanceErrorTypedException:
             expected_symbols=["a", "b"],
             found_symbols=["a"],
             missing_symbols=["b"],
+            total_cost=0.42,
+            model_name="cost-model",
         )
         assert exc.prompt_name == "x_Python.prompt"
         assert exc.output_path == "src/x.py"
@@ -4996,6 +5053,8 @@ class TestArchitectureConformanceErrorTypedException:
         assert exc.expected_symbols == ["a", "b"]
         assert exc.found_symbols == ["a"]
         assert exc.missing_symbols == ["b"]
+        assert exc.total_cost == pytest.approx(0.42)
+        assert exc.model_name == "cost-model"
         # repair_directive computable from fields.
         assert "- b" in exc.repair_directive
         assert "Do not modify architecture.json. Do not remove existing valid exports." in exc.repair_directive

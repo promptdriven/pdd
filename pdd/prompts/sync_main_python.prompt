@@ -1,5 +1,6 @@
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
-
+<pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 # sync_main_python.prompt
 
 % You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
@@ -87,9 +88,9 @@
     - Use `get_pdd_file_paths()` from `sync_determine_operation` to resolve module file paths
     - **Fingerprint check**: If not force mode, call `sync_determine_operation()` to check if module is already synced; skip if operation is "nothing"
     - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`. Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc` `generate_output_path`), not an explicit user `--output` flag, so front-matter `output:` should still take precedence over the .pddrc default.
-    - **Architecture-conformance retry (#866)**: Wrap the `code_generator_main()` call in a retry loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). On `ArchitectureConformanceError` (raised from `code_generator_main`), set the `PDD_REPAIR_DIRECTIVE` env var to `exc.repair_directive` and retry. Track the missing-symbol set across attempts; if the next attempt fails with the **identical** missing-symbol set, abort the loop (no progress) instead of looping forever. After every attempt, restore the previous value of `PDD_REPAIR_DIRECTIVE` (pop it if it was unset before) in a `finally` so the env never leaks. When the loop exhausts, call `build_conformance_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner` and `print()` the structured block to **stderr** (this includes `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint), then re-raise `last_exc` so the existing CLI error path runs. This keeps the plain `pdd sync <module>` diagnostic in parity with `agentic_sync_runner.py` and matches the `sync_orchestration` `generate` operation. Do **not** drop or simplify this loop when regenerating: it is the source-of-truth contract for #865/#866.
+    - **Architecture-conformance retry (#866)**: Wrap the `code_generator_main()` call in a retry loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). On `ArchitectureConformanceError` (raised from `code_generator_main`), add `exc.total_cost` to `pre_cost`, remember `exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only if budget remains. Track the missing-symbol set across attempts; if the next attempt fails with the **identical** missing-symbol set, abort the loop (no progress) instead of looping forever. After every attempt, restore the previous value of `PDD_REPAIR_DIRECTIVE` (pop it if it was unset before) in a `finally` so the env never leaks. When the loop exhausts, set `last_exc.total_cost` to the accumulated failed-attempt cost, call `build_conformance_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner`, and `print()` the structured block to **stderr** (this includes `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint), then re-raise `last_exc` so the existing CLI error path runs. This keeps the plain `pdd sync <module>` diagnostic in parity with `agentic_sync_runner.py` and matches the `sync_orchestration` `generate` operation. Do **not** drop or simplify this loop when regenerating: it is the source-of-truth contract for #865/#866.
     - **Phase 2 (One-session sync)**: Call `run_one_session_sync()` from `one_session_sync` to run example/crash/verify/test in a single agent session
-    - Merge costs: add `pre_cost` to the one-session result's `total_cost`
+    - Merge costs: add `pre_cost` (including failed conformance attempts and the final successful generate attempt) to the one-session result's `total_cost`; pass only `remaining_budget - pre_cost` into the one-session phase.
     - If code generation fails (code file still missing), return failure without proceeding to one-session
     - **Post-sync**: Save fingerprint via `save_fingerprint()` so next sync sees files as up-to-date
     - **Auto-submit**: On success and not local mode, call `_auto_submit_example()` to submit the example to PDD Cloud
@@ -203,6 +204,12 @@
 <pdd.auth_service>
     <include select="def:get_jwt_token,def:get_cached_jwt">context/auth_service_example.py</include>
 </pdd.auth_service>
+<pdd.code_generator_main>
+    <include select="class:ArchitectureConformanceError,def:code_generator_main">pdd/code_generator_main.py</include>
+</pdd.code_generator_main>
+<pdd.agentic_sync_runner>
+    <include select="def:build_conformance_hard_failure_from_error">pdd/agentic_sync_runner.py</include>
+</pdd.agentic_sync_runner>
 
 % CLI command documentation:
 <cli_command_readme>

@@ -56,6 +56,8 @@ class ArchitectureConformanceError(click.UsageError):
         found_symbols: List[str],
         missing_symbols: List[str],
         message: Optional[str] = None,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
     ) -> None:
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
@@ -63,6 +65,8 @@ class ArchitectureConformanceError(click.UsageError):
         self.expected_symbols = list(expected_symbols)
         self.found_symbols = list(found_symbols)
         self.missing_symbols = list(missing_symbols)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
         if message is None:
             output_display = self.output_path or "<unknown>"
             message = (
@@ -1628,6 +1632,10 @@ def code_generator_main(
                         verbose=verbose,
                         output_path=output_path,
                     )
+                except ArchitectureConformanceError as conform_err:
+                    conform_err.total_cost = float(total_cost or 0.0)
+                    conform_err.model_name = model_name or "unknown"
+                    raise  # Re-raise conformance errors as hard failures
                 except click.UsageError:
                     raise  # Re-raise conformance errors as hard failures
                 except Exception as conform_err:

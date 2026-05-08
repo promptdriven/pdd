@@ -178,6 +178,84 @@ def test_happy_path_full_sync(orchestration_fixture):
     mock_sync_app = orchestration_fixture['SyncApp']
     mock_sync_app.assert_called_once()
 
+
+def test_generate_conformance_retry_cost_is_counted(orchestration_fixture):
+    """Conformance retry cost must be included in orchestration totals/logs."""
+    from pdd.code_generator_main import ArchitectureConformanceError
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+
+    def fake_codegen(*_args, **_kwargs):
+        if orchestration_fixture['code_generator_main'].call_count == 1:
+            raise ArchitectureConformanceError(
+                prompt_name="calculator_python.prompt",
+                output_path=str(code_path),
+                architecture_entry={"filename": "calculator_python.prompt"},
+                expected_symbols=["Calculator.run"],
+                found_symbols=["Calculator"],
+                missing_symbols=["Calculator.run"],
+                total_cost=0.20,
+                model_name="failed-model",
+            )
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("class Calculator:\n    def run(self):\n        return None\n")
+        return ("class Calculator:\n    pass\n", False, 0.30, "fixed-model")
+
+    orchestration_fixture['code_generator_main'].side_effect = fake_codegen
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    assert result['success'] is True
+    assert result['total_cost'] == pytest.approx(0.50)
+    orchestration_fixture['_save_fingerprint_atomic'].assert_any_call(
+        "calculator", "python", "generate", ANY, pytest.approx(0.50), "fixed-model",
+        atomic_state=ANY, include_deps_override=ANY,
+    )
+
+
+def test_generate_conformance_hard_failure_cost_is_counted(orchestration_fixture):
+    """Even a final conformance failure should report incurred generation cost."""
+    from pdd.code_generator_main import ArchitectureConformanceError
+
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+
+    def make_error(cost):
+        return ArchitectureConformanceError(
+            prompt_name="calculator_python.prompt",
+            output_path=str(code_path),
+            architecture_entry={"filename": "calculator_python.prompt"},
+            expected_symbols=["Calculator.run"],
+            found_symbols=["Calculator"],
+            missing_symbols=["Calculator.run"],
+            total_cost=cost,
+            model_name="failed-model",
+        )
+
+    orchestration_fixture['code_generator_main'].side_effect = [
+        make_error(0.20),
+        make_error(0.30),
+    ]
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    assert result['success'] is False
+    assert result['total_cost'] == pytest.approx(0.50)
+    from pdd.operation_log import load_operation_log
+    generate_entries = [
+        entry for entry in load_operation_log("calculator", "python")
+        if entry.get("operation") == "generate"
+    ]
+    assert generate_entries[-1]["actual_cost"] == pytest.approx(0.50)
+
 def test_sync_stops_on_operation_failure(orchestration_fixture):
     """
     Ensures the workflow halts immediately if any step fails.

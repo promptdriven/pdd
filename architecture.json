@@ -1866,7 +1866,7 @@
   },
   {
     "reason": "CLI entry point for the code generator command.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output.",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name, and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions.",
     "dependencies": [
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
@@ -1906,7 +1906,7 @@
           },
           {
             "name": "ArchitectureConformanceError",
-            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str])",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = 'unknown')",
             "returns": "ArchitectureConformanceError"
           }
         ]
@@ -2671,8 +2671,11 @@
   },
   {
     "reason": "Coordinates sync workflow steps and state management.",
-    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
-    "dependencies": [],
+    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, stops early on repeated missing-symbol sets, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits build_conformance_hard_failure_from_error diagnostics before re-raising a final conformance failure.",
+    "dependencies": [
+      "code_generator_main_python.prompt",
+      "agentic_sync_runner_python.prompt"
+    ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
     "filepath": "pdd/sync_orchestration.py",
@@ -5140,9 +5143,11 @@
   },
   {
     "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
-    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
+    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits repeated missing-symbol sets, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error diagnostics before re-raising a final conformance failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
     "dependencies": [
-      "core/cloud_python.prompt"
+      "core/cloud_python.prompt",
+      "code_generator_main_python.prompt",
+      "agentic_sync_runner_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -7201,7 +7206,7 @@
   },
   {
     "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects architecture-conformance failures from per-module sync subprocesses (line prefix 'Architecture conformance error for ') and retries the same module up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact missing symbols; short-circuits when the missing-symbol set repeats, and on hard failure records a structured '=== architecture conformance failure ===' block plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable.",
+    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects architecture-conformance failures from per-module sync subprocesses (line prefix 'Architecture conformance error for ') and retries the same module up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact missing symbols; stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the missing-symbol set repeats, and on hard failure records a structured '=== architecture conformance failure ===' block plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
@@ -7224,7 +7229,7 @@
             "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
             "returns": "AsyncSyncRunner",
             "sideEffects": [
-              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child remaining-budget caps"
+              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps"
             ]
           },
           {
