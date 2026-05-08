@@ -7864,7 +7864,7 @@
         "functions": [
           {
             "name": "run_agentic_split_orchestrator",
-            "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction)",
+            "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, max_cost)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
@@ -7899,12 +7899,12 @@
         "functions": [
           {
             "name": "run_agentic_split",
-            "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler)",
+            "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler, max_cost)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "_run_strangler_split",
-            "signature": "(*, target_path, git_root, verbose, quiet, timeout_adder, use_github_state, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction)",
+            "signature": "(*, target_path, git_root, verbose, quiet, timeout_adder, use_github_state, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, max_cost)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]

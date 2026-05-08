@@ -2170,7 +2170,7 @@ Options:
 - `--experimental-language`: Opt-in for non-Python languages (Python is the only `supported` tier in this release)
 - `--no-github-state`: Disable GitHub state persistence (local-only)
 - `--timeout-adder FLOAT`: Add seconds to each step timeout (default: 0.0)
-- `--max-cost FLOAT`: Abort cleanly if accumulated cost crosses USD threshold. State is persisted, so re-running without `--max-cost` (or with a higher cap) resumes from the same step. Useful as a budget guardrail on long strangler runs (default: no cap)
+- `--max-cost FLOAT`: Abort if total cost would cross USD threshold. State is persisted, so re-running without `--max-cost` (or with a higher cap) resumes from the same step. Useful as a budget guardrail on long strangler runs (default: no cap)
 
 Example (agentic mode — full pipeline):
 ```bash

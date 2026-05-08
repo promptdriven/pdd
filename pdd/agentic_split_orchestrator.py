@@ -426,6 +426,9 @@ def _sanitize_path_string(value: Any) -> Any:
     """
     if not isinstance(value, str):
         return value
+    value = value.strip()
+    while value.startswith("`"):
+        value = value[1:].lstrip()
     # Real paths don't contain whitespace, em-dashes, hashes, or backticks.
     # Trim at the first such character so prose after the path is dropped.
     for sep in (" ", "\t", "\n", "—", "–", "#", "`"):
