@@ -28,7 +28,7 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 - `pdd change <issue-url>` - Implement feature requests (13-step workflow)
 - `pdd bug <issue-url>` - Create failing tests for bugs
 - `pdd fix <issue-url>` - Fix the failing tests
-- `pdd split <target-file>` - Diagnose and split large dev units (14-step workflow with intent classification, diagnosis, phase extraction, per-child verify gate, and repair)
+- `pdd split <target-file>` - Diagnose and split large dev units (15-step workflow with intent classification, diagnosis, phase extraction, per-child verify gate, and repair)
 - `pdd generate <issue-url>` - Generate architecture.json from a PRD issue (11-step workflow)
 - `pdd test <issue-url>` - Generate UI tests from issue descriptions (18-step workflow with exploratory testing, contract validation, accessibility audits)
 
@@ -2131,7 +2131,7 @@ This feature works seamlessly with issues processed by `pdd bug`. The typical wo
 
 ### 7. split
 
-Diagnose whether a PDD dev unit has an architectural problem, and if so, split the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. The 14-step agentic workflow classifies intent, surveys the codebase, diagnoses the problem, proposes options with a responsibility-based rubric, extracts children with phase decomposition (and a per-child verify gate as a sub-step within extraction), runs deterministic verification gates (including test-seam resolution and parent-wiring checks), proves the new prompts can regenerate via `pdd sync`, and derives `architecture.json` from prompt metadata tags.
+Diagnose whether a PDD dev unit has an architectural problem, and if so, split the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. The 15-step agentic workflow classifies intent, surveys the codebase, diagnoses the problem, proposes options with a responsibility-based rubric, extracts children with phase decomposition (and a per-child verify gate as a sub-step within extraction), runs deterministic verification gates (including test-seam resolution and parent-wiring checks), proves the new prompts can regenerate via `pdd sync`, derives `architecture.json` from prompt metadata tags, and checks architecture↔include drift after that derivation.
 
 **Agentic Mode (default):**
 ```
@@ -2141,7 +2141,7 @@ pdd [GLOBAL OPTIONS] split [OPTIONS] TARGET_FILE
 Arguments:
 - `TARGET_FILE`: The source file to diagnose and potentially split (e.g., `pdd/large_module.py`).
 
-The 14-step workflow (with `6v` running as a per-child sub-step inside step 6):
+The 15-step workflow (with `6v` running as a per-child sub-step inside step 6):
 0. **Intent**: Classify the goal (REDUCE_MONOLITH / ENABLE_PARALLEL_WORK / EXTRACT_REUSABLE_LAYER / REDUCE_TEST_TIME); re-weights step 4's rubric
 1. **Survey**: Neighborhood survey + target-file scan (architecture, siblings, churn, health signals, co-change)
 2. **Diagnose**: Classify architectural problem; can return `LEAVE_ALONE` (stops here)
@@ -2151,11 +2151,12 @@ The 14-step workflow (with `6v` running as a per-child sub-step inside step 6):
 6a. **Phase Extract (planning)**: For each child, judge whether its dominant symbol has multi-phase structure worth extracting as sibling-file helpers
 6. **Extract**: One child per call, full dev unit (prompt + code + example + tests); applies phase plan from 6a when present
 6v. **Per-Child Verify Gate**: After each child extracts in step 6, run `validate_extraction()` filtered to that child's files only and route any error-severity failures to a bounded step-8 repair sub-loop (max 2 attempts per child). Status is tracked per child in `state["children_extracted_status"]` (`pending` / `extracted` / `verified` / `failed_extract` / `failed_verify` / `failed`) so a crash mid-pipeline never silently re-bills already-verified children.
-7a. **Verify Local**: Final cross-cutting deterministic check across all children — tests, lint, parent line reduction, test-seam resolution, plus `pdd checkup --validate-arch-includes --project-root <worktree>` to catch architecture↔include drift invisible to file-level checks. Catches issues only visible at full-package scope (e.g. circular imports between children).
+7a. **Verify Local**: Final cross-cutting deterministic check across all children — tests, lint, parent line reduction, and test-seam resolution. Catches issues only visible at full-package scope (e.g. circular imports between children).
 7b. **Regen Gate**: Deterministic — `pdd sync` must regenerate each new prompt
 7c. **Arch Sync**: Deterministic — derive `architecture.json` from `<pdd-*>` prompt metadata tags
-7. **Assess**: LLM qualitative verdict; feeds improvement gate alongside 7a metrics
-8. **Repair**: Fix cross-cutting verification failures from 7a (max 5 iterations across the whole plan). Per-child gate failures (6v, max 2 attempts per child) are repaired inline within step 6 and DO NOT enter step 8 — once the per-child budget is exhausted the child enters terminal `failed` status, step 8 is short-circuited entirely (the global loop cannot recover what the per-child gate already gave up on). The improvement gate downgrades AUTO_SHIP to HUMAN_REVIEW_REQUIRED for ANY non-`verified` child (including `failed_extract` from exhausted file-existence retries and `failed` from exhausted per-child repair). Per-child reason strings are persisted in `state["terminal_child_failures"]` (covering both `failed_extract` missing-file detail and `failed` `ValidationFailure.message` detail) and surfaced in the final message + console output so the user knows which child broke and why.
+7d. **Post-Arch Checkup**: Run `pdd checkup --validate-arch-includes --project-root <worktree>` after 7c so architecture↔include drift is checked against freshly synced metadata.
+7. **Assess**: LLM qualitative verdict; feeds improvement gate alongside 7a/7d metrics
+8. **Repair**: Fix cross-cutting verification failures from 7a/7d (max 5 iterations across the whole plan), re-running arch sync before each checkup retry. Per-child gate failures (6v, max 2 attempts per child) are repaired inline within step 6 and DO NOT enter step 8 — once the per-child budget is exhausted the child enters terminal `failed` status, step 8 is short-circuited entirely (the global loop cannot recover what the per-child gate already gave up on). The improvement gate downgrades AUTO_SHIP to HUMAN_REVIEW_REQUIRED for ANY non-`verified` child (including `failed_extract` from exhausted file-existence retries and `failed` from exhausted per-child repair). Per-child reason strings are persisted in `state["terminal_child_failures"]` (covering both `failed_extract` missing-file detail and `failed` `ValidationFailure.message` detail) and surfaced in the final message + console output so the user knows which child broke and why.
 9. **Refine Check**: Ask the agent whether any child is still too monolithic; if yes, run one focused phase-extraction pass
 
 Options:

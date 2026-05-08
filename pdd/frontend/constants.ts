@@ -248,7 +248,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
   [CommandType.SPLIT]: {
     name: CommandType.SPLIT,
     backendName: 'split',
-    description: "Agentic 14-step pipeline that diagnoses and splits a large dev unit into smaller, independent PDD dev units. Runs against the selected prompt's code file.",
+    description: "Agentic 15-step pipeline that diagnoses and splits a large dev unit into smaller, independent PDD dev units. Runs against the selected prompt's code file.",
     shortDescription: "Split Dev Unit",
     icon: "›",
     requiresPrompt: true,

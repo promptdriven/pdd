@@ -47,6 +47,7 @@ from pdd.agentic_split_orchestrator import (
     _parse_step_output,
     _run_split_checkup,
     _stable_split_id,
+    _target_path_in_worktree,
     _validate_single_child,
     _verdict_strength,
     run_agentic_split_orchestrator,
@@ -2325,9 +2326,9 @@ class TestOrchestratorFailedChildBlocksAutoShip:
                 no_phase_extraction=True,
             )
 
-        # The orchestrator must stop at step 6, not flow into 7a/checkup/
-        # assess and then downgrade at the end. Final verification only runs
-        # once all children are verified.
+        # The orchestrator must stop at step 6, not flow into final
+        # verification/checkup/assess and then downgrade at the end. Final
+        # verification only runs once all children are verified.
         assert ok is False
         assert "Step 6 incomplete" in msg, (
             f"failed_extract child must stop the run at step 6; got: {msg}"
@@ -2810,3 +2811,218 @@ class TestOrchestratorClearsStaleVerifyFailures:
             if state.get("children_extracted_status", {}).get("child_b")
             == "verified"
         )
+
+
+class TestOrchestratorPostArchCheckup:
+    """Regression tests for the post-architecture split checkup gate."""
+
+    def test_target_path_in_worktree_maps_relative_subdir_target(self, tmp_path):
+        repo = tmp_path / "repo"
+        cwd = repo / "pkg"
+        worktree = tmp_path / "worktree"
+        cwd.mkdir(parents=True)
+        worktree.mkdir()
+
+        with patch(f"{MODULE}.get_git_root", return_value=repo):
+            mapped = _target_path_in_worktree("foo.py", cwd, worktree)
+
+        assert mapped == worktree / "pkg" / "foo.py"
+
+    @staticmethod
+    def _saved_state(worktree: Path, last_completed: str) -> Dict[str, Any]:
+        options_json = json.dumps({
+            "options": [
+                {
+                    "plan": {
+                        "children": [
+                            {
+                                "name": "child_a",
+                                "prompt_file": "prompts/child_a_python.prompt",
+                                "code_file": "src/child_a.py",
+                            }
+                        ]
+                    },
+                    "score": 50.0,
+                }
+            ]
+        })
+        return {
+            "step_outputs": {
+                "1": "s",
+                "2": "d",
+                "3": "i",
+                "4": options_json,
+                "6": "FILES_CREATED: prompts/child_a_python.prompt, src/child_a.py",
+                "7": '{"overall_verdict": "clear_improvement"}',
+            },
+            "last_completed_step": last_completed,
+            "worktree_path": str(worktree),
+            "total_cost": 1.0,
+            "model_used": "m",
+            "changed_files": ["src/foo.py", "prompts/foo_python.prompt"],
+            "children_extracted": ["ok"],
+            "children_extracted_status": {"child_a": "verified"},
+            "repair_attempts": {"child_a": 0},
+            "verify_failures": [],
+        }
+
+    @staticmethod
+    def _write_project(root: Path) -> None:
+        (root / "src").mkdir(parents=True)
+        (root / "prompts").mkdir(parents=True)
+        (root / "src" / "foo.py").write_text("", encoding="utf-8")
+        (root / "src" / "child_a.py").write_text("", encoding="utf-8")
+        (root / "prompts" / "foo_python.prompt").write_text("", encoding="utf-8")
+        (root / "prompts" / "child_a_python.prompt").write_text(
+            "",
+            encoding="utf-8",
+        )
+        (root / "architecture.json").write_text("[]", encoding="utf-8")
+
+    def test_checkup_runs_after_worktree_arch_sync_before_assess(self, tmp_path):
+        repo = tmp_path / "repo"
+        worktree = tmp_path / "worktree"
+        self._write_project(repo)
+        self._write_project(worktree)
+
+        saved_state = self._saved_state(worktree, "7b_regen_gate")
+        events: List[str] = []
+        saved_states: List[Dict[str, Any]] = []
+
+        def capture_save(*args, **_kwargs):
+            if len(args) >= 4 and isinstance(args[3], dict):
+                saved_states.append(json.loads(json.dumps(args[3], default=str)))
+            return None
+
+        def fake_sync(prompts_dir, architecture_path, dry_run=False):
+            events.append("arch_sync")
+            assert prompts_dir == worktree / "prompts"
+            assert architecture_path == worktree / "architecture.json"
+            assert dry_run is False
+            return {"success": True}
+
+        def fake_checkup(*_args, **_kwargs):
+            events.append("checkup")
+            return ["CHECKUP_FAILURE: stale include"]
+
+        def fake_task(**kwargs):
+            label = kwargs.get("label", "")
+            events.append(f"task:{label}")
+            if label == "7_assess":
+                return _mock_agentic_task(
+                    '{"overall_verdict": "clear_improvement", "rationale": "ok"}'
+                )
+            if label.startswith("8_repair_iter"):
+                return _mock_agentic_task("REPAIR_EXHAUSTED")
+            return _mock_agentic_task('{"should_refine": false}')
+
+        with patch(f"{MODULE}.get_language", return_value="Python"), \
+             patch(f"{MODULE}.load_workflow_state", return_value=(saved_state, None)), \
+             patch(f"{MODULE}.save_workflow_state", side_effect=capture_save), \
+             patch(f"{MODULE}.clear_workflow_state"), \
+             patch(f"{MODULE}.load_prompt_template", return_value="template"), \
+             patch(f"{MODULE}.preprocess", return_value="processed"), \
+             patch(f"{MODULE}.substitute_template_variables", return_value="prompt"), \
+             patch(f"{MODULE}.run_agentic_task", side_effect=fake_task), \
+             patch(f"{MODULE}.set_agentic_progress"), \
+             patch(f"{MODULE}.clear_agentic_progress"), \
+             patch(f"{MODULE}.validate_extraction",
+                   return_value=MagicMock(passed=True, failures=[])), \
+             patch(f"{MODULE}.get_test_command", return_value=None), \
+             patch(f"{MODULE}.get_lint_commands", return_value=[]), \
+             patch(f"{MODULE}.get_git_root", return_value=repo), \
+             patch(f"{MODULE}.sync_all_prompts_to_architecture",
+                   side_effect=fake_sync), \
+             patch(f"{MODULE}._run_split_checkup", side_effect=fake_checkup):
+            run_agentic_split_orchestrator(
+                str(repo / "src" / "foo.py"),
+                cwd=repo,
+                quiet=True,
+                skip_regen_gate=True,
+                no_phase_extraction=True,
+            )
+
+        assert events.index("arch_sync") < events.index("checkup")
+        assert events.index("checkup") < events.index("task:7_assess")
+        checkup_state = next(
+            state for state in saved_states
+            if state.get("last_completed_step") == "7d_checkup"
+        )
+        assert checkup_state["verify_failures"] == [
+            "CHECKUP_FAILURE: stale include"
+        ]
+        assert checkup_state["quant_metrics"]["checkup_pass"] == -1
+
+    def test_repair_rechecks_after_refreshing_architecture(self, tmp_path):
+        repo = tmp_path / "repo"
+        worktree = tmp_path / "worktree"
+        self._write_project(repo)
+        self._write_project(worktree)
+
+        saved_state = self._saved_state(worktree, "7_assess")
+        saved_state["verify_failures"] = ["CHECKUP_FAILURE: stale include"]
+        events: List[str] = []
+        saved_states: List[Dict[str, Any]] = []
+
+        def capture_save(*args, **_kwargs):
+            if len(args) >= 4 and isinstance(args[3], dict):
+                saved_states.append(json.loads(json.dumps(args[3], default=str)))
+            return None
+
+        def fake_sync(prompts_dir, architecture_path, dry_run=False):
+            events.append("arch_sync")
+            assert prompts_dir == worktree / "prompts"
+            assert architecture_path == worktree / "architecture.json"
+            assert dry_run is False
+            return {"success": True}
+
+        def fake_checkup(*_args, **_kwargs):
+            events.append("checkup")
+            return []
+
+        def fake_task(**kwargs):
+            label = kwargs.get("label", "")
+            events.append(f"task:{label}")
+            if label.startswith("8_repair_iter"):
+                return _mock_agentic_task("FILES_MODIFIED: prompts/foo_python.prompt")
+            if label == "9_refine_check":
+                return _mock_agentic_task(
+                    '{"should_refine": false, "reason": "done"}'
+                )
+            return _mock_agentic_task("{}")
+
+        with patch(f"{MODULE}.get_language", return_value="Python"), \
+             patch(f"{MODULE}.load_workflow_state", return_value=(saved_state, None)), \
+             patch(f"{MODULE}.save_workflow_state", side_effect=capture_save), \
+             patch(f"{MODULE}.clear_workflow_state"), \
+             patch(f"{MODULE}.load_prompt_template", return_value="template"), \
+             patch(f"{MODULE}.preprocess", return_value="processed"), \
+             patch(f"{MODULE}.substitute_template_variables", return_value="prompt"), \
+             patch(f"{MODULE}.run_agentic_task", side_effect=fake_task), \
+             patch(f"{MODULE}.set_agentic_progress"), \
+             patch(f"{MODULE}.clear_agentic_progress"), \
+             patch(f"{MODULE}.validate_extraction",
+                   return_value=MagicMock(passed=True, failures=[])), \
+             patch(f"{MODULE}.get_test_command", return_value=None), \
+             patch(f"{MODULE}.get_lint_commands", return_value=[]), \
+             patch(f"{MODULE}.get_git_root", return_value=repo), \
+             patch(f"{MODULE}.sync_all_prompts_to_architecture",
+                   side_effect=fake_sync), \
+             patch(f"{MODULE}._run_split_checkup", side_effect=fake_checkup):
+            ok, msg, _cost, _model, _files = run_agentic_split_orchestrator(
+                str(repo / "src" / "foo.py"),
+                cwd=repo,
+                quiet=True,
+                skip_regen_gate=True,
+                no_phase_extraction=True,
+            )
+
+        assert ok is True, msg
+        assert events.index("task:8_repair_iter_1") < events.index("arch_sync")
+        assert events.index("arch_sync") < events.index("checkup")
+        repair_states = [
+            state for state in saved_states
+            if state.get("last_completed_step") == "8_repair"
+        ]
+        assert repair_states[-1]["verify_failures"] == []
+        assert repair_states[-1]["quant_metrics"]["checkup_pass"] == 1

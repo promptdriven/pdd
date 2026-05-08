@@ -127,7 +127,7 @@ ALLOWED_COMMANDS = {
     "crash": "Fix code based on crash errors",
     "verify": "Verify code against prompt requirements",
     # Advanced operations
-    "split": "Diagnose and split a large dev unit into smaller PDD dev units (agentic 14-step pipeline)",
+    "split": "Diagnose and split a large dev unit into smaller PDD dev units (agentic 15-step pipeline)",
     "change": "Modify prompts based on change instructions",
     "detect": "Detect which prompts need changes",
     "auto-deps": "Analyze project dependencies and update prompt",

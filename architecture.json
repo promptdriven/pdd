@@ -7843,7 +7843,7 @@
   },
   {
     "reason": "Orchestrates the agentic split workflow for diagnosing and splitting large PDD dev units.",
-    "description": "State machine for agentic split: intent, survey, diagnose, investigate, propose options, setup worktree, phase-extract, extract children with per-child 6v validation/repair gates, final cross-cutting verify/checkup, regen gate, arch sync, assess, global repair, and refine_check. Resume state tracks per-child status, repair attempts, terminal child failure detail, stops immediately on unrecovered extraction or terminal per-child verify failure, clears stale child failure detail when a child recovers, and migrates legacy extracted children as extracted (not verified) so the new 6v gate still runs.",
+    "description": "State machine for agentic split: intent, survey, diagnose, investigate, propose options, setup worktree, phase-extract, extract children with per-child 6v validation/repair gates, final cross-cutting verify, regen gate, arch sync, post-arch checkup, assess, global repair, and refine_check. Resume state tracks per-child status, repair attempts, terminal child failure detail, stops immediately on unrecovered extraction or terminal per-child verify failure, clears stale child failure detail when a child recovers, and migrates legacy extracted children as extracted (not verified) so the new 6v gate still runs.",
     "dependencies": [
       "agentic_common_worktree_python.prompt",
       "split_validation_python.prompt",
