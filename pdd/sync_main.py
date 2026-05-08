@@ -573,7 +573,7 @@ def _auto_submit_example(
 
     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
     response = requests.post(
-        CloudConfig.get_endpoint_url("submitExample"),
+        "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample",
         json=payload,
         headers=headers,
         timeout=get_cloud_request_timeout(),

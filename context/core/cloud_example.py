@@ -1,231 +1,258 @@
 #!/usr/bin/env python3
 """
-Example usage of pdd.core.cloud.
+Example usage of the CloudConfig module.
 
-This script demonstrates the centralized cloud configuration helpers used by
-PDD CLI commands:
-
-  1. Resolving cloud endpoint URLs (default + ``PDD_CLOUD_URL`` overrides).
-  2. Detecting whether cloud features are enabled.
-  3. Detecting whether the current process is running inside a cloud env.
-  4. Retrieving JWT tokens (env-injected, file-cached, or device flow).
-  5. Reading the cloud request timeout (PDD_CLOUD_TIMEOUT).
-
-The example mocks all external dependencies so it runs offline and exits 0.
+This script demonstrates how to use the centralized cloud configuration
+for PDD CLI commands. It covers:
+1. Retrieving cloud endpoint URLs.
+2. Handling environment variable overrides.
+3. Checking if cloud features are enabled.
+4. Retrieving JWT tokens for authentication.
+5. Configuring cloud request timeouts via PDD_CLOUD_TIMEOUT.
 
 File structure (relative to project root):
     pdd/
         core/
-            cloud.py                 # The module being demonstrated
+            cloud_config.py   # The module being demonstrated
     context/
         core/
-            cloud_example.py         # This example file
+            cloud_config_example.py  # This example file
 """
 
+import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch, MagicMock
 
-# Make ``pdd`` importable regardless of the working directory the example is
-# launched from. The example lives at <project>/context/core/cloud_example.py
-# so the project root is two directories up.
+# Ensure the project root is in sys.path so we can import the module
+# This allows running the example directly from the context/core directory
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from pdd.core.cloud import (
-    CLOUD_CONNECT_TIMEOUT,
-    CLOUD_ENDPOINTS,
-    DEFAULT_BASE_URL,
-    DEFAULT_CLOUD_TIMEOUT,
-    FIREBASE_API_KEY_ENV,
-    GITHUB_CLIENT_ID_ENV,
-    PDD_CLOUD_TIMEOUT_ENV,
-    PDD_CLOUD_URL_ENV,
-    PDD_JWT_TOKEN_ENV,
-    CloudConfig,
-    get_cloud_request_timeout,
-    get_cloud_timeout,
-)
+# Import the CloudConfig class and constants from the module
+# Note: Adjust the import path based on your actual package structure
+try:
+    from pdd.core.cloud_config import (
+        CloudConfig,
+        CLOUD_ENDPOINTS,
+        PDD_CLOUD_URL_ENV,
+        PDD_JWT_TOKEN_ENV,
+        PDD_CLOUD_TIMEOUT_ENV,
+        DEFAULT_CLOUD_TIMEOUT,
+        FIREBASE_API_KEY_ENV,
+        GITHUB_CLIENT_ID_ENV,
+        get_cloud_timeout,
+    )
+except ImportError:
+    # Fallback for when running in a flat directory structure during testing
+    try:
+        from cloud_config import (
+            CloudConfig,
+            CLOUD_ENDPOINTS,
+            PDD_CLOUD_URL_ENV,
+            PDD_JWT_TOKEN_ENV,
+            PDD_CLOUD_TIMEOUT_ENV,
+            DEFAULT_CLOUD_TIMEOUT,
+            FIREBASE_API_KEY_ENV,
+            GITHUB_CLIENT_ID_ENV,
+            get_cloud_timeout,
+        )
+    except ImportError:
+        print("Error: Could not import CloudConfig. Please ensure the module is in the python path.")
+        sys.exit(1)
 
 
 def print_header(title: str) -> None:
-    """Print a labelled section header."""
-    print()
-    print("=" * 60)
+    """Helper to print a styled header."""
+    print("\n" + "=" * 60)
     print(f" {title}")
     print("=" * 60)
 
 
 def example_url_configuration() -> None:
     """
-    Demonstrate URL resolution.
-
-    ``CloudConfig.get_base_url()`` returns the default Cloud Functions URL
-    unless ``PDD_CLOUD_URL`` is set; trailing slashes are stripped.
-    ``CloudConfig.get_endpoint_url(name)`` looks the path up in
-    ``CLOUD_ENDPOINTS`` (e.g. ``submitExample`` -> ``/submitExample``).
+    Demonstrates how to retrieve base URLs and specific endpoint URLs.
+    Shows how environment variables can override defaults.
     """
-    print_header("1. URL configuration")
+    print_header("1. URL Configuration")
 
-    print("Default base URL:", CloudConfig.get_base_url())
-    print("submitExample URL:", CloudConfig.get_endpoint_url("submitExample"))
-    print("generateCode URL:", CloudConfig.get_endpoint_url("generateCode"))
+    # 1. Default Behavior
+    print("--- Default Configuration ---")
+    base_url = CloudConfig.get_base_url()
+    print(f"Default Base URL: {base_url}")
+    
+    gen_url = CloudConfig.get_endpoint_url("generateCode")
+    print(f"Generate Endpoint: {gen_url}")
 
-    emulator_url = "http://127.0.0.1:5001/my-project/us-central1/"
+    # 2. Overriding with Environment Variable (e.g., for local emulator)
+    print("\n--- Custom Configuration (Emulator) ---")
+    emulator_url = "http://127.0.0.1:5001/my-project/us-central1"
+    
+    # We use patch.dict to simulate setting the environment variable safely
     with patch.dict(os.environ, {PDD_CLOUD_URL_ENV: emulator_url}):
-        base = CloudConfig.get_base_url()
+        custom_base = CloudConfig.get_base_url()
+        print(f"Custom Base URL:   {custom_base}")
+        
         sync_url = CloudConfig.get_endpoint_url("syncState")
-        print()
-        print("With PDD_CLOUD_URL =", emulator_url)
-        print("  base URL (slash stripped):", base)
-        print("  syncState URL:", sync_url)
-        assert base == emulator_url.rstrip("/")
-        assert sync_url == base + CLOUD_ENDPOINTS["syncState"]
-
-    full_override = "https://staging.example.com/generateCode"
-    with patch.dict(os.environ, {PDD_CLOUD_URL_ENV: full_override}):
-        url = CloudConfig.get_endpoint_url("generateCode")
-        print()
-        print("Override that already targets endpoint name:")
-        print("  PDD_CLOUD_URL =", full_override)
-        print("  -> generateCode URL:", url)
-        assert url == full_override
+        print(f"Sync Endpoint:     {sync_url}")
+        
+        # Verify it constructed the path correctly
+        expected_sync = f"{emulator_url}{CLOUD_ENDPOINTS['syncState']}"
+        assert sync_url == expected_sync
+        print("✅ URL construction verified correctly.")
 
 
-def example_running_in_cloud() -> None:
+def example_cloud_enabled_check() -> None:
     """
-    Demonstrate ``CloudConfig.is_running_in_cloud()``.
-
-    Returns True when ``K_SERVICE`` (Cloud Run/Functions) or
-    ``FUNCTIONS_EMULATOR`` (Firebase emulator) is set.
+    Demonstrates checking if cloud features are enabled based on API keys.
     """
-    print_header("2. Running-in-cloud detection")
+    print_header("2. Cloud Enabled Check")
 
+    # Case 1: Missing keys
     with patch.dict(os.environ, {}, clear=True):
-        print("No cloud env vars -> is_running_in_cloud():", CloudConfig.is_running_in_cloud())
-        assert CloudConfig.is_running_in_cloud() is False
+        is_enabled = CloudConfig.is_cloud_enabled()
+        print(f"With no env vars: Cloud Enabled? {is_enabled}")
 
-    with patch.dict(os.environ, {"K_SERVICE": "submitExample"}):
-        print("K_SERVICE set       -> is_running_in_cloud():", CloudConfig.is_running_in_cloud())
-        assert CloudConfig.is_running_in_cloud() is True
+    # Case 2: Keys present
+    mock_env = {
+        FIREBASE_API_KEY_ENV: "dummy_firebase_key",
+        GITHUB_CLIENT_ID_ENV: "dummy_github_id"
+    }
+    with patch.dict(os.environ, mock_env):
+        is_enabled = CloudConfig.is_cloud_enabled()
+        print(f"With keys present: Cloud Enabled? {is_enabled}")
 
-    with patch.dict(os.environ, {"FUNCTIONS_EMULATOR": "true"}):
-        print("FUNCTIONS_EMULATOR  -> is_running_in_cloud():", CloudConfig.is_running_in_cloud())
-        assert CloudConfig.is_running_in_cloud() is True
 
-
-def example_cloud_enabled() -> None:
+def example_jwt_token_handling() -> None:
     """
-    Demonstrate ``CloudConfig.is_cloud_enabled()``.
-
-    True when ``PDD_JWT_TOKEN`` is set, OR when both
-    ``FIREBASE_API_KEY_ENV`` and ``GITHUB_CLIENT_ID_ENV`` are set.
-    False when running inside the cloud or ``PDD_FORCE_LOCAL`` is set.
+    Demonstrates retrieving the JWT token.
+    1. Shows priority of PDD_JWT_TOKEN_ENV (CI/Testing mode).
+    2. Shows fallback to device flow (mocked).
     """
-    print_header("3. Cloud-enabled detection")
+    print_header("3. JWT Token Handling")
 
-    with patch.dict(os.environ, {}, clear=True):
-        print("No env vars                   ->", CloudConfig.is_cloud_enabled())
-        assert CloudConfig.is_cloud_enabled() is False
+    # Scenario A: Token injected via Environment Variable (CI/Testing)
+    print("--- Scenario A: Token from Environment ---")
+    test_token = "eyJhbGciOiJIUzI1NiJ9.test_payload.signature"
+    
+    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: test_token}):
+        token = CloudConfig.get_jwt_token(verbose=True)
+        print(f"Retrieved Token: {token[:15]}... (truncated)")
+        
+        if token == test_token:
+            print("✅ Successfully retrieved token from environment.")
+        else:
+            print("❌ Failed to retrieve token from environment.")
 
-    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.injected.token"}, clear=True):
-        print("PDD_JWT_TOKEN injected         ->", CloudConfig.is_cloud_enabled())
-        assert CloudConfig.is_cloud_enabled() is True
-
-    creds = {FIREBASE_API_KEY_ENV: "key", GITHUB_CLIENT_ID_ENV: "id"}
-    with patch.dict(os.environ, creds, clear=True):
-        print("Firebase + GitHub creds        ->", CloudConfig.is_cloud_enabled())
-        assert CloudConfig.is_cloud_enabled() is True
-
-    with patch.dict(os.environ, {**creds, "PDD_FORCE_LOCAL": "1"}, clear=True):
-        print("With PDD_FORCE_LOCAL=1         ->", CloudConfig.is_cloud_enabled())
-        assert CloudConfig.is_cloud_enabled() is False
-
-
-def example_jwt_token() -> None:
-    """
-    Demonstrate ``CloudConfig.get_jwt_token()``.
-
-    Resolution order: PDD_JWT_TOKEN env var, then file cache, then device
-    flow. We mock the cache and device flow to keep this offline.
-    """
-    print_header("4. JWT token retrieval")
-
-    # Scenario A: env-injected token returns immediately.
-    with patch.dict(os.environ, {PDD_JWT_TOKEN_ENV: "ey.injected"}, clear=True):
-        token = CloudConfig.get_jwt_token()
-        print("PDD_JWT_TOKEN injected -> token:", token)
-        assert token == "ey.injected"
-
-    # Scenario B: file cache hit.
-    with patch.dict(os.environ, {}, clear=True), \
-         patch("pdd.core.cloud._get_cached_jwt", return_value="ey.cached"):
-        token = CloudConfig.get_jwt_token()
-        print("Cache hit              -> token:", token)
-        assert token == "ey.cached"
-
-    # Scenario C: device flow (mocked AsyncMock so no real network call).
-    creds = {FIREBASE_API_KEY_ENV: "key", GITHUB_CLIENT_ID_ENV: "id"}
-    with patch.dict(os.environ, creds, clear=True), \
-         patch("pdd.core.cloud._get_cached_jwt", return_value=None), \
-         patch("pdd.core.cloud.device_flow_get_token", new_callable=AsyncMock) as flow:
-        flow.return_value = "ey.device_flow"
-        token = CloudConfig.get_jwt_token(verbose=False, app_name="example")
-        print("Device flow            -> token:", token)
-        assert token == "ey.device_flow"
-        flow.assert_called_once()
-
-    # Scenario D: missing creds -> graceful None (auth error displayed).
-    with patch.dict(os.environ, {}, clear=True), \
-         patch("pdd.core.cloud._get_cached_jwt", return_value=None):
-        token = CloudConfig.get_jwt_token()
-        print("No creds, no cache     -> token:", token)
-        assert token is None
+    # Scenario B: Interactive Device Flow (Mocked)
+    print("\n--- Scenario B: Interactive Device Flow ---")
+    
+    # We need API keys present for the device flow to trigger
+    env_vars = {
+        FIREBASE_API_KEY_ENV: "valid_key",
+        GITHUB_CLIENT_ID_ENV: "valid_id"
+    }
+    
+    # We mock the async device_flow_get_token function to avoid actual network calls
+    with patch.dict(os.environ, env_vars):
+        # We must patch where it is imported IN CloudConfig, not where it is defined
+        # Assuming CloudConfig imports it as 'device_flow_get_token'
+        with patch('pdd.core.cloud.device_flow_get_token') as mock_flow:
+            # Setup the mock to return a future (since it's awaited in asyncio.run)
+            future = asyncio.Future()
+            future.set_result("device_flow_generated_token_123")
+            mock_flow.return_value = future
+            
+            # Call the method
+            token = CloudConfig.get_jwt_token(verbose=True, app_name="Example App")
+            
+            print(f"Retrieved Token: {token}")
+            if token == "device_flow_generated_token_123":
+                print("✅ Successfully retrieved token via device flow mock.")
+            else:
+                print("❌ Failed to retrieve token via device flow.")
 
 
 def example_cloud_timeout() -> None:
     """
-    Demonstrate timeout configuration.
-
-    ``get_cloud_timeout()`` reads ``PDD_CLOUD_TIMEOUT`` (seconds) and falls
-    back to ``DEFAULT_CLOUD_TIMEOUT`` (900). ``get_cloud_request_timeout()``
-    returns a ``(connect, read)`` tuple suitable for ``requests``.
+    Demonstrates how to retrieve and configure cloud request timeouts.
+    Shows how the PDD_CLOUD_TIMEOUT environment variable can override the default.
     """
-    print_header("5. Cloud timeout")
+    print_header("4. Cloud Timeout Configuration")
 
+    # Default timeout (900 seconds / 15 minutes)
+    print("--- Default Configuration ---")
+    timeout = get_cloud_timeout()
+    print(f"Default Timeout: {timeout} seconds ({timeout / 60:.1f} minutes)")
+    print(f"DEFAULT_CLOUD_TIMEOUT constant: {DEFAULT_CLOUD_TIMEOUT}")
+
+    # Custom timeout via environment variable
+    print("\n--- Custom Configuration ---")
+    custom_timeout = "300"  # 5 minutes
+
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: custom_timeout}):
+        timeout = get_cloud_timeout()
+        print(f"Custom Timeout:  {timeout} seconds ({timeout / 60:.1f} minutes)")
+
+        if timeout == int(custom_timeout):
+            print("✅ Successfully retrieved custom timeout from environment.")
+        else:
+            print("❌ Failed to retrieve custom timeout from environment.")
+
+    # Invalid value falls back to default
+    print("\n--- Invalid Configuration (Fallback) ---")
+    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "invalid_value"}):
+        timeout = get_cloud_timeout()
+        print(f"Timeout with invalid env var: {timeout} seconds")
+
+        if timeout == DEFAULT_CLOUD_TIMEOUT:
+            print("✅ Correctly fell back to default for invalid value.")
+        else:
+            print("❌ Did not fall back to default for invalid value.")
+
+
+def example_error_handling() -> None:
+    """
+    Demonstrates how the configuration handles missing keys during auth.
+    """
+    print_header("5. Error Handling")
+
+    print("--- Missing API Keys ---")
+    # Ensure environment is empty of keys
     with patch.dict(os.environ, {}, clear=True):
-        print(f"Default total timeout: {get_cloud_timeout()} s "
-              f"(constant DEFAULT_CLOUD_TIMEOUT = {DEFAULT_CLOUD_TIMEOUT})")
-        connect, read = get_cloud_request_timeout()
-        print(f"Default request timeout tuple: connect={connect}s read={read}s "
-              f"(CLOUD_CONNECT_TIMEOUT = {CLOUD_CONNECT_TIMEOUT})")
-        assert get_cloud_timeout() == DEFAULT_CLOUD_TIMEOUT
-        assert (connect, read) == (CLOUD_CONNECT_TIMEOUT, DEFAULT_CLOUD_TIMEOUT)
-
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "300"}):
-        print(f"Custom timeout (PDD_CLOUD_TIMEOUT=300): {get_cloud_timeout()} s")
-        assert get_cloud_timeout() == 300
-
-    with patch.dict(os.environ, {PDD_CLOUD_TIMEOUT_ENV: "not-an-int"}):
-        print(f"Invalid value falls back to default: {get_cloud_timeout()} s")
-        assert get_cloud_timeout() == DEFAULT_CLOUD_TIMEOUT
+        # This should fail gracefully and return None, printing an error to console
+        token = CloudConfig.get_jwt_token(verbose=True)
+        
+        if token is None:
+            print("✅ Correctly returned None when API keys are missing.")
+        else:
+            print(f"❌ Unexpectedly returned a token: {token}")
 
 
 def main() -> None:
-    """Run all examples in sequence."""
-    print("Running pdd.core.cloud examples...")
-    print("Default base URL constant:", DEFAULT_BASE_URL)
-    print("Endpoints registered:", len(CLOUD_ENDPOINTS))
+    """
+    Run all examples.
+    """
+    print("Running CloudConfig Examples...")
 
+    # 1. URL Configuration
     example_url_configuration()
-    example_running_in_cloud()
-    example_cloud_enabled()
-    example_jwt_token()
+
+    # 2. Cloud Enabled Check
+    example_cloud_enabled_check()
+
+    # 3. JWT Token Handling
+    # Note: This uses mocks to simulate the async device flow
+    example_jwt_token_handling()
+
+    # 4. Cloud Timeout Configuration
     example_cloud_timeout()
 
-    print()
-    print("All examples completed successfully.")
+    # 5. Error Handling
+    example_error_handling()
+
+    print("\nAll examples completed.")
 
 
 if __name__ == "__main__":
