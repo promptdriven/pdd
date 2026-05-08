@@ -127,6 +127,60 @@ def test_split_main_success(mock_ctx, quiet_mode, capsys):
             assert "modified_prompt.prompt" in captured.out
             assert f"Total cost: $0.123456" in captured.out
 
+
+def test_split_main_sanitizes_invalid_prompt_includes_before_writing(mock_ctx, tmp_path):
+    """Split outputs are generated prompts and should not persist bad selectors."""
+    mock_ctx.obj["quiet"] = True
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "llm_invoke_example.py").write_text(
+        "def run_llm_invoke_examples():\n    pass\n",
+        encoding="utf-8",
+    )
+    sub_output = tmp_path / "sub.prompt"
+    modified_output = tmp_path / "modified.prompt"
+    bad_prompt = (
+        '<include select="class:TokenMatch,def:detect_control_token">'
+        "context/llm_invoke_example.py</include>"
+    )
+
+    with patch("pdd.split_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.split_main.split") as mock_split:
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "input_prompt": "prompt content",
+                "input_code": "code content",
+                "example_code": "example code content",
+            },
+            {
+                "output_sub": str(sub_output),
+                "output_modified": str(modified_output),
+            },
+            "python",
+        )
+        mock_split.return_value = ((bad_prompt, bad_prompt), 0.1, "model-x")
+
+        result_data, total_cost, model_name = split_main(
+            mock_ctx,
+            "input_prompt_file.prompt",
+            "input_code_file.py",
+            "example_code_file.py",
+            None,
+            None,
+        )
+
+    saved_sub = sub_output.read_text(encoding="utf-8")
+    saved_modified = modified_output.read_text(encoding="utf-8")
+    assert "Invalid selector" in saved_sub
+    assert "Invalid selector" in saved_modified
+    assert "class:TokenMatch" not in saved_sub
+    assert "class:TokenMatch" not in saved_modified
+    assert result_data["sub_prompt_content"] == saved_sub
+    assert result_data["modified_prompt_content"] == saved_modified
+    assert total_cost == pytest.approx(0.1)
+    assert model_name == "model-x"
+
+
 def test_split_main_file_not_found(mock_ctx, capsys):
     """
     Test that split_main properly handles FileNotFoundError

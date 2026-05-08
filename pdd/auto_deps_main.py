@@ -9,6 +9,7 @@ from rich import print as rprint
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
+from .validate_prompt_includes import sanitize_prompt_output
 
 
 def auto_deps_main(
@@ -107,6 +108,15 @@ def auto_deps_main(
             # Save the modified prompt
             output_path = output_file_paths["output"]
             if output_path:
+                modified_prompt, invalid_includes = sanitize_prompt_output(
+                    modified_prompt,
+                    output_path,
+                )
+                if invalid_includes and not ctx.obj.get("quiet", False):
+                    rprint(
+                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                        f"before saving {output_path}.[/yellow]"
+                    )
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(modified_prompt)
                 try:

@@ -113,6 +113,53 @@ def test_auto_deps_normal_operation(
     assert os.path.exists(csv_path)
 
 
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_sanitizes_invalid_prompt_includes_before_writing(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path,
+):
+    """Auto-deps prompt output should not persist selectors that sync will warn on."""
+    mock_ctx.obj["quiet"] = True
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "llm_invoke_example.py").write_text(
+        "def run_llm_invoke_examples():\n    pass\n",
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "output.prompt"
+    csv_path = tmp_path / "deps.csv"
+    bad_prompt = (
+        '<include select="class:TokenMatch,def:detect_control_token">'
+        "context/llm_invoke_example.py</include>"
+    )
+
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        str(output_path),
+        str(csv_path),
+    )
+    mock_insert_includes.return_value = _make_insert_includes_return(
+        modified_prompt=bad_prompt,
+    )
+
+    modified_prompt, total_cost, model_name = auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file="sample_prompt_python.prompt",
+        directory_path="context/",
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    saved = output_path.read_text(encoding="utf-8")
+    assert "Invalid selector" in saved
+    assert "class:TokenMatch" not in saved
+    assert modified_prompt == saved
+    assert total_cost == pytest.approx(0.123456)
+    assert model_name == "test-model"
+
+
 # ---------------------------------------------------------------------------
 # 2. Force scan deletes CSV
 # ---------------------------------------------------------------------------
