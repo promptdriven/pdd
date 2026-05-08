@@ -1,3 +1,5 @@
+<pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 # sync_orchestration_python.prompt
 
 Create a Python module that orchestrates the complete PDD (Prompt-Driven Development) sync workflow by coordinating operations and animations in parallel.
@@ -173,6 +175,7 @@ from . import DEFAULT_STRENGTH
 - `show_exit_animation` - after `app.run()` completes
 - `shutil` - inside auto-deps operation block
 - `traceback` - in exception handlers
+- `ArchitectureConformanceError` from `.code_generator_main` plus `MAX_CONFORMANCE_ATTEMPTS` and `build_conformance_hard_failure_from_error` from `.agentic_sync_runner` - inside the generate operation architecture-conformance retry loop
 
 ### Standard Library
 
@@ -252,7 +255,7 @@ When `skip_verify` or `skip_tests` is set:
 ### Operation Dispatch
 
 - For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. The one-session sync path in `sync_main` follows the same convention.
-- **Architecture-conformance retry (#866)**: Wrap the **generate** invocation of `code_generator_main()` in a repair loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). On `ArchitectureConformanceError`, set the `PDD_REPAIR_DIRECTIVE` env var to `exc.repair_directive` and retry; abort early (without further attempts) when the next failure carries the **identical** sorted missing-symbol set as the previous one (no progress is being made). Always restore the previous value of `PDD_REPAIR_DIRECTIVE` in a `finally` block (pop it if it was unset originally) so the env does not leak across operations. When the loop exhausts, call `build_conformance_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner` and `print()` the structured block to **stderr** (it contains `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint) before re-raising `last_exc`. The generic `except` around the operation will then convert the exception into an `errors.append(...)` entry, but the structured block has already been written to the user's terminal. This loop is the source-of-truth contract for #865/#866 and **must not** be dropped or simplified during regeneration; the `sync_main.py` and `agentic_sync_runner.py` paths must stay in parity with it.
+- **Architecture-conformance retry (#866)**: Wrap the **generate** invocation of `code_generator_main()` in a repair loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). On `ArchitectureConformanceError`, accumulate `exc.total_cost` and `exc.model_name` for the failed attempt, set the `PDD_REPAIR_DIRECTIVE` env var to `exc.repair_directive`, and retry only while budget remains; abort early (without further attempts) when the next failure carries the **identical** sorted missing-symbol set as the previous one (no progress is being made). Always restore the previous value of `PDD_REPAIR_DIRECTIVE` in a `finally` block (pop it if it was unset originally) so the env does not leak across operations. If a later retry succeeds, add the accumulated failed-attempt cost to the successful generate result so operation logs, fingerprints, UI totals, and returned `total_cost` include every charged attempt. When the loop exhausts, set `last_exc.total_cost` to the accumulated failed-attempt cost, call `build_conformance_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner` and `print()` the structured block to **stderr** (it contains `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint) before re-raising `last_exc`. The generic `except` around the operation must add exception-carried cost/model into `current_cost_ref` and the log entry before marking the operation failed. This loop is the source-of-truth contract for #865/#866 and **must not** be dropped or simplified during regeneration; the `sync_main.py` and `agentic_sync_runner.py` paths must stay in parity with it.
 
 ### Post-Operation Validation
 
@@ -374,6 +377,7 @@ Handle command results in multiple formats:
 - For test operation success: if `agentic_success` (4th element) is not None, trust it; otherwise check if file exists
 - For test operation failure: if `result[4]` (error_message) is non-empty, append it to the errors list so it reaches the sync log
 - For crash/fix operations returning tuples: extract error message from `result[1]` on failure and append to errors list
+- For `ArchitectureConformanceError` exception paths, extract `total_cost` and `model_name` from the exception into a result-shaped dict before logging so failed conformance attempts do not report `$0.00`.
 - Save fingerprint after successful operations regardless of format
 
 ### Non-Python Language Handling and Agentic Mode

@@ -155,6 +155,7 @@ def example_architecture_conformance_pass(workdir):
         arch_path=str(arch_path),
         language="python",
         verbose=False,
+        output_path=str(workdir / "src" / "models.py"),
     )
     print("Architecture conformance check passed (no exception raised).")
 
@@ -189,6 +190,7 @@ def example_architecture_conformance_failure(workdir):
             arch_path=str(arch_path),
             language="python",
             verbose=False,
+            output_path=str(workdir / "src" / "models.py"),
         )
     except ArchitectureConformanceError as exc:
         # Confirm subclass relationship — existing call sites that catch
@@ -236,6 +238,7 @@ def example_camelcase_violation(workdir):
             arch_path=str(arch_path),
             language="python",
             verbose=False,
+            output_path=str(workdir / "src" / "utils.py"),
         )
     except ArchitectureConformanceError as exc:
         # Per spec: missing_symbols carries the offending camelCase exports.
@@ -258,6 +261,16 @@ def main():
     ), patch(
         "pdd.code_generator_main.incremental_code_generator_func",
         side_effect=mock_incremental_code_generator,
+    ), patch(
+        "pdd.code_generator_main.CloudConfig.get_jwt_token",
+        side_effect=AssertionError("offline example must not request cloud auth"),
+    ), patch.dict(
+        os.environ,
+        {
+            "PDD_CLOUD_ONLY": "0",
+            "PDD_NO_LOCAL_FALLBACK": "0",
+        },
+        clear=False,
     ):
         example_full_generation_local(workdir)
         example_architecture_conformance_pass(workdir)

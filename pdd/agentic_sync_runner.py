@@ -25,6 +25,8 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
+from .construct_paths import _is_known_language
+
 console = Console()
 
 # ---------------------------------------------------------------------------
@@ -39,6 +41,12 @@ HEARTBEAT_INTERVAL = 60
 
 # Architecture-conformance retry cap
 MAX_CONFORMANCE_ATTEMPTS = 3
+
+# GitHub accepts comments up to 65,536 characters. Keep a buffer for CLI/API
+# encoding overhead and future footer text.
+GITHUB_COMMENT_BODY_LIMIT = 60000
+GITHUB_FAILED_DETAIL_PER_MODULE_LIMIT = 8000
+GITHUB_FAILED_DETAIL_MIN_CHARS = 600
 
 # Per-module timeout in seconds. Default 45 min, override via env.
 try:
@@ -62,6 +70,18 @@ _NONFATAL_WARNING_SUBSTRINGS: Tuple[str, ...] = (
 def _is_nonfatal_warning(line: str) -> bool:
     """Return True if `line` matches a known nonfatal-warning substring."""
     return any(s in line for s in _NONFATAL_WARNING_SUBSTRINGS)
+
+
+def _cap_github_comment_body(body: str) -> str:
+    """Return a GitHub issue-comment body that cannot exceed GitHub's limit."""
+    if len(body) <= GITHUB_COMMENT_BODY_LIMIT:
+        return body
+    suffix = (
+        "\n\n_Comment truncated to fit GitHub's size limit. "
+        "See workflow logs for full output._"
+    )
+    keep = max(GITHUB_COMMENT_BODY_LIMIT - len(suffix), 0)
+    return body[:keep].rstrip() + suffix
 
 
 def _run_gh_command(args: List[str], timeout: int = 30) -> Tuple[bool, str]:
@@ -378,11 +398,17 @@ def _env_fingerprint() -> str:
 # Architecture parsing helpers
 # ---------------------------------------------------------------------------
 
-_LANG_SUFFIX_RE = re.compile(
-    r"_(python|javascript|typescript|java|cpp|go|ruby|rust|csharp|php|"
-    r"kotlin|swift|scala)$",
-    re.IGNORECASE,
-)
+def _strip_known_language_suffix(name: str) -> str:
+    """Strip a final ``_<language>`` suffix using PDD's language catalog."""
+    match = re.search(r"_([a-zA-Z0-9]+)$", name)
+    if not match:
+        return name
+    suffix = match.group(1)
+    if suffix.lower() in {"llm", "prompt"}:
+        return name
+    if not _is_known_language(suffix):
+        return name
+    return name[: match.start()]
 
 
 def _basename_from_architecture_filename(filename: str) -> Optional[str]:
@@ -401,7 +427,7 @@ def _basename_from_architecture_filename(filename: str) -> Optional[str]:
     # Strip language suffix from final component, preserving directories
     parent = Path(name).parent
     base = Path(name).name
-    stripped = _LANG_SUFFIX_RE.sub("", base)
+    stripped = _strip_known_language_suffix(base)
     if not stripped:
         return None
     if str(parent) in (".", ""):
@@ -446,7 +472,7 @@ def _target_basename_aliases(target_basename: str) -> set:
     aliases = {target_basename}
     p = Path(target_basename)
     base = p.name
-    stripped = _LANG_SUFFIX_RE.sub("", base)
+    stripped = _strip_known_language_suffix(base)
     if stripped and stripped != base:
         if str(p.parent) in (".", ""):
             aliases.add(stripped)
@@ -854,11 +880,12 @@ class AsyncSyncRunner:
         with self.lock:
             return sum(s.cost for s in self.module_states.values())
 
-    def _remaining_total_budget(self) -> Optional[float]:
+    def _remaining_total_budget(self, in_flight_cost: float = 0.0) -> Optional[float]:
         """Remaining total budget (None if no total budget set)."""
         if self.total_budget is None:
             return None
         spent = float(self.initial_cost) + self._per_module_cost_so_far()
+        spent += max(float(in_flight_cost or 0.0), 0.0)
         return max(float(self.total_budget) - spent, 0.0)
 
     def _budget_exhausted(self) -> bool:
@@ -906,7 +933,7 @@ class AsyncSyncRunner:
         if not (owner and repo and issue_number is not None):
             return
 
-        body = self._build_comment_body(int(issue_number))
+        body = _cap_github_comment_body(self._build_comment_body(int(issue_number)))
         gh_timeout = 30
 
         try:
@@ -1116,13 +1143,38 @@ class AsyncSyncRunner:
         if failed_modules:
             lines.append("")
             lines.append("### Failed module details")
-            per_module_limit = 8000
-            for basename in failed_modules:
+            omitted_details = 0
+            truncated_details = 0
+            for idx, basename in enumerate(failed_modules):
+                remaining_modules = len(failed_modules) - idx
+                current_body_len = len("\n".join(lines))
+                reserved_footer = (
+                    "\n\n_Additional failed module details omitted to keep "
+                    "this GitHub comment under the size limit._"
+                )
+                remaining_budget = (
+                    GITHUB_COMMENT_BODY_LIMIT
+                    - current_body_len
+                    - len(reserved_footer)
+                )
+                detail_overhead = 96 + len(basename)
+                if remaining_budget <= detail_overhead + GITHUB_FAILED_DETAIL_MIN_CHARS:
+                    omitted_details = remaining_modules
+                    break
+
                 err = states_snapshot[basename].error or ""
                 err = err.rstrip()
                 if not err:
                     err = "(no error captured)"
+                per_module_limit = min(
+                    GITHUB_FAILED_DETAIL_PER_MODULE_LIMIT,
+                    max(
+                        GITHUB_FAILED_DETAIL_MIN_CHARS,
+                        (remaining_budget // max(remaining_modules, 1)) - detail_overhead,
+                    ),
+                )
                 if len(err) > per_module_limit:
+                    truncated_details += 1
                     err = (
                         err[:per_module_limit]
                         + f"\n... [truncated {len(err) - per_module_limit} chars]"
@@ -1140,8 +1192,25 @@ class AsyncSyncRunner:
                 lines.append(fence)
                 lines.append("")
                 lines.append("</details>")
+            if truncated_details or omitted_details:
+                lines.append("")
+                summary_parts = []
+                if truncated_details:
+                    summary_parts.append(
+                        f"{truncated_details} failed detail block(s) truncated"
+                    )
+                if omitted_details:
+                    summary_parts.append(
+                        f"{omitted_details} failed detail block(s) omitted"
+                    )
+                lines.append(
+                    "_"
+                    + "; ".join(summary_parts)
+                    + " to keep this GitHub comment under the size limit. "
+                    + "See workflow logs for full output._"
+                )
 
-        return "\n".join(lines)
+        return _cap_github_comment_body("\n".join(lines))
 
     # ------------------------------------------------------------------
     # Recording results
@@ -1327,7 +1396,7 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     # Subprocess execution
     # ------------------------------------------------------------------
-    def _build_command(self, basename: str) -> List[str]:
+    def _build_command(self, basename: str, in_flight_cost: float = 0.0) -> List[str]:
         """Build the pdd sync subprocess command for a basename."""
         pdd_exe = _find_pdd_executable()
         if pdd_exe:
@@ -1362,7 +1431,7 @@ class AsyncSyncRunner:
 
         # Budget handling: total_budget takes precedence
         if self.total_budget is not None:
-            remaining = self._remaining_total_budget()
+            remaining = self._remaining_total_budget(in_flight_cost)
             if remaining is not None:
                 cmd.extend(["--budget", str(remaining)])
         elif self.sync_options.get("budget") is not None:
@@ -1404,7 +1473,9 @@ class AsyncSyncRunner:
 
         for attempt in range(MAX_CONFORMANCE_ATTEMPTS):
             success, cost, error, stdout, stderr = self._run_attempt(
-                basename, repair_directive=repair_directive
+                basename,
+                repair_directive=repair_directive,
+                in_flight_cost=total_cost,
             )
             total_cost += cost
             last_error = error
@@ -1427,6 +1498,13 @@ class AsyncSyncRunner:
             repair_directive = new_directive
 
             if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                break
+            remaining_budget = self._remaining_total_budget(total_cost)
+            if remaining_budget is not None and remaining_budget <= 0.0:
+                last_error = (
+                    f"Budget exhausted during architecture conformance repair "
+                    f"(${total_cost:.2f} spent in {basename})."
+                )
                 break
 
         # Hard-failure path: include structured conformance block
@@ -1494,13 +1572,14 @@ class AsyncSyncRunner:
         self,
         basename: str,
         repair_directive: Optional[str] = None,
+        in_flight_cost: float = 0.0,
     ) -> Tuple[bool, float, str, str, str]:
         """
         Execute a single subprocess attempt.
 
         Returns (success, cost, error, stdout, stderr).
         """
-        cmd = self._build_command(basename)
+        cmd = self._build_command(basename, in_flight_cost=in_flight_cost)
 
         cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
         cost_file.close()
