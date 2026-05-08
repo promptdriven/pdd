@@ -16,21 +16,11 @@ Requirements
 
 Dependencies
 
-<candidate_models>
-  <include>examples/candidate_models_example.py</include>
-</candidate_models>
-
-<nurture_models>
-  <include>examples/nurture_models_example.py</include>
-</nurture_models>
-
-<config_loader>
-  <include>examples/config_loader_example.py</include>
-</config_loader>
-
-<contribution_tracking>
-  <include>examples/contribution_tracking_example.py</include>
-</contribution_tracking>
+Runtime module contracts:
+- `extensions.recruiting.models` provides `CandidateDocument` for candidate data.
+- `extensions.recruiting.nurture_models` provides `CrmFunnelStage`, `ContributionSummary`, `ResurfaceReason`, and `ResurfaceResult`.
+- `extensions.recruiting.config_loader` provides `get_config` for resurface thresholds and the churn window.
+- The contribution tracking data structure supplies merged PR count, platform usage days, marketplace examples, and last activity timestamps.
 
 <cloud_scheduler_daily_job_configuration>
   <web>https://cloud.google.com/scheduler/docs/creating</web>

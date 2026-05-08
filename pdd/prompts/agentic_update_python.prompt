@@ -1,10 +1,25 @@
+<pdd-reason>Coordinates agentic prompt updates by running external CLI agents and detecting changed files.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_update", "signature": "(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_update.py` module.
 
 % Role & Scope
-The `agentic_update` module coordinates an "agentic" update of a prompt file using an external CLI agent (such as Claude Code, Gemini, or Codex). It acts as a bridge between the local file system and AI agents, ensuring that the agents have the necessary context (code and tests) to produce high-quality, compact prompt updates.
+The `agentic_update` module coordinates an "agentic" update of a prompt file using an external CLI agent (such as Claude Code, Gemini, Codex, or OpenCode). It acts as a bridge between the local file system and AI agents, ensuring that the agents have the necessary context (code and tests) to produce high-quality, compact prompt updates.
 
 % Requirements
 1. **Primary Function**: Implement `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`.
@@ -30,7 +45,8 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
 
 % Dependencies
 <pdd.agentic_common>
-    <include select="def:example_run_agentic_task,def:get_available_agents,def:_revert_out_of_scope_changes">context/agentic_common_example.py</include>
+    <include select="def:example_run_agentic_task">context/agentic_common_example.py</include>
+    <include select="def:get_available_agents,def:run_agentic_task,def:_revert_out_of_scope_changes">pdd/agentic_common.py</include>
 </pdd.agentic_common>
 <pdd.load_prompt_template>
     <include>context/load_prompt_template_example.py</include>

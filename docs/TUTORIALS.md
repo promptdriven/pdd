@@ -18,6 +18,7 @@ This tutorial walks through implementing a GitHub issue using PDD.
   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+  - **OpenCode CLI**: `npm install -g opencode-ai` (requires a configured provider via OpenCode's provider connection flow or env vars; recommended: `OPENCODE_MODEL=provider/model`)
 
 ### Method 1: Using the Web Interface
 

@@ -16,5 +16,5 @@
 
 % Here is the syntax file for the .prompt file extension:
 <syntax-file>
-    <include>vscode_prompt/syntaxes/prompt.tmLanguage.json</include>
+    <include>utils/vscode_prompt/syntaxes/prompt.tmLanguage.json</include>
 </syntax-file>

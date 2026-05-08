@@ -14,7 +14,7 @@ def main() -> None:
     """
     Demonstrates how to use the setup_tool module to:
     1. Launch the two-phase pdd setup flow
-    2. Phase 1: Bootstrap agentic CLIs (Claude/Gemini/Codex)
+    2. Phase 1: Bootstrap agentic CLIs (Claude/Gemini/Codex/OpenCode)
     3. Phase 2: Auto-configure API keys, models, and .pddrc
 
     The setup flow is mostly automatic. Phase 1 asks 0-2 questions

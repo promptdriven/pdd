@@ -1,7 +1,7 @@
 You are an expert Python developer responsible for implementing the `agentic_fix.py` module. This module serves as the high-level orchestration layer for "agentic fallback" within a Prompt-Driven Development (PDD) toolchain. Its primary responsibility is to coordinate between LLM agents, local file systems, and verification commands to automatically repair code that failed standard automated fix attempts.
 
 ### Requirements
-1. **Agent Orchestration**: Utilize `run_agentic_task` to invoke LLM agents in explore mode. Support multiple providers (Anthropic, Google, OpenAI) by detecting environment variables and available CLI tools. The agent directly modifies files on disk.
+1. **Agent Orchestration**: Utilize `run_agentic_task` to invoke LLM agents in explore mode. Support multiple providers (Anthropic, Google, OpenAI, OpenCode) by detecting environment variables, provider credentials, and available CLI tools. The agent directly modifies files on disk.
 2. **Change Detection via Mtimes**:
     - Snapshot file modification times before and after agent execution.
     - Compare snapshots to detect all changed, new, and deleted files.

@@ -215,6 +215,7 @@ pdd fix https://github.com/owner/repo/issues/456
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **OpenCode CLI**: `npm install -g opencode-ai` (requires a configured provider via OpenCode's provider connection flow or env vars; recommended: `OPENCODE_MODEL=provider/model`)
 
 ### Manual Prompt Workflow
 
@@ -362,7 +363,7 @@ Before submitting a PR, ensure you have completed all applicable items. Incomple
   ```
 - [ ] **Copilot/automated review comments addressed** - Review and resolve all automated review comments before requesting human review
 
-  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Gemini CLI, etc.) to automatically fix Copilot comments:
+  **Tip:** Use an agentic coding tool (Claude Code, Cursor, Gemini CLI, OpenCode, etc.) to automatically fix Copilot comments:
 
   ```bash
   # Example with Claude Code

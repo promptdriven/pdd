@@ -4,7 +4,7 @@ from __future__ import annotations
 Example demonstrating how to use pdd.agentic_update.run_agentic_update.
 
 run_agentic_update coordinates an agentic update of a prompt file using an
-external CLI agent (Claude, Gemini, Codex). It:
+external CLI agent (Claude, Gemini, Codex, OpenCode). It:
   1. Validates that prompt and code files exist.
   2. Checks for available agent CLIs.
   3. Auto-discovers (or accepts explicit) test files.

@@ -1,7 +1,7 @@
 [
   {
-    "reason": "Shared infrastructure for agentic CLI invocations with multi-provider support and playwright mode.",
-    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI stored OAuth credentials.",
+    "reason": "Shared infrastructure for agentic CLI invocations across Claude, Gemini, Codex, and OpenCode.",
+    "description": "Common functions for running agentic tasks: timeout handling, cost tracking, step execution, result aggregation, playwright mode, GitHub state persistence, and provider availability detection including Gemini CLI OAuth credentials and OpenCode provider credentials.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
@@ -31,33 +31,103 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose, quiet, label, timeout, max_retries, retry_delay, deadline, use_playwright)",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
           },
           {
+            "name": "detect_control_token",
+            "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]",
+            "returns": "Optional[TokenMatch]"
+          },
+          {
+            "name": "classify_step_output",
+            "signature": "(output, tokens, quiet=False) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_codex_auth_failure_message",
+            "signature": "(error_detail: str) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "substitute_template_variables",
+            "signature": "(template, variables) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "set_agentic_progress",
+            "signature": "(workflow, current_step, total_steps, step_name, completed_steps) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "clear_agentic_progress",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "get_and_clear_agentic_interrupt_context",
+            "signature": "() -> Optional[Dict]",
+            "returns": "Optional[Dict]"
+          },
+          {
+            "name": "get_job_deadline",
+            "signature": "() -> Optional[float]",
+            "returns": "Optional[float]"
+          },
+          {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd)",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool",
             "returns": "bool"
           },
           {
             "name": "post_pr_comment",
-            "signature": "(repo_owner, repo_name, pr_number, body, cwd)",
+            "signature": "(repo_owner, repo_name, pr_number, body, cwd) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "post_final_comment",
+            "signature": "(repo_owner, repo_name, issue_number, reason, total_cost, steps_completed, total_steps, cwd) -> bool",
             "returns": "bool"
           },
           {
             "name": "github_save_state",
-            "signature": "(...)",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, state: Dict, cwd: Path, comment_id: Optional[int] = None) -> Optional[int]",
             "returns": "Optional[int]"
           },
           {
             "name": "github_load_state",
-            "signature": "(...)",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> Tuple[Optional[Dict], Optional[int]]",
             "returns": "Tuple[Optional[Dict], Optional[int]]"
           },
           {
+            "name": "github_clear_state",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> bool",
+            "returns": "bool"
+          },
+          {
             "name": "validate_cached_state",
-            "signature": "(last_completed_step, step_outputs, step_order, quiet)",
+            "signature": "(last_completed_step, step_outputs, step_order=None, quiet=False) -> Union[int, float]",
             "returns": "Union[int, float]"
+          },
+          {
+            "name": "load_workflow_state",
+            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> Tuple[Optional[Dict], Optional[int]]",
+            "returns": "Tuple[Optional[Dict], Optional[int]]"
+          },
+          {
+            "name": "save_workflow_state",
+            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state: Dict, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True, github_comment_id: Optional[int] = None) -> Optional[int]",
+            "returns": "Optional[int]"
+          },
+          {
+            "name": "clear_workflow_state",
+            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "_revert_out_of_scope_changes",
+            "signature": "(cwd: Path, allowed_paths: set[Path]) -> List[Path]",
+            "returns": "List[Path]"
           }
         ]
       }
@@ -949,7 +1019,9 @@
   {
     "reason": "Determines output file paths for generated code.",
     "description": "Calculates where generated files should be written based on project structure and conventions.",
-    "dependencies": ["auto_deps_main_python.prompt"],
+    "dependencies": [
+      "auto_deps_main_python.prompt"
+    ],
     "priority": 30,
     "filename": "generate_output_paths_python.prompt",
     "filepath": "pdd/generate_output_paths.py",
@@ -1430,9 +1502,12 @@
     }
   },
   {
-    "reason": "Autonomously updates prompts based on code changes.",
-    "description": "Analyzes code modifications and generates corresponding prompt updates. Ensures prompt-code synchronization.",
-    "dependencies": [],
+    "reason": "Coordinates agentic prompt updates by running external CLI agents and detecting changed files.",
+    "description": "Runs external CLI agents including Claude Code, Gemini, Codex, and OpenCode to update prompt files, guard scope, and report changed files.",
+    "dependencies": [
+      "agentic_update_LLM.prompt",
+      "agentic_common_python.prompt"
+    ],
     "priority": 43,
     "filename": "agentic_update_python.prompt",
     "filepath": "pdd/agentic_update.py",
@@ -1447,11 +1522,8 @@
         "functions": [
           {
             "name": "run_agentic_update",
-            "signature": "(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
       }
@@ -2363,7 +2435,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -2577,7 +2652,9 @@
   {
     "reason": "Generates unit tests for PDD-generated code modules.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
-    "dependencies": ["bug_to_unit_test_python.prompt"],
+    "dependencies": [
+      "bug_to_unit_test_python.prompt"
+    ],
     "priority": 68,
     "filename": "generate_test_python.prompt",
     "filepath": "pdd/generate_test.py",
@@ -2918,12 +2995,12 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step4 reproduce operations.",
-    "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
+    "reason": "LLM prompt template for agentic bug step5 reproduce operations.",
+    "description": "Defines the prompt structure for agentic bug step5 reproduce. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "filename": "agentic_bug_step5_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3040,12 +3117,12 @@
     }
   },
   {
-    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
+    "reason": "Creates draft PR with failing tests and PDD fix command for step 12 of agentic bug workflow.",
+    "description": "Step 12 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
+    "filename": "agentic_bug_step12_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3055,7 +3132,7 @@
     "interface": {
       "type": "command",
       "command": {
-        "name": "agentic_bug_step10",
+        "name": "agentic_bug_step12",
         "description": "Generate draft PR with failing tests and link to GitHub issue"
       }
     },
@@ -3402,12 +3479,12 @@
     }
   },
   {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
+    "reason": "LLM prompt template for extracting query-specific content from include targets.",
+    "description": "Defines the prompt structure for include query extraction. Invoked by the include query extractor module to format LLM requests.",
     "dependencies": [],
     "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
+    "filename": "include_query_extractor_LLM.prompt",
+    "filepath": "prompts/include_query_extractor_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3952,7 +4029,7 @@
     "dependencies": [],
     "priority": 116,
     "filename": "pdd_completion_bash.prompt",
-    "filepath": "pdd_completion.sh",
+    "filepath": "pdd/pdd_completion.sh",
     "tags": [
       "cli",
       "shell"
@@ -4009,7 +4086,7 @@
     "dependencies": [],
     "priority": 119,
     "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
+    "filepath": "prompts/pdd_theme_json.prompt",
     "tags": [
       "config"
     ],
@@ -4200,7 +4277,7 @@
     "dependencies": [],
     "priority": 124,
     "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
+    "filepath": "prompts/regression_analysis_log.prompt",
     "tags": [
       "config"
     ],
@@ -4221,7 +4298,7 @@
     "dependencies": [],
     "priority": 125,
     "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
+    "filepath": "tests/regression.sh",
     "tags": [
       "cli",
       "shell"
@@ -4287,7 +4364,7 @@
     "dependencies": [],
     "priority": 127,
     "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
+    "filepath": "utils/run_generated.py",
     "tags": [
       "generation",
       "module",
@@ -4322,8 +4399,10 @@
   },
   {
     "reason": "Orchestrates pdd setup in two phases: (1) interactive CLI bootstrapping with minimal friction, (2) deterministic auto-configuration using existing Python modules (no LLM calls).",
-    "description": "Handles initial setup, configuration, and environment variable management.",
-    "dependencies": [],
+    "description": "Handles pdd setup, interactive CLI bootstrapping for Claude, Gemini, Codex, and OpenCode, configuration, and environment variable management.",
+    "dependencies": [
+      "cli_detector_python.prompt"
+    ],
     "priority": 129,
     "filename": "setup_tool_python.prompt",
     "filepath": "pdd/setup_tool.py",
@@ -4345,6 +4424,51 @@
     },
     "position": {
       "x": 12000,
+      "y": 400
+    }
+  },
+  {
+    "reason": "Detects and bootstraps agentic CLI tools for pdd setup, with minimal-friction interactive installation and API key configuration.",
+    "description": "Detects and bootstraps Claude, Codex, Gemini, and OpenCode CLI harnesses for agentic workflows and pdd setup.",
+    "dependencies": [],
+    "priority": 130,
+    "filename": "cli_detector_python.prompt",
+    "filepath": "pdd/cli_detector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "detect_and_bootstrap_cli",
+            "signature": "() -> List[CliBootstrapResult]",
+            "returns": "List[CliBootstrapResult]"
+          },
+          {
+            "name": "detect_cli_tools",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ],
+        "dataclasses": [
+          {
+            "name": "CliBootstrapResult",
+            "fields": [
+              "cli_name: str",
+              "provider: str",
+              "cli_path: str",
+              "api_key_configured: bool",
+              "skipped: bool"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 11240,
       "y": 400
     }
   },
@@ -4960,7 +5084,7 @@
     "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
+    "filepath": "tests/prompt_tester.py",
     "tags": [
       "module",
       "python",
@@ -5423,7 +5547,7 @@
         "commands": [
           {
             "name": "generate",
-          "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
           },
           {
             "name": "test",
@@ -5602,11 +5726,11 @@
   },
   {
     "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
-    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
+    "description": "Step 7 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
     "dependencies": [],
     "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filename": "agentic_bug_step7_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step7_prompt_classification_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5626,11 +5750,11 @@
   },
   {
     "reason": "Generates E2E tests that verify the bug at a system level.",
-    "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
+    "description": "Step 11 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6042,7 +6166,9 @@
   {
     "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
-    "dependencies": ["agentic_bug_orchestrator_python.prompt"],
+    "dependencies": [
+      "agentic_bug_orchestrator_python.prompt"
+    ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
     "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
@@ -7037,7 +7163,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
