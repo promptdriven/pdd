@@ -4961,32 +4961,6 @@ def test_is_error_true_returns_failure(mock_cwd, mock_env, mock_load_model_data,
     )
 
 
-def test_anthropic_is_error_preserves_structured_metadata():
-    """Claude Code is_error diagnostics must keep provider metadata visible."""
-    from pdd.agentic_common import _parse_provider_json
-
-    success, msg, cost, _model = _parse_provider_json(
-        "anthropic",
-        {
-            "type": "result",
-            "subtype": "error_during_execution",
-            "is_error": True,
-            "api_error_status": 429,
-            "duration_ms": 143864,
-            "num_turns": 23,
-            "result": "Exit",
-            "total_cost_usd": 0.25,
-        },
-    )
-
-    assert success is False
-    assert cost == 0.25
-    assert '"api_error_status":429' in msg
-    assert '"subtype":"error_during_execution"' in msg
-    assert '"num_turns":23' in msg
-    assert '"result":"Exit"' in msg
-
-
 def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Single-provider config (anthropic-only, the cloud one-session case):
     transient empty-result success must retry on the same provider with

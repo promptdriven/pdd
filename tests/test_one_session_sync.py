@@ -503,31 +503,6 @@ class TestRunOneSessionSync:
         assert len(result["errors"]) == 1
         assert "Something went wrong" in result["errors"][0]
 
-    @patch("pdd.one_session_sync.run_agentic_task")
-    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
-    def test_failure_prints_machine_readable_diagnostic(
-        self, mock_build, mock_task, tmp_path, capsys
-    ):
-        mock_task.return_value = (
-            False,
-            'All agent providers failed: anthropic: Claude Code error: {"api_error_status":429,"result":"Exit"}',
-            0.5,
-            "claude-code",
-        )
-        pdd_files = _make_pdd_files(tmp_path)
-
-        run_one_session_sync(
-            basename="my_module",
-            language="python",
-            pdd_files=pdd_files,
-            project_root=tmp_path,
-            quiet=False,
-        )
-
-        captured = capsys.readouterr()
-        assert "ONE_SESSION_SYNC_ERROR:" in captured.out
-        assert '"api_error_status":429' in captured.out
-
     def test_missing_code_file_raises(self, tmp_path):
         pdd_files = _make_pdd_files(tmp_path)
         pdd_files["code"].unlink()

@@ -329,11 +329,6 @@ def run_one_session_sync(
             f"[bold]One-session sync {status}[/bold] "
             f"({mins}m{secs:02d}s, ${cost:.4f})"
         )
-        if not success:
-            diagnostic = " ".join(
-                (output_text or "One-session sync failed").splitlines()
-            )[:2000]
-            print(f"ONE_SESSION_SYNC_ERROR: {diagnostic}", flush=True)
 
     # Determine which operations were completed
     operations: List[str] = []
