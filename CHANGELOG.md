@@ -2,23 +2,34 @@
 
 ### Feat
 
-- **split**: add per-child verify gate
-- **pdd-split**: defensive resilience — sanitize paths, 429 backoff, --max-cost (#854)
-- fail-fast on degenerate step-5 module-design output (#817)
+- **split**: add per-child verification during extraction, with persisted child status, bounded per-child repair attempts, terminal failure reasons, and resume behavior that skips already verified children.
+- **split**: add `--max-cost` to agentic split, including strangler-mode cumulative budget accounting, resume support, and budget checks after child extraction, repair, and refinement work.
+- **architecture**: fail fast when step 5 module design returns degenerate output (`Done.`, markerless text, or fewer than 200 meaningful characters) instead of spending Step 5b retries on invalid input.
+- **ci**: add public Cloud Batch test infrastructure, duration-balanced pytest sharding, result collection, setup scripts, job templates, and an encrypted repository-dispatch secrets workflow.
+- **include-query**: allow semantic include extraction strength to be overridden with `PDD_EXTRACTS_STRENGTH`.
 
 ### Fix
 
-- clean public release flow (#857)
-- **split**: run checkup after arch sync
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- **#813**: preserve Claude OAuth when stale Anthropic key is set
+- **agentic auth/setup**: preserve Claude Code OAuth/subscription auth when stale `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is present; setup and CLI detection now treat Claude, Gemini, and Codex OAuth logins as valid credentials and tailor OAuth-only quick-start guidance.
+- **sync**: dependency scheduling now lets independent ready modules continue after an unrelated module fails, marks transitive dependency failures as blocked, and distinguishes budget-skipped, blocked, and not-run modules in summaries and GitHub progress comments.
+- **split**: run `checkup --validate-arch-includes` after architecture sync and before checkup repair retries so include drift is evaluated against freshly regenerated metadata.
+- **split**: harden LLM-provided path handling, 429/rate-limit retry backoff, explicit example/test output validation, missing test reporting, parent wiring checks, and `--max-cost` resume state so malformed paths or budget aborts do not crash or re-bill completed work.
+- **prompt includes**: broaden generated-prompt sanitization for `auto-deps`, `change`, `split`, and `update`; the validator now understands attributed/self-closing/path includes, optional includes, selector failures, case-insensitive module prompt includes, project-root-relative lookup, and ignores literal include examples in code spans.
+- **architecture**: preserve existing `.pddrc` contexts during generated architecture setup and remove or move stray target-directory `.pddrc` files back to the project root.
+- **release/regression**: keep public-repo copying separate from PyPI publish, preserve failing command exit codes in sync regression, add kill-after timeout support, and shorten the malformed-prompt regression path.
+
+### Docs
+
+- README, onboarding, and tutorial docs now cover OAuth vs API-key auth paths, `PDD_KEEP_ANTHROPIC_API_KEY`, split per-child verification, post-arch checkup, resume semantics, `--max-cost`, and generated architecture validation.
+
+### Build
+
+- Add `upload-pypi`, release preflight guards for public-origin `main` with a clean aligned worktree, and the 0.0.231 version bump across package metadata, README/PyPI text, frontend constants, and completions.
+- Sync public payloads now include `ci/cloud-batch/` and `context/change/`; refresh architecture metadata, prompts, examples, `project_dependencies.csv`, `pypi_description.rst`, and Cloud Batch timing data; ignore local `.infisical.json`.
+
+### Test
+
+- Added and expanded regression coverage for split per-child verification and `--max-cost` resume, issue 813 OAuth shadowing, issue 817 step-5 fail-fast, sync dependency scheduling, prompt include sanitization, setup/CLI OAuth detection, Cloud Batch sharding, and isolated cloud/LLM-sensitive tests.
 
 ## v0.0.230 (2026-05-06)
 
