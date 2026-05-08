@@ -104,3 +104,49 @@ jobs:
 
       - name: Run public-safe CLI regressions
         run: make regression-public
+
+  package-preprocess-smoke:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    name: Package Preprocess Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PDD_PATH: ''
+      PYTHONPATH: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m build --wheel --outdir dist-smoke
+
+      - name: Install wheel in isolated environment
+        run: |
+          python -m venv "$RUNNER_TEMP/pdd-wheel-smoke"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" -m pip install dist-smoke/*.whl
+
+      - name: Verify packaged preprocess include resolution
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="$(mktemp -d)"
+          cd "$SMOKE_DIR"
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/python" - <<'PY'
+          import pdd
+
+          if "site-packages" not in pdd.__file__:
+              raise SystemExit(f"pdd imported from checkout instead of installed wheel: {pdd.__file__}")
+          PY
+          printf '<include>docs/prompting_guide.md</include>\n' > test_include_python.prompt
+          "$RUNNER_TEMP/pdd-wheel-smoke/bin/pdd" --quiet preprocess test_include_python.prompt --output preprocessed.txt
+          grep -q "PDD Mental Model" preprocessed.txt
