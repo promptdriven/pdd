@@ -789,6 +789,20 @@ def code_generator_main(
             prompt_content += "</unit_test_content>\n"
         # ---------------------------------
 
+        # Architecture-conformance repair directive (set by retrying callers
+        # such as agentic_sync_runner / sync_main when a prior generation
+        # failed conformance). Append to the prompt so the model sees the
+        # missing-export instruction on the next attempt. Without this, the
+        # subprocess retry would be an identical generation request and the
+        # repair loop would not actually repair anything (#866).
+        repair_directive_env = os.environ.get("PDD_REPAIR_DIRECTIVE")
+        if repair_directive_env and repair_directive_env.strip():
+            prompt_content += (
+                "\n\n<architecture_repair_directive>\n"
+                f"{repair_directive_env.strip()}\n"
+                "</architecture_repair_directive>\n"
+            )
+
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
         return "", False, 0.0, "error"
