@@ -19,6 +19,7 @@ from pdd.agentic_sync_runner import (
     ModuleState,
     _BOX_CHARS_RE,
     _format_duration,
+    _parse_conformance_failure,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
@@ -905,6 +906,95 @@ class TestAsyncSyncRunnerRun:
 # ---------------------------------------------------------------------------
 
 class TestSyncOneModule:
+    def test_parse_conformance_failure_with_output_field(self):
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: "
+            "AsyncSyncRunner.run. "
+            "Output: pdd/agentic_sync_runner.py. "
+            "Expected: ['AsyncSyncRunner', 'AsyncSyncRunner.run']. "
+            "Found: ['AsyncSyncRunner']."
+        )
+
+        parsed = _parse_conformance_failure("", stderr)
+
+        assert parsed is not None
+        repair_directive, missing_symbols = parsed
+        assert missing_symbols == ("AsyncSyncRunner.run",)
+        assert "- AsyncSyncRunner.run" in repair_directive
+        assert "Output:" not in repair_directive
+
+    def test_parse_conformance_failure_without_symbols_is_not_repairable(self):
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code\n"
+        )
+
+        assert _parse_conformance_failure("", stderr) is None
+
+    def test_conformance_hard_failure_includes_structured_fields(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. "
+            "Expected: ['Foo', 'Foo.run']. "
+            "Found: ['Foo']."
+        )
+
+        block = runner._build_conformance_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "=== architecture conformance failure ===" in block
+        assert "prompt: foo_python.prompt" in block
+        assert "output: pdd/foo.py" in block
+        assert "expected: ['Foo', 'Foo.run']" in block
+        assert "found: ['Foo']" in block
+        assert "missing: Foo.run" in block
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_conformance_failure_retries_with_repair_directive(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        conformance_error = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. "
+            "Expected: ['Foo', 'Foo.run']. Found: ['Foo']."
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=conformance_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success
+        assert cost == pytest.approx(0.0)
+        assert error == ""
+        assert mock_popen.call_count == 2
+        first_env = mock_popen.call_args_list[0].kwargs["env"]
+        second_env = mock_popen.call_args_list[1].kwargs["env"]
+        assert "PDD_REPAIR_DIRECTIVE" not in first_env
+        assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
+
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
