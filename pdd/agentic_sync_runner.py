@@ -1106,6 +1106,41 @@ class AsyncSyncRunner:
                 f"In Progress ({successes}/{len(self.basenames)} complete)"
             )
 
+        # Failed-module details (#865): render each failed module's structured
+        # error (architecture-conformance block, "Reproduce locally:" line, and
+        # env fingerprint) so the GitHub progress comment carries the same
+        # diagnostics the local CLI prints. Each module is collapsed into a
+        # <details> block and its error is fenced as a code block. The body is
+        # truncated to keep the comment well under the 65 536-character GitHub
+        # limit even when several modules fail with long stack traces.
+        if failed_modules:
+            lines.append("")
+            lines.append("### Failed module details")
+            per_module_limit = 8000
+            for basename in failed_modules:
+                err = states_snapshot[basename].error or ""
+                err = err.rstrip()
+                if not err:
+                    err = "(no error captured)"
+                if len(err) > per_module_limit:
+                    err = (
+                        err[:per_module_limit]
+                        + f"\n... [truncated {len(err) - per_module_limit} chars]"
+                    )
+                # Escape any backtick fence inside the error so the markdown
+                # code block stays well-formed.
+                fence = "```"
+                while fence in err:
+                    fence += "`"
+                lines.append("")
+                lines.append(f"<details><summary><code>{basename}</code></summary>")
+                lines.append("")
+                lines.append(fence)
+                lines.append(err)
+                lines.append(fence)
+                lines.append("")
+                lines.append("</details>")
+
         return "\n".join(lines)
 
     # ------------------------------------------------------------------

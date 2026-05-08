@@ -270,6 +270,49 @@ class TestBuildCommentBody:
         assert "Paused" in body
         assert "`a` failed" in body
 
+    def test_failure_includes_state_error_details(self):
+        """#865: GitHub progress comment must surface the structured
+        conformance error for each failed module (missing symbols, the
+        ``Reproduce locally:`` line, and env fingerprint), not just the
+        ``Paused: <module> failed`` footer."""
+        runner = AsyncSyncRunner(
+            basenames=["alpha", "beta"],
+            dep_graph={"alpha": [], "beta": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["alpha"].status = "failed"
+        runner.module_states["alpha"].start_time = 0.0
+        runner.module_states["alpha"].end_time = 10.0
+        runner.module_states["alpha"].error = (
+            "Architecture conformance failure\n"
+            "\n"
+            "=== architecture conformance failure ===\n"
+            "prompt: alpha_python.prompt\n"
+            "output: pdd/alpha.py\n"
+            "expected: foo, bar\n"
+            "found: foo\n"
+            "missing: bar\n"
+            "\n"
+            "Reproduce locally: pdd sync alpha\n"
+            "\n"
+            "--- env ---\n"
+            "pdd.__file__: /tmp/pdd/__init__.py\n"
+        )
+        runner.module_states["beta"].status = "success"
+        runner.module_states["beta"].start_time = 0.0
+        runner.module_states["beta"].end_time = 10.0
+
+        body = runner._build_comment_body(7)
+        assert "### Failed module details" in body
+        assert "<details><summary><code>alpha</code></summary>" in body
+        assert "missing: bar" in body
+        assert "Reproduce locally: pdd sync alpha" in body
+        assert "--- env ---" in body
+        # Successful module should not get a details block
+        assert "<code>beta</code>" not in body
+
     def test_failure_with_running_modules_shows_continuing(self):
         runner = AsyncSyncRunner(
             basenames=["a", "b"],
