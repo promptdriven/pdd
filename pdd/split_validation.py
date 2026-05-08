@@ -1,25 +1,18 @@
-"""pdd/split_validation.py — Post-extraction validation for the agentic split orchestrator."""
 from __future__ import annotations
 
 import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from types import SimpleNamespace
+from typing import Any, Iterable, Optional
 
-from .get_lint_commands import LintCommand
-from .get_lint_commands import get_lint_commands as _get_lint_commands_impl
-from .get_test_command import TestCommand, get_test_command_for_file
+from .get_test_command import get_test_command_for_file, TestCommand
+from .get_lint_commands import get_lint_commands as _get_lint_commands_impl, LintCommand
 
-__all__ = [
-    "LintCommand",
-    "TestCommand",
-    "ValidationFailure",
-    "ValidationResult",
-    "get_lint_commands",
-    "get_test_command",
-    "validate_extraction",
-]
+
+# Module-level flag to suppress progress prints in tests
+quiet_import: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -29,14 +22,6 @@ __all__ = [
 
 @dataclass
 class ValidationFailure:
-    """A single validation check failure.
-
-    Attributes:
-        check: Name of the check that failed (e.g. ``"byte_equivalence"``).
-        message: Human-readable failure description.
-        severity: One of ``"error"`` or ``"warning"``.  Default ``"error"``.
-    """
-
     check: str
     message: str
     severity: str = "error"
@@ -44,368 +29,128 @@ class ValidationFailure:
 
 @dataclass
 class ValidationResult:
-    """Aggregated result of all validation checks.
-
-    Attributes:
-        passed: ``True`` when there are no error-severity failures.
-        failures: Every failure found across all checks.
-        failure_type: Summary category — ``"none"``, ``"extraction"``,
-            ``"metadata"``, ``"completeness"``, or ``"multiple"``.
-    """
-
     passed: bool
     failures: list[ValidationFailure] = field(default_factory=list)
     failure_type: str = "none"
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Constants
 # ---------------------------------------------------------------------------
 
-_CHECK_TO_CATEGORY: dict[str, str] = {
+
+_LANG_SUFFIXES = ("_python", "_typescript", "_go", "_rust")
+
+_REQUIRED_TAGS = ("<pdd-reason>", "<pdd-interface>", "<pdd-dependency>")
+
+_STDLIB_NAMES = {
+    "os", "sys", "io", "re", "json", "time", "math", "asyncio", "subprocess",
+    "shutil", "tempfile", "pathlib", "logging", "functools", "itertools",
+    "collections", "typing", "datetime", "random", "uuid", "hashlib", "base64",
+    "threading", "multiprocessing", "socket", "signal", "platform", "builtins",
+    "copy", "string", "enum", "dataclasses", "warnings",
+}
+
+_CATEGORY_MAP = {
     "byte_equivalence": "extraction",
+    "test_seam_resolution": "extraction",
+    "parent_wiring": "extraction",
     "prompt_metadata": "metadata",
     "children_completeness": "completeness",
     "example_file": "completeness",
     "test_ownership": "completeness",
-    "test_seam_resolution": "extraction",
 }
 
 
-# Regex for patch-string patterns used across test frameworks.
-# We look for any string literal passed to patch()/patcher/mock.patch()
-# that looks like a dotted module path: "a.b.c" or "module.X".
-# This is framework-agnostic — we capture the STRING not the API call.
-_PATCH_STRING_PATTERNS = [
-    # Python: patch("mod.X"), patch.object("mod.X", ...), mock.patch("mod.X")
-    re.compile(r'''patch(?:\.object)?\s*\(\s*["']([^"']+)["']'''),
-    # Python: mocker.patch("mod.X") AND mocker.patch.object("mod.X", ...)
-    re.compile(r'''mocker\.patch(?:\.object)?\s*\(\s*["']([^"']+)["']'''),
-    # JS/TS: jest.mock('mod'), jest.doMock('mod')
-    re.compile(r'''jest\.(?:do)?[mM]ock\s*\(\s*["']([^"']+)["']'''),
-    # Go: reflect-based lookups that reference module paths as strings
-    # (best-effort; Go rarely uses string-based patching)
-]
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
-def _collect_patch_paths(test_file_content: str) -> list[str]:
-    """Extract every module-path-looking string passed to a patch() call.
-
-    Framework-agnostic: looks for the string argument, not the API call.
-    Returns a deduplicated list of dotted paths that look like symbol
-    references (contain at least one dot).
-    """
-    paths: set[str] = set()
-    for pattern in _PATCH_STRING_PATTERNS:
-        for match in pattern.findall(test_file_content):
-            # Only keep things that look like dotted module paths
-            if "." in match and not match.startswith(".") and not match.endswith("."):
-                paths.add(match)
-    return sorted(paths)
+def _console(stderr: bool = False):
+    from rich.console import Console
+    return Console(stderr=stderr)
 
 
-_STDLIB_MODULES_COMMON: set[str] = {
-    "os", "sys", "io", "re", "json", "time", "math", "asyncio", "subprocess",
-    "shutil", "tempfile", "pathlib", "logging", "functools", "itertools",
-    "collections", "typing", "datetime", "random", "uuid", "hashlib",
-    "base64", "threading", "multiprocessing", "socket", "signal", "platform",
-    "builtins", "copy", "string", "enum", "dataclasses", "warnings",
-}
-
-
-def _resolve_patch_path(path: str, worktree: Path) -> tuple[bool, str]:
-    """Check whether a dotted patch path resolves after extraction.
-
-    We can't actually import the module (that would require executing
-    project code with all its dependencies). Instead we do a static
-    resolution check:
-    - Find the module file for the leading components
-    - Check that the final component appears as a name in that file,
-      either defined directly or re-exported via import
-    Returns (resolved, reason).
-    """
-    if "." not in path:
-        return True, ""  # Not a dotted path; skip
-    parts = path.split(".")
-    # The last part is the symbol name; everything else is the module path.
-    symbol = parts[-1]
-    module_parts = parts[:-1]
-
-    # Pattern: <pkg>.<stdlib>.<attr>  — e.g. src.workers.pdd_executor.os.getpgid
-    # The test is patching a stdlib attribute as imported into the target
-    # package. This works at runtime whenever the target package has
-    # `import <stdlib>`. We accept this optimistically — it's a common
-    # pattern and usually correct.
-    for i, part in enumerate(module_parts):
-        if part in _STDLIB_MODULES_COMMON:
-            # Everything from this point is stdlib attribute access
-            return True, f"optimistic (stdlib attr via '{part}')"
-
-    # Pattern: <pkg>.<stdlib>  — e.g. src.workers.pdd_executor.subprocess
-    # The symbol itself is a stdlib module name. The test is replacing
-    # the whole module attribute on the target. Accept optimistically.
-    if symbol in _STDLIB_MODULES_COMMON:
-        return True, f"optimistic (stdlib module '{symbol}')"
-
-    # Try to locate the module file. Walk the worktree looking for any
-    # `<joined_parts>.py` or `<joined_parts>/__init__.py`.
-    # We try multiple search roots to handle different layouts.
-    rel_candidates: list[Path] = []
-    # Full path: a/b/c.py
-    rel_candidates.append(Path(*module_parts).with_suffix(".py"))
-    # Package: a/b/c/__init__.py
-    rel_candidates.append(Path(*module_parts) / "__init__.py")
-    # Drop first component (common: tests use "src.workers.X" but code is "workers/X")
-    if len(module_parts) > 1:
-        rel_candidates.append(Path(*module_parts[1:]).with_suffix(".py"))
-        rel_candidates.append(Path(*module_parts[1:]) / "__init__.py")
-    # Drop first two components (common: "src.workers.pdd_executor.X" → "pdd_executor/X")
-    if len(module_parts) > 2:
-        rel_candidates.append(Path(*module_parts[2:]).with_suffix(".py"))
-        rel_candidates.append(Path(*module_parts[2:]) / "__init__.py")
-
-    # Search the whole worktree for the last-segment filename as a fallback
-    # (helps when the test uses a flat path but the code lives deep).
-    # Filter so the candidate's trailing path segments match the relative
-    # path's parts — prevents every __init__.py in the tree from matching.
-    found_files: list[Path] = []
-    for rel in rel_candidates:
-        rel_parts = rel.parts
-        for root in [worktree, worktree / "extensions"]:
-            if not root.is_dir():
-                continue
-            for cand in root.rglob(rel.name):
-                if not (cand.is_file() and cand.name == rel.name):
-                    continue
-                try:
-                    rel_cand = cand.relative_to(root).parts
-                except ValueError:
-                    continue
-                if rel_cand[-len(rel_parts):] != rel_parts:
-                    continue
-                found_files.append(cand)
-
-    if not found_files:
-        return False, f"module file not found for path '{path}'"
-
-    # For each candidate file, check whether `symbol` appears as a
-    # defined name or a re-export. We normalize multi-line imports by
-    # collapsing them first (Python allows `from m import (\n  A,\n  B,\n)`
-    # which is invisible to a line-based regex).
-    name_re = re.compile(
-        rf"(?m)^(?:"
-        rf"async\s+def\s+{re.escape(symbol)}\b|"
-        rf"def\s+{re.escape(symbol)}\b|"
-        rf"class\s+{re.escape(symbol)}\b|"
-        rf"{re.escape(symbol)}\s*(?::\s*[^=]+)?\s*="
-        rf")"
+def _normalize_child(child: Any) -> SimpleNamespace:
+    """Normalize a child (dataclass-like or dict) into a SimpleNamespace."""
+    if isinstance(child, dict):
+        prompt_file = child.get("new_prompt") or child.get("prompt_file") or ""
+        code_file = child.get("new_source") or child.get("code_file") or ""
+        name = child.get("name") or ""
+        return SimpleNamespace(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            name=name,
+        )
+    prompt_file = getattr(child, "prompt_file", "") or ""
+    code_file = getattr(child, "code_file", "") or ""
+    name = getattr(child, "name", "") or ""
+    return SimpleNamespace(
+        prompt_file=str(prompt_file),
+        code_file=str(code_file),
+        name=str(name),
     )
-    # Regex for imports that may span multiple lines via parentheses.
-    # We collapse the text first to make the match simple.
-    import_re = re.compile(
-        rf"from\s+\S+\s+import\s+[^;\n]*?\b{re.escape(symbol)}\b"
-    )
-    # Star imports (e.g. `from .submodule import *`) act like brute re-exports
-    star_import_re = re.compile(r"from\s+\S+\s+import\s+\*")
-
-    for cand in found_files:
-        try:
-            text = cand.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        # Direct definition on this file
-        if name_re.search(text):
-            return True, ""
-        # Collapse multi-line parenthesized imports into single lines so
-        # import_re can match. Cheap transformation: remove newlines
-        # inside any `(...)` that follows an `import`.
-        def _flatten_paren_imports(t: str) -> str:
-            # Find `import (...)` blocks and strip newlines inside them
-            out_parts: list[str] = []
-            i = 0
-            while i < len(t):
-                # Look for 'import ' followed by '('
-                m = re.compile(r"\bimport\s*\(").search(t, i)
-                if not m:
-                    out_parts.append(t[i:])
-                    break
-                # Copy up to the '('
-                out_parts.append(t[i:m.end() - 1])  # up to but not including '('
-                # Find matching close paren
-                depth = 0
-                j = m.end() - 1
-                while j < len(t):
-                    ch = t[j]
-                    if ch == "(":
-                        depth += 1
-                    elif ch == ")":
-                        depth -= 1
-                        if depth == 0:
-                            break
-                    j += 1
-                # Flatten the parenthesized block
-                block = t[m.end() - 1 : j + 1].replace("\n", " ")
-                out_parts.append(block)
-                i = j + 1
-            return "".join(out_parts)
-
-        flat = _flatten_paren_imports(text)
-        if import_re.search(flat):
-            return True, ""
-        # Star import: symbol could be from any of them; accept optimistically
-        if star_import_re.search(text):
-            return True, "optimistic (star import)"
-        # Brute-force re-export via dir() walk (manual-split pattern)
-        if (
-            "for _name in dir(" in text
-            and ("globals()[_name] = getattr" in text or "getattr(_" in text)
-        ):
-            return True, "optimistic (dir-walk re-export)"
-
-    return False, f"symbol '{symbol}' not found in any candidate module file"
 
 
-def _classify_failures(failures: list[ValidationFailure]) -> str:
-    """Return the summary ``failure_type`` for a collection of failures."""
+def _module_stem(prompt_path: str) -> str:
+    """Extract module stem from a prompt file path, stripping language suffix."""
+    if not prompt_path:
+        return ""
+    stem = Path(prompt_path).stem
+    # Strip .prompt suffix if present in stem (e.g., "foo.prompt" -> "foo")
+    if stem.endswith(".prompt"):
+        stem = stem[: -len(".prompt")]
+    for suf in _LANG_SUFFIXES:
+        if stem.endswith(suf):
+            return stem[: -len(suf)]
+    return stem
+
+
+def _prompt_stem(prompt_path: str) -> str:
+    if not prompt_path:
+        return ""
+    stem = Path(prompt_path).stem
+    if stem.endswith(".prompt"):
+        stem = stem[: -len(".prompt")]
+    return stem
+
+
+def _classify_failure_type(failures: list[ValidationFailure]) -> str:
     if not failures:
         return "none"
-    categories: set[str] = {
-        _CHECK_TO_CATEGORY.get(f.check, "extraction") for f in failures
-    }
-    if len(categories) > 1:
-        return "multiple"
-    return categories.pop()
-
-
-def _build_result(failures: list[ValidationFailure]) -> ValidationResult:
-    """Construct a :class:`ValidationResult` from collected failures."""
-    has_error = any(f.severity == "error" for f in failures)
-    return ValidationResult(
-        passed=not has_error,
-        failures=failures,
-        failure_type=_classify_failures(failures),
-    )
-
-
-def _relative_to_safe(path: Path, base: Path) -> Path:
-    """Return *path* relative to *base*, falling back to *path* itself."""
-    try:
-        return path.relative_to(base)
-    except ValueError:
-        return path
+    categories = {_CATEGORY_MAP.get(f.check, "extraction") for f in failures}
+    if len(categories) == 1:
+        return next(iter(categories))
+    return "multiple"
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Individual checks
 # ---------------------------------------------------------------------------
 
 
-def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
-    """Run post-extraction validation checks on a worktree.
-
-    Checks executed in order:
-
-    a. **Moved-code byte-equivalence** — ``git diff --stat``
-    b. **Children completeness** — prompt-file existence count
-    c. **Prompt metadata tag presence** — ``<pdd-reason>``, ``<pdd-interface>``,
-       ``<pdd-dependency>``
-    d. **Example file existence** — derived from each child's ``prompt_file``
-    e. **Test ownership classification** — basic grep for cross-module refs
-
-    Args:
-        plan: Duck-typed plan object.  Must expose ``children: list`` where
-              each child has ``prompt_file: str`` and ``code_file: str``
-              attributes.
-        worktree: Root of the git worktree to validate.
-
-    Returns:
-        A :class:`ValidationResult` summarising all detected issues.
-    """
-    from rich.console import Console  # third-party: function-scope
-
-    console = Console(stderr=True)
+def _check_git_status(worktree: Path) -> list[ValidationFailure]:
     failures: list[ValidationFailure] = []
-
-    # Gracefully handle a missing/invalid worktree early.
-    if not worktree.is_dir():
-        return _build_result(
-            [
-                ValidationFailure(
-                    check="byte_equivalence",
-                    message=f"Worktree is not a directory: {worktree}",
-                )
-            ]
-        )
-
-    raw_children: list[Any] = getattr(plan, "children", None) or []
-
-    # Normalize children: accept dicts (from LLM JSON) or dataclass-like objects
-    # with .prompt_file / .code_file attributes. Wrap dicts in a simple namespace
-    # so downstream code can use attribute access uniformly.
-    from types import SimpleNamespace
-    def _as_child(c: Any) -> Any:
-        if isinstance(c, dict):
-            # Map LLM field names to attribute names
-            return SimpleNamespace(
-                prompt_file=c.get("new_prompt") or c.get("prompt_file") or "",
-                code_file=c.get("new_source") or c.get("code_file") or "",
-                name=c.get("name", ""),
-            )
-        return c
-    children = [_as_child(c) for c in raw_children]
-    # Filter out children with empty paths — they crash path operations
-    # (worktree / "" returns worktree itself, which fails as a file).
-    # These are LLM output defects and should be flagged but not crash.
-    skipped_children = [
-        c for c in children
-        if not getattr(c, "prompt_file", "") and not getattr(c, "code_file", "")
-    ]
-    children = [
-        c for c in children
-        if getattr(c, "prompt_file", "") or getattr(c, "code_file", "")
-    ]
-    for c in skipped_children:
-        failures.append(
-            ValidationFailure(
-                check="children_completeness",
-                message=(
-                    f"Child '{getattr(c, 'name', '?')}' has no prompt_file "
-                    f"or code_file — LLM output defect"
-                ),
-                severity="warning",
-            )
-        )
-
-    # ------------------------------------------------------------------ (a)
-    # Git repository sanity — verify we're in a working git worktree
-    # The spec calls this "moved-code byte-equivalence" but actually
-    # checking byte-match requires per-symbol diff against the pre-split
-    # source (which this function doesn't have). The agent is responsible
-    # for preserving byte-equivalence during extraction (enforced by the
-    # step 6 prompt); this check only verifies git is functional.
-    # ------------------------------------------------------------------
     try:
-        status_proc = subprocess.run(
+        result = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=worktree,
             capture_output=True,
             text=True,
         )
-        if status_proc.returncode != 0:
+        if result.returncode != 0:
             failures.append(
                 ValidationFailure(
                     check="byte_equivalence",
-                    message=(
-                        f"git status failed (rc={status_proc.returncode}): "
-                        f"{status_proc.stderr.strip()}"
-                    ),
+                    message=f"git status failed: {result.stderr.strip()}",
                 )
             )
     except FileNotFoundError:
         failures.append(
             ValidationFailure(
                 check="byte_equivalence",
-                message="git executable not found; cannot verify worktree state.",
+                message="git executable not found",
             )
         )
     except OSError as exc:
@@ -415,391 +160,605 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
                 message=f"Error running git status: {exc}",
             )
         )
+    return failures
 
-    # ------------------------------------------------------------------ (b)
-    # Children completeness
-    # ------------------------------------------------------------------
-    # A child is "extracted" if either its prompt or its source exists.
-    # Some LLM outputs omit prompt_file — require at least one.
-    def _child_extracted(c: Any) -> bool:
-        prompt_ok = bool(c.prompt_file) and (worktree / c.prompt_file).is_file()
-        code_ok = bool(c.code_file) and (worktree / c.code_file).is_file()
-        return prompt_ok or code_ok
 
-    children_extracted = [c for c in children if _child_extracted(c)]
-    if len(children_extracted) != len(children):
-        missing = [
-            f"{getattr(c, 'name', '?') or '?'}:"
-            f"{getattr(c, 'prompt_file', '') or getattr(c, 'code_file', '') or '(no path)'}"
-            for c in children
-            if not _child_extracted(c)
-        ]
+def _check_children_completeness(
+    children: list[SimpleNamespace], worktree: Path
+) -> list[ValidationFailure]:
+    failures: list[ValidationFailure] = []
+    extracted = 0
+    missing: list[str] = []
+    for child in children:
+        prompt_exists = bool(child.prompt_file) and (worktree / child.prompt_file).exists()
+        code_exists = bool(child.code_file) and (worktree / child.code_file).exists()
+        if prompt_exists or code_exists:
+            extracted += 1
+        else:
+            label = child.name or child.prompt_file or child.code_file or "<unknown>"
+            paths = ", ".join(p for p in (child.prompt_file, child.code_file) if p) or "<no paths>"
+            missing.append(f"{label} ({paths})")
+    total = len(children)
+    if extracted < total and missing:
         failures.append(
             ValidationFailure(
                 check="children_completeness",
                 message=(
-                    f"Expected {len(children)} children but found "
-                    f"{len(children_extracted)}. Missing: {missing}"
+                    f"Missing {total - extracted}/{total} children: "
+                    + "; ".join(missing)
                 ),
             )
         )
+    return failures
 
-    # ------------------------------------------------------------------ (c)
-    # Prompt metadata tag presence
-    # ------------------------------------------------------------------
-    required_tags: list[str] = [
-        "<pdd-reason>",
-        "<pdd-interface>",
-        "<pdd-dependency>",
-    ]
+
+def _check_prompt_metadata(
+    children: list[SimpleNamespace], worktree: Path
+) -> list[ValidationFailure]:
+    failures: list[ValidationFailure] = []
     for child in children:
         if not child.prompt_file:
-            continue  # already reported as children_completeness warning
+            continue
         prompt_path = worktree / child.prompt_file
-        if not prompt_path.exists() or not prompt_path.is_file():
+        if not prompt_path.exists():
             continue
         try:
             content = prompt_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
-            console.print(
-                f"[yellow]Warning: could not read {child.prompt_file}: {exc}[/yellow]"
-            )
+            try:
+                _console(stderr=True).print(
+                    f"[yellow]Warning: failed to read {prompt_path}: {exc}[/yellow]"
+                )
+            except Exception:
+                pass
             continue
-        for tag in required_tags:
+        for tag in _REQUIRED_TAGS:
             if tag not in content:
                 failures.append(
                     ValidationFailure(
                         check="prompt_metadata",
-                        message=f"Missing {tag} in {child.prompt_file}",
+                        message=f"{child.prompt_file}: missing tag {tag}",
                         severity="warning",
                     )
                 )
+    return failures
 
-    # ------------------------------------------------------------------ (d)
-    # Example file existence
-    # ------------------------------------------------------------------
+
+def _check_example_files(
+    children: list[SimpleNamespace], worktree: Path
+) -> list[ValidationFailure]:
+    failures: list[ValidationFailure] = []
     for child in children:
         if not child.prompt_file:
-            continue  # already reported
+            continue
+        suffix = Path(child.code_file).suffix if child.code_file else ".py"
+        if not suffix:
+            suffix = ".py"
+        stem = _module_stem(child.prompt_file)
+        pstem = _prompt_stem(child.prompt_file)
         prompt_path = Path(child.prompt_file)
-        # Strip language suffix to get the base module name
-        stem = prompt_path.stem
-        if not stem:
-            continue  # defensive: empty stem would make with_suffix crash
-        for lang_suffix in ("_python", "_typescript", "_go", "_rust"):
-            stem = stem.replace(lang_suffix, "")
-        # Check multiple conventional locations.
-        # Use the actual code file suffix so non-Python languages work too.
-        example_suffix = Path(child.code_file).suffix or ".py"
-        candidates = [
-            worktree / "examples" / f"{stem}_example{example_suffix}",
-            worktree / "examples" / f"{prompt_path.stem}_example{example_suffix}",
-            worktree / prompt_path.with_suffix(example_suffix),
-        ]
-        if not any(c.exists() for c in candidates):
-            checked = [str(_relative_to_safe(c, worktree)) for c in candidates]
+
+        candidates: list[Path] = []
+        if stem:
+            candidates.append(Path("examples") / f"{stem}_example{suffix}")
+        if pstem and pstem != stem:
+            candidates.append(Path("examples") / f"{pstem}_example{suffix}")
+        candidates.append(prompt_path.with_suffix(suffix))
+
+        # Deduplicate
+        seen: set[str] = set()
+        unique_candidates: list[Path] = []
+        for c in candidates:
+            key = str(c)
+            if key not in seen:
+                seen.add(key)
+                unique_candidates.append(c)
+
+        if not any((worktree / c).exists() for c in unique_candidates):
+            paths_str = ", ".join(str(c) for c in unique_candidates)
+            label = child.name or stem or child.prompt_file
             failures.append(
                 ValidationFailure(
                     check="example_file",
-                    message=f"Example file not found for {child.prompt_file}. Checked: {checked}",
+                    message=f"No example file found for {label}; checked: {paths_str}",
                 )
             )
+    return failures
 
-    # ------------------------------------------------------------------ (e)
-    # Test ownership classification
-    # ------------------------------------------------------------------
-    module_names: dict[str, str] = {}
+
+def _check_test_ownership(
+    children: list[SimpleNamespace], worktree: Path
+) -> list[ValidationFailure]:
+    failures: list[ValidationFailure] = []
+
+    # Build map of stem -> child for cross-reference checks
+    child_stems: list[tuple[str, SimpleNamespace]] = []
     for child in children:
+        stem = _module_stem(child.prompt_file) if child.prompt_file else ""
+        if not stem and child.code_file:
+            stem = Path(child.code_file).stem
+        if stem:
+            child_stems.append((stem, child))
+
+    for stem, child in child_stems:
         if not child.code_file:
             continue
-        code_path = Path(child.code_file)
-        if code_path.stem:
-            module_names[code_path.stem] = child.code_file
-
-    all_modules = set(module_names.keys())
-
-    for child in children:
-        if not child.code_file:
-            continue
-        code_path = Path(child.code_file)
-        module_name = code_path.stem
-        if not module_name:
-            continue
-
-        test_file_name = f"test_{module_name}{code_path.suffix}"
+        suffix = Path(child.code_file).suffix or ".py"
+        code_dir = (worktree / child.code_file).parent
+        test_name = f"test_{stem}{suffix}"
         candidates = [
-            worktree / code_path.parent / test_file_name,
-            worktree / "tests" / test_file_name,
+            code_dir / test_name,
+            worktree / "tests" / test_name,
         ]
-
-        test_path: Optional[Path] = None
-        for candidate in candidates:
-            if candidate.exists():
-                test_path = candidate
-                break
-
-        if test_path is None:
-            continue
-
-        try:
-            test_content = test_path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-
-        other_modules = all_modules - {module_name}
-        for other in sorted(other_modules):
-            if re.search(rf"\b{re.escape(other)}\b", test_content):
-                rel = _relative_to_safe(test_path, worktree)
-                failures.append(
-                    ValidationFailure(
-                        check="test_ownership",
-                        message=(
-                            f"Test file {rel} references module "
-                            f"'{other}' which belongs to a different child."
-                        ),
-                        severity="warning",
+        for tf in candidates:
+            if not tf.exists():
+                continue
+            try:
+                content = tf.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for other_stem, other_child in child_stems:
+                if other_stem == stem:
+                    continue
+                pattern = re.compile(rf"\b{re.escape(other_stem)}\b")
+                if pattern.search(content):
+                    failures.append(
+                        ValidationFailure(
+                            check="test_ownership",
+                            message=(
+                                f"Test file {tf} for child '{stem}' references "
+                                f"other child module '{other_stem}'"
+                            ),
+                            severity="warning",
+                        )
                     )
-                )
+    return failures
 
-    # ------------------------------------------------------------------ (f)
-    # Test-seam resolution (NEW in v2.1)
-    # ------------------------------------------------------------------
-    # For every test file in the worktree, parse out string-based patch
-    # paths and verify each one resolves to a symbol that exists after
-    # extraction. Missing re-exports are the #1 cause of post-split test
-    # failures — this catches them before step 7a runs the actual tests.
-    #
-    # Framework-agnostic: we look for the string argument passed to
-    # patch(), jest.mock(), etc., not the API call itself.
-    test_files_to_check: list[Path] = []
-    # Collect child test files already located above
+
+# ---------------------------------------------------------------------------
+# Test seam resolution
+# ---------------------------------------------------------------------------
+
+
+_PATCH_PATTERNS = [
+    # patch("a.b") and patch.object("a.b", ...) - first string arg
+    re.compile(r"""(?<![\w.])patch(?:\.object)?\s*\(\s*["']([^"']+)["']"""),
+    # mocker.patch(...) and mocker.patch.object(...)
+    re.compile(r"""mocker\.patch(?:\.object)?\s*\(\s*["']([^"']+)["']"""),
+    # jest.mock("...") / jest.doMock("...")
+    re.compile(r"""jest\.(?:mock|doMock)\s*\(\s*["']([^"']+)["']"""),
+]
+
+
+def _extract_patch_paths(content: str) -> list[str]:
+    paths: list[str] = []
+    for pat in _PATCH_PATTERNS:
+        for m in pat.finditer(content):
+            p = m.group(1).strip()
+            if "." not in p:
+                continue
+            if p.startswith(".") or p.endswith("."):
+                continue
+            paths.append(p)
+    return paths
+
+
+def _collapse_paren_imports(content: str) -> str:
+    """Collapse newlines inside parenthesized `from ... import (...)` groups."""
+    def _collapse(match: re.Match[str]) -> str:
+        head = match.group(1)
+        inside = match.group(2)
+        flat = re.sub(r"\s+", " ", inside)
+        return f"{head}({flat})"
+
+    pattern = re.compile(
+        r"(from\s+[\w.]+\s+import\s*)\(([^)]*)\)",
+        re.MULTILINE,
+    )
+    return pattern.sub(_collapse, content)
+
+
+def _find_module_file(
+    module_parts: list[str], worktree: Path
+) -> Optional[Path]:
+    """Locate a candidate module file in worktree or worktree/extensions."""
+    if not module_parts:
+        return None
+
+    search_roots = [worktree]
+    ext_dir = worktree / "extensions"
+    if ext_dir.exists():
+        search_roots.append(ext_dir)
+
+    # Try various truncations: full, drop-1, drop-2 leading components
+    variants: list[list[str]] = [module_parts]
+    if len(module_parts) > 1:
+        variants.append(module_parts[1:])
+    if len(module_parts) > 2:
+        variants.append(module_parts[2:])
+
+    for parts in variants:
+        if not parts:
+            continue
+        # Try .py and __init__.py forms
+        for as_init in (False, True):
+            if as_init:
+                rel_parts = parts + ["__init__.py"]
+            else:
+                rel_parts = parts[:-1] + [parts[-1] + ".py"]
+            basename = rel_parts[-1]
+            for root in search_roots:
+                # Direct check first
+                direct = root.joinpath(*rel_parts)
+                if direct.exists():
+                    return direct
+                # rglob basename, match trailing parts
+                try:
+                    for cand in root.rglob(basename):
+                        if not cand.is_file():
+                            continue
+                        cand_parts = cand.parts[-len(rel_parts):]
+                        if list(cand_parts) == rel_parts:
+                            return cand
+                except OSError:
+                    continue
+    return None
+
+
+def _symbol_defined(content: str, sym: str) -> bool:
+    """Check if symbol is defined or imported in file content."""
+    esc = re.escape(sym)
+
+    # def / async def / class
+    if re.search(rf"^(?:async\s+)?def\s+{esc}\b", content, re.MULTILINE):
+        return True
+    if re.search(rf"^class\s+{esc}\b", content, re.MULTILINE):
+        return True
+    # Top-level assignment
+    if re.search(rf"^{esc}\s*[:=]", content, re.MULTILINE):
+        return True
+
+    collapsed = _collapse_paren_imports(content)
+
+    # from ... import ... sym ...
+    # Match the imported names list
+    for m in re.finditer(
+        r"from\s+[\w.]+\s+import\s+([^\n#]+)",
+        collapsed,
+    ):
+        names_part = m.group(1).strip()
+        # Strip parens
+        names_part = names_part.strip("()")
+        # Split by commas
+        for raw in names_part.split(","):
+            name = raw.strip()
+            if not name:
+                continue
+            # Handle "X as Y"
+            if " as " in name:
+                _, alias = name.split(" as ", 1)
+                if alias.strip() == sym:
+                    return True
+            else:
+                if name == sym:
+                    return True
+
+    # from ... import *
+    if re.search(r"from\s+[\w.]+\s+import\s+\*", content):
+        return True
+
+    # Dir-walk re-export
+    if re.search(r"for\s+_?\w+\s+in\s+dir\s*\(", content):
+        if re.search(r"globals\s*\(\s*\)\s*\[", content) or re.search(
+            r"getattr\s*\(\s*_?\w+", content
+        ):
+            return True
+
+    return False
+
+
+def _resolve_patch_path(
+    dotted: str, worktree: Path
+) -> tuple[bool, str]:
+    """Resolve a dotted patch path. Returns (resolved, reason)."""
+    parts = dotted.split(".")
+    if len(parts) < 2:
+        return True, "trivial"
+
+    module_parts = parts[:-1]
+    sym = parts[-1]
+
+    # Stdlib optimism: any module component or trailing sym
+    for p in module_parts + [sym]:
+        if p in _STDLIB_NAMES:
+            return True, "stdlib"
+
+    module_file = _find_module_file(module_parts, worktree)
+    if module_file is None:
+        return False, "module file not found"
+
+    try:
+        content = module_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return False, f"failed to read module: {exc}"
+
+    if _symbol_defined(content, sym):
+        return True, "found"
+
+    return False, f"symbol '{sym}' not found"
+
+
+def _discover_test_files(
+    children: list[SimpleNamespace], worktree: Path
+) -> list[Path]:
+    """Discover test files relevant to the children."""
+    test_files: set[Path] = set()
+
     for child in children:
         if not child.code_file:
             continue
-        code_path = Path(child.code_file)
-        if not code_path.stem:
+        suffix = Path(child.code_file).suffix or ".py"
+        stem = _module_stem(child.prompt_file) if child.prompt_file else Path(child.code_file).stem
+        if not stem:
             continue
-        test_file_name = f"test_{code_path.stem}{code_path.suffix}"
-        for candidate in (
-            worktree / code_path.parent / test_file_name,
-            worktree / "tests" / test_file_name,
-            # Extensions convention
-            worktree / "extensions" / "*" / "tests" / test_file_name,
-        ):
-            # Star-glob needs expansion
-            if "*" in str(candidate):
-                parent = Path(str(candidate).split("*")[0].rstrip("/"))
-                if parent.is_dir():
-                    for sub in parent.iterdir():
-                        if sub.is_dir():
-                            p = sub / "tests" / test_file_name
-                            if p.exists():
-                                test_files_to_check.append(p)
-            elif candidate.exists():
-                test_files_to_check.append(candidate)
-    # Also include the parent's original test file(s). Tests that
-    # patch through the parent module name (e.g. `src.workers.X`) are
-    # the primary way re-export omissions cause failures, so we must
-    # check these.
-    if children:
-        for child in children:
-            if not child.code_file:
-                continue
-            code_path = Path(child.code_file)
-            # Walk up from the child's package dir looking for a tests/
-            # directory. This handles extensions/<ext>/tests/ and flat
-            # tests/ at the repo root.
-            parent = code_path.parent
-            for _ in range(6):
-                if parent == Path("."):
-                    break
-                tdir = worktree / parent / "tests"
-                if tdir.is_dir():
-                    for p in tdir.iterdir():
-                        if (
-                            p.is_file()
-                            and p.name.startswith("test_")
-                            and p.suffix in (".py", ".ts", ".tsx", ".js")
-                        ):
-                            test_files_to_check.append(p)
-                parent = parent.parent
-            # Also repo-root tests/
-            root_tests = worktree / "tests"
-            if root_tests.is_dir():
-                for p in root_tests.iterdir():
-                    if (
-                        p.is_file()
-                        and p.name.startswith("test_")
-                        and p.suffix in (".py", ".ts", ".tsx", ".js")
-                    ):
-                        test_files_to_check.append(p)
-            # Don't break — scan ALL children so test files in
-            # different packages are discovered (was breaking after
-            # the first child, missing children in other dirs).
+        test_name = f"test_{stem}{suffix}"
+        code_path = worktree / child.code_file
+        code_dir = code_path.parent
 
-    # De-duplicate
-    test_files_to_check = list({p.resolve() for p in test_files_to_check if p.is_file()})
+        # Co-located
+        for cand in (code_dir / test_name, worktree / "tests" / test_name):
+            if cand.exists() and cand.is_file():
+                try:
+                    test_files.add(cand.resolve())
+                except OSError:
+                    test_files.add(cand)
 
-    unresolved_count = 0
-    checked_count = 0
-    for test_path in test_files_to_check:
+        # Walk up looking for tests/ dirs
+        cur = code_dir
+        for _ in range(6):
+            tests_dir = cur / "tests"
+            if tests_dir.is_dir():
+                for ext in ("py", "ts", "tsx", "js"):
+                    for tf in tests_dir.glob(f"test_*.{ext}"):
+                        if tf.is_file():
+                            try:
+                                test_files.add(tf.resolve())
+                            except OSError:
+                                test_files.add(tf)
+            if cur == worktree or cur.parent == cur:
+                break
+            cur = cur.parent
+
+        # extensions/*/tests/
+        ext_dir = worktree / "extensions"
+        if ext_dir.is_dir():
+            for ext_sub in ext_dir.iterdir():
+                if not ext_sub.is_dir():
+                    continue
+                ext_tests = ext_sub / "tests"
+                if not ext_tests.is_dir():
+                    continue
+                cand = ext_tests / test_name
+                if cand.exists() and cand.is_file():
+                    try:
+                        test_files.add(cand.resolve())
+                    except OSError:
+                        test_files.add(cand)
+
+    # Worktree tests/
+    wt_tests = worktree / "tests"
+    if wt_tests.is_dir():
+        for ext in ("py", "ts", "tsx", "js"):
+            for tf in wt_tests.glob(f"test_*.{ext}"):
+                if tf.is_file():
+                    try:
+                        test_files.add(tf.resolve())
+                    except OSError:
+                        test_files.add(tf)
+
+    return sorted(test_files)
+
+
+def _check_test_seams(
+    children: list[SimpleNamespace], worktree: Path
+) -> list[ValidationFailure]:
+    failures: list[ValidationFailure] = []
+    test_files = _discover_test_files(children, worktree)
+
+    total_paths = 0
+    resolved_paths = 0
+
+    for tf in test_files:
         try:
-            test_content = test_path.read_text(encoding="utf-8", errors="ignore")
+            content = tf.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        patch_paths = _collect_patch_paths(test_content)
-        if not patch_paths:
-            continue
-        for ppath in patch_paths:
-            checked_count += 1
-            resolved, reason = _resolve_patch_path(ppath, worktree)
-            if not resolved:
-                unresolved_count += 1
-                rel = _relative_to_safe(test_path, worktree)
+        patch_paths = _extract_patch_paths(content)
+        for p in patch_paths:
+            total_paths += 1
+            ok, reason = _resolve_patch_path(p, worktree)
+            if ok:
+                resolved_paths += 1
+            else:
                 failures.append(
                     ValidationFailure(
                         check="test_seam_resolution",
-                        message=(
-                            f"Test seam unresolved: {rel} patches '{ppath}' "
-                            f"but {reason}. Add a re-export on the parent or "
-                            f"update the patch path."
-                        ),
-                        severity="error",
+                        message=f"Unresolved patch path '{p}' in {tf} ({reason})",
                     )
                 )
-    if checked_count > 0 and not quiet_import:
+
+    if total_paths > 0 and not quiet_import:
         try:
-            # Friendly progress signal on the console when seams were checked
-            from rich.console import Console as _C  # type: ignore
-            _C(stderr=True).print(
-                f"[dim]Test-seam check: {checked_count - unresolved_count}/"
-                f"{checked_count} patch paths resolved across "
-                f"{len(test_files_to_check)} test files[/dim]"
+            _console(stderr=True).print(
+                f"[dim]Test-seam check: {resolved_paths}/{total_paths} "
+                f"patch paths resolved across {len(test_files)} test files[/dim]"
             )
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # (g) Parent-wiring check — catches the "helpers created but never
-    # called" regression. If a child defines a function but the parent
-    # doesn't import/call it, the helper is dead code and the parent
-    # didn't shrink as intended.
-    # ------------------------------------------------------------------
-    parent_changes = getattr(plan, "parent_changes", {}) or {}
-    parent_source = None
+    return failures
+
+
+# ---------------------------------------------------------------------------
+# Parent wiring
+# ---------------------------------------------------------------------------
+
+
+def _extract_top_level_definitions(content: str) -> list[str]:
+    names: list[str] = []
+    for m in re.finditer(
+        r"^(?:async\s+)?def\s+([A-Za-z_]\w*)", content, re.MULTILINE
+    ):
+        names.append(m.group(1))
+    for m in re.finditer(r"^class\s+([A-Za-z_]\w*)", content, re.MULTILINE):
+        names.append(m.group(1))
+    # Skip dunders
+    return [n for n in names if not (n.startswith("__") and n.endswith("__"))]
+
+
+def _check_parent_wiring(
+    plan: Any, children: list[SimpleNamespace], worktree: Path
+) -> list[ValidationFailure]:
+    failures: list[ValidationFailure] = []
+    parent_changes = getattr(plan, "parent_changes", None)
+    if not parent_changes:
+        return failures
     if isinstance(parent_changes, dict):
-        parent_source = parent_changes.get("modified_source", "")
-    if parent_source:
-        parent_path = worktree / parent_source
-        # Handle the "parent became a package" case
-        if not parent_path.is_file():
-            pkg_init = (worktree / parent_source).with_suffix("") / "__init__.py"
-            if pkg_init.is_file():
-                parent_path = pkg_init
-        if parent_path.is_file():
-            try:
-                parent_content = parent_path.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                parent_content = ""
-            unwired = _find_unwired_helpers(children, worktree, parent_content)
-            for helper_name, child_file in unwired:
+        modified_source = parent_changes.get("modified_source", "")
+    else:
+        modified_source = getattr(parent_changes, "modified_source", "") or ""
+    if not modified_source:
+        return failures
+
+    parent_path = worktree / modified_source
+    if not parent_path.exists():
+        # Try package __init__.py
+        as_pkg = parent_path.with_suffix("") / "__init__.py"
+        if as_pkg.exists():
+            parent_path = as_pkg
+        else:
+            return failures
+
+    try:
+        parent_content = parent_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return failures
+
+    for child in children:
+        if not child.code_file:
+            continue
+        child_path = worktree / child.code_file
+        if not child_path.exists():
+            continue
+        try:
+            child_content = child_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        helpers = _extract_top_level_definitions(child_content)
+        for name in helpers:
+            pattern = re.compile(rf"\b{re.escape(name)}\b")
+            if not pattern.search(parent_content):
                 failures.append(
                     ValidationFailure(
                         check="parent_wiring",
                         message=(
-                            f"Unwired helper: '{helper_name}' defined in "
-                            f"{child_file} but never imported/called from "
-                            f"parent {parent_source}. Replace inline code "
-                            f"in parent with calls to the new helper."
+                            f"Unwired helper: '{name}' defined in "
+                            f"{child.code_file} but never imported/called from "
+                            f"parent {modified_source}…"
                         ),
-                        severity="error",
                     )
                 )
+    return failures
 
-    return _build_result(failures)
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
-def _find_unwired_helpers(
-    children: list,
-    worktree: Path,
-    parent_content: str,
-) -> list[tuple[str, str]]:
-    """Return [(helper_name, child_file_rel), ...] for helpers defined
-    in children but not referenced (imported or called) in the parent.
+def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
+    """Run post-extraction validation checks for the agentic split orchestrator."""
+    if not isinstance(worktree, Path):
+        worktree = Path(worktree)
 
-    A helper is "wired" if the parent imports it OR calls it via
-    attribute access (module.helper_name) OR references it directly.
-    """
-    unwired: list[tuple[str, str]] = []
-    for child in children:
-        code_file = getattr(child, "code_file", "")
-        if not code_file:
+    if not worktree.is_dir():
+        failures = [
+            ValidationFailure(
+                check="byte_equivalence",
+                message=f"worktree is not a directory: {worktree}",
+            )
+        ]
+        return ValidationResult(
+            passed=False,
+            failures=failures,
+            failure_type=_classify_failure_type(failures),
+        )
+
+    raw_children = getattr(plan, "children", None) or []
+    all_failures: list[ValidationFailure] = []
+
+    # Normalize children, separating defective ones (both paths empty)
+    valid_children: list[SimpleNamespace] = []
+    for raw in raw_children:
+        norm = _normalize_child(raw)
+        if not norm.prompt_file and not norm.code_file:
+            label = norm.name or "<unnamed>"
+            all_failures.append(
+                ValidationFailure(
+                    check="children_completeness",
+                    message=f"Child '{label}' has no prompt_file or code_file",
+                    severity="warning",
+                )
+            )
             continue
-        child_path = worktree / code_file
-        if not child_path.is_file():
-            continue
-        try:
-            child_content = child_path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        # Collect top-level def/class/async def names from the child.
-        # Regex is intentionally simple — avoids AST to stay language-agnostic
-        # beyond Python.
-        defined = set()
-        for m in re.finditer(
-            r"^(?:async\s+)?def\s+(\w+)|^class\s+(\w+)",
-            child_content,
-            flags=re.MULTILINE,
-        ):
-            name = m.group(1) or m.group(2)
-            # Skip dunder methods (__init__, __repr__) — they're not
-            # helpers. Single-underscore names (_phase_setup) ARE included
-            # because phase helpers created by step 6a should be wired up
-            # by the parent's rewritten coordinator function.
-            if name and not name.startswith("__"):
-                defined.add(name)
-        # For each helper, check if it appears in the parent.
-        # Match: `import name`, `from X import name`, `name(` or `.name(`
-        for name in defined:
-            # Word-boundary match — guards against substrings (e.g. "run"
-            # matching "run_with_provider").
-            pattern = rf"\b{re.escape(name)}\b"
-            if not re.search(pattern, parent_content):
-                unwired.append((name, code_file))
-    return unwired
+        valid_children.append(norm)
 
+    # (a) git sanity
+    all_failures.extend(_check_git_status(worktree))
 
-# Flag to silence the progress print when used in contexts where rich
-# output is unwanted (e.g. tests). Set by callers; defaults to False.
-quiet_import = False
+    # (b) children completeness
+    all_failures.extend(_check_children_completeness(valid_children, worktree))
+
+    # (c) prompt metadata
+    all_failures.extend(_check_prompt_metadata(valid_children, worktree))
+
+    # (d) example files
+    all_failures.extend(_check_example_files(valid_children, worktree))
+
+    # (e) test ownership
+    all_failures.extend(_check_test_ownership(valid_children, worktree))
+
+    # (f) test seam resolution
+    all_failures.extend(_check_test_seams(valid_children, worktree))
+
+    # (g) parent wiring
+    all_failures.extend(_check_parent_wiring(plan, valid_children, worktree))
+
+    failure_type = _classify_failure_type(all_failures)
+    passed = not any(f.severity == "error" for f in all_failures)
+    return ValidationResult(
+        passed=passed,
+        failures=all_failures,
+        failure_type=failure_type,
+    )
 
 
 def get_test_command(file: Path) -> Optional[TestCommand]:
-    """Resolve the test command for *file*.
-
-    Delegates to :pyfunc:`pdd.get_test_command.get_test_command_for_file`.
-
-    Args:
-        file: Path to the test file.
-
-    Returns:
-        A :class:`TestCommand`, or ``None`` if no command could be resolved
-        (signalling that an agentic fallback is needed).
-    """
+    """Resolve the test command for the given file."""
     return get_test_command_for_file(str(file))
 
 
 def get_lint_commands(file: Path) -> list[LintCommand]:
-    """Resolve lint commands for *file*.
-
-    Delegates to :pyfunc:`pdd.get_lint_commands.get_lint_commands`.  Returns
-    an empty list for languages without deterministic lint support, signalling
-    the orchestrator to fall back to agent-discovered commands.
-
-    Args:
-        file: Path to the source file to lint.
-
-    Returns:
-        A list of :class:`LintCommand` instances (may be empty).
-    """
+    """Resolve lint commands for the given file."""
     return _get_lint_commands_impl(file)
+
+
+__all__ = [
+    "LintCommand",
+    "TestCommand",
+    "ValidationFailure",
+    "ValidationResult",
+    "validate_extraction",
+    "get_test_command",
+    "get_lint_commands",
+]

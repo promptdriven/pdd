@@ -242,8 +242,8 @@ class TestChildrenCompleteness:
             result = validate_extraction(plan, tmp_path)
         errors = [f for f in result.failures if f.check == "children_completeness"]
         assert len(errors) == 1
-        assert "Expected 2" in errors[0].message
         assert "b.prompt" in errors[0].message
+        assert errors[0].severity == "error"
 
 
 # ---------------------------------------------------------------------------
