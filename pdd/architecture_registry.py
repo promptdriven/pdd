@@ -12,6 +12,7 @@ import fnmatch
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -300,18 +301,28 @@ def find_project_root(start: Optional[Path] = None) -> Path:
         start = Path.cwd()
     current = start.resolve()
 
-    # ~/.pdd and ~/.pddrc are user-global config (created by `pdd setup`),
-    # not project markers. Without this guard, any repo under $HOME without a
-    # closer marker would resolve to $HOME itself, making generate / sync /
-    # auto-deps operate at the user's home directory.
+    # ~/.pdd / ~/.pddrc and temp-root .pdd markers are ambient config/cache
+    # locations, not project markers. Without this guard, any repo under $HOME
+    # or pytest workspace under /tmp without a closer marker could resolve to an
+    # unrelated ancestor.
     try:
         home = Path.home().resolve()
     except (RuntimeError, OSError):
         home = None
+    temp_roots = set()
+    for candidate in (tempfile.gettempdir(), os.environ.get("TMPDIR"), "/tmp"):
+        if not candidate:
+            continue
+        try:
+            path = Path(candidate).resolve()
+        except (RuntimeError, OSError):
+            continue
+        temp_roots.add(path)
 
     for _ in range(20):
         is_home = home is not None and current == home
-        if not is_home:
+        is_temp_root = current in temp_roots
+        if not is_home and not is_temp_root:
             is_tier_a = (current / ".pddrc").exists() or (current / ".pdd").is_dir()
             is_tier_b = (
                 (current / "sources").is_dir() and _has_prd_spec_marker(current)

@@ -104,6 +104,13 @@ def preserve_git_work_tree():
 
 
 @pytest.fixture(autouse=True)
+def isolate_cloud_only_overrides(monkeypatch):
+    """Clear developer cloud-only env flags unless a test sets them."""
+    monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
+    monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_claude_oauth_probe(monkeypatch):
     """Default the Issue #813 OAuth probe to False so tests are CI-portable.
 

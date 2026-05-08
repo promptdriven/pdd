@@ -35,7 +35,8 @@
   Runs the checks below in order and returns a `ValidationResult`. If `worktree` is not a directory, return a single `byte_equivalence` error ("not a directory") immediately.
 
   Plan duck-typing:
-  - `plan.children: list` may contain dataclass-like objects (with `.prompt_file`, `.code_file`, optional `.name`) OR dicts from LLM JSON. Normalize dicts via `SimpleNamespace`, mapping `new_prompt`→`prompt_file` and `new_source`→`code_file` (fall back to `prompt_file`/`code_file` keys). Default missing values to "".
+  - `plan.children: list` may contain dataclass-like objects (with `.prompt_file`, `.code_file`, optional `.example_file`, `.test_file`, `.name`) OR dicts from LLM JSON. Normalize dicts via `SimpleNamespace`, mapping `new_prompt`→`prompt_file`, `new_source`→`code_file`, `new_example`→`example_file`, and `new_test`→`test_file` (fall back to the canonical keys). Default missing values to "".
+  - The function MUST work with any subset of `plan.children`; the orchestrator passes a single-child view for the per-child verify gate and the full plan for final cross-cutting validation.
   - Children with both paths empty are LLM defects: emit a `children_completeness` warning naming the child and skip them.
   - `plan.parent_changes` (optional dict) may contain `modified_source: str` for the parent-wiring check.
 
@@ -52,16 +53,16 @@
 
   (c) **prompt_metadata** — For each child whose prompt file exists, emit a *warning* per missing tag in {`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`}. Read with utf-8; on read failure print a warning via `rich.console.Console(stderr=True)` and skip.
 
-  (d) **example_file** — For each child with a `prompt_file`, derive the module stem by stripping language suffixes (`_python`, `_typescript`, `_go`, `_rust`). Use the child's `code_file` suffix (default `.py`). Search these locations under `worktree`:
+  (d) **example_file** — For each child with a `prompt_file`, first honor an explicit `example_file`/`new_example` path from the split plan. If absent, derive the module stem by stripping language suffixes (`_python`, `_typescript`, `_go`, `_rust`). Use the child's `code_file` suffix (default `.py`). Search these fallback locations under `worktree`:
        - `examples/{stem}_example{suffix}`
        - `examples/{prompt_stem}_example{suffix}` (without language strip)
        - `{prompt_path.with_suffix(suffix)}`
       If none exist, emit an error listing the candidate paths checked.
 
-  (e) **test_ownership** — For each child, look for `test_{module_stem}{suffix}` in `{code_dir}/` and `{worktree}/tests/`. Read the file and emit a *warning* per other child's module name that appears (word-boundary regex). Skip children with empty `code_file`/stem.
+  (e) **test_ownership** — For each child, first honor an explicit `test_file`/`new_test` path from the split plan. If absent, look for `test_{module_stem}{suffix}` in `{code_dir}/` and `{worktree}/tests/`. If no explicit or fallback test candidate exists, emit an error-severity `test_file` failure. Read the file and emit a *warning* per other child's module name that appears (word-boundary regex). Skip ownership scanning for children with empty `code_file`/stem only after test-file existence is enforced.
 
   (f) **test_seam_resolution** — For every test file relevant to the children, parse string-based patch paths and verify each resolves to a symbol that exists post-extraction. Emit an error per unresolved patch path.
-       - Test discovery: child test files (as in (e)), plus all `test_*.{py,ts,tsx,js}` files in any `tests/` directory walking up to 6 levels from each child's package, plus `worktree/tests/`. De-duplicate by resolved path. Also check `worktree/extensions/*/tests/` for the per-child test name.
+       - Test discovery: explicit `test_file`/`new_test` paths and child fallback test files (as in (e)), plus all `test_*.{py,ts,tsx,js}` files in any `tests/` directory walking up to 6 levels from each child's package, plus `worktree/tests/`. De-duplicate by resolved path. Also check `worktree/extensions/*/tests/` for the per-child test name.
        - Patch-string extraction is framework-agnostic — match the *string argument* (not the API) for: `patch("a.b")` / `patch.object("a.b", ...)`, `mocker.patch(...)` / `mocker.patch.object(...)`, `jest.mock("…")` / `jest.doMock("…")`. Keep dotted paths only (contain `.`, not leading/trailing dot).
        - Resolution per dotted path `a.b.c…sym`:
          * If any module-path component or the trailing symbol is a common stdlib name (os, sys, io, re, json, time, math, asyncio, subprocess, shutil, tempfile, pathlib, logging, functools, itertools, collections, typing, datetime, random, uuid, hashlib, base64, threading, multiprocessing, socket, signal, platform, builtins, copy, string, enum, dataclasses, warnings) → accept optimistically (note "stdlib").

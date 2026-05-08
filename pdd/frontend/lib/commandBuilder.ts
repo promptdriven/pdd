@@ -107,7 +107,7 @@ export function buildCommandArgs(
       break;
 
     case CommandType.SPLIT:
-      // pdd split TARGET_FILE — agentic 14-step pipeline against the code file.
+      // pdd split TARGET_FILE — agentic 15-step pipeline against the code file.
       // Legacy 3-arg split (--legacy INPUT_PROMPT INPUT_CODE EXAMPLE_CODE) is
       // CLI-only; the web UI always drives the agentic default.
       args.target_file = codeFile;
