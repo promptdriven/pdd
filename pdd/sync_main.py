@@ -941,22 +941,76 @@ def sync_main(
                     # Phase 1: Run pdd generate to create the code file
                     pre_cost = 0.0
                     if not pdd_files["code"].exists() or force:
-                        from .code_generator_main import code_generator_main
+                        from .code_generator_main import (
+                            code_generator_main,
+                            ArchitectureConformanceError,
+                        )
+                        from .agentic_sync_runner import MAX_CONFORMANCE_ATTEMPTS
 
                         if not quiet:
                             rprint("[dim]Running pdd generate...[/dim]")
                         pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
-                        gen_result = code_generator_main(
-                            ctx,
-                            prompt_file=str(pdd_files["prompt"].resolve()),
-                            output=str(pdd_files["code"].resolve()),
-                            original_prompt_file_path=None,
-                            force_incremental_flag=False,
-                            language=resolved_language,
-                            # output is .pddrc-derived (get_pdd_file_paths uses
-                            # context config), so let front-matter override it.
-                            output_from_config=True,
-                        )
+
+                        # Architecture-conformance repair loop (#866). Retry
+                        # generation when conformance fails, injecting the
+                        # repair directive via PDD_REPAIR_DIRECTIVE so the
+                        # next attempt sees the missing-export instruction.
+                        # The plain `pdd sync <module>` path runs in-process,
+                        # so we mutate os.environ directly and restore it after.
+                        import os as _os
+                        _prev_repair = _os.environ.get("PDD_REPAIR_DIRECTIVE")
+                        try:
+                            last_exc: Optional[ArchitectureConformanceError] = None
+                            last_missing: Optional[Tuple[str, ...]] = None
+                            for _attempt in range(MAX_CONFORMANCE_ATTEMPTS):
+                                try:
+                                    gen_result = code_generator_main(
+                                        ctx,
+                                        prompt_file=str(pdd_files["prompt"].resolve()),
+                                        output=str(pdd_files["code"].resolve()),
+                                        original_prompt_file_path=None,
+                                        force_incremental_flag=False,
+                                        language=resolved_language,
+                                        # output is .pddrc-derived (get_pdd_file_paths uses
+                                        # context config), so let front-matter override it.
+                                        output_from_config=True,
+                                    )
+                                    last_exc = None
+                                    break
+                                except ArchitectureConformanceError as exc:
+                                    # Accumulate cost from prior attempt is not
+                                    # available because the exception aborts
+                                    # before return; retry with directive set.
+                                    new_missing = tuple(
+                                        sorted(set(exc.missing_symbols))
+                                    )
+                                    if (
+                                        last_missing is not None
+                                        and new_missing == last_missing
+                                    ):
+                                        # Stuck on identical symbol set — abort.
+                                        last_exc = exc
+                                        break
+                                    last_missing = new_missing
+                                    last_exc = exc
+                                    if _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                        break
+                                    if not quiet:
+                                        rprint(
+                                            "[yellow]Architecture conformance failed; "
+                                            f"retrying generation with repair directive "
+                                            f"(missing: {', '.join(new_missing) or '<none>'}).[/yellow]"
+                                        )
+                                    _os.environ["PDD_REPAIR_DIRECTIVE"] = exc.repair_directive
+                            if last_exc is not None:
+                                # Re-raise as the original click.UsageError so
+                                # downstream handling sees a hard failure.
+                                raise last_exc
+                        finally:
+                            if _prev_repair is None:
+                                _os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
+                            else:
+                                _os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
                         # code_generator_main returns (content, was_incremental, cost, model)
                         pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
                     elif not quiet:

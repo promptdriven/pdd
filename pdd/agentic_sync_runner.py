@@ -178,12 +178,57 @@ def _parse_conformance_failure(
 
     Returns (repair_directive, missing_symbols_sorted_tuple) when a conformance
     error is detected, or None otherwise.
+
+    Two output shapes are supported:
+
+    * Inline form emitted by ``ArchitectureConformanceError.__init__`` —
+      ``... declared symbols missing from generated code: A, B.c, D. Expected: ...``
+      The missing symbols are a comma-separated list on the same line, ending
+      at the next sentence-terminating period (followed by space/EOL or
+      ``Expected:``). The camelCase variant is similar but parenthesised:
+      ``... Python code uses camelCase names (foo, barBaz) but ...``
+    * Bullet form from a richer multi-line message (kept for forward
+      compatibility), where bullets follow the marker line.
     """
     combined = (stdout or "") + "\n" + (stderr or "")
     if _CONFORMANCE_PREFIX not in combined:
         return None
 
     missing: List[str] = []
+
+    def _split_symbols(blob: str) -> List[str]:
+        out: List[str] = []
+        for tok in blob.split(","):
+            sym = tok.strip().rstrip(".").strip()
+            # Drop trailing punctuation/quoting and any embedded whitespace.
+            sym = sym.strip("`'\"")
+            if sym and " " not in sym and "\t" not in sym:
+                out.append(sym)
+        return out
+
+    # 1) Inline declared-missing form:
+    #    "... declared symbols missing from generated code: A, B.c. Expected: ..."
+    # Capture symbols until the first ". " or end-of-line / "Expected:" /
+    # "Found:" boundary. Use a tolerant regex that allows the symbols list
+    # to include dotted names (Class.method) and is bounded by a period
+    # followed by either a capital "Expected"/"Found" or end of line.
+    inline_re = re.compile(
+        r"declared symbols missing from generated code:\s*(.+?)"
+        r"(?=\.\s+(?:Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE,
+    )
+    for m in inline_re.finditer(combined):
+        missing.extend(_split_symbols(m.group(1)))
+
+    # 2) Inline camelCase form:
+    #    "... Python code uses camelCase names (foo, barBaz) but ..."
+    camel_re = re.compile(
+        r"Python code uses camelCase names\s*\(([^)]*)\)"
+    )
+    for m in camel_re.finditer(combined):
+        missing.extend(_split_symbols(m.group(1)))
+
+    # 3) Bullet form: capture bullet lines following the marker.
     capture = False
     for line in combined.splitlines():
         stripped = line.strip()
@@ -196,7 +241,7 @@ def _parse_conformance_failure(
         if capture:
             m = re.match(r"^[-*]\s+(\S+)", stripped)
             if m:
-                missing.append(m.group(1))
+                missing.append(m.group(1).rstrip(".,"))
                 continue
             if stripped == "":
                 continue
