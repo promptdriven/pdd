@@ -20,18 +20,18 @@ _CLI_COMMANDS: dict[str, str] = {
 }
 
 # Maps provider name -> environment variable for API key.
-# OpenCode is a multi-provider router with no single canonical API-key env
-# var — it consumes whichever backend provider key (ANTHROPIC_API_KEY,
-# OPENAI_API_KEY, OPENROUTER_API_KEY, GITHUB_TOKEN, ...) corresponds to the
-# resolved OPENCODE_MODEL. We pick ANTHROPIC_API_KEY as the most common
-# default for the legacy `_has_api_key` lookup; richer detection happens via
-# `_has_provider_oauth("opencode")` (auth.json) and the runtime helper
-# `_has_opencode_credentials` in `agentic_common.py`.
+# OpenCode is intentionally absent: it is a multi-provider router with no
+# canonical API-key env var of its own. It consumes whichever backend
+# provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY,
+# GITHUB_TOKEN, ...) corresponds to the resolved OPENCODE_MODEL — there is
+# no single key to prompt for or save. Setup discovers credentials for
+# OpenCode via `_has_opencode_oauth_or_config` (auth.json + opencode.json
+# + provider env vars) and instructs the user to run `opencode auth login`
+# rather than collecting a key into a file under the wrong name.
 _API_KEY_ENV_VARS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
-    "opencode": "ANTHROPIC_API_KEY",
 }
 
 # Maps provider name -> npm install command for the CLI
@@ -50,12 +50,15 @@ _CLI_DISPLAY_NAMES: dict[str, str] = {
     "opencode": "OpenCode CLI",
 }
 
-# Provider -> primary key env var name (used when saving)
+# Provider -> primary key env var name (used when saving).
+# OpenCode is intentionally absent for the same reason as `_API_KEY_ENV_VARS`:
+# there is no single "OpenCode API key" to save. `_prompt_api_key` short-
+# circuits when the entry is missing so users are not prompted for, and a
+# non-OpenCode key is not silently saved under an unrelated name.
 PROVIDER_PRIMARY_KEY: Dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
-    "opencode": "ANTHROPIC_API_KEY",
 }
 
 # Provider -> display name
@@ -251,23 +254,73 @@ def _has_provider_oauth(provider: str) -> bool:
         return False
 
     if provider == "opencode":
-        # OpenCode persists per-backend credentials at
-        # ``~/.local/share/opencode/auth.json`` as ``{provider: {...}, ...}``.
-        # Any non-empty provider entry is a usable OAuth/API-credential signal.
-        auth = Path.home() / ".local" / "share" / "opencode" / "auth.json"
-        try:
-            if auth.exists() and auth.stat().st_size > 0:
-                data = json.loads(auth.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data:
-                    for value in data.values():
-                        if isinstance(value, dict) and value:
-                            return True
-                        if isinstance(value, str) and value.strip():
-                            return True
-        except (OSError, json.JSONDecodeError):
-            pass
-        return False
+        return _has_opencode_oauth_or_config()
 
+    return False
+
+
+def _has_opencode_oauth_or_config() -> bool:
+    """Return True when OpenCode has any usable credential / configuration source.
+
+    OpenCode is a multi-provider router with no single canonical API-key env
+    var, so setup must look beyond ``~/.local/share/opencode/auth.json`` to
+    avoid pushing users into the wrong API-key prompt. Sources (any one
+    qualifies):
+
+      * ``~/.local/share/opencode/auth.json`` with non-empty provider data
+      * ``~/.config/opencode/opencode.json`` declaring a provider/model
+      * Project ``opencode.json`` (walked up from cwd) declaring a provider/model
+      * ``OPENCODE_CONFIG`` pointing to a file declaring a provider/model
+      * Any backend-provider env var the OpenCode router can route to
+        (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY/GOOGLE_API_KEY,
+        OPENROUTER_API_KEY, GITHUB_TOKEN, XAI_API_KEY, DEEPSEEK_API_KEY, ...)
+    """
+    # 1. auth.json with provider data.
+    auth = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+    try:
+        if auth.exists() and auth.stat().st_size > 0:
+            data = json.loads(auth.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                for value in data.values():
+                    if isinstance(value, dict) and value:
+                        return True
+                    if isinstance(value, str) and value.strip():
+                        return True
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    # 2. OpenCode config files (global, project, OPENCODE_CONFIG).
+    try:
+        from pdd.agentic_common import (
+            _opencode_config_paths,
+            _opencode_config_declares_provider,
+        )
+    except ImportError:
+        _opencode_config_paths = None  # type: ignore[assignment]
+        _opencode_config_declares_provider = None  # type: ignore[assignment]
+    if _opencode_config_paths is not None and _opencode_config_declares_provider is not None:
+        try:
+            for cfg in _opencode_config_paths(None):
+                if _opencode_config_declares_provider(cfg):
+                    return True
+        except Exception:
+            pass
+
+    # 3. Backend provider env vars the OpenCode router can route to.
+    backend_env_keys = (
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY", "GITHUB_TOKEN", "XAI_API_KEY", "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY", "COHERE_API_KEY", "MOONSHOT_API_KEY", "AZURE_API_KEY",
+        "AZURE_AI_API_KEY", "AWS_ACCESS_KEY_ID", "GROQ_API_KEY",
+        "TOGETHERAI_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY",
+        "PERPLEXITYAI_API_KEY", "REPLICATE_API_KEY", "DEEPINFRA_API_KEY",
+        "ZAI_API_KEY", "DASHSCOPE_API_KEY", "MINIMAX_API_KEY", "OLLAMA_HOST",
+        "LMSTUDIO_HOST",
+    )
+    for key in backend_env_keys:
+        v = os.environ.get(key)
+        if v and v.strip():
+            return True
     return False
 
 
@@ -289,6 +342,11 @@ def _get_display_key_name(provider: str) -> str:
         if os.environ.get("GOOGLE_API_KEY", "").strip():
             return "GOOGLE_API_KEY"
         return "GEMINI_API_KEY"
+    if provider == "opencode":
+        # OpenCode has no single API-key env var to display — surface the
+        # CLI-level auth flow instead so users with `opencode auth login`
+        # configured see a meaningful label.
+        return "opencode auth login"
     return _API_KEY_ENV_VARS.get(provider, "")
 
 def _npm_available() -> bool:
@@ -418,6 +476,19 @@ def _prompt_api_key(provider: str, shell: str) -> bool:
     """Prompt user for API key and save it. Prints save location on success."""
     key_name = PROVIDER_PRIMARY_KEY.get(provider, "")
     if not key_name:
+        if provider == "opencode":
+            # OpenCode has no single API key — issuing the generic prompt would
+            # silently save user input under the wrong env var (e.g. as
+            # ANTHROPIC_API_KEY) and confuse later runs. Guide the user to the
+            # supported configuration paths instead.
+            console.print(
+                "  [yellow]OpenCode has no dedicated API key.[/yellow] Configure it via "
+                "[bold]opencode auth login[/bold], an [bold]opencode.json[/bold] config "
+                "file (project, ~/.config/opencode/opencode.json, or OPENCODE_CONFIG), "
+                "or by setting a backend provider env var (ANTHROPIC_API_KEY, "
+                "OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, GITHUB_TOKEN, "
+                "...). Then set OPENCODE_MODEL=provider/model to pick a route."
+            )
         return False
 
     display = PROVIDER_DISPLAY.get(provider, provider)

@@ -380,6 +380,16 @@ def _is_permanent_error(error_message: str) -> bool:
         # through to OpenAI.
         r"not\s+logged\s+in",
         r"please\s+run\s+/login",
+        # OpenCode-specific configuration failures: these cannot heal
+        # without user action (running `opencode auth login`, configuring a
+        # provider, or correcting the OPENCODE_MODEL identifier). Retrying
+        # them on the same provider just burns the retry budget.
+        r"provider\s+not\s+configured",
+        r"no\s+provider\s+configured",
+        r"model\s+not\s+found\s+in\s+provider",
+        r"run\s+`?opencode\s+auth\s+login`?",
+        r"opencode\s+auth\s+login",
+        r"configure\s+(a\s+|the\s+)?provider",
     ]
     return any(re.search(p, msg) for p in permanent_patterns)
 
@@ -1051,18 +1061,234 @@ def _translate_to_opencode_model(model_id: str) -> str:
     return mid
 
 
-def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[str]:
-    """Resolve the OpenCode model for a run.
+# Mapping from llm_model.csv api_key env var names to OpenCode provider IDs.
+# Used to (a) build the configured-provider set for CSV-based model fallback
+# and (b) filter candidate CSV rows by whether OpenCode can route them.
+_OPENCODE_ENV_TO_PROVIDER: Dict[str, str] = {
+    "ANTHROPIC_API_KEY": "anthropic",
+    "OPENAI_API_KEY": "openai",
+    "GEMINI_API_KEY": "google",
+    "GOOGLE_API_KEY": "google",
+    "OPENROUTER_API_KEY": "openrouter",
+    "GITHUB_TOKEN": "github-copilot",
+    "XAI_API_KEY": "xai",
+    "DEEPSEEK_API_KEY": "deepseek",
+    "MISTRAL_API_KEY": "mistral",
+    "COHERE_API_KEY": "cohere",
+    "MOONSHOT_API_KEY": "moonshot",
+    "GROQ_API_KEY": "groq",
+    "TOGETHERAI_API_KEY": "together-ai",
+    "FIREWORKS_AI_API_KEY": "fireworks-ai",
+    "FIREWORKS_API_KEY": "fireworks-ai",
+    "PERPLEXITYAI_API_KEY": "perplexity",
+    "DEEPINFRA_API_KEY": "deepinfra",
+    "ZAI_API_KEY": "z-ai",
+    "DASHSCOPE_API_KEY": "dashscope",
+    "REPLICATE_API_KEY": "replicate",
+    "AZURE_API_KEY": "azure",
+    "AZURE_AI_API_KEY": "azure-ai",
+    "AWS_ACCESS_KEY_ID": "bedrock",
+    "OLLAMA_HOST": "ollama",
+    "LMSTUDIO_HOST": "lmstudio",
+}
 
-    Order: ``OPENCODE_MODEL`` env var (verbatim, including nested slashes such
-    as ``openrouter/openai/gpt-5.3-codex``); otherwise ``None`` so the caller
-    can fall through to provider defaults or fail with an actionable error.
+
+def _opencode_configured_providers(
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[Path] = None,
+) -> set:
+    """Return the OpenCode provider IDs that have a usable credential source.
+
+    Used by the CSV-based model fallback to filter candidate rows to providers
+    OpenCode can actually route to. Sources (any one is sufficient):
+
+      * Top-level keys in ``~/.local/share/opencode/auth.json``
+      * ``provider`` mapping keys in OpenCode config files (project, global,
+        ``OPENCODE_CONFIG``)
+      * Provider prefix of a config-level ``model`` string
+      * ``_OPENCODE_ENV_TO_PROVIDER`` env vars set in ``env``
+    """
+    src = env if env is not None else os.environ
+    providers: set = set()
+
+    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+    try:
+        if auth_path.exists() and auth_path.stat().st_size > 0:
+            data = json.loads(auth_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    if isinstance(value, dict) and value:
+                        providers.add(key)
+                    elif isinstance(value, str) and value.strip():
+                        providers.add(key)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    for cfg in _opencode_config_paths(cwd):
+        try:
+            text = cfg.read_text(encoding="utf-8")
+            cleaned = re.sub(r"//[^\n]*", "", text)
+            cfg_data = json.loads(cleaned)
+        except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(cfg_data, dict):
+            continue
+        provider_dict = cfg_data.get("provider")
+        if isinstance(provider_dict, dict):
+            for k, v in provider_dict.items():
+                if (isinstance(v, dict) and v) or (isinstance(v, str) and v.strip()):
+                    providers.add(k)
+        m = cfg_data.get("model")
+        if isinstance(m, str) and "/" in m:
+            providers.add(m.split("/", 1)[0])
+
+    for env_var, provider_id in _OPENCODE_ENV_TO_PROVIDER.items():
+        v = src.get(env_var)
+        if v and v.strip():
+            providers.add(provider_id)
+
+    return providers
+
+
+def _resolve_opencode_csv_fallback(
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[Path] = None,
+) -> Optional[str]:
+    """Pick an OpenCode model from ``llm_model.csv`` using auth-aware filtering.
+
+    Walks the CSV rows in descending ELO order and returns the first row whose
+    ``api_key`` env vars are all set AND whose ``_translate_to_opencode_model``
+    output has a provider prefix in the configured-provider set. Returns
+    ``None`` when no row qualifies (caller surfaces an actionable error).
+    """
+    src = env if env is not None else os.environ
+    try:
+        df = _load_model_data(None)
+    except Exception:
+        return None
+    if df is None or getattr(df, "empty", True):
+        return None
+
+    configured = _opencode_configured_providers(env=src, cwd=cwd)
+    if not configured:
+        return None
+
+    try:
+        sorted_df = df.sort_values("coding_arena_elo", ascending=False)
+    except Exception:
+        return None
+
+    for _, row in sorted_df.iterrows():
+        api_key_field = str(row.get("api_key") or "").strip()
+        if not api_key_field:
+            continue
+        env_vars = [v.strip() for v in api_key_field.split("|") if v.strip()]
+        if not env_vars:
+            continue
+        if not all((src.get(v) or "").strip() for v in env_vars):
+            continue
+        model_id = str(row.get("model") or "").strip()
+        if not model_id:
+            continue
+        translated = _translate_to_opencode_model(model_id)
+        prefix = translated.split("/", 1)[0] if "/" in translated else translated
+        if prefix in configured:
+            return translated
+    return None
+
+
+def _opencode_csv_cost(model_id: Optional[str], tokens: Optional[Dict[str, Any]]) -> float:
+    """Compute USD cost for an OpenCode run from the CSV pricing row.
+
+    Falls back here when OpenCode JSONL omits ``step_finish.part.cost`` so
+    successful runs are not silently reported as ``$0.00``. ``model_id`` may
+    be either the OpenCode ``provider/model`` form or a bare CSV model name;
+    we match against the CSV ``model`` column directly. Returns ``0.0`` when
+    we cannot match the row or no token counts are available.
+
+    Pricing in ``llm_model.csv`` is per-million tokens. The Anthropic
+    conventions used elsewhere (cache_read 90% off, cache_write 25% premium
+    over input) are applied uniformly here for parity with the existing
+    `ANTHROPIC_PRICING_BY_FAMILY` formula — backends without cache events
+    just see those counters at zero.
+    """
+    if not model_id:
+        return 0.0
+    if not isinstance(tokens, dict):
+        return 0.0
+    try:
+        df = _load_model_data(None)
+    except Exception:
+        return 0.0
+    if df is None or getattr(df, "empty", True):
+        return 0.0
+    # Try matching the model id verbatim, then with any leading provider/
+    # prefix stripped — OpenCode IDs like ``anthropic/claude-sonnet-4-6``
+    # usually match the CSV row by suffix.
+    candidates = [model_id]
+    if "/" in model_id:
+        candidates.append(model_id.split("/", 1)[1])
+        candidates.append(model_id.rsplit("/", 1)[1])
+    row = None
+    for cand in candidates:
+        match = df[df["model"] == cand]
+        if not match.empty:
+            row = match.iloc[0]
+            break
+    if row is None:
+        return 0.0
+    try:
+        input_per_m = float(row.get("input") or 0.0)
+        output_per_m = float(row.get("output") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    input_tokens = int(tokens.get("input") or 0)
+    output_tokens = int(tokens.get("output") or 0)
+    cache_read = int(tokens.get("cache_read") or 0)
+    cache_write = int(tokens.get("cache_write") or 0)
+    if input_tokens <= 0 and output_tokens <= 0 and cache_read <= 0 and cache_write <= 0:
+        return 0.0
+    new_input = max(0, input_tokens - cache_read - cache_write)
+    cost = (
+        new_input * input_per_m / 1_000_000
+        + output_tokens * output_per_m / 1_000_000
+        + cache_read * input_per_m * 0.1 / 1_000_000
+        + cache_write * input_per_m * 1.25 / 1_000_000
+    )
+    return float(cost)
+
+
+def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Resolve the OpenCode model from ``OPENCODE_MODEL`` only.
+
+    Returns the env var value verbatim (including nested slashes such as
+    ``openrouter/openai/gpt-5.3-codex``), or ``None`` when unset. CSV-based
+    fallback resolution lives in :func:`_resolve_opencode_model_for_run` so
+    callers that only want the env-var view (tests, diagnostics) are not
+    coupled to filesystem probes.
     """
     src = env if env is not None else os.environ
     raw = (src.get("OPENCODE_MODEL") or "").strip()
     if raw:
         return raw
     return None
+
+
+def _resolve_opencode_model_for_run(
+    env: Optional[Dict[str, str]] = None,
+    cwd: Optional[Path] = None,
+) -> Optional[str]:
+    """Resolve the OpenCode model with auth-aware CSV fallback.
+
+    Order per the prompt contract: (1) ``OPENCODE_MODEL`` env var, kept
+    verbatim; (2) auth-filtered ``llm_model.csv`` row whose translated
+    ``provider/model`` identifier maps to a configured OpenCode provider.
+    """
+    src = env if env is not None else os.environ
+    raw = (src.get("OPENCODE_MODEL") or "").strip()
+    if raw:
+        return raw
+    return _resolve_opencode_csv_fallback(env=src, cwd=cwd)
 
 
 def _parse_opencode_jsonl(stdout: str) -> Dict[str, Any]:
@@ -2093,14 +2319,17 @@ def _run_with_provider(
         # deterministic default we can rely on, so fail fast with an
         # actionable message instead of letting the CLI surface a generic
         # error far from the configuration source.
-        model_id = _resolve_opencode_model(env)
+        model_id = _resolve_opencode_model_for_run(env, cwd=cwd)
         if not model_id:
             return False, (
-                "OPENCODE_MODEL is not set. Set OPENCODE_MODEL to a "
-                "'provider/model' identifier (e.g., "
-                "'anthropic/claude-sonnet-4-6', 'openrouter/openai/gpt-5', "
-                "'github-copilot/gpt-5') so OpenCode can route the request "
-                "to a backend provider."
+                "Cannot resolve an OpenCode model: OPENCODE_MODEL is not set "
+                "and no llm_model.csv row matches a configured OpenCode "
+                "provider. Set OPENCODE_MODEL to a 'provider/model' identifier "
+                "(e.g., 'anthropic/claude-sonnet-4-6', "
+                "'openrouter/openai/gpt-5', 'github-copilot/gpt-5'), configure "
+                "a provider via `opencode auth login`, or set a backend "
+                "provider env var (ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+                "GEMINI_API_KEY, OPENROUTER_API_KEY, GITHUB_TOKEN, ...)."
             ), 0.0, None
         translated_model = _translate_to_opencode_model(model_id)
         cmd = [
@@ -2117,15 +2346,25 @@ def _run_with_provider(
         variant_name = (env.get("OPENCODE_VARIANT") or "").strip()
         if variant_name:
             cmd.extend(["--variant", variant_name])
-        # ``--`` separates flags from prompt content; prompt is fed via stdin
-        # rather than as an argv element so multi-line prompts and shell
-        # metacharacters cannot leak into argv parsing.
+        # The OpenCode CLI requires a positional ``message`` argument for
+        # ``opencode run`` (https://opencode.ai/docs/cli/) — earlier revisions
+        # passed only ``--`` and piped the prompt body on stdin, which the CLI
+        # does not consume in non-interactive mode. The full prompt is in
+        # ``prompt_path``; pass only a short directive on argv so large issue
+        # prompts cannot exceed OS argv limits while OpenCode still receives a
+        # valid trailing message. Using ``--`` first ensures the directive is
+        # parsed as the message and not a flag.
         cmd.append("--")
+        cmd.append(
+            f"Read the file {prompt_path.name} for your full instructions and execute them."
+        )
     else:
         return False, f"Unknown provider {provider}", 0.0, None
 
-    # For anthropic / opencode, pipe prompt content via stdin; others use file path in cmd
-    stdin_content = prompt_content if provider in ("anthropic", "opencode") else None
+    # For anthropic, pipe prompt content via stdin; others use file path in cmd.
+    # OpenCode reads the prompt from the file referenced in the trailing
+    # message argv, so it does NOT receive the body via stdin.
+    stdin_content = prompt_content if provider == "anthropic" else None
 
     try:
         result = _subprocess_run(
@@ -2166,16 +2405,26 @@ def _run_with_provider(
         parsed = _parse_opencode_jsonl(result.stdout)
         actual_model = parsed.get("model") or None
         err = parsed.get("error") or ""
+        # Cost: prefer JSONL-reported cost; fall back to CSV pricing when
+        # OpenCode did not surface a cost field (some backends/sessions omit
+        # ``step_finish.part.cost``). Returning $0.00 for a successful run
+        # silently breaks cost-accounting acceptance.
+        if parsed.get("cost_reported"):
+            cost = float(parsed.get("cost") or 0.0)
+        else:
+            tokens = parsed.get("tokens") or {}
+            csv_model_id = actual_model or _resolve_opencode_model_for_run(env, cwd=cwd)
+            cost = _opencode_csv_cost(csv_model_id, tokens)
         if err:
             # An error event with returncode==0 still represents a routing /
             # provider failure inside OpenCode (e.g., "provider not
             # configured"). Surface as failure, but keep cost and any
             # captured model so callers can audit partial spend.
-            return False, str(err), float(parsed.get("cost") or 0.0), actual_model
+            return False, str(err), cost, actual_model
         return (
             True,
             str(parsed.get("text") or ""),
-            float(parsed.get("cost") or 0.0),
+            cost,
             actual_model,
         )
 

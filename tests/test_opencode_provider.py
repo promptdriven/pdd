@@ -272,10 +272,14 @@ def test_get_available_agents_excludes_opencode_when_no_credentials(monkeypatch)
 # _run_with_provider routing
 # ---------------------------------------------------------------------------
 
-def test_run_with_provider_opencode_unknown_returns_actionable_error(tmp_path):
-    """No OPENCODE_MODEL -> fail fast with an actionable message."""
+def test_run_with_provider_opencode_unknown_returns_actionable_error(tmp_path, monkeypatch):
+    """No OPENCODE_MODEL and no CSV fallback signals -> fail fast with an actionable message."""
     prompt_file = tmp_path / "prompt.txt"
     prompt_file.write_text("do thing", encoding="utf-8")
+    # Pin Path.home to tmp_path so any real ~/.local/share/opencode/auth.json
+    # or ~/.config/opencode/opencode.json on the developer machine cannot
+    # satisfy the new auth-aware CSV fallback.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     with (
         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/local/bin/opencode"),
         patch.dict(os.environ, {}, clear=True),
@@ -437,5 +441,22 @@ def test_cli_detector_has_provider_oauth_opencode_with_creds(monkeypatch, tmp_pa
 
 
 def test_cli_detector_has_provider_oauth_opencode_without_creds(monkeypatch, tmp_path):
+    """No auth.json, no opencode.json, no backend env vars -> not configured."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    # Clear every backend provider env var the OpenCode router can route to —
+    # any one of these set on the host would otherwise (correctly) flip the
+    # answer to True under the expanded detection logic.
+    for k in (
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY", "GITHUB_TOKEN", "XAI_API_KEY", "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY", "COHERE_API_KEY", "MOONSHOT_API_KEY", "AZURE_API_KEY",
+        "AZURE_AI_API_KEY", "AWS_ACCESS_KEY_ID", "GROQ_API_KEY",
+        "TOGETHERAI_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY",
+        "PERPLEXITYAI_API_KEY", "REPLICATE_API_KEY", "DEEPINFRA_API_KEY",
+        "ZAI_API_KEY", "DASHSCOPE_API_KEY", "MINIMAX_API_KEY", "OLLAMA_HOST",
+        "LMSTUDIO_HOST",
+    ):
+        monkeypatch.delenv(k, raising=False)
     assert cli_detector._has_provider_oauth("opencode") is False
