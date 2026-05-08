@@ -55,6 +55,13 @@ from pdd.agentic_split_orchestrator import (
 MODULE = "pdd.agentic_split_orchestrator"
 
 
+@pytest.fixture(autouse=True)
+def mock_split_checkup_for_orchestrator_tests():
+    """Keep orchestrator tests from shelling out to pdd checkup."""
+    with patch(f"{MODULE}._run_split_checkup", return_value=[]):
+        yield
+
+
 # =========================================================================
 # 1. _stable_split_id
 # =========================================================================
