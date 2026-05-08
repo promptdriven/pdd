@@ -163,7 +163,8 @@ def _write_csv_file(path, rows):
 def _run_setup_capture(tmp_path, monkeypatch, ref_csv_rows=None,
                        user_csv_rows=None, env_keys=None,
                        input_sequence=None, cli_results=None,
-                       test_result=None, create_pddrc=False):
+                       test_result=None, create_pddrc=False,
+                       has_provider_oauth=False):
     """Run run_setup() with full environment control, capturing all output.
 
     Mocks at true boundaries only: CLI detection, user input, model testing,
@@ -263,6 +264,15 @@ def _run_setup_capture(tmp_path, monkeypatch, ref_csv_rows=None,
         patch("pdd.provider_manager._get_user_csv_path",
               lambda: pdd_dir / "llm_model.csv"),
         patch("pdd.provider_manager._get_shell_rc_path", lambda: None),
+        # Issue #813 follow-up: setup_tool now consults
+        # `_has_provider_oauth` to suppress the "missing API key" warning
+        # when a stored OAuth login (Claude Max keychain, ~/.gemini/oauth_creds.json,
+        # ~/.codex/auth.json) is present. Force a deterministic value here
+        # (default False) so tests don't depend on the developer's local
+        # OAuth state. Tests can override via the ``has_provider_oauth``
+        # parameter.
+        patch("pdd.cli_detector._has_provider_oauth",
+              return_value=has_provider_oauth),
         patch("sys.stdout"),
     ]
 
@@ -345,7 +355,11 @@ def test_happy_path_skipped_cli(tmp_path, monkeypatch):
 # ===========================================================================
 
 def test_no_api_key_warning_shown(tmp_path, monkeypatch):
-    """CLI found but no API key → warning appears."""
+    """CLI found but no API key AND no OAuth → warning appears.
+
+    The default ``_has_provider_oauth`` patch in ``_run_setup_capture``
+    returns False, simulating a system without any stored CLI login.
+    """
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=SIMPLE_REF_CSV,
@@ -354,11 +368,11 @@ def test_no_api_key_warning_shown(tmp_path, monkeypatch):
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
-    assert "No API key configured" in output
+    assert "No credentials configured" in output
 
 
 def test_multiple_cli_results_warning_only_for_missing(tmp_path, monkeypatch):
-    """Multiple CLIs, warning only for the one missing API key."""
+    """Multiple CLIs, warning only for the one missing both API key and OAuth."""
     output, _ = _run_setup_capture(
         tmp_path, monkeypatch,
         ref_csv_rows=SIMPLE_REF_CSV,
@@ -370,7 +384,59 @@ def test_multiple_cli_results_warning_only_for_missing(tmp_path, monkeypatch):
         create_pddrc=True,
         input_sequence=["", "", ""],
     )
-    assert "No API key configured" in output
+    assert "No credentials configured" in output
+
+
+def test_oauth_only_user_no_warning_shown(tmp_path, monkeypatch):
+    """Issue #813 follow-up: a Claude Max user with OAuth must NOT see the
+    "missing credentials" warning even when ``api_key_configured=False``.
+    Without this fix, setup would push OAuth-only users toward setting
+    ANTHROPIC_API_KEY — the exact stale-key workflow this PR fixes."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        cli_results=[_make_cli_result(api_key_configured=False)],
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+        has_provider_oauth=True,  # Simulate Claude Max OAuth login.
+    )
+    # The "no credentials" warning must NOT appear because OAuth is detected.
+    assert "No credentials configured" not in output
+
+
+def test_oauth_only_user_skips_step1_api_key_prompt(tmp_path, monkeypatch):
+    """Issue #813 round-6: a true OAuth-only user (no usable env API key)
+    must NOT be prompted to add an API key in Phase 2 / Step 1.
+
+    Without this fix, _step1_scan_keys() would print "No API keys found"
+    and call _prompt_for_api_key(), whose first line says "To continue
+    setup, add at least one API key" — pushing OAuth users into the
+    stale-key workflow this PR exists to make safe.
+
+    Critical: an empty env var is not a usable API key. Only the OAuth
+    credential (simulated via has_provider_oauth=True) is present. The
+    fix should skip the prompt and print the green OAuth-detected line
+    instead.
+    """
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": ""},  # Env name exists, value is unusable.
+        cli_results=[_make_cli_result(provider="anthropic", api_key_configured=False)],
+        create_pddrc=True,
+        # Only 2 inputs needed: continue between steps. NO API-key entry expected.
+        input_sequence=["", "", ""],
+        has_provider_oauth=True,
+    )
+    # Empty values must not be counted as configured keys.
+    assert "0 API key(s) found." in output
+    # The "add at least one API key" prompt must NOT fire.
+    assert "To continue setup, add at least one API key" not in output
+    # Instead, the green OAuth-detected confirmation should appear.
+    assert "stored OAuth/subscription credentials detected" in output
+    # OAuth-only setup should not advertise the direct API-key quick-start path.
+    assert "pdd generate success_python.prompt" not in output
 
 
 # ===========================================================================
@@ -706,6 +772,212 @@ def test_exit_summary_quick_start_printed(tmp_path, monkeypatch):
     assert "pdd generate" in output
 
 
+# Issue #813 P2 review: a fresh user with an OAuth-backed CLI but no API
+# key would get the standard "pdd generate success_python.prompt" quick-
+# start, which routes through litellm and fails because OAuth covers the
+# agentic CLI subprocess but not direct LLM calls. The exit summary now
+# tailors the quick-start to point those users at `pdd setup` (to add an
+# API key) or the agentic CLI directly, not at the doomed command.
+
+def test_exit_summary_oauth_only_omits_pdd_generate(tmp_path, monkeypatch):
+    """OAuth-only setup must NOT advertise `pdd generate success_python.prompt`."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={},  # no API keys at all
+        cli_results=[_make_cli_result(api_key_configured=False)],
+        has_provider_oauth=True,  # but claude has stored OAuth
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    assert "QUICK START" in output
+    # The doomed command must not appear in the OAuth-only quick-start.
+    assert "pdd generate success_python.prompt" not in output
+    # The user is told what to do instead.
+    assert "OAuth" in output
+    assert "API key" in output
+
+
+def test_exit_summary_oauth_only_advertises_agentic_commands(tmp_path, monkeypatch):
+    """Issue #813 P3 (round 9 follow-up): the OAuth-only quick-start must NOT
+    over-correct by sending users only to standalone `claude`/`codex`/`gemini`.
+
+    PDD's issue-driven agentic commands (`pdd generate <issue>`,
+    `pdd change <issue>`, `pdd bug <issue>`, `pdd fix <issue>`,
+    `pdd test <issue>`, `pdd checkup <issue>`) dispatch through agentic
+    workflows which spawn the configured CLI as a subprocess and use its
+    OAuth/subscription credential. They work NOW for OAuth-only users — that's
+    the workflow this setup just enabled. Pointing such users only at `claude`
+    standalone misrepresents what's available.
+
+    The earlier message ("invoke it standalone: claude, codex, or gemini") is
+    pinned ABSENT here so a regression to over-correction surfaces immediately.
+    """
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={},
+        cli_results=[_make_cli_result(api_key_configured=False)],
+        has_provider_oauth=True,
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    # The OAuth-aware family of commands MUST be advertised.
+    assert "pdd change" in output, "OAuth-only message must mention agentic commands"
+    assert "pdd bug" in output
+    assert "pdd fix" in output
+    assert "pdd generate <issue-url>" in output
+    assert "pdd generate <prompt-file>" in output
+    # The over-correction text MUST be gone.
+    assert "invoke it standalone" not in output
+    # Direct prompt commands' API-key requirement must still be explained, so
+    # the user knows why they would re-run pdd setup to add an API key.
+    assert "litellm" in output or "API key" in output
+    # Issue #813 round-11 P2: `pdd sync <issue-url>` MUST NOT be advertised
+    # as an OAuth-friendly agentic command. maintenance.py:194 dispatches
+    # sync with `agentic=False` by default, and sync's generate step calls
+    # code_generator_main → llm_invoke (sync_orchestration.py:2202 →
+    # code_generator.py:93), so sync's path requires an API key even with
+    # an issue URL. Reviewer caught this in round 11 — the prior round-10
+    # quick-start steered OAuth-only users into a command that may fail
+    # for lack of API keys.
+    assert "pdd sync <issue-url>" not in output, (
+        "pdd sync <issue-url> still requires an API key for its generate "
+        "step (litellm path), so it must NOT appear in the OAuth-only "
+        "agentic-commands family.\nOutput:\n" + output
+    )
+    # `pdd crash` MUST NOT be advertised as an issue-mode command — its
+    # actual CLI signature requires PROMPT_FILE CODE_FILE PROGRAM_FILE
+    # ERROR_FILE (not an issue URL), so a copy-paste of the quick-start
+    # would yield a click usage error. Issue #813 round-9 follow-up pinned
+    # this after a reviewer caught it in setup_tool.py.
+    assert "pdd crash <issue-url>" not in output
+    assert "pdd crash <issue" not in output  # belt-and-suspenders against bracket variants
+
+
+def test_exit_summary_oauth_only_summary_file_matches_terminal(tmp_path, monkeypatch):
+    """OAuth-only quick-start must be identical in PDD-SETUP-SUMMARY.txt."""
+    _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={},
+        cli_results=[_make_cli_result(api_key_configured=False)],
+        has_provider_oauth=True,
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    summary = (tmp_path / "project" / "PDD-SETUP-SUMMARY.txt").read_text()
+    assert "QUICK START" in summary
+    assert "pdd generate success_python.prompt" not in summary
+    assert "pdd generate <issue-url>" in summary
+    assert "pdd generate <prompt-file>" in summary
+    assert "pdd sync <issue-url>" not in summary
+    cli_block = summary[summary.find("CLIs Configured:"):summary.find("API Keys Configured:")]
+    assert "OAuth/subscription credential configured" in cli_block
+    assert "no API key" not in cli_block
+    # The summary file mentions both fallback paths so the user has options.
+    assert "pdd setup" in summary
+    assert "claude" in summary or "codex" in summary or "gemini" in summary
+
+
+def test_exit_summary_api_key_setup_keeps_standard_quick_start(tmp_path, monkeypatch):
+    """When an API key IS configured, the standard quick-start still wins."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-test"},
+        # OAuth also present but irrelevant — keys take precedence.
+        cli_results=[_make_cli_result(api_key_configured=True)],
+        has_provider_oauth=True,
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    # The standard generate quick-start MUST still appear when keys exist,
+    # even if OAuth is also detected. Don't regress the happy path.
+    assert "pdd generate success_python.prompt" in output
+
+
+def test_exit_summary_no_oauth_no_keys_keeps_standard_quick_start(tmp_path, monkeypatch):
+    """No keys + no OAuth → user already got the API-key prompt; keep standard."""
+    output, _ = _run_setup_capture(
+        tmp_path, monkeypatch,
+        ref_csv_rows=SIMPLE_REF_CSV,
+        env_keys={"ANTHROPIC_API_KEY": "sk-fallback-from-prompt"},
+        # _step1_scan_keys would have prompted; mimic the post-prompt state.
+        cli_results=[_make_cli_result(api_key_configured=False)],
+        has_provider_oauth=False,
+        create_pddrc=True,
+        input_sequence=["", "", ""],
+    )
+    # When OAuth is absent the OAuth-only branch should not fire even if
+    # keys list initially looks empty — the standard quick-start applies.
+    assert "pdd generate" in output
+
+
+def test_exit_summary_dotenv_only_keys_keep_standard_quick_start(tmp_path, monkeypatch):
+    """Issue #813 P3: a `.env`-only key plus OAuth must NOT trigger OAuth-only path.
+
+    When the project has a `.env` file with `ANTHROPIC_API_KEY=...` but the
+    env var hasn't been exported into the parent shell, `os.environ.get(...)`
+    returns "" (so the env-loaded `valid_keys` stays empty) — but the Step 1
+    scan still discovers the key via `dotenv_values` and yields it in
+    ``found_keys`` with source ``".env file"``. At runtime, `llm_invoke`
+    loads the same `.env` so `pdd generate` works fine. Basing the
+    OAuth-only branch on `valid_keys` would lie to these users; base it on
+    `found_keys` instead.
+
+    Test directly against `_print_exit_summary` so we can pin the
+    precondition (env-empty + found_keys-non-empty) without coordinating
+    with the broader helper's filesystem layout.
+    """
+    pdd_home = tmp_path / "home"
+    pdd_dir = pdd_home / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: pdd_home)
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    # CRITICAL: ANTHROPIC_API_KEY is NOT in os.environ — that is what makes
+    # this scenario different from the API-key happy path. valid_keys will
+    # be empty; found_keys is supplied explicitly.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    captured: List[str] = []
+
+    def capture_print(*args, **kwargs):
+        captured.append(" ".join(str(a) for a in args))
+
+    mock_console = MagicMock()
+    mock_console.print = lambda *a, **kw: captured.append(
+        " ".join(str(x) for x in a)
+    )
+
+    with patch("pdd.setup_tool._console", mock_console), \
+         patch("builtins.print", capture_print), \
+         patch("pdd.cli_detector._has_provider_oauth", return_value=True), \
+         patch("pdd.provider_manager._get_shell_rc_path", lambda: None):
+        # found_keys has the .env-discovered entry; valid_keys (built inside
+        # _print_exit_summary from os.environ) will stay empty.
+        setup_tool._print_exit_summary(
+            [("ANTHROPIC_API_KEY", ".env file")],
+            cli_results=[_make_cli_result(api_key_configured=False)],
+        )
+
+    output = "\n".join(captured)
+    assert "pdd generate success_python.prompt" in output
+    # Corollary: the OAuth-only steerage text must be absent here.
+    assert (
+        "Setup detected an OAuth-backed agentic CLI but no API key" not in output
+    )
+
+    summary = (project_dir / "PDD-SETUP-SUMMARY.txt").read_text()
+    assert "pdd generate success_python.prompt" in summary
+    assert (
+        "Setup detected an OAuth-backed agentic CLI but no API key" not in summary
+    )
+
+
 # ===========================================================================
 # X. Options Menu (via run_setup with 'm' input)
 # ===========================================================================
@@ -745,6 +1017,83 @@ def test_menu_enter_exits(tmp_path, monkeypatch):
     )
     mocks["add_provider"].assert_not_called()
     mocks["test_interactive"].assert_not_called()
+
+
+def test_menu_add_provider_post_refresh_drops_oauth_only_quickstart(tmp_path, monkeypatch):
+    """End-to-end P4 regression: OAuth-only entry → menu adds key → final
+    summary uses standard `pdd generate`, NOT OAuth-only steerage.
+    """
+    pdd_home = tmp_path / "home"
+    pdd_dir = pdd_home / ".pdd"
+    pdd_dir.mkdir(parents=True)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: pdd_home)
+    monkeypatch.chdir(project_dir)
+    (project_dir / ".pddrc").write_text("version: '1.0'\n")
+
+    # OAuth-only precondition: no API keys in env at start.
+    for var in _ENV_VARS_TO_CLEAN:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+
+    fake_module_dir = tmp_path / "fake_pdd"
+    fake_module_dir.mkdir()
+    data_dir = fake_module_dir / "data"
+    data_dir.mkdir()
+    _write_csv_file(data_dir / "llm_model.csv", SIMPLE_REF_CSV)
+    monkeypatch.setattr(setup_tool, "__file__",
+                        str(fake_module_dir / "setup_tool.py"))
+
+    captured: List[str] = []
+
+    def capture_print(*args, **kwargs):
+        captured.append(" ".join(str(a) for a in args))
+
+    mock_console = MagicMock()
+    mock_console.print = lambda *a, **kw: captured.append(
+        " ".join(str(x) for x in a)
+    )
+
+    inputs = iter(["", "", "m", "1", ""])
+
+    def mock_input(prompt=""):
+        try:
+            return next(inputs)
+        except StopIteration:
+            return ""
+
+    def fake_add_provider():
+        # Mimic _save_key_to_api_env: lands in os.environ. The post-menu
+        # silent rescan should now find ANTHROPIC_API_KEY via "shell
+        # environment".
+        os.environ["ANTHROPIC_API_KEY"] = "sk-added-via-menu"
+
+    with patch("pdd.setup_tool._console", mock_console), \
+         patch("builtins.print", capture_print), \
+         patch("builtins.input", mock_input), \
+         patch("pdd.cli_detector.detect_and_bootstrap_cli",
+               return_value=[_make_cli_result(api_key_configured=False)]), \
+         patch("pdd.model_tester._run_test", return_value=TEST_SUCCESS_RESULT), \
+         patch("pdd.provider_manager.add_provider_from_registry",
+               side_effect=fake_add_provider), \
+         patch("pdd.provider_manager._get_user_csv_path",
+               lambda: pdd_dir / "llm_model.csv"), \
+         patch("pdd.provider_manager._get_shell_rc_path", lambda: None), \
+         patch("pdd.cli_detector._has_provider_oauth", return_value=True), \
+         patch("sys.stdout"):
+        try:
+            setup_tool.run_setup()
+        except (SystemExit, StopIteration):
+            pass
+
+    output = "\n".join(captured)
+    # The user added a key via the menu; the final quick-start MUST be the
+    # standard one. The OAuth-only steerage would be a regression here.
+    assert "pdd generate success_python.prompt" in output, output[-2000:]
+    assert (
+        "Setup detected an OAuth-backed agentic CLI but no API key" not in output
+    ), output[-2000:]
 
 
 def test_menu_invalid_option(tmp_path, monkeypatch):

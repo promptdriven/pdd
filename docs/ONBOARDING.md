@@ -83,26 +83,30 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
    - Type `"Extensions: Install from VSIX..."` and select it.
    - Locate the `prompt-*.vsix` file you downloaded and select it to complete the installation.
 
-### 7. Set Up API Keys
+### 7. Set Up Credentials
 
 **Recommended: Use the setup wizard**
 
-Run the interactive setup wizard to configure your API keys:
+Run the interactive setup wizard to configure your credentials. PDD supports
+API keys for direct prompt/LiteLLM commands and stored OAuth/subscription
+logins for agentic CLI workflows such as Claude Max/Pro, Gemini OAuth, and
+Codex ChatGPT login:
 
 ```bash
 pdd setup
 ```
 
 The wizard will:
-- **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files)
-- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers
-- **Validate keys** with real test requests to ensure they work
+- **Scan your environment** for existing API keys from all sources (shell, .env, ~/.pdd files) and detect stored agentic CLI OAuth/subscription logins
+- **Present an interactive menu** to add/fix keys, configure local LLMs, or manage providers. OAuth-only users are not forced to add `ANTHROPIC_API_KEY`; setup explains that direct prompt/LiteLLM commands still need API keys.
+- **Validate API keys** with real test requests to ensure they work
 - **Show cost transparency** for different model tiers
 - **Create .pddrc** configuration for your project
 
 **Alternative: Manual configuration**
 
-If you prefer manual setup, add your LLM API keys to a `.env` file in the project root:
+If you prefer manual setup for direct prompt/LiteLLM commands, add your LLM
+API keys to a `.env` file in the project root:
 
 ```bash
 # Required: At least one LLM provider
@@ -117,6 +121,10 @@ VERTEX_CREDENTIALS=/path/to/service-account.json
 VERTEX_PROJECT=your-gcp-project-id
 VERTEX_LOCATION=us-central1
 ```
+
+For issue-driven agentic CLI workflows, you can instead run the CLI's own
+login flow once, such as `claude auth login`, `gemini` interactive login, or
+`codex login`, then run `pdd setup` so PDD can detect that stored credential.
 
 **To use Vertex AI (optional):**
 
@@ -212,9 +220,9 @@ pdd fix https://github.com/owner/repo/issues/456
    ```
 
 2. **One Agentic CLI** - Required to run the workflows (install at least one):
-   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (requires `ANTHROPIC_API_KEY`)
-   - **Gemini CLI**: `npm install -g @google/gemini-cli` (requires `GOOGLE_API_KEY`)
-   - **Codex CLI**: `npm install -g @openai/codex` (requires `OPENAI_API_KEY`)
+   - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your Claude Max/Pro OAuth login from `claude auth login` if present, otherwise `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
+   - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GOOGLE_API_KEY`)
+   - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
 
 ### Manual Prompt Workflow
 
