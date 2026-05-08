@@ -64,14 +64,14 @@ class ArchitectureConformanceError(click.UsageError):
         self.found_symbols = list(found_symbols)
         self.missing_symbols = list(missing_symbols)
         if message is None:
+            output_display = self.output_path or "<unknown>"
             message = (
                 f"Architecture conformance error for {prompt_name}: "
                 f"declared symbols missing from generated code: "
                 f"{', '.join(self.missing_symbols)}. "
+                f"Output: {output_display}. "
                 f"Expected: {self.expected_symbols}. Found: {self.found_symbols}."
             )
-            if self.output_path:
-                message = f"{message} Output: {self.output_path}."
         super().__init__(message)
 
     @property
@@ -467,10 +467,9 @@ def _verify_architecture_conformance(
                 f"Architecture conformance error for {prompt_name}: "
                 f"Python code uses camelCase names ({', '.join(camel_exports[:5])}) "
                 f"but Python convention requires snake_case. "
+                f"Output: {output_path or '<unknown>'}. "
                 f"Expected: {declared_symbols}. Found: {actual_symbols}."
             )
-            if output_path:
-                camel_message = f"{camel_message} Output: {output_path}."
             raise ArchitectureConformanceError(
                 prompt_name=prompt_name,
                 output_path=output_path or "",

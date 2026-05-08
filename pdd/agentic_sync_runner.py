@@ -207,14 +207,13 @@ def _parse_conformance_failure(
         return out
 
     # 1) Inline declared-missing form:
-    #    "... declared symbols missing from generated code: A, B.c. Expected: ..."
-    # Capture symbols until the first ". " or end-of-line / "Expected:" /
-    # "Found:" boundary. Use a tolerant regex that allows the symbols list
-    # to include dotted names (Class.method) and is bounded by a period
-    # followed by either a capital "Expected"/"Found" or end of line.
+    #    "... declared symbols missing from generated code: A, B.c. Output: ..."
+    # Capture symbols until a known field boundary. Dotted names
+    # (Class.method) are safe because boundaries require ". " followed by a
+    # field label.
     inline_re = re.compile(
         r"declared symbols missing from generated code:\s*(.+?)"
-        r"(?=\.\s+(?:Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\.\s*\n|$)",
         re.MULTILINE,
     )
     for m in inline_re.finditer(combined):
@@ -248,6 +247,8 @@ def _parse_conformance_failure(
             capture = False
 
     missing_sorted = tuple(sorted(set(missing)))
+    if not missing_sorted:
+        return None
 
     directive_lines = [
         "Architecture conformance repair required.",
@@ -646,7 +647,7 @@ class AsyncSyncRunner:
         self._comment_update_interval: float = 15.0
 
         # Modules whose state was restored to "success" from disk
-        self._resumed_modules: set = set()
+        self._resumed_modules: List[str] = []
         self._load_state()
 
     # ------------------------------------------------------------------
@@ -685,7 +686,8 @@ class AsyncSyncRunner:
                     state.completed_phases = list(phases)
                 state.start_time = info.get("start_time")
                 state.end_time = info.get("end_time")
-                self._resumed_modules.add(basename)
+                if basename not in self._resumed_modules:
+                    self._resumed_modules.append(basename)
 
         cid = saved.get("comment_id")
         if cid is not None:
@@ -1283,7 +1285,7 @@ class AsyncSyncRunner:
         self._delete_state()
         return (
             True,
-            f"All {len(succeeded)} module(s) synced successfully",
+            f"All {len(succeeded)} modules synced successfully",
             total_cost,
         )
 
@@ -1413,28 +1415,28 @@ class AsyncSyncRunner:
 
         prompt_field = "<unknown>"
         combined = (stdout or "") + "\n" + (stderr or "")
+        field_boundary = r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\n|$)"
+
+        def _extract_field(label: str, default: str = "<unknown>") -> str:
+            pattern = re.compile(
+                rf"{re.escape(label)}:\s*(.*?){field_boundary}",
+                re.DOTALL,
+            )
+            match = pattern.search(combined)
+            if not match:
+                return default
+            value = match.group(1).strip().rstrip(".").strip()
+            return value or default
+
         for line in combined.splitlines():
             if _CONFORMANCE_PREFIX in line:
                 tail = line.split(_CONFORMANCE_PREFIX, 1)[1].strip()
                 prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
                 break
 
-        # Extract Expected:/Found:/Output: fields emitted by
-        # ArchitectureConformanceError so the diagnostic block has the
-        # contract details users need to debug locally (#866 follow-up).
-        def _last(pattern: str, flags: int = 0) -> str:
-            matches = list(re.finditer(pattern, combined, flags))
-            return matches[-1].group(1).strip() if matches else "<unknown>"
-
-        expected_field = _last(r"Expected:\s*(.+?)\.\s+Found:")
-        found_field = _last(
-            r"Found:\s*(.+?)\.(?:\s+Output:|\s*\n|\s*$)",
-            re.MULTILINE,
-        )
-        output_field = _last(
-            r"Output:\s*([^\n]+?)\.?(?=\s*\n|\s*$)",
-            re.MULTILINE,
-        )
+        output_field = _extract_field("Output")
+        expected_field = _extract_field("Expected")
+        found_field = _extract_field("Found")
 
         block_lines = [
             failure_summary or "Architecture conformance failure",

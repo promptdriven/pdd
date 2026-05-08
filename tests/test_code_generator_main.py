@@ -2121,6 +2121,50 @@ def test_full_gen_local_with_unit_test(
     assert "</unit_test_content>" in called_prompt
 
 
+def test_full_gen_local_includes_architecture_repair_directive(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    monkeypatch,
+    mock_env_vars,
+):
+    """Retry callers can inject missing-symbol repair instructions into generation."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_prompt.prompt"
+    prompt_content = "Generate repaired code."
+    create_file(prompt_file_path, prompt_content)
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "repair.py")
+    repair_directive = (
+        "Architecture conformance repair required.\n"
+        "Required missing exports:\n"
+        "- AsyncSyncRunner.run\n"
+        "Do not modify architecture.json."
+    )
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", repair_directive)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python",
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        output_file_path_str,
+        None,
+        False,
+    )
+
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert prompt_content in called_prompt
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "- AsyncSyncRunner.run" in called_prompt
+    assert "</architecture_repair_directive>" in called_prompt
+
+
 def test_full_gen_local_with_unit_test_and_front_matter_conflict(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars
 ):
@@ -4801,6 +4845,38 @@ class TestArchitectureConformanceErrorTypedException:
         assert msg.startswith("Architecture conformance error for models_Python.prompt:")
         # Must include the missing symbols.
         assert "Admin" in msg
+
+    def test_missing_symbol_includes_output_path_when_provided(self, tmp_path):
+        """Structured failures should carry the generated output path."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Admin", "signature": "class Admin"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code="",
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+                output_path="src/models.py",
+            )
+
+        assert excinfo.value.output_path == "src/models.py"
+        assert "Output: src/models.py" in str(excinfo.value)
 
     def test_missing_symbol_repair_directive_format(self, tmp_path):
         """repair_directive must enumerate missing symbols and forbid arch edits."""
