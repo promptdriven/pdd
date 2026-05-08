@@ -945,7 +945,10 @@ def sync_main(
                             code_generator_main,
                             ArchitectureConformanceError,
                         )
-                        from .agentic_sync_runner import MAX_CONFORMANCE_ATTEMPTS
+                        from .agentic_sync_runner import (
+                            MAX_CONFORMANCE_ATTEMPTS,
+                            build_conformance_hard_failure_from_error,
+                        )
 
                         if not quiet:
                             rprint("[dim]Running pdd generate...[/dim]")
@@ -1003,8 +1006,15 @@ def sync_main(
                                         )
                                     _os.environ["PDD_REPAIR_DIRECTIVE"] = exc.repair_directive
                             if last_exc is not None:
-                                # Re-raise as the original click.UsageError so
-                                # downstream handling sees a hard failure.
+                                # Emit the structured hard-failure block
+                                # (#866 contract: plain CLI path must show the
+                                # same diagnostic the agentic runner emits)
+                                # before re-raising the original click.UsageError.
+                                import sys as _sys
+                                hard_block = build_conformance_hard_failure_from_error(
+                                    last_exc, basename
+                                )
+                                print(hard_block, file=_sys.stderr)
                                 raise last_exc
                         finally:
                             if _prev_repair is None:
