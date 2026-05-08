@@ -133,7 +133,7 @@ Instruction: `"Read the file {prompt_file} for instructions. You have full file 
     <include select="def:llm_invoke">pdd/llm_invoke.py</include>
 </pdd.llm_invoke>
 <agentic_common_existing_impl>
-    <include select="class:TokenMatch,def:detect_control_token,def:classify_step_output,def:substitute_template_variables">pdd/agentic_common.py</include>
+    <include>pdd/agentic_common.py</include>
 </agentic_common_existing_impl>
 <utils.api_key_scanner>
     <include>context/api_key_scanner_example.py</include>

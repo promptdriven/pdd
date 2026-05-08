@@ -7,8 +7,11 @@ prompts the LLM actually pulls in via <include>.
 from __future__ import annotations
 
 import json
+import ast
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 from .architecture_registry import extract_modules
 from .sync_order import extract_includes_from_file, extract_module_from_include
@@ -144,6 +147,312 @@ def _resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
 def resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path:
     """Public API for resolving an architecture ``filename`` to an on-disk path."""
     return _resolve_architecture_prompt_path(filename, project_root)
+
+
+@dataclass(frozen=True)
+class _IncludeReference:
+    """A parsed prompt ``<include>`` tag."""
+
+    path: str
+    attrs: Dict[str, str]
+
+    @property
+    def is_partial(self) -> bool:
+        """Return True when the include selects only part of a source file."""
+        return any(self.attrs.get(k, "").strip() for k in ("select", "lines", "query"))
+
+
+_INCLUDE_RE = re.compile(r"<include\b([^>]*)>(.*?)</include>", re.IGNORECASE | re.DOTALL)
+_ATTR_RE = re.compile(
+    r"""([A-Za-z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"""
+)
+
+
+def _parse_include_attrs(raw_attrs: str) -> Dict[str, str]:
+    """Parse simple XML-style attributes from an ``<include>`` tag."""
+    attrs: Dict[str, str] = {}
+    for match in _ATTR_RE.finditer(raw_attrs or ""):
+        value = match.group(2)
+        if value is None:
+            value = match.group(3)
+        if value is None:
+            value = match.group(4)
+        attrs[match.group(1).lower()] = value or ""
+    return attrs
+
+
+def _extract_include_references(prompt_content: str) -> List[_IncludeReference]:
+    """Return parsed ``<include>`` tags with their target paths and attributes."""
+    refs: List[_IncludeReference] = []
+    for match in _INCLUDE_RE.finditer(prompt_content or ""):
+        path = (match.group(2) or "").strip()
+        if not path:
+            continue
+        refs.append(_IncludeReference(path=path, attrs=_parse_include_attrs(match.group(1))))
+    return refs
+
+
+def _collect_python_public_symbols(body: List[ast.stmt], prefix: str = "") -> List[str]:
+    """Collect public Python exports using the same shape as architecture conformance."""
+    symbols: List[str] = []
+    for node in body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not node.name.startswith("_"):
+                symbols.append(f"{prefix}{node.name}")
+        elif isinstance(node, ast.ClassDef):
+            if not node.name.startswith("_"):
+                class_name = f"{prefix}{node.name}"
+                symbols.append(class_name)
+                symbols.extend(_collect_python_public_symbols(node.body, f"{class_name}."))
+        elif not prefix and isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and not target.id.startswith("_"):
+                    symbols.append(target.id)
+        elif (
+            not prefix
+            and isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+            and not node.target.id.startswith("_")
+        ):
+            symbols.append(node.target.id)
+    return symbols
+
+
+def _python_top_level_public_symbols(source: str) -> List[str]:
+    """Return public symbols exported by a Python source file."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for symbol in _collect_python_public_symbols(tree.body):
+        if symbol not in seen:
+            seen.add(symbol)
+            ordered.append(symbol)
+    return ordered
+
+
+def _interface_function_names(interface: Any) -> List[str]:
+    """Extract declared public symbols from an architecture/prompt interface block."""
+    if not isinstance(interface, dict):
+        return []
+    if interface.get("type") != "module":
+        return []
+
+    module_spec = interface.get("module")
+    if not isinstance(module_spec, dict):
+        return []
+
+    names: List[str] = []
+    for key in ("functions", "classes", "constants", "exports"):
+        values = module_spec.get(key, [])
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            name: Optional[str] = None
+            if isinstance(value, dict):
+                raw_name = value.get("name")
+                if isinstance(raw_name, str):
+                    name = raw_name
+            elif isinstance(value, str):
+                name = value
+            if name and not name.startswith("_") and name not in names:
+                names.append(name)
+    return names
+
+
+def _prompt_interface(prompt_content: str) -> Optional[Dict[str, Any]]:
+    """Extract the prompt-local ``<pdd-interface>`` block if present."""
+    try:
+        from .architecture_sync import parse_prompt_tags
+
+        interface = parse_prompt_tags(prompt_content).get("interface")
+    except Exception:
+        return None
+    return interface if isinstance(interface, dict) else None
+
+
+def _entry_matches_prompt_or_output(
+    entry: Dict[str, Any],
+    prompt_path: Path,
+    output_path: Path,
+    project_root: Path,
+) -> bool:
+    """Return True when an architecture entry names the prompt or output path."""
+    filename = str(entry.get("filename") or "").replace("\\", "/")
+    prompt_name = prompt_path.name
+    if filename:
+        if filename == prompt_name or Path(filename).name == prompt_name:
+            return True
+        if Path(filename).stem == prompt_path.stem:
+            return True
+
+    filepath = entry.get("filepath")
+    if isinstance(filepath, str) and filepath.strip():
+        normalized = filepath.replace("\\", "/").lstrip("/")
+        try:
+            if (project_root / normalized).resolve() == output_path.resolve():
+                return True
+        except OSError:
+            pass
+        try:
+            rel_output = output_path.resolve().relative_to(project_root.resolve()).as_posix()
+            if rel_output == normalized:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def _load_architecture_interface(
+    architecture_path: Optional[Path],
+    prompt_path: Path,
+    output_path: Path,
+    project_root: Path,
+) -> Optional[Dict[str, Any]]:
+    """Load the matching architecture.json interface block, if any."""
+    arch_path = architecture_path or (project_root / "architecture.json")
+    if not arch_path.exists():
+        return None
+    try:
+        arch_data = json.loads(arch_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    for entry in extract_modules(arch_data):
+        if _entry_matches_prompt_or_output(entry, prompt_path, output_path, project_root):
+            interface = entry.get("interface")
+            return interface if isinstance(interface, dict) else None
+    return None
+
+
+def _include_matches_output(include_path: str, output_path: Path, project_root: Path) -> bool:
+    """Return True when an include target is the same file as the output path."""
+    raw = include_path.replace("\\", "/").strip()
+    if not raw:
+        return False
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = project_root / raw
+    try:
+        if candidate.resolve() == output_path.resolve():
+            return True
+    except OSError:
+        pass
+    try:
+        rel_output = output_path.resolve().relative_to(project_root.resolve()).as_posix()
+        return raw.lstrip("/") == rel_output
+    except ValueError:
+        return False
+
+
+def _symbols_covered_by_selectors(selectors: List[str], existing_symbols: List[str]) -> Set[str]:
+    """Map ``<include select=...>`` selectors to covered source symbols."""
+    covered: Set[str] = set()
+    symbol_set = set(existing_symbols)
+    for selector_list in selectors:
+        for raw_token in (selector_list or "").split(","):
+            token = raw_token.strip()
+            if not token:
+                continue
+            kind = ""
+            value = token
+            if ":" in token:
+                kind, value = token.split(":", 1)
+                kind = kind.strip().lower()
+                value = value.strip()
+            if not value:
+                continue
+            if kind in {"class", "cls"}:
+                for symbol in existing_symbols:
+                    if symbol == value or symbol.startswith(f"{value}."):
+                        covered.add(symbol)
+            elif value in symbol_set:
+                covered.add(value)
+    return covered
+
+
+def validate_prompt_contract_context(
+    prompt_path: Path,
+    output_path: Path,
+    project_root: Path,
+    architecture_path: Optional[Path] = None,
+    prompt_content: Optional[str] = None,
+) -> List[str]:
+    """
+    Validate that broad module interface declarations have matching source context.
+
+    This preflight catches the issue-798 failure shape: an existing module prompt
+    declares a wide public interface but includes only a small selected slice of
+    the existing implementation, leaving the LLM without enough context to
+    preserve declared exports. A full self-include satisfies the contract. A
+    partial self-include must select every declared symbol that already exists in
+    the output source file.
+    """
+    prompt_path = Path(prompt_path)
+    output_path = Path(output_path)
+    project_root = Path(project_root)
+
+    if prompt_content is None:
+        try:
+            prompt_content = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+
+    try:
+        existing_source = output_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    if not existing_source.strip():
+        return []
+
+    declared_symbols: List[str] = []
+    for interface in (
+        _prompt_interface(prompt_content),
+        _load_architecture_interface(architecture_path, prompt_path, output_path, project_root),
+    ):
+        for symbol in _interface_function_names(interface):
+            if symbol not in declared_symbols:
+                declared_symbols.append(symbol)
+    if not declared_symbols:
+        return []
+
+    existing_symbols = _python_top_level_public_symbols(existing_source)
+    existing_symbol_set = set(existing_symbols)
+    declared_existing = [symbol for symbol in declared_symbols if symbol in existing_symbol_set]
+    if not declared_existing:
+        return []
+
+    self_includes = [
+        ref
+        for ref in _extract_include_references(prompt_content)
+        if _include_matches_output(ref.path, output_path, project_root)
+    ]
+    if not self_includes:
+        return []
+    if any(not ref.is_partial for ref in self_includes):
+        return []
+
+    covered = _symbols_covered_by_selectors(
+        [ref.attrs.get("select", "") for ref in self_includes if ref.attrs.get("select")],
+        existing_symbols,
+    )
+    missing = [symbol for symbol in declared_existing if symbol not in covered]
+    if not missing:
+        return []
+
+    covered_declared_count = len([s for s in declared_existing if s in covered])
+    return [
+        (
+            f"{prompt_path}: prompt declares {len(declared_existing)} public symbols "
+            f"already present in {output_path} but only includes source context for "
+            f"{covered_declared_count}: missing {', '.join(missing)}. "
+            "Use a full <include> of the existing module or select every declared "
+            "existing public symbol."
+        )
+    ]
 
 
 def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:

@@ -31,6 +31,7 @@ from .architecture_sync import (
     generate_tags_from_architecture,
 )
 from .architecture_registry import extract_modules
+from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
@@ -66,6 +67,47 @@ def _should_wire_generated_exports(output_path: str) -> bool:
     if _env_flag_enabled("PDD_SKIP_WIRING"):
         return False
     return _env_flag_enabled("PDD_ENABLE_WIRING")
+
+
+def _find_prompt_contract_project_root(prompt_path: str, output_path: Optional[str]) -> pathlib.Path:
+    """Find the project root used for prompt contract preflight resolution."""
+    starts: List[pathlib.Path] = []
+    try:
+        starts.append(pathlib.Path(prompt_path).resolve().parent)
+    except Exception:
+        pass
+    if output_path:
+        try:
+            starts.append(pathlib.Path(output_path).resolve().parent)
+        except Exception:
+            pass
+    starts.append(pathlib.Path.cwd().resolve())
+
+    seen: set[pathlib.Path] = set()
+    for start in starts:
+        if start in seen:
+            continue
+        seen.add(start)
+        current = start
+        while True:
+            if (current / "architecture.json").exists():
+                return current
+            if current.parent == current:
+                break
+            current = current.parent
+
+    try:
+        current = pathlib.Path(prompt_path).resolve().parent
+        while True:
+            if current.name == "prompts":
+                return current.parent
+            if current.parent == current:
+                break
+            current = current.parent
+    except Exception:
+        pass
+
+    return pathlib.Path.cwd().resolve()
 
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
@@ -811,6 +853,25 @@ def code_generator_main(
     # Honor front-matter language if provided (overrides detection for both local and cloud)
     if fm_meta and isinstance(fm_meta.get("language"), str) and fm_meta.get("language"):
         language = fm_meta.get("language")
+
+    if (
+        llm_enabled
+        and output_path
+        and not _env_flag_enabled("PDD_SKIP_PROMPT_CONTRACT_PREFLIGHT")
+    ):
+        contract_root = _find_prompt_contract_project_root(prompt_file, output_path)
+        contract_arch_path = contract_root / "architecture.json"
+        contract_errors = validate_prompt_contract_context(
+            prompt_path=pathlib.Path(prompt_file),
+            output_path=pathlib.Path(output_path),
+            project_root=contract_root,
+            architecture_path=contract_arch_path if contract_arch_path.exists() else None,
+            prompt_content=prompt_content,
+        )
+        if contract_errors:
+            raise click.UsageError(
+                "Prompt contract preflight failed:\n- " + "\n- ".join(contract_errors)
+            )
 
     if output_path and pathlib.Path(output_path).exists():
         try:

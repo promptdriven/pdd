@@ -25,6 +25,12 @@
 %      prompt file has no <include> or <pdd-dependency> referencing that module's prompt.
 %   2. Reverse mismatch: a prompt <include>s another module's prompt, but
 %      architecture.json dependencies do not list that module.
+% It also provides a generation-time contract preflight for existing modules:
+%   3. Prompt contract/context mismatch: a prompt declares a broad module interface
+%      while <include>ing only a selected slice of the existing output source.
+%      For existing modules, a partial self-include must cover every declared public
+%      symbol that already exists in the output file, or the prompt must use a full
+%      self-include.
 
 % ============================================================
 % Internal helpers
@@ -63,6 +69,40 @@
 %   - Uses parse_prompt_tags from .architecture_sync to extract "dependencies" tags.
 %   - Filters out self_mod and uses extract_module_from_include for each dependency.
 %   - Returns empty set on OSError or empty content.
+
+% _IncludeReference dataclass
+%   - Fields: path: str, attrs: Dict[str, str].
+%   - Property is_partial: True when select=, lines=, or query= is present.
+
+% _extract_include_references(prompt_content: str) -> List[_IncludeReference]
+%   - Parse raw <include ...>target</include> tags, preserving include attributes.
+%   - This must parse plain prompt text and not require the prompt to be valid XML.
+
+% _interface_function_names(interface: Any) -> List[str]
+%   - Extract public module symbols declared in architecture/prompt interface blocks.
+%   - Reads module.functions, module.classes, module.constants, and module.exports.
+
+% _python_top_level_public_symbols(source: str) -> List[str]
+%   - Parse Python source with ast and return public top-level functions/classes/constants.
+%   - Include class methods as dotted symbols when discovered.
+
+% validate_prompt_contract_context(
+%     prompt_path: Path,
+%     output_path: Path,
+%     project_root: Path,
+%     architecture_path: Optional[Path] = None,
+%     prompt_content: Optional[str] = None,
+% ) -> List[str]
+%   - Generation-time preflight used before the LLM is called.
+%   - Load declared module symbols from both <pdd-interface> and matching architecture.json.
+%   - If the prompt includes the output source file with a full <include>, return [].
+%   - If the prompt includes the output source file with select=/lines=/query=, require
+%     selected context to cover every declared public symbol that already exists in
+%     output_path.
+%   - Return a hard-failure message when declared existing symbols are missing from
+%     partial self-include context.
+%   - Return [] when the prompt has no self-include so legacy prompts are not broken by
+%     this scoped preflight.
 
 % ============================================================
 % Core validation function
@@ -161,7 +201,8 @@
 % Generate a single Python module with:
 %   - Module docstring describing Phase 5 cross-validation purpose.
 %   - from __future__ import annotations
-%   - Imports: json, pathlib.Path, typing (Any, Dict, FrozenSet, List, Optional)
+%   - Imports: ast, json, re, dataclasses.dataclass, pathlib.Path, typing
+%     (Any, Dict, FrozenSet, List, Optional, Set)
 %   - Relative imports from .architecture_registry and .sync_order at top level.
 %   - Lazy imports of click, rich, .architecture_sync, .architecture_registry inside
 %     functions that need them (to avoid circular imports).

@@ -202,6 +202,26 @@ Check with: `ls prompts/_context/data_dictionary.yaml 2>/dev/null`
    - `prompts/_context/data_dictionary.yaml` is authoritative when it exists
    - architecture.json `interface` fields are authoritative for function signatures
 
+% Existing Module Contract Context (CRITICAL)
+
+For existing modules, the declared interface and LLM context must stay aligned.
+Before writing a prompt for a module whose `filepath` already exists, inspect the
+existing source file and list its public functions/classes. Compare that list to
+the module's architecture `interface`.
+
+If the prompt declares an existing public symbol in `<pdd-interface>`, include
+enough source context for the LLM to preserve it:
+- Use a full `<include>` of that source file for established/shared modules or
+  modules whose prompt is expected to preserve existing behavior.
+- Or use a targeted `<include select="...">` that covers every existing public symbol
+  declared in `<pdd-interface>`.
+- Or explicitly state that the module is a replacement/new implementation and narrow
+  the declared interface to only the exports the generated code must provide.
+
+Do NOT declare a broad public API while including only a small selected slice of the
+existing implementation. `<pdd-dependency>` is architecture metadata, not LLM context;
+it does not provide source text to the code generation model.
+
 % Cross-Language Field Name Mapping (for multi-language projects)
    - For every prompt that defines or consumes a shared data type used across languages (e.g., Python backend + TypeScript frontend):
      - Include a "Field Name Mapping" table showing the exact field names in each language:
