@@ -16,13 +16,22 @@ _CLI_COMMANDS: dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
+    "opencode": "opencode",
 }
 
-# Maps provider name -> environment variable for API key
+# Maps provider name -> environment variable for API key.
+# OpenCode is a multi-provider router with no single canonical API-key env
+# var — it consumes whichever backend provider key (ANTHROPIC_API_KEY,
+# OPENAI_API_KEY, OPENROUTER_API_KEY, GITHUB_TOKEN, ...) corresponds to the
+# resolved OPENCODE_MODEL. We pick ANTHROPIC_API_KEY as the most common
+# default for the legacy `_has_api_key` lookup; richer detection happens via
+# `_has_provider_oauth("opencode")` (auth.json) and the runtime helper
+# `_has_opencode_credentials` in `agentic_common.py`.
 _API_KEY_ENV_VARS: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "opencode": "ANTHROPIC_API_KEY",
 }
 
 # Maps provider name -> npm install command for the CLI
@@ -30,6 +39,7 @@ _INSTALL_COMMANDS: dict[str, str] = {
     "anthropic": "npm install -g @anthropic-ai/claude-code",
     "google": "npm install -g @google/gemini-cli",
     "openai": "npm install -g @openai/codex",
+    "opencode": "npm install -g opencode-ai",
 }
 
 # Maps provider name -> human-readable CLI name
@@ -37,6 +47,7 @@ _CLI_DISPLAY_NAMES: dict[str, str] = {
     "anthropic": "Claude CLI",
     "google": "Gemini CLI",
     "openai": "Codex CLI",
+    "opencode": "OpenCode CLI",
 }
 
 # Provider -> primary key env var name (used when saving)
@@ -44,6 +55,7 @@ PROVIDER_PRIMARY_KEY: Dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GEMINI_API_KEY",
     "openai": "OPENAI_API_KEY",
+    "opencode": "ANTHROPIC_API_KEY",
 }
 
 # Provider -> display name
@@ -51,16 +63,18 @@ PROVIDER_DISPLAY: Dict[str, str] = {
     "anthropic": "Anthropic",
     "google": "Google (Gemini)",
     "openai": "OpenAI",
+    "opencode": "OpenCode",
 }
 
 # CLI preference order (claude first because it supports subscription auth)
-CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex"]
+CLI_PREFERENCE: List[str] = ["gemini", "claude", "codex", "opencode"]
 
 # Ordered list for the numbered selection table: (provider, cli_name, display_name)
 _TABLE_ORDER: List[Tuple[str, str, str]] = [
     ("anthropic", "claude", "Claude CLI"),
     ("openai", "codex", "Codex CLI"),
     ("google", "gemini", "Gemini CLI"),
+    ("opencode", "opencode", "OpenCode CLI"),
 ]
 
 # Shell -> RC file path (relative to home)
@@ -86,6 +100,12 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path.home() / ".local" / "bin" / "gemini",
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
+    ],
+    "opencode": [
+        Path.home() / ".local" / "bin" / "opencode",
+        Path.home() / ".npm-global" / "bin" / "opencode",
+        Path("/usr/local/bin/opencode"),
+        Path("/opt/homebrew/bin/opencode"),
     ],
 }
 
@@ -226,6 +246,24 @@ def _has_provider_oauth(provider: str) -> bool:
                 data = json.loads(auth.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and (data.get("token") or data.get("tokens") or data.get("OPENAI_API_KEY")):
                     return True
+        except (OSError, json.JSONDecodeError):
+            pass
+        return False
+
+    if provider == "opencode":
+        # OpenCode persists per-backend credentials at
+        # ``~/.local/share/opencode/auth.json`` as ``{provider: {...}, ...}``.
+        # Any non-empty provider entry is a usable OAuth/API-credential signal.
+        auth = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+        try:
+            if auth.exists() and auth.stat().st_size > 0:
+                data = json.loads(auth.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data:
+                    for value in data.values():
+                        if isinstance(value, dict) and value:
+                            return True
+                        if isinstance(value, str) and value.strip():
+                            return True
         except (OSError, json.JSONDecodeError):
             pass
         return False
@@ -651,8 +689,12 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
         seen: set[int] = set()
         parts = [p.strip() for p in raw.split(",")]
         for part in parts:
-            if part in ("1", "2", "3"):
-                idx = int(part) - 1
+            try:
+                num = int(part)
+            except ValueError:
+                continue
+            if 1 <= num <= len(cli_info):
+                idx = num - 1
                 if idx not in seen:
                     seen.add(idx)
                     selected_indices.append(idx)

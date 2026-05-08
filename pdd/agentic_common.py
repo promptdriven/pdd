@@ -26,7 +26,7 @@ except ImportError:
         return None
 
 # Constants
-_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai"]
+_DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
 
 # Default number of tail lines to scan for semantic regex patterns.
 # Semantic matching is restricted to the tail to prevent false positives
@@ -253,6 +253,7 @@ CLI_COMMANDS: Dict[str, str] = {
     "anthropic": "claude",
     "google": "gemini",
     "openai": "codex",
+    "opencode": "opencode",
 }
 
 # Common installation paths for CLI tools (platform-specific)
@@ -285,6 +286,15 @@ _COMMON_CLI_PATHS: Dict[str, List[Path]] = {
         Path("/usr/local/bin/gemini"),
         Path("/opt/homebrew/bin/gemini"),
         Path("/home/linuxbrew/.linuxbrew/bin/gemini"),
+        Path.home() / ".nvm" / "versions" / "node",
+    ],
+    "opencode": [
+        Path.home() / ".npm-global" / "bin" / "opencode",
+        Path.home() / ".local" / "bin" / "opencode",
+        Path.home() / "bin" / "opencode",
+        Path("/usr/local/bin/opencode"),
+        Path("/opt/homebrew/bin/opencode"),
+        Path("/home/linuxbrew/.linuxbrew/bin/opencode"),
         Path.home() / ".nvm" / "versions" / "node",
     ],
 }
@@ -501,6 +511,7 @@ _PROVIDER_MODEL_ENV: Dict[str, str] = {
     "anthropic": "CLAUDE_MODEL",
     "google": "GEMINI_MODEL",
     "openai": "CODEX_MODEL",
+    "opencode": "OPENCODE_MODEL",
 }
 
 
@@ -713,7 +724,7 @@ def _iter_common_cli_paths(name: str) -> List[Path]:
     discovery still honors the current home directory.
     """
     paths = list(_COMMON_CLI_PATHS.get(name, []))
-    if name in {"claude", "codex", "gemini"}:
+    if name in {"claude", "codex", "gemini", "opencode"}:
         home = Path.home()
         paths.extend([
             home / ".npm-global" / "bin" / name,
@@ -812,6 +823,15 @@ def get_available_agents() -> List[str]:
     ):
         available.append("openai")
 
+    # 4. OpenCode (multi-provider CLI)
+    # Available if 'opencode' CLI exists AND at least one usable credential
+    # signal is present: stored OpenCode auth.json with provider data, an
+    # OpenCode config source declaring a provider, or any provider credential
+    # env var represented in pdd/data/llm_model.csv. OPENCODE_MODEL alone is
+    # NOT a credential — it's a model knob.
+    if _find_cli_binary("opencode") and _has_opencode_credentials():
+        available.append("opencode")
+
     return available
 
 
@@ -856,6 +876,326 @@ def _has_codex_auth_file() -> bool:
         or data.get("tokens")
         or data.get("OPENAI_API_KEY")
     )
+
+# ---------------------------------------------------------------------------
+# OpenCode helpers (auth detection, model resolution, JSONL parsing)
+# ---------------------------------------------------------------------------
+
+# Provider credential env vars used by OpenCode-backed providers, derived from
+# pdd/data/llm_model.csv. Any one of these being set is treated as a usable
+# credential signal for OpenCode availability detection.
+_OPENCODE_PROVIDER_ENV_KEYS: Tuple[str, ...] = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GITHUB_TOKEN",
+    "XAI_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "MISTRAL_API_KEY",
+    "COHERE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "AZURE_API_KEY",
+    "AZURE_AI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "GROQ_API_KEY",
+    "TOGETHERAI_API_KEY",
+    "FIREWORKS_AI_API_KEY",
+    "FIREWORKS_API_KEY",
+    "PERPLEXITYAI_API_KEY",
+    "REPLICATE_API_KEY",
+    "DEEPINFRA_API_KEY",
+    "ZAI_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "MINIMAX_API_KEY",
+    "OLLAMA_HOST",
+    "LMSTUDIO_HOST",
+)
+
+
+def _opencode_auth_file_has_credentials(path: Path) -> bool:
+    """Return True when ``path`` is an OpenCode auth.json with usable provider data.
+
+    OpenCode CLI persists provider credentials at
+    ``~/.local/share/opencode/auth.json`` as ``{provider: {...}, ...}``. Any
+    non-empty provider entry counts as a usable credential signal.
+    """
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict) or not data:
+        return False
+    # Any provider entry that is a non-empty dict or non-empty string counts.
+    for value in data.values():
+        if isinstance(value, dict) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    return False
+
+
+def _opencode_config_paths(cwd: Optional[Path] = None) -> List[Path]:
+    """Return candidate OpenCode config file locations (existing files only).
+
+    Order: explicit ``OPENCODE_CONFIG`` env var, project ``opencode.json``
+    walking up from ``cwd``, then global ``~/.config/opencode/opencode.json``.
+    """
+    paths: List[Path] = []
+    explicit = os.environ.get("OPENCODE_CONFIG", "").strip()
+    if explicit:
+        p = Path(explicit)
+        if p.is_file():
+            paths.append(p)
+    start = cwd or Path.cwd()
+    try:
+        cur = start.resolve()
+    except OSError:
+        cur = start
+    for _ in range(MAX_PDDRC_SEARCH_DEPTH):
+        candidate = cur / "opencode.json"
+        if candidate.is_file():
+            paths.append(candidate)
+            break
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    global_cfg = Path.home() / ".config" / "opencode" / "opencode.json"
+    if global_cfg.is_file():
+        paths.append(global_cfg)
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: List[Path] = []
+    for p in paths:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(p)
+    return unique
+
+
+def _opencode_config_declares_provider(path: Path) -> bool:
+    """Return True when an OpenCode config file declares any provider/model.
+
+    Bare config existence with only unrelated preferences is diagnostic-only —
+    must not flip availability. We treat a top-level ``provider`` mapping or a
+    ``model`` string as a provider/model declaration.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+        # OpenCode supports JSONC (JSON with comments). Strip line comments
+        # for the cheap check; anything ambiguous remains diagnostic-only.
+        cleaned = re.sub(r"//[^\n]*", "", text)
+        data = json.loads(cleaned)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("model"), str) and data.get("model", "").strip():
+        return True
+    provider = data.get("provider")
+    if isinstance(provider, dict) and provider:
+        return True
+    return False
+
+
+def _has_opencode_credentials(cwd: Optional[Path] = None) -> bool:
+    """Return True when any OpenCode credential signal is present.
+
+    Signals (any one is sufficient):
+      - ``~/.local/share/opencode/auth.json`` parses to non-empty provider data
+      - An OpenCode config source declares a provider/model
+      - Any provider credential env var from llm_model.csv is set
+    """
+    auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
+    if _opencode_auth_file_has_credentials(auth_path):
+        return True
+    for cfg in _opencode_config_paths(cwd):
+        if _opencode_config_declares_provider(cfg):
+            return True
+    for key in _OPENCODE_PROVIDER_ENV_KEYS:
+        val = os.environ.get(key)
+        if val and val.strip():
+            return True
+    return False
+
+
+def _translate_to_opencode_model(model_id: str) -> str:
+    """Translate LiteLLM-oriented model IDs to OpenCode ``provider/model`` form.
+
+    Rules:
+      * ``github_copilot/X`` -> ``github-copilot/X``
+      * ``gemini/X`` -> ``google/X``
+      * Bare ``claude-...`` -> ``anthropic/claude-...``
+      * Bare ``gpt-...`` -> ``openai/gpt-...``
+      * IDs already in ``provider/model`` form pass through unchanged.
+    """
+    if not model_id:
+        return model_id
+    mid = model_id.strip()
+    if mid.startswith("github_copilot/"):
+        return "github-copilot/" + mid[len("github_copilot/"):]
+    if mid.startswith("gemini/"):
+        return "google/" + mid[len("gemini/"):]
+    if "/" in mid:
+        return mid
+    if mid.startswith("claude-"):
+        return f"anthropic/{mid}"
+    if mid.startswith("gpt-"):
+        return f"openai/{mid}"
+    return mid
+
+
+def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Resolve the OpenCode model for a run.
+
+    Order: ``OPENCODE_MODEL`` env var (verbatim, including nested slashes such
+    as ``openrouter/openai/gpt-5.3-codex``); otherwise ``None`` so the caller
+    can fall through to provider defaults or fail with an actionable error.
+    """
+    src = env if env is not None else os.environ
+    raw = (src.get("OPENCODE_MODEL") or "").strip()
+    if raw:
+        return raw
+    return None
+
+
+def _parse_opencode_jsonl(stdout: str) -> Dict[str, Any]:
+    """Parse OpenCode JSONL output into a normalized accounting dict.
+
+    OpenCode emits one JSON object per line (``--format json``) with events
+    such as ``step_start``, ``step_finish``, ``text``, ``tool_use``, and
+    ``error``. Returns a dict with keys:
+
+      * ``text``: concatenated visible text payloads
+      * ``cost``: summed ``step_finish.part.cost`` values (USD)
+      * ``cost_reported``: True iff any cost field appeared
+      * ``model``: model name surfaced by the run (empty when absent)
+      * ``error``: first error message encountered (empty when none)
+      * ``tokens``: dict with ``input``, ``output``, ``reasoning``,
+        ``cache_read``, ``cache_write`` counters
+    """
+    text_parts: List[str] = []
+    cost_total: float = 0.0
+    cost_reported = False
+    model_names: List[str] = []
+    error_msg = ""
+    tokens = {"input": 0, "output": 0, "reasoning": 0, "cache_read": 0, "cache_write": 0}
+
+    if not stdout:
+        return {
+            "text": "",
+            "cost": 0.0,
+            "cost_reported": False,
+            "model": "",
+            "error": "",
+            "tokens": tokens,
+        }
+
+    def _add_model(name: Any) -> None:
+        if isinstance(name, str) and name.strip() and name not in model_names:
+            model_names.append(name.strip())
+
+    def _accumulate_tokens(usage: Any) -> None:
+        if not isinstance(usage, dict):
+            return
+        for src_key, dst_key in (
+            ("input", "input"),
+            ("input_tokens", "input"),
+            ("prompt_tokens", "input"),
+            ("output", "output"),
+            ("output_tokens", "output"),
+            ("completion_tokens", "output"),
+            ("reasoning", "reasoning"),
+            ("reasoning_tokens", "reasoning"),
+        ):
+            v = usage.get(src_key)
+            if isinstance(v, (int, float)):
+                tokens[dst_key] += int(v)
+        cache = usage.get("cache")
+        if isinstance(cache, dict):
+            for src_key, dst_key in (
+                ("read", "cache_read"),
+                ("write", "cache_write"),
+            ):
+                v = cache.get(src_key)
+                if isinstance(v, (int, float)):
+                    tokens[dst_key] += int(v)
+
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+
+        ev_type = event.get("type", "")
+
+        # Capture model from any event that carries it.
+        _add_model(event.get("model"))
+        for nested_key in ("session", "message", "part"):
+            nested = event.get(nested_key)
+            if isinstance(nested, dict):
+                _add_model(nested.get("model"))
+
+        if ev_type == "error":
+            msg = event.get("message") or event.get("error") or ""
+            if isinstance(msg, dict):
+                msg = msg.get("message") or msg.get("error") or ""
+            if msg and not error_msg:
+                error_msg = str(msg)
+            continue
+
+        if ev_type in ("step_start", "tool_use"):
+            continue
+
+        if ev_type == "step_finish":
+            part = event.get("part")
+            if isinstance(part, dict):
+                cost_val = part.get("cost")
+                if isinstance(cost_val, (int, float)):
+                    cost_total += float(cost_val)
+                    cost_reported = True
+                _accumulate_tokens(part.get("usage") or part.get("tokens"))
+            _accumulate_tokens(event.get("usage") or event.get("tokens"))
+            continue
+
+        if ev_type == "text":
+            part = event.get("part")
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                text_parts.append(part["text"])
+            elif isinstance(event.get("text"), str):
+                text_parts.append(event["text"])
+            elif isinstance(event.get("content"), str):
+                text_parts.append(event["content"])
+            continue
+
+        # Tolerate top-level cost on unknown events for forward compatibility.
+        cost_val = event.get("cost")
+        if isinstance(cost_val, (int, float)):
+            cost_total += float(cost_val)
+            cost_reported = True
+
+    model_str = "+".join(sorted(model_names)) if len(model_names) > 1 else (model_names[0] if model_names else "")
+
+    return {
+        "text": "".join(text_parts),
+        "cost": cost_total,
+        "cost_reported": cost_reported,
+        "model": model_str,
+        "error": error_msg,
+        "tokens": tokens,
+    }
+
 
 def _calculate_gemini_cost(stats: Dict[str, Any]) -> float:
     """Calculates cost for Gemini based on token stats."""
@@ -1745,11 +2085,47 @@ def _run_with_provider(
         codex_model = env.get("CODEX_MODEL")
         if codex_model:
             cmd.extend(["--model", codex_model])
+    elif provider == "opencode":
+        # OpenCode is a multi-provider routing CLI: a single binary that
+        # delegates to whichever backend (Anthropic, OpenAI, GitHub Copilot,
+        # OpenRouter, etc.) the resolved ``provider/model`` identifier names.
+        # Routing requires a model identifier — without it OpenCode has no
+        # deterministic default we can rely on, so fail fast with an
+        # actionable message instead of letting the CLI surface a generic
+        # error far from the configuration source.
+        model_id = _resolve_opencode_model(env)
+        if not model_id:
+            return False, (
+                "OPENCODE_MODEL is not set. Set OPENCODE_MODEL to a "
+                "'provider/model' identifier (e.g., "
+                "'anthropic/claude-sonnet-4-6', 'openrouter/openai/gpt-5', "
+                "'github-copilot/gpt-5') so OpenCode can route the request "
+                "to a backend provider."
+            ), 0.0, None
+        translated_model = _translate_to_opencode_model(model_id)
+        cmd = [
+            cli_path,
+            "run",
+            "--dir", str(cwd),
+            "--format", "json",
+            "--dangerously-skip-permissions",
+            "--model", translated_model,
+        ]
+        agent_name = (env.get("OPENCODE_AGENT") or "").strip()
+        if agent_name:
+            cmd.extend(["--agent", agent_name])
+        variant_name = (env.get("OPENCODE_VARIANT") or "").strip()
+        if variant_name:
+            cmd.extend(["--variant", variant_name])
+        # ``--`` separates flags from prompt content; prompt is fed via stdin
+        # rather than as an argv element so multi-line prompts and shell
+        # metacharacters cannot leak into argv parsing.
+        cmd.append("--")
     else:
         return False, f"Unknown provider {provider}", 0.0, None
 
-    # For anthropic, pipe prompt content via stdin; others use file path in cmd
-    stdin_content = prompt_content if provider == "anthropic" else None
+    # For anthropic / opencode, pipe prompt content via stdin; others use file path in cmd
+    stdin_content = prompt_content if provider in ("anthropic", "opencode") else None
 
     try:
         result = _subprocess_run(
@@ -1781,6 +2157,27 @@ def _run_with_provider(
             if codex_auth_message:
                 return False, codex_auth_message, 0.0, None
         return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
+
+    # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
+    # different event schema than Codex/Claude (step_start, text, step_finish,
+    # error...) and routes cost via ``step_finish.part.cost``, so it doesn't
+    # belong in the shared single-JSON / Codex-NDJSON path below.
+    if provider == "opencode":
+        parsed = _parse_opencode_jsonl(result.stdout)
+        actual_model = parsed.get("model") or None
+        err = parsed.get("error") or ""
+        if err:
+            # An error event with returncode==0 still represents a routing /
+            # provider failure inside OpenCode (e.g., "provider not
+            # configured"). Surface as failure, but keep cost and any
+            # captured model so callers can audit partial spend.
+            return False, str(err), float(parsed.get("cost") or 0.0), actual_model
+        return (
+            True,
+            str(parsed.get("text") or ""),
+            float(parsed.get("cost") or 0.0),
+            actual_model,
+        )
 
     # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
     # Cloud one-session sync runs hit "All agent providers failed: anthropic: "

@@ -212,12 +212,16 @@ def test_get_available_agents_all_available(mock_env, mock_load_model_data, mock
     os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
     os.environ["GEMINI_API_KEY"] = "AIza..."
     os.environ["OPENAI_API_KEY"] = "sk-..."
-    
+
     agents = get_available_agents()
     assert "anthropic" in agents
     assert "google" in agents
     assert "openai" in agents
-    assert len(agents) == 3
+    # OpenCode (Issue #798) is also reported when its CLI is found AND any
+    # backing-provider credential signal is present — ANTHROPIC_API_KEY
+    # qualifies because OpenCode is a multi-provider router.
+    assert "opencode" in agents
+    assert len(agents) == 4
 
 def test_get_available_agents_mixed(mock_env, mock_load_model_data, mock_shutil_which):
     """Test mixed availability."""
@@ -1062,7 +1066,10 @@ def test_get_available_agents_preference_order(mock_shutil_which, mock_env, mock
     mock_env["OPENAI_API_KEY"] = "key"
 
     agents = get_available_agents()
-    assert agents == ["anthropic", "google", "openai"]
+    # OpenCode (Issue #798) joins as a fourth provider when its CLI is found
+    # and any backing-provider credential signal (e.g., ANTHROPIC_API_KEY) is
+    # present.
+    assert agents == ["anthropic", "google", "openai", "opencode"]
 
 # --- Tests for Cost Calculation ---
 
@@ -3331,7 +3338,8 @@ def test_post_pr_comment_no_gh_cli(tmp_path):
 def test_get_agent_provider_preference_default(mock_env):
     """Default preference when PDD_AGENTIC_PROVIDER is not set."""
     mock_env.pop("PDD_AGENTIC_PROVIDER", None)
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+    # OpenCode (Issue #798) is the new fourth default-preference provider.
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 def test_get_agent_provider_preference_single(mock_env):
@@ -3355,7 +3363,7 @@ def test_get_agent_provider_preference_with_spaces(mock_env):
 def test_get_agent_provider_preference_empty_string(mock_env):
     """Empty string falls back to default."""
     mock_env["PDD_AGENTIC_PROVIDER"] = ""
-    assert get_agent_provider_preference() == ["anthropic", "google", "openai"]
+    assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
 # ---------------------------------------------------------------------------
@@ -4998,7 +5006,10 @@ def test_false_positive_retries_in_single_provider_config(mock_cwd, mock_env, mo
     transient empty-result success must retry on the same provider with
     backoff rather than `break` to a non-existent next provider.
     """
-    mock_shutil_which.return_value = "/bin/claude"
+    # Only the claude CLI is on PATH — opencode (Issue #798) shares
+    # ANTHROPIC_API_KEY as a credential signal, so we must keep its binary
+    # unavailable to preserve the single-provider scope this test pins.
+    mock_shutil_which.side_effect = lambda cmd: "/bin/claude" if cmd == "claude" else None
     os.environ["ANTHROPIC_API_KEY"] = "key"
     # Remove google/openai creds so only anthropic is the candidate
     for k in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
