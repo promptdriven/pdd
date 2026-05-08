@@ -43,9 +43,9 @@ SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
     "6a_phase_extract": 500.0,
     "6_extract": 1000.0,
     "7a_verify_local": 900.0,
-    "7a_checkup": 600.0,
     "7b_regen_gate": 1800.0,
     "7c_arch_sync": 60.0,
+    "7d_checkup": 600.0,
     "7_assess": 300.0,
     "8_repair": 600.0,
     "9_refine_check": 300.0,
@@ -649,8 +649,8 @@ def _first_nonverified_child_index(plan: "SplitPlan", statuses: Dict[str, str]) 
 
     Step 6 is complete only after every child passes the per-child verify gate.
     Terminal ``failed`` children are not re-extracted automatically, but they
-    still block later 7a/checkup/assessment steps until a human fixes or
-    restarts the split.
+    still block later final verification, checkup, and assessment steps until
+    a human fixes or restarts the split.
     """
     for index, key in enumerate(_child_state_keys(plan)):
         if statuses.get(key) != "verified":
@@ -862,6 +862,97 @@ def _worktree_has_architecture_json(worktree: Path) -> bool:
         return any(path.is_file() for path in worktree.rglob("architecture.json"))
     except OSError:
         return False
+
+
+def _target_path_in_worktree(
+    target_file: Union[str, Path],
+    cwd: Path,
+    worktree: Path,
+) -> Path:
+    """Map the original target path into the active split worktree."""
+    target_path = Path(target_file)
+    target_abs = (
+        target_path
+        if target_path.is_absolute()
+        else cwd / target_path
+    ).resolve(strict=False)
+    base = get_git_root(cwd) or cwd
+    try:
+        return worktree / target_abs.relative_to(base.resolve(strict=False))
+    except ValueError:
+        return target_abs
+
+
+def _find_nearest_prompts_dir(target_abs: Path) -> Optional[Path]:
+    """Find the nearest prompts directory around a target file."""
+    candidate = target_abs.parent
+    for _ in range(8):
+        for prompts_name in ("prompts", "prompts/src"):
+            maybe = candidate / prompts_name
+            if maybe.is_dir():
+                return maybe
+        if candidate.parent == candidate:
+            break
+        candidate = candidate.parent
+    return None
+
+
+def _find_nearest_architecture_file(target_abs: Path) -> Optional[Path]:
+    """Find the nearest architecture.json around a target file."""
+    candidate = target_abs.parent
+    for _ in range(8):
+        maybe = candidate / "architecture.json"
+        if maybe.is_file():
+            return maybe
+        if candidate.parent == candidate:
+            break
+        candidate = candidate.parent
+    return None
+
+
+def _sync_split_architecture(
+    target_file: Union[str, Path],
+    cwd: Path,
+    worktree: Path,
+    changed_files: List[str],
+    quiet: bool,
+) -> List[str]:
+    """Refresh architecture metadata in the split worktree.
+
+    Returns failure messages that should feed the global repair loop.
+    """
+    target_abs = _target_path_in_worktree(target_file, cwd, worktree)
+    prompts_dir = _find_nearest_prompts_dir(target_abs)
+    architecture_path = _find_nearest_architecture_file(target_abs)
+    if prompts_dir is None or architecture_path is None:
+        if not quiet:
+            console.print(
+                "[yellow]Skipping arch sync — no prompts/ or "
+                "architecture.json found near target[/yellow]"
+            )
+        return []
+
+    try:
+        sync_result = sync_all_prompts_to_architecture(
+            prompts_dir, architecture_path, dry_run=False
+        )
+    except Exception as exc:
+        if not quiet:
+            console.print(f"[yellow]Arch sync errored: {exc}[/yellow]")
+        return [f"Arch sync errored: {exc}"]
+
+    if sync_result.get("success", False):
+        return []
+
+    errors = sync_result.get("errors", [])
+    own_stems = {Path(filename).stem for filename in changed_files}
+    relevant_errors = [
+        error for error in errors
+        if any(stem in str(error) for stem in own_stems)
+    ]
+    if relevant_errors:
+        return [f"Arch sync failed: {relevant_errors}"]
+    return []
 
 
 def _check_hard_stop(step: str, output: str, force_split: bool) -> Optional[str]:
@@ -1162,7 +1253,8 @@ def run_agentic_split_orchestrator(
         "5_setup_worktree",
         "6a_phase_extract",
         "6_extract",
-        "7a_verify_local", "7b_regen_gate", "7c_arch_sync", "7_assess",
+        "7a_verify_local", "7b_regen_gate", "7c_arch_sync", "7d_checkup",
+        "7_assess",
         "8_repair",
         "9_refine_check",
     ]
@@ -2320,9 +2412,18 @@ def run_agentic_split_orchestrator(
                             new_failures.append("Lint timed out after 120s")
 
                     new_failures.extend(
+                        _sync_split_architecture(
+                            target_file,
+                            cwd,
+                            current_work_dir,
+                            changed_files,
+                            quiet,
+                        )
+                    )
+                    new_failures.extend(
                         _run_split_checkup(
                             current_work_dir,
-                            SPLIT_STEP_TIMEOUTS["7a_checkup"] + timeout_adder,
+                            SPLIT_STEP_TIMEOUTS["7d_checkup"] + timeout_adder,
                         )
                     )
 
@@ -2346,7 +2447,7 @@ def run_agentic_split_orchestrator(
                 # repair fixes all failures, and the improvement gate aborts
                 # a successful split as ABORT_REGRESSION.
                 quant_metrics["validation_pass"] = 1 if not verify_failures else -1
-                if (current_work_dir / "architecture.json").is_file():
+                if _worktree_has_architecture_json(current_work_dir):
                     quant_metrics["checkup_pass"] = (
                         -1
                         if any(f.startswith("CHECKUP_FAILURE") for f in verify_failures)
@@ -2512,16 +2613,6 @@ def run_agentic_split_orchestrator(
                         except subprocess.TimeoutExpired:
                             verify_failures.append("Lint timed out after 120s")
 
-                    checkup_failures = _run_split_checkup(
-                        current_work_dir,
-                        SPLIT_STEP_TIMEOUTS["7a_checkup"] + timeout_adder,
-                    )
-                    if checkup_failures:
-                        verify_failures.extend(checkup_failures)
-                        quant_metrics["checkup_pass"] = -1
-                    elif (current_work_dir / "architecture.json").is_file():
-                        quant_metrics["checkup_pass"] = 1
-
             elif step == "7b_regen_gate":
                 if skip_regen_gate:
                     if not quiet:
@@ -2549,76 +2640,31 @@ def run_agentic_split_orchestrator(
                             verify_failures.append(f"Regen gate timed out for {basename}")
 
             elif step == "7c_arch_sync":
-                # Scope arch sync to the target file's directory tree. The
-                # sync_all_prompts_to_architecture function scans the entire
-                # prompts_dir recursively; if run on the project root it will
-                # also try to sync unrelated prompts (e.g. CRM, frontend) that
-                # aren't part of this split and may have broken references.
-                # Find the prompts dir closest to the target file.
-                target_abs = (Path(target_file)
-                              if Path(target_file).is_absolute()
-                              else cwd / target_file)
-                prompts_dir: Optional[Path] = None
-                # Walk up from target file's dir looking for a sibling prompts/
-                candidate = target_abs.parent
-                for _ in range(8):
-                    for p_name in ("prompts", "prompts/src"):
-                        maybe = candidate / p_name
-                        if maybe.is_dir():
-                            prompts_dir = maybe
-                            break
-                    if prompts_dir is not None:
-                        break
-                    if candidate.parent == candidate:
-                        break
-                    candidate = candidate.parent
-                # Similarly find an architecture.json near the target
-                architecture_path: Optional[Path] = None
-                candidate = target_abs.parent
-                for _ in range(8):
-                    maybe = candidate / "architecture.json"
-                    if maybe.is_file():
-                        architecture_path = maybe
-                        break
-                    if candidate.parent == candidate:
-                        break
-                    candidate = candidate.parent
-                if prompts_dir is None or architecture_path is None:
+                arch_sync_failures = _sync_split_architecture(
+                    target_file,
+                    cwd,
+                    current_work_dir,
+                    changed_files,
+                    quiet,
+                )
+                verify_failures.extend(arch_sync_failures)
+
+            elif step == "7d_checkup":
+                if no_verify:
                     if not quiet:
-                        console.print(
-                            "[yellow]Skipping arch sync — no prompts/ or "
-                            "architecture.json found near target[/yellow]"
-                        )
+                        console.print("[yellow]Skipping checkup (no_verify flag)[/yellow]")
                 else:
-                    try:
-                        sync_result = sync_all_prompts_to_architecture(
-                            prompts_dir, architecture_path, dry_run=False
-                        )
-                        if not sync_result.get("success", False):
-                            errors = sync_result.get("errors", [])
-                            # Filter out errors for unrelated prompts that
-                            # existed before this split (we only care about
-                            # prompts we created/modified).
-                            # changed_files has source paths (e.g. pdd/foo.py)
-                            # while errors reference .prompt paths — match on
-                            # basenames (stems) so e.g. "foo" matches both
-                            # "pdd/foo.py" and "prompts/foo.prompt".
-                            own_stems = {
-                                Path(f).stem for f in changed_files
-                            }
-                            relevant_errors = [
-                                e for e in errors
-                                if any(stem in str(e) for stem in own_stems)
-                            ]
-                            if relevant_errors:
-                                verify_failures.append(
-                                    f"Arch sync failed: {relevant_errors}"
-                                )
-                    except Exception as exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Arch sync errored (non-fatal): {exc}[/yellow]"
-                            )
+                    checkup_failures = _run_split_checkup(
+                        current_work_dir,
+                        SPLIT_STEP_TIMEOUTS["7d_checkup"] + timeout_adder,
+                    )
+                    if checkup_failures:
+                        for failure in checkup_failures:
+                            if failure not in verify_failures:
+                                verify_failures.append(failure)
+                        quant_metrics["checkup_pass"] = -1
+                    elif _worktree_has_architecture_json(current_work_dir):
+                        quant_metrics["checkup_pass"] = 1
 
         # Persist state after every step
         state["last_completed_step"] = step

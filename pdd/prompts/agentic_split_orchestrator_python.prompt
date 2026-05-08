@@ -36,7 +36,7 @@ Orchestrator for the agentic split workflow. Diagnoses whether a PDD dev unit ha
    - `delete_dead`: opt-in dead symbol deletion in step 6 (last child only)
    - `intent`: user hint (CLI flag); if set, step 0 is skipped
    - `no_phase_extraction`: skip step 6a (phase decomposition)
-5. Step 6 includes a deterministic per-child verify gate ("6v") immediately after each child extraction. A child must pass `validate_extraction()` in a single-child plan view before the orchestrator can continue to the final cross-cutting gates. Per-child failures use the step 8 repair prompt in a bounded sub-loop of `MAX_CHILD_VERIFY_REPAIR_ATTEMPTS = 2`; if any child remains non-verified, persist state and return before 7a/checkup/regen/assess/global repair.
+5. Step 6 includes a deterministic per-child verify gate ("6v") immediately after each child extraction. A child must pass `validate_extraction()` in a single-child plan view before the orchestrator can continue to the final cross-cutting gates. Per-child failures use the step 8 repair prompt in a bounded sub-loop of `MAX_CHILD_VERIFY_REPAIR_ATTEMPTS = 2`; if any child remains non-verified, persist state and return before 7a/regen/arch-sync/checkup/assess/global repair.
 
 % Per-Step Timeouts
 ```python
@@ -52,6 +52,7 @@ SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
     "7a_verify_local": 900.0,
     "7b_regen_gate": 1800.0,
     "7c_arch_sync": 60.0,
+    "7d_checkup": 600.0,
     "7_assess": 300.0,
     "8_repair": 600.0,
     "9_refine_check": 300.0,
@@ -92,9 +93,10 @@ Important fields/aliases:
 | 6a_phase_extract | agentic_split_step6a_phase_extract_LLM | run_agentic_task × N | Per-child phase decomposition (skipped by `no_phase_extraction`) |
 | 6_extract | agentic_split_step6_extract_LLM | run_agentic_task × N | One child per call; parses FILES_CREATED/FILES_MODIFIED, verifies on disk, then runs the per-child 6v gate. State keys use readable child name/stem when unique and path-qualified keys when names collide. |
 | 6v_verify_child | (none) | Python | After each child extracts, call `validate_extraction()` on a single-child `SplitPlan`. Filter cross-cutting `test_seam_resolution` failures to the current child's own test path by normalized full path when the failure message includes a path, using basename/stem only as a fallback when no path is parseable. On failures, run the repair prompt for that child up to 2 attempts, then mark `verified` or terminal `failed`. |
-| 7a_verify_local | (none) | Python | Final cross-cutting validate_extraction + tests + lint + quant metrics, only after every child is `verified`; also runs local `pdd checkup --validate-arch-includes --project-root <worktree>` when a root or nested architecture.json exists |
+| 7a_verify_local | (none) | Python | Final cross-cutting validate_extraction + tests + lint + quant metrics, only after every child is `verified`; do not run checkup here because architecture metadata is refreshed in 7c |
 | 7b_regen_gate | (none) | Python | `pdd sync <basename> --max-attempts 1 --budget 5.0` per changed `.prompt` file |
 | 7c_arch_sync | (none) | Python | `sync_all_prompts_to_architecture(prompts_dir, architecture_path, dry_run=False)` |
+| 7d_checkup | (none) | Python | Run local `pdd checkup --validate-arch-includes --project-root <worktree>` against the freshly synced architecture metadata |
 | 7_assess | agentic_split_step7_assess_LLM | run_agentic_task | Qualitative verdict |
 | 8_repair | agentic_split_step8_repair_LLM | run_agentic_task × ≤5 | Fix final cross-cutting verify_failures only; per-child 6v failures are handled in step 6 and must not consume the global repair budget |
 | 9_refine_check | agentic_split_step9_refine_check_LLM | run_agentic_task | Decide whether to do ONE focused refinement pass |
@@ -153,7 +155,7 @@ If step 3 surfaced `shared_layer_candidates` (non-empty) but the selected option
 % Step 6: File-Creation Verification
 Parse `FILES_CREATED:` and `FILES_MODIFIED:` markers from agent output (regex captures until blank line, next `[A-Z_]+:` marker, or EOF; split on commas; strip whitespace, commas, backticks). For each claimed-created path, verify it exists at `current_work_dir / path`. If any are missing, retry the agent up to 2 times with a `% RETRY NOTICE — MUST CREATE MISSING FILES` appendix listing the missing paths. Only add files to `changed_files` after they're verified on disk (prevents phantom entries). Mark a child "extracted" when **all claimed-created files exist** (`not missing`) — note this is vacuously true when the agent emits no `FILES_CREATED:` marker at all (`claimed_created == []` → `missing == []`); in that case the child is still advanced. If genuinely missing files remain after retries, leave `last_completed_step` at the previous step and return Step 6 incomplete immediately so resume re-enters step 6 for the failed child without spending budget on later siblings.
 
-After each child reaches `extracted`, run the 6v gate by validating a single-child `SplitPlan` view. Error-severity failures trigger per-child repair using `agentic_split_step8_repair_LLM` with `context["child_name"]`, `context["child"]`, `verify_failures`, `repair_iteration`, and `max_repair_iterations=2`; persist attempt count and status before each LLM repair call. When missing-file extraction recovers, clear that child's stale `terminal_child_failures`; when validation passes, mark `verified` and clear that child's stale `terminal_child_failures`/`verify_failures` entries. If repair budget is exhausted, mark terminal `failed`, persist `terminal_child_failures`, and stop immediately at Step 6 incomplete before later siblings, 7a/checkup/regen/assess/global repair. If all children verify, clear stale partial-extraction markers before continuing.
+After each child reaches `extracted`, run the 6v gate by validating a single-child `SplitPlan` view. Error-severity failures trigger per-child repair using `agentic_split_step8_repair_LLM` with `context["child_name"]`, `context["child"]`, `verify_failures`, `repair_iteration`, and `max_repair_iterations=2`; persist attempt count and status before each LLM repair call. When missing-file extraction recovers, clear that child's stale `terminal_child_failures`; when validation passes, mark `verified` and clear that child's stale `terminal_child_failures`/`verify_failures` entries. If repair budget is exhausted, mark terminal `failed`, persist `terminal_child_failures`, and stop immediately at Step 6 incomplete before later siblings, 7a/regen/arch-sync/checkup/assess/global repair. If all children verify, clear stale partial-extraction markers before continuing.
 
 % Step 6a: Phase Extraction (per child)
 For each child without a saved phase plan: format the step 6a prompt, parse into `PhaseExtractionPlan`, persist as a JSON-safe dict in `state["phase_plans"][i]`. On parse failure, record `{"should_extract": False, "reason": "output unparseable"}`. On `no_phase_extraction`, set every entry to `None`. In step 6, set `context["phase_plan"]` to the JSON-encoded plan if non-empty, else `""`.
@@ -167,7 +169,7 @@ Run only after every child status is `verified`. After validation/tests/lint, co
 - Lint failures append to `verify_failures` with command stderr (truncated 500 chars)
 
 Only append `error`-severity validation failures to `verify_failures` (warnings are cosmetic).
-Also invoke `pdd checkup --validate-arch-includes --project-root <worktree>` when the worktree has either a root `architecture.json` or any nested `architecture.json`, because the checkup validator can scan nested PDD projects.
+Do not invoke `pdd checkup` in 7a. Checkup must run only after 7c refreshes architecture metadata.
 
 % Improvement Gate Decision Matrix (`_apply_improvement_gate`)
 Map `qual_assess.overall_verdict` to strength via `_verdict_strength`:
@@ -186,10 +188,13 @@ If `qual_assess` is `None` at gate time (pipeline completed but assessment unpar
 Decisions containing `"ABORT"` return False with `f"Improvement gate: {decision}"`.
 
 % Step 8: Repair Re-Verification
-Up to 5 iterations for final cross-cutting failures only. If any child is terminal `failed`, skip global repair because the per-child budget is already exhausted and global repair cannot safely recover it. After each repair: re-run `validate_extraction`, tests (with same ImportError exclusion as 7a), lint, and checkup. Recompute `quant_metrics["validation_pass"]` from the new failures (otherwise a -1 from 7a sticks even after a successful repair and aborts as REGRESSION). Stop on `REPAIR_EXHAUSTED`, or when `iteration > 1` and the failure count didn't decrease. Track FILES_CREATED/MODIFIED with the same on-disk verification as step 6.
+Up to 5 iterations for final cross-cutting failures only. If any child is terminal `failed`, skip global repair because the per-child budget is already exhausted and global repair cannot safely recover it. After each repair: re-run `validate_extraction`, tests (with same ImportError exclusion as 7a), lint, arch sync, then checkup. Recompute `quant_metrics["validation_pass"]` from the new failures (otherwise a -1 from 7a sticks even after a successful repair and aborts as REGRESSION). Stop on `REPAIR_EXHAUSTED`, or when `iteration > 1` and the failure count didn't decrease. Track FILES_CREATED/MODIFIED with the same on-disk verification as step 6.
 
 % Step 7c: Scoped Arch Sync
-Walk up from the target's directory (≤8 levels) to find the nearest `prompts/` (also try `prompts/src/`) and `architecture.json`. Skip with a warning if either is missing. Run `sync_all_prompts_to_architecture(prompts_dir, architecture_path, dry_run=False)`. Filter returned errors: only those mentioning a stem of `Path(f).stem` for `f in changed_files` are added to `verify_failures` — otherwise unrelated prompts in the same tree pollute the gate.
+Map the original target path into the active split worktree, then walk up from that worktree target's directory (≤8 levels) to find the nearest `prompts/` (also try `prompts/src/`) and `architecture.json`. Skip with a warning if either is missing. Run `sync_all_prompts_to_architecture(prompts_dir, architecture_path, dry_run=False)`. Filter returned errors: only those mentioning a stem of `Path(f).stem` for `f in changed_files` are added to `verify_failures` — otherwise unrelated prompts in the same tree pollute the gate. If arch sync raises, append the exception to `verify_failures` so assessment/global repair cannot proceed as if metadata refreshed.
+
+% Step 7d: Post-Architecture Checkup
+Run after 7c and before 7_assess. If `no_verify` is false, call `pdd checkup --validate-arch-includes --project-root <worktree>` when the worktree has either a root `architecture.json` or any nested `architecture.json`. Append `CHECKUP_FAILURE` messages to `verify_failures`; set `quant_metrics["checkup_pass"]` to `-1` on failure or `1` when architecture files exist and checkup passes. These failures feed the same global step-8 repair path as 7a failures.
 
 % Refinement Pass (after main pipeline)
 If `state["_pending_refine"]` is set and `iteration_count < MAX_REFINEMENT_ITERATIONS` and not `no_phase_extraction`:
