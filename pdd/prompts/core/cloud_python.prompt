@@ -41,8 +41,11 @@
   8) Module-level function `get_cloud_timeout()`: Return cloud request timeout in seconds
      - Check `PDD_CLOUD_TIMEOUT` env var, fall back to `DEFAULT_CLOUD_TIMEOUT` (900s)
      - Return int, handle invalid env var values gracefully (return default)
-  9) Export module-level constants for env var names, `DEFAULT_BASE_URL`, and cloud endpoints
-  10) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
+  9) Module-level function `get_cloud_request_timeout()`: Return `(connect_timeout, read_timeout)` tuple for `requests`
+     - Use `CLOUD_CONNECT_TIMEOUT` for connect timeout
+     - Use `get_cloud_timeout()` for read timeout
+  10) Export module-level constants for env var names, `DEFAULT_BASE_URL`, timeout defaults, and cloud endpoints
+  11) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
 
 % Constants
   - `CLOUD_ENDPOINTS` dict with keys for: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, getCommandStatus, updateCommand, cancelCommand, submitExample
