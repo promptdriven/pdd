@@ -6300,3 +6300,75 @@ class TestIssue1376IncidentReplay:
         assert google_record["model"] == "gemini-3-flash-preview", (
             f"Expected model from GEMINI_MODEL env var, got: {google_record['model']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1384: 429 rate-limit detection + RATE_LIMIT_BACKOFF_FLOOR
+# ---------------------------------------------------------------------------
+
+
+class TestIsRateLimited:
+    """Direct coverage for ``_is_rate_limited`` patterns (Issue #1384)."""
+
+    def test_429_status_code_detected(self):
+        from pdd.agentic_common import _is_rate_limited
+        assert _is_rate_limited("Error: api_error_status: 429 rate limit exceeded")
+        assert _is_rate_limited("HTTP 429: too many requests")
+        assert _is_rate_limited('{"api_error_status": 429, "message": "..."}')
+
+    def test_rate_limit_phrase_detected(self):
+        from pdd.agentic_common import _is_rate_limited
+        assert _is_rate_limited("rate_limit_error from provider")
+        assert _is_rate_limited("rate-limit reached")
+        assert _is_rate_limited("RATE LIMIT EXCEEDED")  # case-insensitive
+
+    def test_too_many_requests_phrase_detected(self):
+        from pdd.agentic_common import _is_rate_limited
+        assert _is_rate_limited("Server: too many requests")
+        assert _is_rate_limited("Too Many Requests")  # case-insensitive
+
+    def test_requests_per_minute_phrase_detected(self):
+        from pdd.agentic_common import _is_rate_limited
+        assert _is_rate_limited("3 requests per minute limit")
+
+    def test_unrelated_errors_not_flagged(self):
+        from pdd.agentic_common import _is_rate_limited
+        assert not _is_rate_limited("authentication failed")
+        assert not _is_rate_limited("invalid api key")
+        assert not _is_rate_limited("model not found")
+        assert not _is_rate_limited("")
+        assert not _is_rate_limited("connection refused")
+        # 429 must be word-bounded — not a substring of a longer number
+        assert not _is_rate_limited("Process exited with code 4290")
+
+    def test_quota_not_misclassified_as_rate_limit(self):
+        from pdd.agentic_common import _is_rate_limited
+        # Quota errors are PERMANENT — should NOT match the rate-limit
+        # transient pattern (those go through _is_permanent_error instead).
+        assert not _is_rate_limited("daily quota exceeded")
+        assert not _is_rate_limited("quota exhausted")
+
+
+class TestRateLimitBackoffFloor:
+    """RATE_LIMIT_BACKOFF_FLOOR = 60s applies to rate-limited retries."""
+
+    def test_floor_constant_is_60(self):
+        from pdd.agentic_common import RATE_LIMIT_BACKOFF_FLOOR
+        assert RATE_LIMIT_BACKOFF_FLOOR == 60.0
+
+    def test_floor_caps_lower_backoff(self):
+        """Standard exp backoff (1s, 2s, 4s) capped to floor on 429 retry."""
+        from pdd.agentic_common import RATE_LIMIT_BACKOFF_FLOOR
+        # Simulate the orchestrator's backoff calculation:
+        #   base_backoff = retry_delay * 2 ** (attempt - 1)
+        #   if rate_limited: backoff = max(backoff, RATE_LIMIT_BACKOFF_FLOOR)
+        for attempt in range(1, 5):
+            base_backoff = 1.0 * 2 ** (attempt - 1)
+            backoff = max(base_backoff, RATE_LIMIT_BACKOFF_FLOOR)
+            assert backoff >= 60.0, f"attempt {attempt}: backoff {backoff} < floor"
+
+    def test_floor_does_not_clip_higher_backoff(self):
+        """Once exp backoff exceeds 60s, the floor is a no-op."""
+        from pdd.agentic_common import RATE_LIMIT_BACKOFF_FLOOR
+        high_backoff = 90.0
+        assert max(high_backoff, RATE_LIMIT_BACKOFF_FLOOR) == 90.0

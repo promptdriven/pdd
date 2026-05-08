@@ -1,6 +1,7 @@
 """pdd/split_validation.py — Post-extraction validation for the agentic split orchestrator."""
 from __future__ import annotations
 
+import errno
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -20,6 +21,41 @@ __all__ = [
     "get_test_command",
     "validate_extraction",
 ]
+
+
+def _safe_is_file(path: Path) -> bool:
+    """Long-path-safe ``Path.is_file()`` for user/LLM-provided paths (Issue #1384).
+
+    The Step-4 LLM occasionally emits prose into path fields. Joining
+    that onto the worktree path and calling ``Path.is_file()`` on macOS
+    raises ``OSError(63: File name too long)`` once the basename
+    exceeds 255 chars; some encodings can also raise ``OSError(EINVAL)``.
+    Both are catastrophic for the validator. Wrap every ``.is_file()``
+    on a user/LLM path through this helper so a malformed input becomes
+    a downstream validation failure rather than a process crash.
+    """
+    try:
+        return path.is_file()
+    except OSError as e:
+        if e.errno in (errno.ENAMETOOLONG, errno.EINVAL):
+            return False
+        raise
+
+
+def _safe_exists(path: Path) -> bool:
+    """Long-path-safe ``Path.exists()`` for user/LLM-provided paths.
+
+    Same rationale as ``_safe_is_file`` — ``Path.exists()`` also raises
+    ``OSError(ENAMETOOLONG / EINVAL)`` on malformed paths. Use this for
+    any candidate path derived from an LLM-emitted child code_file
+    or prompt_file (e.g. test_<stem><suffix> derivations).
+    """
+    try:
+        return path.exists()
+    except OSError as e:
+        if e.errno in (errno.ENAMETOOLONG, errno.EINVAL):
+            return False
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +471,11 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
     # A child is "extracted" if either its prompt or its source exists.
     # Some LLM outputs omit prompt_file — require at least one.
     def _child_extracted(c: Any) -> bool:
-        prompt_ok = bool(c.prompt_file) and (worktree / c.prompt_file).is_file()
-        code_ok = bool(c.code_file) and (worktree / c.code_file).is_file()
+        # Route both child paths through _safe_is_file: an LLM-emitted
+        # child code_file/prompt_file with a basename > 255 chars would
+        # otherwise raise OSError(ENAMETOOLONG) here and crash validation.
+        prompt_ok = bool(c.prompt_file) and _safe_is_file(worktree / c.prompt_file)
+        code_ok = bool(c.code_file) and _safe_is_file(worktree / c.code_file)
         return prompt_ok or code_ok
 
     children_extracted = [c for c in children if _child_extracted(c)]
@@ -469,7 +508,9 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
         if not child.prompt_file:
             continue  # already reported as children_completeness warning
         prompt_path = worktree / child.prompt_file
-        if not prompt_path.exists() or not prompt_path.is_file():
+        # Route through _safe_is_file: child.prompt_file is LLM-provided
+        # and an oversized-basename path would crash here otherwise.
+        if not _safe_is_file(prompt_path):
             continue
         try:
             content = prompt_path.read_text(encoding="utf-8")
@@ -513,7 +554,10 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
             worktree / "examples" / f"{prompt_path.stem}_example{example_suffix}",
             worktree / prompt_path.with_suffix(example_suffix),
         ])
-        if not any(c.exists() for c in candidates):
+        # Route through _safe_exists: candidates are derived from
+        # LLM-emitted child.prompt_file, so a polluted basename (>255
+        # chars) would raise OSError(ENAMETOOLONG) here otherwise.
+        if not any(_safe_exists(c) for c in candidates):
             checked = [str(_relative_to_safe(c, worktree)) for c in candidates]
             failures.append(
                 ValidationFailure(
@@ -553,9 +597,11 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
             worktree / "tests" / test_file_name,
         ])
 
+        # Use _safe_exists: candidate paths are derived from LLM-emitted
+        # child.code_file, so a polluted basename would raise here.
         test_path: Optional[Path] = None
         for candidate in candidates:
-            if candidate.exists():
+            if _safe_exists(candidate):
                 test_path = candidate
                 break
 
@@ -622,16 +668,17 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
             worktree / "extensions" / "*" / "tests" / test_file_name,
         ])
         for candidate in candidate_paths:
-            # Star-glob needs expansion
+            # Star-glob needs expansion. test_file_name is LLM-derived,
+            # so use _safe_exists for both branches.
             if "*" in str(candidate):
                 parent = Path(str(candidate).split("*")[0].rstrip("/"))
                 if parent.is_dir():
                     for sub in parent.iterdir():
                         if sub.is_dir():
                             p = sub / "tests" / test_file_name
-                            if p.exists():
+                            if _safe_exists(p):
                                 test_files_to_check.append(p)
-            elif candidate.exists():
+            elif _safe_exists(candidate):
                 test_files_to_check.append(candidate)
     # Also include the parent's original test file(s). Tests that
     # patch through the parent module name (e.g. `src.workers.X`) are
@@ -725,14 +772,29 @@ def validate_extraction(plan: Any, worktree: Path) -> ValidationResult:
     parent_source = None
     if isinstance(parent_changes, dict):
         parent_source = parent_changes.get("modified_source", "")
+    # Defensive: LLMs occasionally emit prose into this field, producing
+    # a path whose basename exceeds 255 chars and crashes Path.is_file()
+    # with OSError(Errno 63: File name too long) on macOS. Trim at the
+    # first whitespace/em-dash so a polluted value still resolves to its
+    # real path prefix instead of taking the whole run down.
+    if isinstance(parent_source, str):
+        for sep in (" ", "\t", "\n", "—", "–", "#", "`"):
+            idx = parent_source.find(sep)
+            if idx >= 0:
+                parent_source = parent_source[:idx]
+        parent_source = parent_source.strip()
     if parent_source:
         parent_path = worktree / parent_source
-        # Handle the "parent became a package" case
-        if not parent_path.is_file():
+        # Handle the "parent became a package" case. Use _safe_is_file
+        # so any residual long-path / encoding edge case that slipped
+        # past the sanitizer above doesn't crash the verify step.
+        is_file = _safe_is_file(parent_path)
+        if not is_file:
             pkg_init = (worktree / parent_source).with_suffix("") / "__init__.py"
-            if pkg_init.is_file():
+            if _safe_is_file(pkg_init):
                 parent_path = pkg_init
-        if parent_path.is_file():
+                is_file = True
+        if is_file:
             try:
                 parent_content = parent_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
@@ -772,7 +834,9 @@ def _find_unwired_helpers(
         if not code_file:
             continue
         child_path = worktree / code_file
-        if not child_path.is_file():
+        # Route through _safe_is_file: child.code_file is LLM-provided
+        # and an oversized-basename path would crash here otherwise.
+        if not _safe_is_file(child_path):
             continue
         try:
             child_content = child_path.read_text(encoding="utf-8", errors="ignore")

@@ -307,6 +307,38 @@ MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error mes
 MAX_ERROR_RESPONSE_NEWLINES: int = 3
 
 
+def _is_rate_limited(error_message: str) -> bool:
+    """Detect transient rate-limit errors that need extended backoff.
+
+    Provider 429s clear in seconds-to-minutes; the default exponential
+    backoff (1s → 2s → 4s) burns the retry budget before the rate limit
+    window opens. When this returns True, the caller should pick a
+    longer floor (e.g. 60s) for the next sleep.
+
+    Background: in the May 5 agentic split run on solving_orchestrator.py,
+    3 of 12 child extractions ended in ``api_error_status: 429`` after
+    DEFAULT_MAX_RETRIES (3) attempts under standard backoff — children
+    that would have succeeded with one or two longer waits were marked
+    as terminal failures and never retried.
+    """
+    msg = error_message.lower()
+    rate_limit_patterns = [
+        r'"api_error_status"\s*:\s*429',
+        r"\b429\b",
+        r"rate[\s_-]?limit",
+        r"too\s+many\s+requests",
+        r"requests\s+per\s+minute",
+        r"rate\s+exceeded",
+    ]
+    return any(re.search(p, msg) for p in rate_limit_patterns)
+
+
+# Floor for the next sleep when the previous attempt hit a 429. Long enough
+# that token-window-based limits (per-minute) have a chance to clear, short
+# enough that a deadline-bounded run still attempts another shot.
+RATE_LIMIT_BACKOFF_FLOOR: float = 60.0
+
+
 def _is_permanent_error(error_message: str) -> bool:
     """Detect permanent provider errors that should NOT be retried.
 
@@ -1119,6 +1151,21 @@ def run_agentic_task(
                             base_backoff = retry_delay * (2 ** (attempt - 1))
                             jitter = random.uniform(0, retry_delay)
                             backoff = min(base_backoff + jitter, MAX_RETRY_DELAY)
+                            # Issue #1384: when the false-positive payload
+                            # itself looks like a 429 ("Error: api_error_status:
+                            # 429 rate limit exceeded"), apply the same 60s
+                            # floor as the not-success retry path below.
+                            # Without this, a 429 surfaced through the
+                            # successful-but-Error-prefixed path retries on
+                            # the default 1s/2s/4s schedule, which burns the
+                            # retry budget before the per-minute window clears.
+                            if _is_rate_limited(stripped_output or ""):
+                                backoff = max(backoff, RATE_LIMIT_BACKOFF_FLOOR)
+                                if verbose:
+                                    console.print(
+                                        f"[yellow]Rate-limited (HTTP 429); raising "
+                                        f"backoff floor to {RATE_LIMIT_BACKOFF_FLOOR:.0f}s[/yellow]"
+                                    )
                             if not quiet:
                                 console.print(f"[dim]Single-provider config: retrying in {backoff:.0f}s...[/dim]")
                             time.sleep(backoff)
@@ -1185,7 +1232,17 @@ def run_agentic_task(
                     base_backoff = retry_delay * (2 ** (attempt - 1))
                     jitter = random.uniform(0, retry_delay)
                     backoff = min(base_backoff + jitter, MAX_RETRY_DELAY)
-                    
+                    # If the previous attempt was rate-limited, raise the
+                    # floor so we wait long enough for the limit to clear
+                    # instead of burning the next attempt on the same 429.
+                    if _is_rate_limited(last_output or ""):
+                        backoff = max(backoff, RATE_LIMIT_BACKOFF_FLOOR)
+                        if verbose:
+                            console.print(
+                                f"[yellow]Rate-limited (HTTP 429); raising "
+                                f"backoff floor to {RATE_LIMIT_BACKOFF_FLOOR:.0f}s[/yellow]"
+                            )
+
                     if verbose:
                         console.print(f"[dim]Waiting {backoff:.1f}s before retry...[/dim]")
                     time.sleep(backoff)

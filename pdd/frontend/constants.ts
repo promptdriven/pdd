@@ -262,6 +262,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
       { name: 'force-split', type: 'checkbox', placeholder: '', description: 'Override LEAVE_ALONE diagnosis and force extraction' },
       { name: 'no-phase-extraction', type: 'checkbox', placeholder: '', description: 'Skip step 6a phase extraction (only move whole symbols)' },
       { name: 'strangler', type: 'checkbox', placeholder: '', description: 'Strangler mode: produce N sequential PRs, one child per PR' },
+      { name: 'max-cost', type: 'number', placeholder: '50', description: 'Abort if total cost would cross USD threshold' },
     ]
   },
   [CommandType.CHANGE]: {
