@@ -197,6 +197,18 @@ class TestGetBlockedModules:
         blocked = runner._get_blocked_modules()
         assert blocked == []
 
+    def test_blocked_by_transitive_failed_dep(self):
+        runner = AsyncSyncRunner(
+            basenames=["a", "b", "c"],
+            dep_graph={"a": [], "b": ["a"], "c": ["b"]},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["a"].status = "failed"
+        blocked = runner._get_blocked_modules()
+        assert blocked == ["b", "c"]
+
 
 # ---------------------------------------------------------------------------
 # AsyncSyncRunner._build_comment_body
@@ -255,6 +267,25 @@ class TestBuildCommentBody:
 
         body = runner._build_comment_body(5)
         assert "Paused" in body
+        assert "`a` failed" in body
+
+    def test_failure_with_running_modules_shows_continuing(self):
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["a"].status = "failed"
+        runner.module_states["a"].start_time = 0.0
+        runner.module_states["a"].end_time = 10.0
+        runner.module_states["b"].status = "running"
+        runner.module_states["b"].start_time = 0.0
+
+        body = runner._build_comment_body(5)
+        assert "Continuing independent module(s)" in body
+        assert "Paused" not in body
         assert "`a` failed" in body
 
     def test_all_success(self):
@@ -669,7 +700,7 @@ class TestAsyncSyncRunnerRun:
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")
     def test_failure_pauses_new_modules(self, mock_comment, mock_sync):
-        """When a module fails, pending modules should not start."""
+        """When a dependency fails, dependent modules should not start."""
 
         def fake_sync(basename):
             if basename == "a":
@@ -691,6 +722,65 @@ class TestAsyncSyncRunnerRun:
         assert runner.module_states["a"].status == "failed"
         # b should remain pending (blocked by failed a)
         assert runner.module_states["b"].status == "pending"
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_failure_does_not_block_independent_ready_modules(
+        self, mock_comment, mock_sync
+    ):
+        """Regression for #798: an unrelated failure must not strand ready work.
+
+        In the #798 run, ``cli_detector`` failed architecture conformance while
+        ``agentic_common`` was still running. ``setup_tool`` was genuinely
+        blocked by ``cli_detector``, but ``agentic_update`` only depended on
+        the successful ``agentic_common`` module. The runner should still start
+        that independent dependent once its own dependency succeeds.
+        """
+        calls = []
+
+        def fake_sync(basename):
+            calls.append(basename)
+            if basename == "cli_detector":
+                return (False, 0.01, "Architecture conformance error")
+            if basename == "agentic_common":
+                time.sleep(0.05)
+                return (True, 0.02, "")
+            if basename == "agentic_update":
+                return (True, 0.03, "")
+            raise AssertionError(f"{basename} should remain blocked")
+
+        mock_sync.side_effect = fake_sync
+
+        runner = AsyncSyncRunner(
+            basenames=[
+                "cli_detector",
+                "agentic_common",
+                "setup_tool",
+                "agentic_update",
+            ],
+            dep_graph={
+                "cli_detector": [],
+                "agentic_common": [],
+                "setup_tool": ["cli_detector"],
+                "agentic_update": ["agentic_common"],
+            },
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+
+        assert not success
+        assert cost == pytest.approx(0.06)
+        assert runner.module_states["cli_detector"].status == "failed"
+        assert runner.module_states["agentic_common"].status == "success"
+        assert runner.module_states["agentic_update"].status == "success"
+        assert runner.module_states["setup_tool"].status == "pending"
+        assert "agentic_update" in calls
+        assert "setup_tool" not in calls
+        assert "Skipped (blocked): ['setup_tool']" in msg
+        assert "agentic_update" not in msg.split("Skipped (blocked):", 1)[-1]
 
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")
@@ -742,6 +832,40 @@ class TestAsyncSyncRunnerRun:
         assert runner.module_states["a"].status == "success"
         assert runner.module_states["b"].status == "pending"
         assert runner.module_states["c"].status == "pending"
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_total_budget_exhaustion_after_failed_module_stops_new_modules(
+        self, mock_comment, mock_sync
+    ):
+        """A failed module's cost can exhaust the global budget."""
+        calls = []
+
+        def fake_sync(basename):
+            calls.append(basename)
+            if basename == "a":
+                return (False, 1.0, "sync failed after spending budget")
+            return (True, 0.5, "")
+
+        mock_sync.side_effect = fake_sync
+
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={"total_budget": 1.0},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, msg, cost = runner.run()
+
+        assert not success
+        assert runner.budget_exhausted is True
+        assert calls == ["a"]
+        assert cost == pytest.approx(1.0)
+        assert "Budget exhausted" in msg
+        assert runner.module_states["a"].status == "failed"
+        assert runner.module_states["b"].status == "pending"
 
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")
@@ -2107,6 +2231,89 @@ def _make_fake_pdd_shim(tmp_path, stdout_text: str, stderr_text: str, exit_code:
     )
     shim.chmod(0o755)
     return shim
+
+
+def _make_issue_798_scheduler_shim(tmp_path) -> Path:
+    """Fake pdd executable that reproduces the #798 sync schedule."""
+    shim = tmp_path / "fake_pdd_issue_798"
+    shim.write_text(
+        f"#!{sys.executable}\n"
+        + textwrap.dedent(
+            """\
+            import sys
+            import time
+
+            basename = ""
+            if "sync" in sys.argv:
+                idx = sys.argv.index("sync")
+                if idx + 1 < len(sys.argv):
+                    basename = sys.argv[idx + 1]
+
+            if basename == "cli_detector":
+                sys.stdout.write("Overall status: Failed\\n")
+                sys.stderr.write(
+                    "Architecture conformance error for "
+                    "cli_detector_python.prompt: declared symbols missing "
+                    "from generated code\\n"
+                )
+                sys.exit(1)
+            if basename == "agentic_common":
+                time.sleep(0.2)
+                sys.stdout.write("Overall status: Success\\n")
+                sys.exit(0)
+            if basename == "agentic_update":
+                sys.stdout.write("Overall status: Success\\n")
+                sys.exit(0)
+            if basename == "setup_tool":
+                sys.stderr.write("setup_tool should have stayed blocked\\n")
+                sys.exit(9)
+
+            sys.stderr.write(f"unexpected basename: {basename}\\n")
+            sys.exit(8)
+            """
+        )
+    )
+    shim.chmod(0o755)
+    return shim
+
+
+class TestAsyncSyncRunnerRunE2E:
+    """End-to-end scheduler coverage with real child subprocesses."""
+
+    def test_issue_798_failure_only_blocks_failed_dependency_dependents(self, tmp_path):
+        shim = _make_issue_798_scheduler_shim(tmp_path)
+        runner = AsyncSyncRunner(
+            basenames=[
+                "cli_detector",
+                "agentic_common",
+                "setup_tool",
+                "agentic_update",
+            ],
+            dep_graph={
+                "cli_detector": [],
+                "agentic_common": [],
+                "setup_tool": ["cli_detector"],
+                "agentic_update": ["agentic_common"],
+            },
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        with patch(
+            "pdd.agentic_sync_runner._find_pdd_executable",
+            return_value=str(shim),
+        ):
+            success, msg, cost = runner.run()
+
+        assert not success
+        assert cost == pytest.approx(0.0)
+        assert runner.module_states["cli_detector"].status == "failed"
+        assert runner.module_states["agentic_common"].status == "success"
+        assert runner.module_states["agentic_update"].status == "success"
+        assert runner.module_states["setup_tool"].status == "pending"
+        assert "Skipped (blocked): ['setup_tool']" in msg
+        assert "agentic_update" not in msg.split("Skipped (blocked):", 1)[-1]
 
 
 class TestSyncOneModuleE2E:

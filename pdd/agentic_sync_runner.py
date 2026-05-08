@@ -478,20 +478,24 @@ class AsyncSyncRunner:
             futures: Dict[Any, str] = {}  # Future -> basename
 
             while not self._all_done():
-                if not self.failed and self._budget_exhausted():
+                if not self.budget_exhausted and self._budget_exhausted():
                     self.failed = True
                     self.budget_exhausted = True
 
                 # Find modules whose deps are all "success"
                 ready = self._get_ready_modules()
 
-                if self.failed:
-                    # Don't start new modules; wait for running ones to finish
+                if self.budget_exhausted:
+                    # Don't start new modules once the global budget is spent;
+                    # wait for already-running modules to finish.
                     if not futures:
                         break
                 else:
                     # Only submit up to available worker slots so modules
                     # aren't marked "running" while queued in the executor.
+                    # A failed module is handled through the dependency graph:
+                    # dependents remain pending, while unrelated ready modules
+                    # can still sync and be checkpointed.
                     available_slots = self.max_workers - len(futures)
                     for basename in ready[:available_slots]:
                         with self.lock:
@@ -519,11 +523,11 @@ class AsyncSyncRunner:
                         success, cost, error = False, 0.0, str(e)
                     self._record_result(basename, success, cost, error)
                     self._update_github_comment()
-                    if not success:
-                        self.failed = True
-                    elif self._budget_exhausted():
+                    if self._budget_exhausted():
                         self.failed = True
                         self.budget_exhausted = True
+                    elif not success:
+                        self.failed = True
 
         # Final update
         self._update_github_comment()
@@ -533,6 +537,9 @@ class AsyncSyncRunner:
         succeeded = [b for b, s in self.module_states.items() if s.status == "success"]
         failed = [b for b, s in self.module_states.items() if s.status == "failed"]
         pending = [b for b, s in self.module_states.items() if s.status == "pending"]
+        blocked = self._get_blocked_modules()
+        blocked_set = set(blocked)
+        not_run = [b for b in pending if b not in blocked_set]
 
         if self.budget_exhausted:
             budget = float(self.total_budget)
@@ -548,8 +555,10 @@ class AsyncSyncRunner:
             return False, msg, total_cost
         if failed:
             msg = f"Failed: {failed}. Succeeded: {succeeded}."
-            if pending:
-                msg += f" Skipped (blocked): {pending}."
+            if blocked:
+                msg += f" Skipped (blocked): {blocked}."
+            if not_run:
+                msg += f" Skipped (not run): {not_run}."
             # Include error details for failed modules
             for b in failed:
                 err = self.module_states[b].error
@@ -560,7 +569,11 @@ class AsyncSyncRunner:
             self._save_state()
             return False, msg, total_cost
         elif pending:
-            msg = f"Succeeded: {succeeded}. Skipped (blocked): {pending}."
+            msg = f"Succeeded: {succeeded}."
+            if blocked:
+                msg += f" Skipped (blocked): {blocked}."
+            if not_run:
+                msg += f" Skipped (not run): {not_run}."
             self._save_state()
             return False, msg, total_cost
         else:
@@ -594,19 +607,43 @@ class AsyncSyncRunner:
         return ready
 
     def _get_blocked_modules(self) -> List[str]:
-        """Get modules that are pending but blocked by non-success deps."""
+        """Get pending modules blocked by a failed dependency chain."""
         blocked = []
         with self.lock:
+            blocked_cache: Dict[str, bool] = {}
+
+            def is_blocked_by_failure(module: str, visiting: set[str]) -> bool:
+                cached = blocked_cache.get(module)
+                if cached is not None:
+                    return cached
+                if module in visiting:
+                    blocked_cache[module] = False
+                    return False
+
+                visiting.add(module)
+                for dep in self.dep_graph.get(module, []):
+                    dep_state = self.module_states.get(dep)
+                    if dep_state is None:
+                        continue
+                    if dep_state.status == "failed":
+                        blocked_cache[module] = True
+                        visiting.remove(module)
+                        return True
+                    if dep_state.status == "pending" and is_blocked_by_failure(
+                        dep, visiting
+                    ):
+                        blocked_cache[module] = True
+                        visiting.remove(module)
+                        return True
+                visiting.remove(module)
+                blocked_cache[module] = False
+                return False
+
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
-                deps = self.dep_graph.get(basename, [])
-                has_failed_dep = any(
-                    self.module_states.get(d, ModuleState(status="success")).status == "failed"
-                    for d in deps
-                )
-                if has_failed_dep:
+                if is_blocked_by_failure(basename, set()):
                     blocked.append(basename)
         return blocked
 
@@ -1101,9 +1138,15 @@ class AsyncSyncRunner:
 
         # Status line
         failed_modules = [b for b, s in self.module_states.items() if s.status == "failed"]
+        running_modules = [b for b, s in self.module_states.items() if s.status == "running"]
         all_done = all(s.status in ("success", "failed") for s in self.module_states.values())
 
-        if failed_modules:
+        if failed_modules and running_modules:
+            lines.append(
+                f"**⚠️ `{'`, `'.join(failed_modules)}` failed; "
+                f"Continuing independent module(s): `{'`, `'.join(running_modules)}`**"
+            )
+        elif failed_modules:
             lines.append(f"**⚠️ Paused: `{'`, `'.join(failed_modules)}` failed**")
         elif all_done:
             lines.append(f"**✅ All {total} modules synced successfully**")
