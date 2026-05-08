@@ -2209,7 +2209,10 @@ def sync_orchestration(
                                 # sync_main.py / agentic_sync_runner.py for parity across all
                                 # `pdd sync` entry points.
                                 from .code_generator_main import ArchitectureConformanceError
-                                from .agentic_sync_runner import MAX_CONFORMANCE_ATTEMPTS
+                                from .agentic_sync_runner import (
+                                    MAX_CONFORMANCE_ATTEMPTS,
+                                    build_conformance_hard_failure_from_error,
+                                )
                                 _prev_repair = os.environ.get("PDD_REPAIR_DIRECTIVE")
                                 try:
                                     last_conform_exc: Optional[ArchitectureConformanceError] = None
@@ -2231,6 +2234,17 @@ def sync_orchestration(
                                                 break
                                             os.environ["PDD_REPAIR_DIRECTIVE"] = _conform_exc.repair_directive
                                     if last_conform_exc is not None:
+                                        # Emit the structured hard-failure block
+                                        # (#866 contract: plain CLI path must show the
+                                        # same diagnostic the agentic runner emits)
+                                        # before re-raising. The generic except below
+                                        # converts the exception into an errors.append
+                                        # entry, but the structured block has already
+                                        # been written to stderr for the user.
+                                        hard_block = build_conformance_hard_failure_from_error(
+                                            last_conform_exc, basename
+                                        )
+                                        print(hard_block, file=sys.stderr)
                                         raise last_conform_exc
                                 finally:
                                     if _prev_repair is None:

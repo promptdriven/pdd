@@ -263,6 +263,41 @@ def _parse_conformance_failure(
     return repair_directive, missing_sorted
 
 
+def build_conformance_hard_failure_from_error(
+    error: Any,
+    basename: str,
+) -> str:
+    """Format a structured architecture-conformance hard-failure block.
+
+    Mirrors :meth:`AsyncSyncRunner._build_conformance_hard_failure` but takes
+    a typed :class:`ArchitectureConformanceError` instance directly, so the
+    in-process ``pdd sync <module>`` paths in ``sync_main.py`` and
+    ``sync_orchestration.py`` can emit the same diagnostic without scraping
+    subprocess streams (#866).
+    """
+    missing = list(getattr(error, "missing_symbols", []) or [])
+    expected = list(getattr(error, "expected_symbols", []) or [])
+    found = list(getattr(error, "found_symbols", []) or [])
+    output = getattr(error, "output_path", "") or "<unknown>"
+    prompt = getattr(error, "prompt_name", "") or "<unknown>"
+
+    block_lines = [
+        str(error),
+        "",
+        "=== architecture conformance failure ===",
+        f"prompt: {prompt}",
+        f"output: {output}",
+        f"expected: {', '.join(expected) if expected else '<unknown>'}",
+        f"found: {', '.join(found) if found else '<unknown>'}",
+        f"missing: {', '.join(missing) if missing else '<none>'}",
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
+
+
 def _env_fingerprint() -> str:
     """Best-effort environment fingerprint for diagnostic blocks."""
     lines = ["--- env ---"]
