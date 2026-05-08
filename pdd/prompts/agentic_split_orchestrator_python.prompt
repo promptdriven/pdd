@@ -7,7 +7,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_split_orchestrator", "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_split_orchestrator", "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, max_cost)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -24,7 +24,7 @@ Write the `pdd/agentic_split_orchestrator.py` module.
 Orchestrator for the agentic split workflow. Diagnoses whether a PDD dev unit has an architectural problem; if so, splits the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. Runs LLM steps as separate agentic tasks, executes deterministic gates (validation, tests, lint, regen, arch sync) in Python, accumulates context between steps, tracks cost, and supports resuming from saved state. After the main pipeline, optionally runs ONE focused refinement pass on a single flagged child.
 
 % Requirements
-1. Function signature: `run_agentic_split_orchestrator(target_file: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, diagnose_only: bool = False, propose_only: bool = False, delete_dead: bool = False, force_split: bool = False, no_verify: bool = False, skip_regen_gate: bool = False, experimental_language: bool = False, intent: Optional[str] = None, no_phase_extraction: bool = False) -> Tuple[bool, str, float, str, List[str]]`
+1. Function signature: `run_agentic_split_orchestrator(target_file: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, diagnose_only: bool = False, propose_only: bool = False, delete_dead: bool = False, force_split: bool = False, no_verify: bool = False, skip_regen_gate: bool = False, experimental_language: bool = False, intent: Optional[str] = None, no_phase_extraction: bool = False, max_cost: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]`
 2. Return 5-tuple: `(success, final_message, total_cost, model_used, changed_files)`
 3. Language tier gate: `SUPPORTED_LANGUAGES = ["python"]`. Non-Python aborts with `"Language not supported: {lang}. Use --experimental-language."` unless `experimental_language=True`.
 4. Flags:
@@ -36,6 +36,12 @@ Orchestrator for the agentic split workflow. Diagnoses whether a PDD dev unit ha
    - `delete_dead`: opt-in dead symbol deletion in step 6 (last child only)
    - `intent`: user hint (CLI flag); if set, step 0 is skipped
    - `no_phase_extraction`: skip step 6a (phase decomposition)
+   - `max_cost` (Issue #1384): when not None, the orchestrator checks `state.total_cost >= max_cost` BOTH at the top of every iteration of the step loop AND immediately after every `total_cost += ...` accumulation that precedes a possible early return (diagnose_only, propose_only, LEAVE_ALONE, hard-stop) AND after each per-child fan-out cost in steps 6a/6/8 (post per-child state persistence). Without the post-accumulation check, an LLM step that adds cost and then immediately exits via early return — or a multi-child fan-out — can bypass the cap by one full step's cost (or N × per-child cost). Implement as a closure `_check_budget(at_step) -> Optional[abort_tuple]` that returns the standard 5-tuple when crossed, else `None`. On hit: sets `state["max_cost_reached"] = True`, persists state via `save_workflow_state`, restores signal handlers, calls `clear_agentic_progress()`, and returns the standard 5-tuple with `success=False` and a stop message of the form `"Aborted at step <step>: --max-cost ${cap:.2f} reached (spent ${cost:.2f}). Re-run without --max-cost or with a higher cap to resume."`. The next invocation without `--max-cost` (or with a higher value) resumes from the same state. State persistence ordering matters: budget check fires AFTER `state["step_outputs"][step] = output` AND `state["last_completed_step"] = step` so resume picks up the next step rather than re-running the just-completed one. Mirrors the `max_cost_reached` pattern in `pdd/checkup_review_loop.py:1849-1862`.
+
+5. **Path sanitization helpers** (Issue #1384): expose two module-level helpers that the orchestrator MUST call between the Step 4 LLM output and any filesystem operation:
+   - `_sanitize_path_string(value)`: when `value` is a `str`, strip prose tails by truncating at the first whitespace / em-dash / hash / backtick character, then strip whitespace. Non-string inputs pass through unchanged. Empty strings remain empty.
+   - `_sanitize_split_paths(option)`: walk a parsed `SplitOption` (or its `dict` form) and apply `_sanitize_path_string` in place to `parent_changes.{modified_source, deleted_source, new_source, source}` AND on every child to BOTH naming schemes — canonical fields (`code_file`, `prompt_file`, `example_file`, `test_file`) AND Step 4 LLM aliases (`new_source`, `new_prompt`, `new_example`, `new_test`). The aliases are emitted by `agentic_split_step4_propose_options_LLM.prompt` and mapped to canonical fields downstream by `split_validation` at parse time, so an unsanitized alias still flows into a real path field. Tolerates `None` option, missing `parent_changes`, and `None` field values.
+   - Both helpers are pure (no I/O, no exceptions) and MUST be called both in the resume-from-saved-state path (when re-hydrating `selected_option`) AND immediately after fresh Step-4 parsing, before any persistence or filesystem use. Without sanitization, the Step-4 LLM occasionally emits prose into path fields (e.g. `"pdd/foo.py — keep BUG_STEP_TIMEOUTS, console, logger"`); macOS then raises `OSError(63: File name too long)` from `Path.is_file()` when the basename exceeds 255 chars and crashes the entire run.
 
 % Per-Step Timeouts
 ```python
@@ -101,7 +107,7 @@ Important fields/aliases:
 - `_stable_split_id(target_path)`: deterministic hash mod 100000 of repo-relative target path (`h = h*31 + ord(c)` masked to 32 bits). Used for state file/branch/worktree naming so files with the same basename in different dirs don't collide.
 - State dir: `<git_root or cwd>/.pdd/split-state/`.
 - State persisted via `load_workflow_state` / `save_workflow_state` / `clear_workflow_state` (GitHub comment marker + JSON cache).
-- State keys: `step_outputs`, `last_completed_step`, `total_cost`, `model_used`, `changed_files`, `children_extracted`, `phase_plans`, `verify_failures`, `quant_metrics`, `worktree_path`, `intent`, `iteration_count`, `_pending_refine`.
+- State keys: `step_outputs`, `last_completed_step`, `total_cost`, `model_used`, `changed_files`, `children_extracted`, `phase_plans`, `verify_failures`, `quant_metrics`, `worktree_path`, `intent`, `iteration_count`, `_pending_refine`, `_pending_refine_plan`, `_pending_refine_extract_applied`, `max_cost_reached`. The three `_pending_refine*` keys cooperate to make focused refinement resumable from any mid-refinement `--max-cost` abort: `_pending_refine` carries the `RefineCheck` request, `_pending_refine_plan` carries the parsed step-6a `PhaseExtractionPlan` (so resume skips re-paying for 6a), and `_pending_refine_extract_applied` is a True/False flag set after step-6's FILES_CREATED markers are promoted to `changed_files` (so resume skips re-paying for the step-6 extract). `max_cost_reached` is set by the budget guard and consumed once by the child-extract resume guard.
 - Persist state after every step. Print a resume banner when `last_completed_step` is set.
 
 % Graceful Shutdown
@@ -181,12 +187,17 @@ Walk up from the target's directory (≤8 levels) to find the nearest `prompts/`
 
 % Refinement Pass (after main pipeline)
 If `state["_pending_refine"]` is set and `iteration_count < MAX_REFINEMENT_ITERATIONS` and not `no_phase_extraction`:
-- Increment `iteration_count`, clear `_pending_refine`
-- Build a synthetic single-child plan around `pending_refine["target_child_file"]`
-- Run step 6a on that file; if it produces a `should_extract=True` plan, run step 6 with that plan
-- Skip silently if the target file is missing on disk
-- Re-run `validate_extraction` after refinement; update `verify_failures` and `quant_metrics["validation_pass"]`
-- Do NOT loop back to step 9 (cap at one focused pass)
+- **Defer `iteration_count` increment AND `_pending_refine` / `_pending_refine_plan` / `_pending_refine_extract_applied` clear until refinement completes successfully** (Issue #1384). MAX_REFINEMENT_ITERATIONS is 1; bumping at the start would cause a mid-refinement budget abort to leave saved state with `iteration_count == 1` and the gate would short-circuit on resume — silently dropping the user's flagged refinement. All four updates happen at the success block (after the post-refine `validate_extraction`).
+- Build a synthetic single-child plan around `pending_refine["target_child_file"]`.
+- Step 6a (parsed `PhaseExtractionPlan`):
+  - **Resume guard**: if `state["_pending_refine_plan"]` is already populated (a prior run paid for 6a and aborted before step-6 extract finished), skip the 6a LLM call entirely and reuse the saved plan as `refine_phase_plan`.
+  - Otherwise run the 6a `run_agentic_task`, parse the `PhaseExtractionPlan` FIRST. If `parsed_pe.should_extract` is True, build the full `refine_phase_plan` dict; if False, build a no-op sentinel `{"should_extract": False, "reason": parsed_pe.reason or "no extraction warranted"}`. Persist `state["_pending_refine_plan"] = refine_phase_plan` (truthy in both cases) AND `state["_pending_refine"] = pending_refine` AND `state["changed_files"] = changed_files` BEFORE the `_check_budget("9_refine_check")` call so an abort here preserves the paid decision (whether real plan or no-op). The step-6 branch must check `refine_phase_plan.get("should_extract")` — only run step-6 when True; the False sentinel makes step-6 skip and refinement complete as 'no extraction warranted' on resume.
+- Step 6 extract (only when `refine_phase_plan` exists):
+  - **Resume guard**: if `state["_pending_refine_extract_applied"]` is True (a prior run paid for step-6 and crossed --max-cost AFTER FILES_CREATED were promoted to `changed_files`), skip the step-6 LLM call entirely and proceed to post-refine validation.
+  - Otherwise run the step-6 `run_agentic_task`, parse `FILES_CREATED:` / `FILES_MODIFIED:` markers, count `verified_marker_paths` (every marker path that exists on disk via `_safe_path_exists`, INCLUDING paths already in `changed_files` from the main extraction — a focused refinement that modifies an already-tracked file is real work), and append any new verified paths to `changed_files`. Persist `state["_pending_refine"] = pending_refine` AND `state["changed_files"] = changed_files`. Set `state["_pending_refine_extract_applied"] = True` ONLY when `ex_success` is True AND `verified_marker_paths > 0` — a failed LLM call OR a no-op extract (no usable markers / no path verifies on disk) leaves the flag False so resume re-runs the LLM call. The counter MUST track "verified on disk" not "newly appended to changed_files" — otherwise a successful modify-only extract on an already-tracked file leaves the flag unset, causing resume to re-pay. THEN call `_check_budget("9_refine_check")`. Order matters: the flag must be set BEFORE the budget check (so a real abort doesn't cause resume to re-run this same paid LLM call) but ONLY when the extract genuinely produced verified work.
+- Skip silently if the target file is missing on disk (use `_safe_path_exists` so a polluted/long path is treated as missing rather than raising).
+- Re-run `validate_extraction` after refinement; update `verify_failures` and `quant_metrics["validation_pass"]`.
+- Do NOT loop back to step 9 (cap at one focused pass).
 
 % Console Output (rich)
 Suppressed when `quiet`. Markers:
