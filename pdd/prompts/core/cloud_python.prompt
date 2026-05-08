@@ -1,4 +1,24 @@
+<pdd-reason>Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "CloudConfig.get_base_url", "signature": "() -> str", "returns": "str"},
+      {"name": "CloudConfig.get_endpoint_url", "signature": "(endpoint_name: str) -> str", "returns": "str"},
+      {"name": "CloudConfig.get_jwt_token", "signature": "(verbose: bool = False, app_name: str = 'pdd') -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "CloudConfig.is_running_in_cloud", "signature": "() -> bool", "returns": "bool"},
+      {"name": "CloudConfig.is_cloud_enabled", "signature": "() -> bool", "returns": "bool"},
+      {"name": "get_cloud_timeout", "signature": "() -> int", "returns": "int"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Create a centralized cloud configuration module for PDD CLI commands.
+
+<pdd-dependency>auth_service_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
@@ -43,7 +63,8 @@
   10) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
 
 % Constants
-  - `CLOUD_ENDPOINTS` dict with keys for: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, getCommandStatus, updateCommand, cancelCommand
+  - `CLOUD_ENDPOINTS` dict with keys for: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, getCommandStatus, updateCommand, cancelCommand, submitExample
+    - `submitExample` MUST be present so that `CloudConfig.get_endpoint_url("submitExample")` honors `PDD_CLOUD_URL` (staging/prod/local) for auto-submit callers in `sync_main` and `fix_main`. Hardcoding the production URL at the call sites breaks staging canaries with Firebase audience mismatches (#859).
 
 % Dependencies
   - Import auth functions and exceptions from `..get_jwt_token` (including `_get_cached_jwt`)
