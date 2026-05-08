@@ -19,11 +19,22 @@ from dataclasses import dataclass
 
 from rich.console import Console
 
-try:
-    from pdd.llm_invoke import _load_model_data
-except ImportError:
-    def _load_model_data(*args, **kwargs):
+def _load_model_data(*args, **kwargs):
+    """Lazily load model data from ``pdd.llm_invoke``.
+
+    The real loader lives in ``pdd.llm_invoke``, but a top-level import here
+    creates a circular import: ``pdd/__init__.py`` imports this module, which
+    would import ``pdd.llm_invoke``, which (transitively, via the FastAPI
+    routes) imports back into ``pdd.agentic_common`` while it is still
+    initializing. Importing inside the helpers defers the resolution until
+    after package import completes. Returns ``None`` when the loader is
+    genuinely unavailable.
+    """
+    try:
+        from pdd.llm_invoke import _load_model_data as _real_loader
+    except ImportError:
         return None
+    return _real_loader(*args, **kwargs)
 
 # Constants
 _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "opencode"]
@@ -989,12 +1000,84 @@ def _opencode_config_paths(cwd: Optional[Path] = None) -> List[Path]:
     return unique
 
 
-def _opencode_config_declares_provider(path: Path) -> bool:
-    """Return True when an OpenCode config file declares any provider/model.
+# Field names within an OpenCode ``provider.<id>`` mapping that carry the
+# secret material. Compared case-insensitively after stripping ``-``/``_``.
+_OPENCODE_PROVIDER_CREDENTIAL_FIELDS = frozenset(
+    {"apikey", "key", "token", "bearer", "bearertoken", "accesstoken", "secret"}
+)
 
-    Bare config existence with only unrelated preferences is diagnostic-only —
-    must not flip availability. We treat a top-level ``provider`` mapping or a
-    ``model`` string as a provider/model declaration.
+# Containers within a provider mapping that may nest credential fields.
+_OPENCODE_PROVIDER_CREDENTIAL_CONTAINERS = frozenset({"options", "auth", "headers"})
+
+
+def _resolve_opencode_template_value(value: Any) -> Optional[str]:
+    """Resolve an OpenCode config template ``{env:VAR}`` / ``{file:PATH}``.
+
+    Returns the resolved non-empty string, or ``None`` when the template
+    cannot be resolved (env var unset, file missing/empty). Plain strings
+    pass through after stripping; non-strings return ``None``.
+    """
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    m = re.fullmatch(r"\{env:([^}]+)\}", s)
+    if m:
+        v = os.environ.get(m.group(1).strip())
+        return v.strip() if v and v.strip() else None
+    m = re.fullmatch(r"\{file:([^}]+)\}", s)
+    if m:
+        try:
+            text = Path(m.group(1).strip()).expanduser().read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return text or None
+    # Plain string with no template: treat as a literal credential value.
+    return s
+
+
+def _opencode_provider_value_has_usable_credential(value: Any) -> bool:
+    """Return True when an OpenCode ``provider.<id>`` value carries usable auth.
+
+    OpenCode config files frequently contain provider preferences (model
+    name, options) without credentials, including unresolved
+    ``{env:VAR}`` / ``{file:PATH}`` references. This walks one level deep
+    into the value, looking only for credential-shaped fields whose
+    resolved string is non-empty.
+    """
+    if isinstance(value, str):
+        return _resolve_opencode_template_value(value) is not None
+    if not isinstance(value, dict):
+        return False
+    for key, sub in value.items():
+        if not isinstance(key, str):
+            continue
+        normalized = key.lower().replace("-", "").replace("_", "")
+        if normalized in _OPENCODE_PROVIDER_CREDENTIAL_FIELDS:
+            if isinstance(sub, str):
+                if _resolve_opencode_template_value(sub) is not None:
+                    return True
+            elif isinstance(sub, dict):
+                for v in sub.values():
+                    if isinstance(v, str) and _resolve_opencode_template_value(v) is not None:
+                        return True
+            continue
+        if normalized in _OPENCODE_PROVIDER_CREDENTIAL_CONTAINERS and isinstance(sub, dict):
+            if _opencode_provider_value_has_usable_credential(sub):
+                return True
+    return False
+
+
+def _opencode_config_declares_provider(path: Path) -> bool:
+    """Return True when an OpenCode config file declares usable provider auth.
+
+    A bare ``model`` preference or an empty ``provider`` mapping is
+    diagnostic-only — it must not flip availability. A ``provider`` entry
+    qualifies only when it contains a credential-shaped field (apiKey, key,
+    token, bearer, ...) whose resolved value is non-empty. Unresolved
+    ``{env:VAR}`` / ``{file:PATH}`` references with the env var unset or
+    the file missing do not qualify.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -1006,11 +1089,11 @@ def _opencode_config_declares_provider(path: Path) -> bool:
         return False
     if not isinstance(data, dict):
         return False
-    if isinstance(data.get("model"), str) and data.get("model", "").strip():
-        return True
     provider = data.get("provider")
-    if isinstance(provider, dict) and provider:
-        return True
+    if isinstance(provider, dict):
+        for value in provider.values():
+            if _opencode_provider_value_has_usable_credential(value):
+                return True
     return False
 
 
@@ -1136,11 +1219,11 @@ def _opencode_configured_providers(
         provider_dict = cfg_data.get("provider")
         if isinstance(provider_dict, dict):
             for k, v in provider_dict.items():
-                if (isinstance(v, dict) and v) or (isinstance(v, str) and v.strip()):
+                # Only count provider entries that actually carry usable
+                # auth — a bare options/model preference or an unresolved
+                # ``{env:VAR}`` reference does not constitute a credential.
+                if _opencode_provider_value_has_usable_credential(v):
                     providers.add(k)
-        m = cfg_data.get("model")
-        if isinstance(m, str) and "/" in m:
-            providers.add(m.split("/", 1)[0])
 
     for env_var, provider_id in _OPENCODE_ENV_TO_PROVIDER.items():
         v = src.get(env_var)
@@ -1178,15 +1261,16 @@ def _resolve_opencode_csv_fallback(
     except Exception:
         return None
 
+    # A row qualifies when its translated provider prefix is in the
+    # configured-provider set. ``configured`` already merges signals from
+    # ``~/.local/share/opencode/auth.json``, OpenCode config files, and
+    # provider env vars, so a user who ran ``opencode auth login`` for a
+    # provider — or who set its API key env var — gets CSV-driven fallback
+    # without also having to set both. This intentionally lets no-key /
+    # device-flow rows like ``github_copilot/...`` participate when
+    # OpenCode has the ``github-copilot`` provider configured, instead of
+    # being skipped before translation.
     for _, row in sorted_df.iterrows():
-        api_key_field = str(row.get("api_key") or "").strip()
-        if not api_key_field:
-            continue
-        env_vars = [v.strip() for v in api_key_field.split("|") if v.strip()]
-        if not env_vars:
-            continue
-        if not all((src.get(v) or "").strip() for v in env_vars):
-            continue
         model_id = str(row.get("model") or "").strip()
         if not model_id:
             continue

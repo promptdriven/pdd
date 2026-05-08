@@ -460,3 +460,136 @@ def test_cli_detector_has_provider_oauth_opencode_without_creds(monkeypatch, tmp
     ):
         monkeypatch.delenv(k, raising=False)
     assert cli_detector._has_provider_oauth("opencode") is False
+
+
+# ---------------------------------------------------------------------------
+# CSV fallback / loader plumbing (Issue #798 regression)
+# ---------------------------------------------------------------------------
+
+def test_load_model_data_resolves_real_loader_when_imported_normally():
+    """``_load_model_data`` must reach ``pdd.llm_invoke`` once the package is
+    fully initialized — not stay bound to the local fallback stub.
+
+    Regression for the import-cycle bug where ``pdd/__init__.py`` imported
+    ``pdd.agentic_common`` before ``pdd.llm_invoke`` could resolve, leaving
+    every CSV-based fallback dead in the user path.
+    """
+    import pandas as pd
+    from pdd import agentic_common as ac
+
+    df = ac._load_model_data(None)
+    assert df is not None, "loader returned None — fallback stub still wired in"
+    assert isinstance(df, pd.DataFrame)
+    assert not df.empty
+    # Sanity check: the CSV columns the fallback helpers rely on are present.
+    assert {"model", "api_key", "coding_arena_elo", "input", "output"}.issubset(df.columns)
+
+
+def test_resolve_opencode_csv_fallback_via_auth_json_only(monkeypatch, tmp_path):
+    """auth.json provides Anthropic credentials but no provider env var is
+    set — CSV fallback must still pick a translated anthropic/* model."""
+    from pdd.agentic_common import _resolve_opencode_csv_fallback
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    auth_dir = tmp_path / ".local" / "share" / "opencode"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.json").write_text(
+        json.dumps({"anthropic": {"type": "api", "key": "sk-ant-x"}}),
+        encoding="utf-8",
+    )
+
+    resolved = _resolve_opencode_csv_fallback(env={}, cwd=tmp_path)
+    assert resolved is not None
+    assert resolved.startswith("anthropic/")
+
+
+def test_resolve_opencode_csv_fallback_github_copilot_no_key(monkeypatch, tmp_path):
+    """github_copilot CSV rows have empty ``api_key`` (device-flow). They
+    must still participate when OpenCode has ``github-copilot`` configured."""
+    from pdd.agentic_common import _resolve_opencode_csv_fallback
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    auth_dir = tmp_path / ".local" / "share" / "opencode"
+    auth_dir.mkdir(parents=True)
+    (auth_dir / "auth.json").write_text(
+        json.dumps({"github-copilot": {"type": "oauth"}}),
+        encoding="utf-8",
+    )
+
+    resolved = _resolve_opencode_csv_fallback(env={}, cwd=tmp_path)
+    assert resolved is not None
+    assert resolved.startswith("github-copilot/")
+
+
+def test_opencode_config_declares_provider_rejects_bare_model(tmp_path):
+    """A config with only a top-level ``model`` preference must be
+    diagnostic-only — it does not constitute a credential."""
+    from pdd.agentic_common import _opencode_config_declares_provider
+
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(
+        json.dumps({"model": "anthropic/claude-sonnet-4-6"}),
+        encoding="utf-8",
+    )
+    assert _opencode_config_declares_provider(cfg) is False
+
+
+def test_opencode_config_declares_provider_rejects_unresolved_env_template(
+    tmp_path, monkeypatch,
+):
+    """``{env:VAR}`` references where ``VAR`` is unset must not flip
+    availability — the user has no usable auth yet."""
+    from pdd.agentic_common import _opencode_config_declares_provider
+
+    monkeypatch.delenv("PDD_TEST_UNSET_KEY_XYZ", raising=False)
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "anthropic": {
+                        "options": {"apiKey": "{env:PDD_TEST_UNSET_KEY_XYZ}"}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _opencode_config_declares_provider(cfg) is False
+
+
+def test_opencode_config_declares_provider_accepts_resolved_env_template(
+    tmp_path, monkeypatch,
+):
+    """``{env:VAR}`` references where ``VAR`` IS set count as usable auth."""
+    from pdd.agentic_common import _opencode_config_declares_provider
+
+    monkeypatch.setenv("PDD_TEST_SET_KEY_XYZ", "sk-ant-test")
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "anthropic": {
+                        "options": {"apiKey": "{env:PDD_TEST_SET_KEY_XYZ}"}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert _opencode_config_declares_provider(cfg) is True
+
+
+def test_opencode_config_declares_provider_accepts_literal_credential(tmp_path):
+    """A direct apiKey string in the provider mapping is a credential."""
+    from pdd.agentic_common import _opencode_config_declares_provider
+
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(
+        json.dumps({"provider": {"anthropic": {"apiKey": "sk-ant-literal"}}}),
+        encoding="utf-8",
+    )
+    assert _opencode_config_declares_provider(cfg) is True
