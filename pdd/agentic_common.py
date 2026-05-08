@@ -1705,6 +1705,34 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
     return None
 
 
+def _format_anthropic_cli_error(data: Dict[str, Any], output_text: str) -> str:
+    """Return a compact Claude Code error with structured fields preserved."""
+    diagnostic: Dict[str, Any] = {"is_error": True}
+    for key in (
+        "subtype",
+        "api_error_status",
+        "api_error_message",
+        "duration_ms",
+        "num_turns",
+        "session_id",
+    ):
+        value = data.get(key)
+        if value is not None:
+            diagnostic[key] = value
+    if output_text:
+        diagnostic["result"] = str(output_text)[:1200]
+    try:
+        payload = json.dumps(
+            diagnostic,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        payload = str(diagnostic)
+    return f"Claude Code error: {payload[:MAX_ERROR_SNIPPET_LENGTH]}"
+
+
 def _parse_provider_json(
     provider: str, data: Dict[str, Any]
 ) -> Tuple[bool, str, float, Optional[str]]:
@@ -1729,9 +1757,11 @@ def _parse_provider_json(
             output_text = data.get("result") or data.get("response") or ""
             # Claude Code JSON includes is_error when the session failed
             # (auth, refusal, crash). Propagate as failure so callers can
-            # retry or fall through instead of treating it as success.
+            # retry or fall through instead of treating it as success. Preserve
+            # structured metadata so cloud logs can distinguish rate limits
+            # from generic mid-workflow failures.
             if data.get("is_error"):
-                return False, str(output_text) or "CLI reported is_error with no message", cost, actual_model
+                return False, _format_anthropic_cli_error(data, str(output_text)), cost, actual_model
 
         elif provider == "google":
             stats = data.get("stats", {})
