@@ -97,6 +97,7 @@ CLOUD_ENDPOINTS = {
     "getCommandStatus": "/getCommandStatus",
     "updateCommand": "/updateCommand",
     "cancelCommand": "/cancelCommand",
+    "submitExample": "/submitExample",
 }
 
 

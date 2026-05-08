@@ -1,21 +1,3 @@
-<pdd-reason>Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "CloudConfig.get_base_url", "signature": "() -> str", "returns": "str"},
-      {"name": "CloudConfig.get_endpoint_url", "signature": "(endpoint_name: str) -> str", "returns": "str"},
-      {"name": "CloudConfig.get_jwt_token", "signature": "(verbose: bool = False, app_name: str = 'pdd') -> Optional[str]", "returns": "Optional[str]"},
-      {"name": "CloudConfig.is_running_in_cloud", "signature": "() -> bool", "returns": "bool"},
-      {"name": "CloudConfig.is_cloud_enabled", "signature": "() -> bool", "returns": "bool"},
-      {"name": "get_cloud_timeout", "signature": "() -> int", "returns": "int"}
-    ]
-  }
-}
-</pdd-interface>
-
 % You are an expert Python engineer. Create a centralized cloud configuration module for PDD CLI commands.
 
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>

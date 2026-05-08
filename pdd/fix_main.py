@@ -564,13 +564,14 @@ def fix_main(
                                 "filename": "analysis.log"
                             }]
 
-                        # Submit the example to Firebase Cloud Function
+                        # Submit through CloudConfig so PDD_CLOUD_URL routes
+                        # staging/local/prod consistently.
                         headers = {
                             "Authorization": f"Bearer {jwt_token}",
                             "Content-Type": "application/json"
                         }
                         response = requests.post(
-                            'https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample',
+                            CloudConfig.get_endpoint_url("submitExample"),
                             json=payload,
                             headers=headers,
                             timeout=get_cloud_request_timeout(),

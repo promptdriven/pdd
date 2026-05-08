@@ -1,16 +1,3 @@
-<pdd-reason>CLI wrapper for `pdd fix`; routes auto-submit through CloudConfig.get_endpoint_url so PDD_CLOUD_URL is honored.</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "cli",
-  "cli": {
-    "commands": [
-      {"name": "fix_main", "description": "Run single-pass or iterative fix loop, optionally on cloud, with auto-submit of successful fixes via CloudConfig endpoint"}
-    ]
-  }
-}
-</pdd-interface>
-
 % You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
 
 <pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>

@@ -1,19 +1,6 @@
-# sync_main_python.prompt
-
-<pdd-reason>CLI wrapper for `pdd sync`; routes auto-submit through CloudConfig.get_endpoint_url so PDD_CLOUD_URL is honored.</pdd-reason>
-
-<pdd-interface>
-{
-  "type": "cli",
-  "cli": {
-    "commands": [
-      {"name": "sync_main", "description": "Run the full PDD sync workflow (auto-deps, generate, example, crash, verify, test, fix, update, optional auto-submit) for one prompt basename"}
-    ]
-  }
-}
-</pdd-interface>
-
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
+
+# sync_main_python.prompt
 
 % You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
 

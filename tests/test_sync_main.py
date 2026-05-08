@@ -2158,6 +2158,42 @@ class TestAutoSubmitSkipInCloud:
         # Caller bailed out before reaching the cloud HTTP submit.
         mock_post.assert_not_called()
 
+    @patch("requests.post")
+    @patch("pdd.get_jwt_token.get_jwt_token")
+    @patch("pdd.core.cloud.CloudConfig.is_running_in_cloud", return_value=False)
+    def test_submit_uses_cloudconfig_endpoint(
+        self, mock_in_cloud, mock_get_jwt, mock_post, tmp_path, monkeypatch
+    ):
+        """Regression for #859: PDD_CLOUD_URL must control submitExample."""
+        monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+        monkeypatch.setenv(
+            "PDD_CLOUD_URL",
+            "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
+        )
+
+        async def _fake_jwt(*args, **kwargs):
+            return "fake_jwt_token"
+
+        mock_get_jwt.side_effect = _fake_jwt
+        mock_post.return_value.status_code = 200
+
+        pdd_files = {
+            "prompt": tmp_path / "x.prompt",
+            "code": tmp_path / "x.py",
+            "example": tmp_path / "x_example.py",
+            "test": tmp_path / "test_x.py",
+        }
+        for f in pdd_files.values():
+            f.write_text("placeholder")
+
+        _real_auto_submit_example("x", "python", pdd_files, self._make_ctx())
+
+        mock_post.assert_called_once()
+        assert (
+            mock_post.call_args.args[0]
+            == "https://us-central1-prompt-driven-development-stg.cloudfunctions.net/submitExample"
+        )
+
 
 class TestModuleTimeoutEnvOverride:
     """MODULE_TIMEOUT must default to a generous cap for large modules and be
