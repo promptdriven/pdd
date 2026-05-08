@@ -53,6 +53,12 @@ console = Console()
     default=False,
     help="Strangler mode: sequence N orchestrator passes (see issue #1402 for true 1-child-per-pass enforcement).",
 )
+@click.option(
+    "--max-cost",
+    type=click.FloatRange(min=0.01),
+    default=None,
+    help="Abort if total cost would cross USD threshold.",
+)
 @click.pass_context
 @track_cost
 def split(
@@ -73,6 +79,7 @@ def split(
     intent: Optional[str],
     no_phase_extraction: bool,
     strangler: bool,
+    max_cost: Optional[float],
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Split large dev units into smaller, more manageable ones.
@@ -134,6 +141,7 @@ def split(
                 intent=intent,
                 no_phase_extraction=no_phase_extraction,
                 strangler=strangler,
+                max_cost=max_cost,
             )
 
             if not quiet:

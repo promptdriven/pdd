@@ -2172,12 +2172,20 @@ Options:
 - `--experimental-language`: Opt-in for non-Python languages (Python is the only `supported` tier in this release)
 - `--no-github-state`: Disable GitHub state persistence (local-only)
 - `--timeout-adder FLOAT`: Add seconds to each step timeout (default: 0.0)
+- `--max-cost FLOAT`: Abort if total cost would cross USD threshold. State is persisted, so re-running without `--max-cost` (or with a higher cap) resumes from the same step. Useful as a budget guardrail on long strangler runs (default: no cap)
 
 **Resume**: State is persisted after every per-child status transition (in `state["children_extracted_status"]`, keyed by child name). On resumption, `pdd split` picks up at the first non-terminal child — terminal statuses are `verified` (success) and `failed` (per-child repair budget exhausted), both of which are skipped without re-billing tokens. Children in `failed_verify` (verify failed but repair budget remaining) are re-extracted on resume; the saved `repair_attempts` count is carried forward (not reset), so the per-child gate continues from where it left off rather than re-spending the full N=2 budget.
 
 Example (agentic mode — full pipeline):
 ```bash
 pdd split pdd/large_module.py
+```
+
+Example (with budget cap):
+```bash
+# Stop cleanly if the run would cross $50; state is saved so you can
+# resume later by re-running without --max-cost (or with a higher cap).
+pdd split --max-cost 50 pdd/large_module.py
 ```
 
 Example (diagnosis only):
