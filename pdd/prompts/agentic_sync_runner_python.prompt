@@ -168,7 +168,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
     <include select="def:example_state_resumption">context/agentic_test_orchestrator_example.py</include>
 </pdd.agentic_test_orchestrator>
 <pdd.progress_events>
-    <include select="def:example_run_with_progress_events,def:example_classify_event_kinds,def:example_watchdog_stall_loop">context/progress_events_example.py</include>
+    <include>context/progress_events_example.py</include>
 </pdd.progress_events>
 
 % Instructions

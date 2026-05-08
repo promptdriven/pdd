@@ -35,7 +35,7 @@ Durable execution engine for `pdd sync <github issue url> --durable`. It must pr
     <include query="URL detection and LLM response parsing for sync tasks">context/agentic_sync_example.py</include>
 </pdd.agentic_sync>
 <pdd.progress_events>
-    <include select="def:example_run_with_progress_events,def:example_classify_event_kinds,def:example_watchdog_stall_loop">context/progress_events_example.py</include>
+    <include>context/progress_events_example.py</include>
 </pdd.progress_events>
 
 % Error Handling
