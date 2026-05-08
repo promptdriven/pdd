@@ -7,8 +7,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_split", "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler)", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "_run_strangler_split", "signature": "(*, target_path, git_root, verbose, quiet, timeout_adder, use_github_state, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction)", "returns": "Tuple[bool, str, float, str, List[str]]"}
+      {"name": "run_agentic_split", "signature": "(target_file, *, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, strangler, max_cost)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_run_strangler_split", "signature": "(*, target_path, git_root, verbose, quiet, timeout_adder, use_github_state, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, max_cost)", "returns": "Tuple[bool, str, float, str, List[str]]"}
     ]
   }
 }
@@ -32,6 +32,7 @@ Thin CLI wrapper around `run_agentic_split_orchestrator`. Resolves and validates
    - `diagnose_only=False, propose_only=False, delete_dead=False, force_split=False`
    - `no_verify=False, skip_regen_gate=False, experimental_language=False`
    - `intent: Optional[str] = None, no_phase_extraction=False, strangler=False`
+   - `max_cost: Optional[float] = None` (Issue #1384)
    - Returns 5-tuple `(success, message, total_cost, model_used, changed_files)`.
 
 2. Validation order (each failure returns `(False, msg, 0.0, "", [])` and prints a red `Error:` unless `quiet`):
@@ -47,14 +48,16 @@ Thin CLI wrapper around `run_agentic_split_orchestrator`. Resolves and validates
 
 4. Test-file discovery (warning only). Look for `test_<stem><suffix>` in `<git_root>/tests/`, the target's own directory, and each `extensions/*/tests/` dir. Warn if none exist.
 
-5. Non-strangler path: call `run_agentic_split_orchestrator` with `cwd=git_root` and forward every flag (including `intent` and `no_phase_extraction`; `strangler` is NOT forwarded). Wrap in try/except — any exception returns `(False, f"Orchestrator failed: {e}", 0.0, "", [])`.
+5. Non-strangler path: call `run_agentic_split_orchestrator` with `cwd=git_root` and forward every flag (including `intent`, `no_phase_extraction`, and `max_cost`; `strangler` is NOT forwarded). Wrap in try/except — any exception returns `(False, f"Orchestrator failed: {e}", 0.0, "", [])`.
 
 6. Strangler path (when `strangler=True`): delegate to `_run_strangler_split`. It must:
    - Print a cyan progress message unless quiet.
-   - Pass 1: call orchestrator with `propose_only=True, diagnose_only=False, delete_dead=False`. If it returns `success=False` AND the message is not "Propose only complete", abort with that message.
-   - Load the persisted plan from state: import `load_workflow_state` and `_stable_split_id` from the orchestrator module; compute the split_id from the repo-relative path of the target (fall back to the absolute path if not under git_root); state lives at `<git_root>/.pdd/split-state`.
+   - **Resume-aware order** (Issue #1384): load any saved workflow state FIRST (before running propose-only). With `use_github_state=True`, an unconditional propose-only call could resume a saved last_completed_step and silently advance past step 4 if the prior abort happened mid-pass. Detect a resumable state when `saved_state.get("max_cost_reached")` AND `saved_state["step_outputs"].get("4")` is non-empty — in that case, skip the propose-only call entirely and reuse the saved plan. Otherwise, call orchestrator with `propose_only=True, diagnose_only=False, delete_dead=False`. If it returns `success=False` AND the message is not "Propose only complete", abort with that message. Re-load state after propose-only.
+   - Compute the split_id from the repo-relative path of the target (fall back to the absolute path if not under git_root); state lives at `<git_root>/.pdd/split-state`. Use `_stable_split_id` from the orchestrator module.
    - Read `state["step_outputs"]["4"]`, parse it via `_parse_step_output(..., OptionsConsidered)`, rebuild any dict entries into `SplitOption` via `_dict_to_dataclass`, and pick the option with the highest `numeric_score`. Each error condition (no state, missing step 4, parse failure, empty options) returns a descriptive `Strangler: ...` message.
-   - Let `N = len(best_plan.plan.children)`. Clear workflow state, then run N passes. Each pass calls the orchestrator with `force_split=True, propose_only=False, diagnose_only=False, delete_dead=False`, accumulates cost and changed files, and clears workflow state again before the next pass. A failed pass aborts and returns `f"Strangler pass {idx+1} failed: {msg}"` with accumulated cost/changed.
+   - Let `N = len(best_plan.plan.children)`. Determine `start_idx`: if resuming a max-cost abort, set `start_idx = state.get("strangler_passes_completed", 0)` AND set the wrapper-level `total_cost = state.get("strangler_total_cost", 0.0)`; otherwise clear workflow state and `start_idx = 0`. Run passes `idx in range(start_idx, N)`. Each pass calls the orchestrator with `force_split=True, propose_only=False, diagnose_only=False, delete_dead=False`, accumulates cost and changed files, and clears workflow state again before the next pass. A failed pass aborts and returns `f"Strangler pass {idx+1} failed: {msg}"` with accumulated cost/changed.
+   - **`max_cost` cap applies across all passes** (Issue #1384): each pass receives `max_cost - total_cost_so_far` (or `None` if `max_cost is None`). Before each pass, if `max_cost is not None and (max_cost - total_cost) <= 0`, abort with `f"Strangler aborted at pass {idx+1}: --max-cost ${max_cost:.2f} reached (spent ${total_cost:.2f})"` so the total run respects the user's ceiling.
+   - **Persist strangler-level cumulative state on max-cost abort** (Issue #1384): when a pass aborts with `max_cost_reached`, the orchestrator's saved state has `state["total_cost"]` equal to the per-pass cost (NOT the wrapper's cumulative). Before returning, write back into the saved state: `cur_state["strangler_total_cost"] = wrapper_cumulative_total_cost` AND `cur_state["strangler_passes_completed"] = idx` (the aborted pass index — passes 0..idx-1 completed cleanly). Resume reads these so it does not re-run paid passes or undercount cumulative spend.
    - On success return `(True, f"Strangler complete: {N} orchestrator passes ran ({len(all_changed)} files changed across passes)", total_cost, last_model, all_changed)`. Do NOT claim "{N} children extracted" — the wrapper does not enforce one child per pass; each pass picks its own plan (see issue #1402).
 
 7. Use `rich.console.Console` for all user-facing output; never print when `quiet=True`.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import re
 import signal
@@ -251,6 +252,26 @@ def _get_state_dir(cwd: Path) -> Path:
     return root / ".pdd" / "split-state"
 
 
+def _safe_path_exists(path: Path) -> bool:
+    """Long-path-safe ``Path.exists()`` for LLM-emitted paths (Issue #1384).
+
+    The agent's ``FILES_CREATED:`` / ``FILES_MODIFIED:`` markers are
+    free-form text. A 300+ char polluted basename joined onto
+    ``current_work_dir`` and passed to ``.exists()`` raises
+    ``OSError(63: File name too long)`` on macOS and crashes the
+    extraction loop before any state can be saved. Wrap every
+    ``.exists()`` on an LLM-derived path through this helper so a
+    bad marker becomes a missing-file (the agent will be retried)
+    rather than a process-killing exception.
+    """
+    try:
+        return path.exists()
+    except OSError as e:
+        if e.errno in (errno.ENAMETOOLONG, errno.EINVAL):
+            return False
+        raise
+
+
 def _stable_split_id(target_path: str) -> int:
     """Deterministic ID from repo-relative target path (stable across Python runs)."""
     h = 0
@@ -384,6 +405,70 @@ def _dict_to_dataclass(cls: type, data: Any) -> Any:
             continue
         filtered[k] = v
     return cls(**filtered)
+
+
+_PATH_LIKE_FIELDS_BY_CLASS: Dict[type, Tuple[str, ...]] = {
+    SplitPlan: ("parent_changes",),  # nested dict — handled by _sanitize_split_paths
+}
+
+
+def _sanitize_path_string(value: Any) -> Any:
+    """Strip prose appended to a path field.
+
+    LLMs occasionally emit ``"pdd/foo.py — keep BUG_STEP_TIMEOUTS, …"`` for
+    fields that are supposed to hold a bare relative path. Downstream code
+    does ``Path(worktree) / value`` and crashes with ``OSError(Errno 63:
+    File name too long)`` on macOS once the basename exceeds 255 chars.
+
+    Trim at the first whitespace, em-dash, hash, or backtick — characters
+    that never appear in a real Python module path. Returns the value
+    unchanged if it's not a string or already clean.
+    """
+    if not isinstance(value, str):
+        return value
+    # Real paths don't contain whitespace, em-dashes, hashes, or backticks.
+    # Trim at the first such character so prose after the path is dropped.
+    for sep in (" ", "\t", "\n", "—", "–", "#", "`"):
+        idx = value.find(sep)
+        if idx >= 0:
+            value = value[:idx]
+    return value.strip()
+
+
+def _sanitize_split_paths(option: "SplitOption") -> None:
+    """Sanitize path-like fields in a parsed SplitOption in place.
+
+    Targets every field a downstream consumer turns into a filesystem path:
+    - ``plan.parent_changes.modified_source`` / ``deleted_source`` /
+      ``new_source`` (the Errno 63 crash site at split_validation.py:695)
+    - each ``plan.children[i].code_file`` / ``prompt_file``
+
+    Mutates the option in place. Callers must invoke this *before* persisting
+    state or running validation, otherwise polluted paths will be written to
+    disk and crash later steps.
+    """
+    plan = getattr(option, "plan", None)
+    if plan is None:
+        return
+    pc = getattr(plan, "parent_changes", None)
+    if isinstance(pc, dict):
+        for key in ("modified_source", "deleted_source", "new_source", "source"):
+            if key in pc:
+                pc[key] = _sanitize_path_string(pc[key])
+    for child in getattr(plan, "children", []) or []:
+        if isinstance(child, dict):
+            # Sanitize both naming schemes:
+            # - canonical fields: code_file, prompt_file, example_file, test_file
+            # - Step 4 LLM aliases: new_source, new_prompt, new_example, new_test
+            #   (split_validation.py:386 maps new_prompt/new_source ->
+            #   prompt_file/code_file at parse time, so an unsanitized alias
+            #   still flows into a real path field downstream.)
+            for key in (
+                "code_file", "prompt_file", "example_file", "test_file",
+                "new_source", "new_prompt", "new_example", "new_test",
+            ):
+                if key in child:
+                    child[key] = _sanitize_path_string(child[key])
 
 
 def _check_hard_stop(step: str, output: str, force_split: bool) -> Optional[str]:
@@ -527,6 +612,7 @@ def run_agentic_split_orchestrator(
     experimental_language: bool = False,
     intent: Optional[str] = None,
     no_phase_extraction: bool = False,
+    max_cost: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     if not quiet:
         console.print(f"Splitting {target_file}...")
@@ -716,6 +802,8 @@ def run_agentic_split_orchestrator(
                         rebuilt.append(o)
                     elif isinstance(o, dict):
                         rebuilt.append(_dict_to_dataclass(SplitOption, o))
+                for opt in rebuilt:
+                    _sanitize_split_paths(opt)
                 if rebuilt:
                     selected_option = max(rebuilt, key=lambda o: o.numeric_score)
 
@@ -725,7 +813,46 @@ def run_agentic_split_orchestrator(
             if isinstance(parsed_qa, QualitativeAssessment):
                 qual_assess = parsed_qa
 
+    def _check_budget(at_step: str) -> Optional[Tuple[bool, str, float, str, List[str]]]:
+        """Budget guard — return abort tuple if --max-cost crossed, else None.
+
+        Persists state so the next run without --max-cost (or with a higher
+        one) resumes from ``at_step``. Mirrors the pattern in
+        ``pdd/checkup_review_loop.py:1849-1862`` (max_cost_reached flag +
+        stop_reason).
+
+        MUST be called both at the top of each step iteration AND after every
+        ``total_cost += ...`` accumulation that precedes a possible early
+        return (diagnose_only, propose_only, LEAVE_ALONE, hard-stop, etc.).
+        Otherwise --max-cost can be bypassed when an LLM step adds cost and
+        then immediately exits via early return.
+        """
+        if max_cost is None or total_cost < max_cost:
+            return None
+        state["max_cost_reached"] = True
+        state["total_cost"] = total_cost
+        state["model_used"] = model_used
+        state["changed_files"] = changed_files
+        save_workflow_state(
+            cwd, split_id, "split", state, state_dir,
+            "", "", use_github_state, github_comment_id,
+        )
+        clear_agentic_progress()
+        _restore_signals()
+        stop_reason = (
+            f"Aborted at step {at_step}: --max-cost ${max_cost:.2f} "
+            f"reached (spent ${total_cost:.2f}). Re-run without "
+            f"--max-cost or with a higher cap to resume."
+        )
+        if not quiet:
+            console.print(f"[yellow]{stop_reason}[/yellow]")
+        return False, stop_reason, total_cost, model_used, changed_files
+
     for step in ordered_steps[start_idx:]:
+        budget_abort = _check_budget(step)
+        if budget_abort is not None:
+            return budget_abort
+
         # Skip step 0 when intent is already set (CLI flag or previous
         # run). Saves ~$0.20 + 200s of LLM time.
         if step == "0_intent" and current_intent:
@@ -790,6 +917,12 @@ def run_agentic_split_orchestrator(
                 # Still check for hard stops in partial output, then abort
                 stop_reason = _check_hard_stop(step, output, force_split)
                 state["total_cost"] = total_cost
+                # Budget check first: a failed step that pushed cost past
+                # --max-cost should produce a resumable abort, not a
+                # non-resumable Step-failed exit.
+                budget_abort = _check_budget(step)
+                if budget_abort is not None:
+                    return budget_abort
                 github_comment_id = save_workflow_state(
                     cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
                 )
@@ -800,7 +933,23 @@ def run_agentic_split_orchestrator(
 
             stop_reason = _check_hard_stop(step, output, force_split)
             if stop_reason:
+                # Persist step output AND last_completed_step BEFORE the
+                # hard-stop early return so resume picks up at the next
+                # step rather than re-running and re-charging this one.
+                # Without this, a hard-stop after total_cost += step_cost
+                # leaves cost spent but step_outputs missing — same bug
+                # as the diagnose_only/propose_only path (Issue #1384).
+                state["step_outputs"][step_num] = output
+                context[f"step{step_num}_output"] = output
+                state["last_completed_step"] = step
                 state["total_cost"] = total_cost
+                # Budget check first: if --max-cost was crossed by this
+                # step's cost, prefer the resumable max-cost abort over
+                # the hard-stop reason so user gets the correct exit code
+                # path and max_cost_reached=True is recorded.
+                budget_abort = _check_budget(step)
+                if budget_abort is not None:
+                    return budget_abort
                 github_comment_id = save_workflow_state(
                     cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
                 )
@@ -810,6 +959,21 @@ def run_agentic_split_orchestrator(
 
             state["step_outputs"][step_num] = output
             context[f"step{step_num}_output"] = output
+
+            # Re-check budget after the step's LLM cost is added AND its
+            # output is persisted to state. Order matters: if we abort here,
+            # the saved state must include this step's output and
+            # last_completed_step so a subsequent resume picks up at the
+            # NEXT step rather than re-running and re-charging this one.
+            # Without this, --max-cost can also be bypassed when the next
+            # branch is an early return (e.g. diagnose_only after step 2,
+            # LEAVE_ALONE after step 2, propose_only after step 4) — the
+            # top-of-loop check only fires on the next iteration, but we
+            # may exit before.
+            state["last_completed_step"] = step
+            budget_abort = _check_budget(step)
+            if budget_abort is not None:
+                return budget_abort
 
             # Step-specific parsing
             if step == "0_intent":
@@ -938,6 +1102,11 @@ def run_agentic_split_orchestrator(
                             options.append(o)
                         elif isinstance(o, dict):
                             options.append(_dict_to_dataclass(SplitOption, o))
+                    # Strip prose appended to path-like fields BEFORE any
+                    # downstream code joins them onto a worktree path —
+                    # otherwise validate_extraction crashes Errno 63.
+                    for opt in options:
+                        _sanitize_split_paths(opt)
                     if not options:
                         if not quiet:
                             console.print(
@@ -1005,7 +1174,19 @@ def run_agentic_split_orchestrator(
                                 output = r_output
                                 state["step_outputs"]["4"] = output
                                 context["step4_output"] = output
+                                # Persist updated cost/output before checking
+                                # budget so resume picks up correctly.
+                                state["last_completed_step"] = step
+                                budget_abort = _check_budget(step)
+                                if budget_abort is not None:
+                                    return budget_abort
                                 continue  # reparse with new output
+                            # Retry failed — still budget-check before next
+                            # iteration so cost burned on a failed retry
+                            # cannot push past --max-cost silently.
+                            budget_abort = _check_budget(step)
+                            if budget_abort is not None:
+                                return budget_abort
                             # Retry failed — loop again so the retry counter
                             # check at line top triggers the next attempt or
                             # the >= max_step4_retries branch records failure.
@@ -1204,6 +1385,14 @@ def run_agentic_split_orchestrator(
                         cwd, split_id, "split", state, state_dir,
                         "", "", use_github_state, github_comment_id,
                     )
+                    # Per-child fan-out budget check: after each child's
+                    # phase-extract LLM cost is added AND its plan is
+                    # persisted to state. Without this, --max-cost can
+                    # be overrun by total_children × per_child_cost in
+                    # one fan-out before the next outer-loop check.
+                    budget_abort = _check_budget("6a_phase_extract")
+                    if budget_abort is not None:
+                        return budget_abort
                 state["step_outputs"]["6a"] = (
                     f"Phase plans: "
                     f"{sum(1 for p in phase_plans if p and p.get('should_extract'))}"
@@ -1222,6 +1411,63 @@ def run_agentic_split_orchestrator(
             for i in range(len(children_extracted), total_children):
                 child = selected_option.plan.children[i]
                 child_name = child.get("name", f"child_{i+1}") if isinstance(child, dict) else str(child)
+
+                # Resume guard (Issue #1384): if a prior --max-cost
+                # abort fired mid-retry AFTER the retry's files made it
+                # onto disk (and into changed_files via the post-retry
+                # promotion at line ~1577), then on resume those files
+                # already exist. Skip the LLM call and credit the child
+                # as extracted directly — paying again would be the
+                # double-charge bug.
+                #
+                # Gating: ONLY engage on resume from a max-cost abort.
+                # On a normal run a child's planned paths might happen
+                # to exist (e.g. left over from an earlier user split
+                # attempt or a partial worktree); a blanket existence
+                # check would silently skip real extraction work.
+                # `state["max_cost_reached"]` is set ONLY by the budget
+                # guard, so it cleanly identifies the resume case.
+                # We also require ALL FOUR Step-4 path fields to exist
+                # (code_file/prompt_file plus new_example/new_test if
+                # the plan declares them) — Step 6 says examples and
+                # tests are first-class artifacts, not optional.
+                expected_files: List[str] = []
+                if isinstance(child, dict):
+                    for key in (
+                        "code_file", "prompt_file", "example_file", "test_file",
+                        "new_source", "new_prompt", "new_example", "new_test",
+                    ):
+                        v = child.get(key)
+                        if isinstance(v, str) and v:
+                            expected_files.append(v)
+                if (
+                    state.get("max_cost_reached")
+                    and expected_files
+                    and all(
+                        _safe_path_exists(current_work_dir / f)
+                        for f in expected_files
+                    )
+                ):
+                    if not quiet:
+                        console.print(
+                            f"[dim]Child {i+1}/{total_children} ({child_name}): "
+                            f"all planned files present on disk — skipping "
+                            f"re-extraction (resume after prior --max-cost abort).[/dim]"
+                        )
+                    children_extracted.append(
+                        f"RESUMED: child {i+1} files present on disk: {expected_files}"
+                    )
+                    state["children_extracted"] = children_extracted
+                    # Clear max_cost_reached AFTER consuming it, so
+                    # subsequent children don't also skip via this path
+                    # (each child's resume credit is one-shot).
+                    state["max_cost_reached"] = False
+                    github_comment_id = save_workflow_state(
+                        cwd, split_id, "split", state, state_dir,
+                        "", "", use_github_state, github_comment_id,
+                    )
+                    continue
+
                 if not quiet:
                     console.print(f"Extracting child {i+1}/{total_children}: {child_name}...")
                 context["current_child_index"] = i + 1
@@ -1282,6 +1528,13 @@ def run_agentic_split_orchestrator(
                     state["children_extracted"] = children_extracted
                     state["changed_files"] = changed_files
                     state["total_cost"] = total_cost
+                    # Budget check before hard-stop return so a 6_extract
+                    # cost-add that crosses --max-cost flips to a
+                    # resumable max_cost_reached exit instead of a
+                    # non-resumable EXTRACTION_BLOCKED stop.
+                    budget_abort = _check_budget("6_extract")
+                    if budget_abort is not None:
+                        return budget_abort
                     github_comment_id = save_workflow_state(
                         cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id,
                     )
@@ -1318,7 +1571,7 @@ def run_agentic_split_orchestrator(
                 # filesystem and retry if any claimed-created file is missing.
                 missing = [
                     f for f in claimed_created
-                    if not (current_work_dir / f).exists()
+                    if not _safe_path_exists(current_work_dir / f)
                 ]
                 retry_count = 0
                 max_extract_retries = 2
@@ -1367,10 +1620,49 @@ def run_agentic_split_orchestrator(
                     total_cost += r_cost
                     model_used = r_model
                     output += f"\n---RETRY {retry_count}---\n{r_output}"
+                    # Recompute missing FIRST (before the budget check)
+                    # so a retry that actually created the files credits
+                    # them to changed_files BEFORE any abort. Without
+                    # this ordering, a retry that both created files
+                    # AND crossed --max-cost would abort with files on
+                    # disk but no record in state — resume re-runs the
+                    # child and pays again. (children_extracted append
+                    # still happens once at post-loop, gated by `success
+                    # and not missing`, so no double append.)
                     missing = [
                         f for f in claimed_created
-                        if not (current_work_dir / f).exists()
+                        if not _safe_path_exists(current_work_dir / f)
                     ]
+                    if not missing:
+                        for f in claimed_created + claimed_modified:
+                            if f and f not in changed_files and _safe_path_exists(current_work_dir / f):
+                                changed_files.append(f)
+                        state["changed_files"] = changed_files
+                    # Budget check INSIDE the retry loop: each retry
+                    # adds another full extract-LLM-call cost, and the
+                    # post-loop check only fires once. Without this,
+                    # 2 retries can push past --max-cost before we abort.
+                    state["total_cost"] = total_cost
+                    # Persist progress so a budget abort here doesn't
+                    # lose the just-completed retry's work. Note:
+                    # children_extracted is NOT touched yet — the post-
+                    # loop block is the single source of truth for that
+                    # to avoid duplicate appends. On a budget abort
+                    # mid-retry, the next strangler/resume invocation
+                    # will see the verified files in changed_files but
+                    # NOT in children_extracted, so it correctly re-
+                    # enters this child's extraction loop. The retry's
+                    # already-created files remain on disk; the loop's
+                    # _safe_path_exists check will detect missing=[]
+                    # immediately and skip directly to the post-loop
+                    # block without paying for another LLM call.
+                    github_comment_id = save_workflow_state(
+                        cwd, split_id, "split", state, state_dir,
+                        "", "", use_github_state, github_comment_id,
+                    )
+                    budget_abort = _check_budget("6_extract")
+                    if budget_abort is not None:
+                        return budget_abort
                 if missing and not quiet:
                     console.print(
                         f"[red]Child {i+1}: {len(missing)} files still missing "
@@ -1380,7 +1672,7 @@ def run_agentic_split_orchestrator(
                 # NOW add verified files to changed_files (Bug #4 fix:
                 # only track files that actually exist on disk).
                 for f in claimed_created + claimed_modified:
-                    if f and f not in changed_files and (current_work_dir / f).exists():
+                    if f and f not in changed_files and _safe_path_exists(current_work_dir / f):
                         changed_files.append(f)
 
                 # Only count as extracted if the agent succeeded and all
@@ -1403,6 +1695,15 @@ def run_agentic_split_orchestrator(
                 github_comment_id = save_workflow_state(
                     cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
                 )
+                # Per-child fan-out budget check: after each child's
+                # extract LLM cost (and any retry costs) is added AND the
+                # child is recorded in children_extracted / changed_files.
+                # Without this, a multi-child split can blow past --max-cost
+                # by total_children × per_child_cost in one fan-out before
+                # the next outer-loop check.
+                budget_abort = _check_budget("6_extract")
+                if budget_abort is not None:
+                    return budget_abort
             extracted_count = len(state.get("children_extracted", []))
             extract_msg = (
                 f"{extracted_count}/{total_children} children extracted"
@@ -1482,7 +1783,7 @@ def run_agentic_split_orchestrator(
                             for f in match.group(1).split(",")
                         ]
                         for f in files_list:
-                            if f and f not in changed_files and (current_work_dir / f).exists():
+                            if f and f not in changed_files and _safe_path_exists(current_work_dir / f):
                                 changed_files.append(f)
 
                 # If repair agent emits REPAIR_EXHAUSTED, stop trying.
@@ -1566,6 +1867,14 @@ def run_agentic_split_orchestrator(
                 github_comment_id = save_workflow_state(
                     cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id,
                 )
+                # Per-iteration repair budget check: after each repair
+                # iteration's LLM cost is added AND verify_failures /
+                # quant_metrics are persisted. Repair iterations can run
+                # up to 5 × per-iteration cost; without this check a long
+                # repair loop can blow past --max-cost.
+                budget_abort = _check_budget("8_repair")
+                if budget_abort is not None:
+                    return budget_abort
             state["step_outputs"]["8"] = f"Repair complete ({len(verify_failures)} remaining)"
             context["step8_output"] = state["step_outputs"]["8"]
 
@@ -1842,10 +2151,15 @@ def run_agentic_split_orchestrator(
         and iteration_count < MAX_REFINEMENT_ITERATIONS
         and not no_phase_extraction
     ):
-        iteration_count += 1
-        state["iteration_count"] = iteration_count
+        # Do NOT increment iteration_count or clear _pending_refine
+        # here. Both must persist across a mid-refinement budget abort
+        # so resume re-enters this same focused refinement pass.
+        # MAX_REFINEMENT_ITERATIONS is 1; if we incremented at start
+        # and aborted mid-LLM, the saved state would have
+        # iteration_count == 1 and the gate above (line ~2092) would
+        # short-circuit on resume — silently dropping the user's
+        # flagged refinement. Both updates happen at successful end.
         refined_target = pending_refine.get("target_child_file") or target_file
-        state["_pending_refine"] = None
         if not quiet:
             console.print(
                 f"[cyan]Focused refinement pass — "
@@ -1853,9 +2167,13 @@ def run_agentic_split_orchestrator(
             )
 
         # Treat the refined target as a single-child plan for step 6a.
+        # refined_target comes from RefineCheck.target_child_file which
+        # is LLM-emitted; route through _safe_path_exists so a
+        # polluted/long path is treated as missing (skip refinement)
+        # rather than raising OSError(ENAMETOOLONG).
         refined_target_path = current_work_dir / refined_target
-        if not refined_target_path.is_file():
-            # File doesn't exist — skip refinement gracefully.
+        if not _safe_path_exists(refined_target_path):
+            # File doesn't exist (or path is malformed) — skip refinement gracefully.
             if not quiet:
                 console.print(
                     f"[yellow]Refinement target not found: "
@@ -1880,10 +2198,22 @@ def run_agentic_split_orchestrator(
             }, default=str)
             context["children_extracted"] = "[]"
 
-            # Step 6a on the refined target.
-            template_name = "agentic_split_step6a_phase_extract_LLM"
-            p_template = load_prompt_template(template_name)
-            refine_phase_plan: Optional[Dict[str, Any]] = None
+            # Step 6a on the refined target. On resume from a 6a
+            # max-cost abort, the parsed plan is already in saved
+            # state — skip the 6a LLM call entirely to avoid double-
+            # charging. The pre-budget-check persist in the 6a block
+            # below ensures any paid 6a output is recoverable.
+            refine_phase_plan: Optional[Dict[str, Any]] = state.get("_pending_refine_plan")
+            if refine_phase_plan is None:
+                template_name = "agentic_split_step6a_phase_extract_LLM"
+                p_template = load_prompt_template(template_name)
+            else:
+                p_template = None
+                if not quiet:
+                    console.print(
+                        "[dim]Refinement: phase plan already saved from "
+                        "prior abort — skipping 6a LLM call.[/dim]"
+                    )
             if p_template:
                 processed = preprocess(
                     p_template, recursive=True,
@@ -1903,27 +2233,78 @@ def run_agentic_split_orchestrator(
                 )
                 total_cost += pe_cost
                 model_used = pe_model
+                # Parse the phase plan FIRST so the budget check below
+                # cannot strand a paid plan. Persist refine_phase_plan
+                # in state so resume picks up the parsed plan and skips
+                # straight to step 6 — without re-paying the 6a LLM
+                # call. (Resume reads state['_pending_refine_plan'] at
+                # the top of the refinement block.)
                 parsed_pe = _parse_step_output(pe_output, PhaseExtractionPlan)
-                if isinstance(parsed_pe, PhaseExtractionPlan) and parsed_pe.should_extract:
-                    refine_phase_plan = {
-                        "should_extract": True,
-                        "target_symbol": parsed_pe.target_symbol,
-                        "target_file": parsed_pe.target_file or refined_target,
-                        "phases": [
-                            {
-                                "name": p.name, "description": p.description,
-                                "line_range": p.line_range, "inputs": p.inputs,
-                                "outputs": p.outputs, "side_effects": p.side_effects,
-                            }
-                            for p in parsed_pe.phases
-                        ],
-                        "parent_shell": parsed_pe.parent_shell,
-                        "rationale": parsed_pe.rationale,
-                        "reason": "",
-                    }
+                if isinstance(parsed_pe, PhaseExtractionPlan):
+                    if parsed_pe.should_extract:
+                        refine_phase_plan = {
+                            "should_extract": True,
+                            "target_symbol": parsed_pe.target_symbol,
+                            "target_file": parsed_pe.target_file or refined_target,
+                            "phases": [
+                                {
+                                    "name": p.name, "description": p.description,
+                                    "line_range": p.line_range, "inputs": p.inputs,
+                                    "outputs": p.outputs, "side_effects": p.side_effects,
+                                }
+                                for p in parsed_pe.phases
+                            ],
+                            "parent_shell": parsed_pe.parent_shell,
+                            "rationale": parsed_pe.rationale,
+                            "reason": "",
+                        }
+                    else:
+                        # 6a parsed successfully but said no extraction
+                        # warranted. Persist a no-op sentinel so a
+                        # subsequent budget abort doesn't cause resume
+                        # to re-pay for the same 6a LLM call. Resume
+                        # reads `_pending_refine_plan` and short-circuits
+                        # the 6a call; the False sentinel then makes the
+                        # `if refine_phase_plan` branch below skip step-6
+                        # and proceed to post-refine validation.
+                        refine_phase_plan = {
+                            "should_extract": False,
+                            "reason": parsed_pe.reason or "no extraction warranted",
+                        }
+                # Refinement-pass budget check: caps the focused
+                # phase-extract LLM call against --max-cost. Persist
+                # _pending_refine + changed_files + refine_phase_plan
+                # so resume picks up exactly here.
+                state["total_cost"] = total_cost
+                state["_pending_refine"] = pending_refine
+                state["_pending_refine_plan"] = refine_phase_plan
+                state["changed_files"] = changed_files
+                budget_abort = _check_budget("9_refine_check")
+                if budget_abort is not None:
+                    return budget_abort
 
             # Step 6 extract the phase plan (only if one was produced).
-            if refine_phase_plan:
+            # Resume guard: if the prior run paid for this extract and
+            # crossed --max-cost AFTER FILES_CREATED were promoted to
+            # changed_files (lines below in this block), state has
+            # _pending_refine_extract_applied=True. Skip the LLM call
+            # entirely and proceed to post-refine validation. Without
+            # this, resume re-runs the same paid extract LLM call.
+            # Only enter step-6 when the plan actually wants extraction.
+            # A sentinel `{should_extract: False}` (from a paid 6a no-op
+            # decision, persisted for resume) means refinement is done —
+            # post-refine validation runs but no further LLM call.
+            should_run_step6 = bool(
+                refine_phase_plan and refine_phase_plan.get("should_extract")
+            )
+            if should_run_step6 and state.get("_pending_refine_extract_applied"):
+                if not quiet:
+                    console.print(
+                        "[dim]Refinement: extract already applied in prior "
+                        "run (files in changed_files) — skipping step-6 "
+                        "LLM call.[/dim]"
+                    )
+            elif should_run_step6:
                 context["phase_plan"] = json.dumps(refine_phase_plan, default=str)
                 template_name = "agentic_split_step6_extract_LLM"
                 p_template = load_prompt_template(template_name)
@@ -1946,9 +2327,25 @@ def run_agentic_split_orchestrator(
                     )
                     total_cost += ex_cost
                     model_used = ex_model
-                    # Parse FILES_CREATED/FILES_MODIFIED markers.
-                    # Only track files that actually exist on disk (same
-                    # guard as step 6 extraction — prevents phantom entries).
+                    # Refinement-pass extract budget check: caps the
+                    # focused step-6 LLM call against --max-cost.
+                    # iteration_count NOT bumped — see end-of-refinement.
+                    state["total_cost"] = total_cost
+                    # Parse FILES_CREATED/FILES_MODIFIED markers BEFORE
+                    # the budget check so a budget abort here doesn't
+                    # lose verified files. Reorder also preserves the
+                    # _pending_refine request for resume.
+                    #
+                    # Track "verified marker paths this extract"
+                    # SEPARATELY from "newly appended to changed_files".
+                    # The flag-set condition is whether the LLM actually
+                    # produced verified work — a successful FILES_MODIFIED
+                    # on an already-tracked file (common in focused
+                    # refinement, where the child target is usually
+                    # already in changed_files from the main extraction)
+                    # would otherwise leave the counter at 0 and cause
+                    # resume to re-pay for the same extract.
+                    verified_marker_paths = 0
                     for marker in ("FILES_CREATED:", "FILES_MODIFIED:"):
                         match = re.search(
                             rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
@@ -1957,8 +2354,26 @@ def run_agentic_split_orchestrator(
                         if match:
                             for f in match.group(1).split(","):
                                 f = f.strip().strip(",").strip("`").strip()
-                                if f and f not in changed_files and (current_work_dir / f).exists():
-                                    changed_files.append(f)
+                                if not f:
+                                    continue
+                                if _safe_path_exists(current_work_dir / f):
+                                    verified_marker_paths += 1
+                                    if f not in changed_files:
+                                        changed_files.append(f)
+                    state["_pending_refine"] = pending_refine
+                    state["changed_files"] = changed_files
+                    # Mark "applied" when the extract genuinely produced
+                    # verified work — defined as ex_success AND at least
+                    # one marker path that exists on disk (whether new
+                    # or modify of an already-tracked file). A failed
+                    # LLM call OR one that emitted no usable
+                    # FILES_CREATED/MODIFIED markers leaves the flag
+                    # False so resume re-runs the LLM call.
+                    if ex_success and verified_marker_paths > 0:
+                        state["_pending_refine_extract_applied"] = True
+                    budget_abort = _check_budget("9_refine_check")
+                    if budget_abort is not None:
+                        return budget_abort
                     if not quiet:
                         console.print(
                             f"[cyan]Refinement iter {iteration_count}: "
@@ -1971,6 +2386,21 @@ def run_agentic_split_orchestrator(
                         f"step 6a said no extraction warranted on "
                         f"{refined_target} — skipping[/cyan]"
                     )
+
+        # Refinement completed (no budget abort fired). NOW safe to
+        # bump iteration_count AND clear _pending_refine /
+        # _pending_refine_plan / _pending_refine_extract_applied. All
+        # deferred to here so a mid-refinement budget abort leaves
+        # the request + parsed plan + extract-applied flag intact AND
+        # iteration_count == 0 — resume re-enters the same focused
+        # pass and skips straight to whichever stage was paid for.
+        # (MAX_REFINEMENT_ITERATIONS=1 means a premature increment
+        # would lock out resume entirely.)
+        iteration_count += 1
+        state["iteration_count"] = iteration_count
+        state["_pending_refine"] = None
+        state["_pending_refine_plan"] = None
+        state["_pending_refine_extract_applied"] = False
 
         # Re-run verification after refinement.
         if selected_option is not None:

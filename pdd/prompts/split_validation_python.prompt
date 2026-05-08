@@ -39,6 +39,8 @@
   - Children with both paths empty are LLM defects: emit a `children_completeness` warning naming the child and skip them.
   - `plan.parent_changes` (optional dict) may contain `modified_source: str` for the parent-wiring check.
 
+  **Defensive long-path guard** (Issue #1384): every `Path.is_file()` call on user/LLM-provided path components MUST be wrapped via a private helper `_safe_is_file(path: Path) -> bool` that catches `OSError` with `errno in (errno.ENAMETOOLONG, errno.EINVAL)` and returns `False` instead of raising. The Step-4 LLM occasionally emits prose into `parent_changes.modified_source` (e.g. `"pdd/foo.py — keep BUG_STEP_TIMEOUTS, console, logger"`); after sanitization is bypassed, joining that onto the worktree path and calling `is_file()` on macOS raises `OSError(63: File name too long)` once the basename exceeds 255 chars and crashes the entire run. The guard ensures the validator emits a warning-severity failure instead of crashing.
+
   Checks:
 
   (a) **byte_equivalence** — git sanity. Run `git status --porcelain` in `worktree` via `subprocess.run(..., capture_output=True, text=True)`. Dirty output is *expected* after extraction and not a failure. Only emit errors when:
@@ -85,7 +87,7 @@
 
 % Dependencies
   <get_test_command>
-    <include>context/get_test_command_example.py</include>
+    <include select="def:default_verify_cmd_for">context/get_test_command_example.py</include>
   </get_test_command>
 
   <get_lint_commands>
