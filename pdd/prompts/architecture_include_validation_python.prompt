@@ -30,7 +30,11 @@
 %      while <include>ing only a selected slice of the existing output source.
 %      For existing modules, a partial self-include must cover every declared public
 %      symbol that already exists in the output file, or the prompt must use a full
-%      self-include.
+%      self-include. In staged strict mode, when a prompt-local <pdd-interface>
+%      declares public symbols already present in the existing output file, the prompt
+%      must include the existing module source context at all; no-self-include is a
+%      hard failure for that prompt-local contract. Keep legacy prompts without
+%      self-includes compatible by default.
 
 % ============================================================
 % Internal helpers
@@ -125,6 +129,7 @@
 %     project_root: Path,
 %     architecture_path: Optional[Path] = None,
 %     prompt_content: Optional[str] = None,
+%     require_prompt_local_source_context: bool = False,
 % ) -> List[str]
 %   - Generation-time preflight used before the LLM is called.
 %   - Load declared module symbols from both <pdd-interface> and matching architecture.json.
@@ -132,12 +137,18 @@
 %   - If the prompt includes the output source file with select=/lines=/query= or
 %     mode="interface", require deterministic implementation context to cover every
 %     declared public symbol that already exists in output_path.
+%   - If a prompt-local <pdd-interface> declares symbols already present in
+%     output_path, the prompt has no self-include of output_path, and
+%     require_prompt_local_source_context=True, return a hard failure saying the
+%     prompt includes no existing module source context. This staged strict mode
+%     catches changed generated prompt/code contracts that would otherwise pass
+%     dry-run and fail real sync architecture conformance.
 %   - Treat query-only self-includes and mode="interface" self-includes as unsupported
 %     partial context and include that reason in the hard-failure message.
 %   - Return a hard-failure message when declared existing symbols are missing from
 %     partial self-include context.
-%   - Return [] when the prompt has no self-include so legacy prompts are not broken by
-%     this scoped preflight.
+%   - Return [] for no-self-include prompts when require_prompt_local_source_context
+%     is False so current legacy prompts are not broken by this scoped preflight.
 
 % ============================================================
 % Core validation function

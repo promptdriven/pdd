@@ -24,12 +24,17 @@ from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_u
 from .agentic_common import run_agentic_task
 from .agentic_sync_runner import (
     AsyncSyncRunner,
+    _architecture_entry_aliases,
     _basename_from_architecture_filename,
     _find_pdd_executable,
     build_dep_graph_from_architecture_data,
 )
 from .durable_sync_runner import DurableSyncRunner
-from .architecture_include_validation import collect_architecture_include_validation_warnings
+from .architecture_include_validation import (
+    collect_architecture_include_validation_warnings,
+    resolve_architecture_prompt_path,
+    validate_prompt_contract_context,
+)
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .architecture_registry import extract_modules, find_project_root as _find_project_root
 from .construct_paths import (
@@ -434,6 +439,115 @@ def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[s
             basenames.append(basename)
             seen.add(basename)
     return basenames
+
+
+def _prompt_contract_errors_for_module(
+    basename: str,
+    cwd: Path,
+    project_root: Path,
+) -> List[str]:
+    """Return deterministic prompt-contract preflight errors for a sync module."""
+    candidate_roots: List[Path] = []
+    seen_roots: set[Path] = set()
+    for candidate in (cwd, _find_project_root(cwd), project_root):
+        try:
+            root = Path(candidate).resolve()
+        except OSError:
+            root = Path(candidate)
+        if root not in seen_roots:
+            candidate_roots.append(root)
+            seen_roots.add(root)
+
+    for root in candidate_roots:
+        architecture, architecture_path = _load_architecture_json(root)
+        if not architecture:
+            continue
+
+        matched = False
+        errors: List[str] = []
+        for entry in extract_modules(architecture):
+            if basename not in _architecture_entry_aliases(entry):
+                continue
+            matched = True
+            filename = str(entry.get("filename") or "").strip()
+            filepath = str(entry.get("filepath") or "").strip()
+            if not filename or not filepath:
+                continue
+
+            prompt_path = resolve_architecture_prompt_path(filename, root)
+            output_path = Path(filepath)
+            if not output_path.is_absolute():
+                output_path = root / output_path
+            errors.extend(
+                validate_prompt_contract_context(
+                    prompt_path=prompt_path,
+                    output_path=output_path,
+                    project_root=root,
+                    architecture_path=architecture_path,
+                    require_prompt_local_source_context=(
+                        _prompt_contract_strict_self_context_required(
+                            prompt_path, root
+                        )
+                    ),
+                )
+            )
+
+        if matched:
+            return errors
+
+    return []
+
+
+def _prompt_contract_strict_self_context_required(
+    prompt_path: Path,
+    project_root: Path,
+) -> bool:
+    """Return True when a prompt changed in git and needs staged stricter checks."""
+    try:
+        root = Path(project_root).resolve()
+        rel_path = Path(prompt_path).resolve().relative_to(root).as_posix()
+    except (OSError, ValueError):
+        return False
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", rel_path],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode == 0 and status.stdout.strip():
+        return True
+
+    for base_ref in ("origin/main", "main", "origin/master", "master"):
+        merge_base = subprocess.run(
+            ["git", "merge-base", "HEAD", base_ref],
+            cwd=root,
+            capture_output=True,
+            text=True,
+        )
+        if merge_base.returncode != 0:
+            continue
+        base = merge_base.stdout.strip()
+        if not base:
+            continue
+        diff = subprocess.run(
+            ["git", "diff", "--quiet", base, "--", rel_path],
+            cwd=root,
+        )
+        if diff.returncode == 1:
+            return True
+        if diff.returncode == 0:
+            return False
+
+    return False
+
+
+def _format_prompt_contract_preflight_error(basename: str, errors: List[str]) -> str:
+    """Format prompt-contract errors for agentic sync dry-run validation output."""
+    return (
+        f"{basename}: prompt contract preflight failed:\n"
+        + "\n".join(f"- {error}" for error in errors)
+    )
 
 
 def _resolve_module_sync_context(
@@ -1071,6 +1185,16 @@ def _run_dry_run_validation(
         ok, err_output = _run_single_dry_run(basename, cwd, quiet=quiet)
 
         if ok:
+            contract_errors = _prompt_contract_errors_for_module(
+                basename, cwd, project_root
+            )
+            if contract_errors:
+                errors.append(
+                    _format_prompt_contract_preflight_error(
+                        basename, contract_errors
+                    )
+                )
+                continue
             module_cwds[basename] = cwd
             continue
 
@@ -1091,6 +1215,16 @@ def _run_dry_run_validation(
         total_llm_cost += llm_cost
 
         if llm_ok and llm_cwd is not None:
+            contract_errors = _prompt_contract_errors_for_module(
+                basename, llm_cwd, project_root
+            )
+            if contract_errors:
+                errors.append(
+                    _format_prompt_contract_preflight_error(
+                        basename, contract_errors
+                    )
+                )
+                continue
             module_cwds[basename] = llm_cwd
             if not quiet:
                 try:

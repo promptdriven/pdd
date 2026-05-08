@@ -566,6 +566,7 @@ def validate_prompt_contract_context(
     project_root: Path,
     architecture_path: Optional[Path] = None,
     prompt_content: Optional[str] = None,
+    require_prompt_local_source_context: bool = False,
 ) -> List[str]:
     """
     Validate that broad module interface declarations have matching source context.
@@ -594,9 +595,12 @@ def validate_prompt_contract_context(
     if not existing_source.strip():
         return []
 
+    prompt_interface = _prompt_interface(prompt_content)
+    prompt_declared_symbols = _interface_function_names(prompt_interface)
+
     declared_symbols: List[str] = []
     for interface in (
-        _prompt_interface(prompt_content),
+        prompt_interface,
         _load_architecture_interface(architecture_path, prompt_path, output_path, project_root),
     ):
         for symbol in _interface_function_names(interface):
@@ -617,6 +621,20 @@ def validate_prompt_contract_context(
         if _include_matches_output(ref.path, output_path, project_root)
     ]
     if not self_includes:
+        prompt_declared_existing = [
+            symbol for symbol in prompt_declared_symbols if symbol in existing_symbol_set
+        ]
+        if require_prompt_local_source_context and prompt_declared_existing:
+            return [
+                (
+                    f"{prompt_path}: prompt-local interface declares "
+                    f"{len(prompt_declared_existing)} public symbols already present "
+                    f"in {output_path} but includes no existing module source context: "
+                    f"missing {', '.join(prompt_declared_existing)}. Use a full "
+                    "<include> of the existing module or select every declared "
+                    "existing public symbol."
+                )
+            ]
         return []
     if any(not ref.is_partial for ref in self_includes):
         return []
