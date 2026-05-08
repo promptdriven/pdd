@@ -37,6 +37,53 @@ def set_pdd_path(monkeypatch):
     monkeypatch.setenv("PDD_PATH", str(pdd_package_dir))
 
 
+@pytest.fixture(autouse=True)
+def stub_test_generation(monkeypatch):
+    """Avoid live model/agent calls while preserving sys.path assertions."""
+    from pdd.generate_test import _inject_sys_path_preamble
+
+    def fake_generate_test(
+        prompt,
+        code=None,
+        example=None,
+        strength=0.5,
+        temperature=0.0,
+        time=0.25,
+        language="python",
+        verbose=False,
+        source_file_path=None,
+        test_file_path=None,
+        module_name=None,
+        existing_tests=None,
+    ):
+        module = module_name or Path(source_file_path or "module.py").stem
+        content = f"from {module} import *\n\n\ndef test_generated():\n    assert True\n"
+        if language.lower() == "python":
+            content = _inject_sys_path_preamble(content)
+        return content, 0.01, "mock-model"
+
+    def fake_run_agentic_test_generate(
+        prompt_file,
+        code_file,
+        output_test_file,
+        verbose=False,
+        quiet=False,
+    ):
+        content = (
+            "const { add } = require('../math');\n\n"
+            "test('add', () => {\n"
+            "  expect(add(1, 2)).toBe(3);\n"
+            "});\n"
+        )
+        return content, 0.01, "mock-agent", True, None
+
+    monkeypatch.setattr("pdd.cmd_test_main.generate_test", fake_generate_test)
+    monkeypatch.setattr(
+        "pdd.agentic_test_generate.run_agentic_test_generate",
+        fake_run_agentic_test_generate,
+    )
+
+
 @pytest.mark.e2e
 class TestSysPathIsolationE2E:
     """
