@@ -73,7 +73,7 @@ from .agentic_change_orchestrator import run_agentic_change_orchestrator
 from .agentic_common_worktree import get_git_root, worktree_exists, branch_exists, remove_worktree, delete_branch, resolve_main_ref, setup_worktree, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker
 from .get_lint_commands import LintCommand, get_lint_commands
 from .split_main import split_main
-from .split_validation import ValidationFailure, ValidationResult, validate_extraction
-from .agentic_split_orchestrator import run_agentic_split_orchestrator
+from .split_validation import ValidationFailure, ValidationResult, validate_extraction, get_test_command, get_lint_commands
+from .agentic_split_orchestrator import run_agentic_split_orchestrator, Diagnosis, ModuleInvestigation, SplitPlan, SplitOption, OptionsConsidered, QualitativeAssessment, IntentDecision, Phase, PhaseExtractionPlan, RefineCheck
 from .agentic_split import run_agentic_split
 from .ci_detect_changed_modules import main

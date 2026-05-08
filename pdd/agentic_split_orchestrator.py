@@ -3,25 +3,24 @@ from __future__ import annotations
 import json
 import re
 import signal
-import shlex
 import subprocess
-import shutil
-from dataclasses import dataclass, field
+import sys
+from dataclasses import dataclass, field, asdict, fields as dc_fields
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.console import Console
 from rich.table import Table
 
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
+    clear_agentic_progress,
     clear_workflow_state,
     load_workflow_state,
     run_agentic_task,
     save_workflow_state,
     set_agentic_progress,
     substitute_template_variables,
-    clear_agentic_progress,
 )
 from .agentic_common_worktree import get_git_root, setup_worktree
 from .architecture_sync import sync_all_prompts_to_architecture
@@ -32,7 +31,22 @@ from .split_validation import get_lint_commands, get_test_command, validate_extr
 
 console = Console()
 
-# Per-Step Timeouts
+SUPPORTED_LANGUAGES: List[str] = ["python"]
+MAX_REFINEMENT_ITERATIONS: int = 1
+
+VALID_INTENTS = {
+    "REDUCE_MONOLITH",
+    "ENABLE_PARALLEL_WORK",
+    "EXTRACT_REUSABLE_LAYER",
+    "REDUCE_TEST_TIME",
+}
+INTENT_ALIAS = {
+    "reduce": "REDUCE_MONOLITH",
+    "parallel": "ENABLE_PARALLEL_WORK",
+    "reuse": "EXTRACT_REUSABLE_LAYER",
+    "tests": "REDUCE_TEST_TIME",
+}
+
 SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
     "0_intent": 200.0,
     "1_survey": 900.0,
@@ -50,156 +64,83 @@ SPLIT_STEP_TIMEOUTS: Dict[str, float] = {
     "9_refine_check": 300.0,
 }
 
-# Max refinement passes after the main pipeline (U6).
-# The pipeline runs once, step 9 asks "should we refine?", and if yes we
-# run a focused phase-extraction pass (step 6a + step 6) on one flagged
-# child. That's it — we do NOT loop back to step 9 for another refine
-# check, because that would require re-running assess/repair and the
-# marginal gain after iteration 1 was not worth the cost on our oracle
-# (pdd_executor: iter 1 added $30 to iter 0's $45, iter 2 would've
-# added more). A re-run of `pdd split` on the output always gives the
-# user another refinement pass if they want one.
-MAX_REFINEMENT_ITERATIONS = 1
 
-# Valid intent values (U5).
-VALID_INTENTS = {
-    "REDUCE_MONOLITH",
-    "ENABLE_PARALLEL_WORK",
-    "EXTRACT_REUSABLE_LAYER",
-    "REDUCE_TEST_TIME",
-}
+# ----------------------------- Dataclasses -----------------------------
 
-# Map CLI short form to canonical intent.
-INTENT_ALIAS = {
-    "reduce": "REDUCE_MONOLITH",
-    "parallel": "ENABLE_PARALLEL_WORK",
-    "reuse": "EXTRACT_REUSABLE_LAYER",
-    "tests": "REDUCE_TEST_TIME",
-}
-
-SUPPORTED_LANGUAGES = ["python"]
-
-
-# ---------------------------------------------------------------------------
-# Data Models
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Diagnosis:
-    """Parsed diagnosis from step 2.
-
-    Fields align with the step 2 prompt output contract:
-    ``DIAGNOSIS_BEGIN { recommended_action, leave_alone_rationale,
-    reasoning, confidence, target_file_lines, ... } DIAGNOSIS_END``.
-
-    Legacy ``type`` / ``rationale`` aliases are kept for backward compat
-    and populated from ``recommended_action`` / ``reasoning`` via __post_init__.
-    """
     recommended_action: str = ""
     leave_alone_rationale: str = ""
     reasoning: str = ""
     confidence: float = 0.0
     target_file_lines: int = 0
-    type: str = ""  # backward-compat alias
-    rationale: str = ""  # backward-compat alias
+    type: str = ""
+    rationale: str = ""
 
-    def __post_init__(self):
-        # Populate legacy fields from new ones
+    def __post_init__(self) -> None:
         if not self.type and self.recommended_action:
             self.type = self.recommended_action
         if not self.rationale:
-            self.rationale = self.reasoning or self.leave_alone_rationale
+            self.rationale = self.reasoning or self.leave_alone_rationale or ""
 
 
 @dataclass
 class ModuleInvestigation:
-    test_seams: List[str] = field(default_factory=list)
-    test_ownership: Dict[str, str] = field(default_factory=dict)
+    test_seams: List[Any] = field(default_factory=list)
+    ownership: Dict[str, Any] = field(default_factory=dict)
+    shared_layer_candidates: List[Any] = field(default_factory=list)
+    notes: str = ""
 
 
 @dataclass
 class SplitPlan:
-    """Parsed SplitPlan from step 4.
-
-    Fields align with prompt: children (list), parent_changes (dict),
-    reference_updates (list), test_ownership (dict),
-    surfaced_dead_candidates (list).
-    """
-    children: List[Dict[str, Any]] = field(default_factory=list)
+    children: List[Any] = field(default_factory=list)
     parent_changes: Dict[str, Any] = field(default_factory=dict)
-    reference_updates: List[Dict[str, Any]] = field(default_factory=list)
     test_ownership: Dict[str, Any] = field(default_factory=dict)
-    surfaced_dead_candidates: List[str] = field(default_factory=list)
-
-
-@dataclass
-class QualitativeAssessment:
-    """Parsed qualitative assessment from step 7.
-
-    Fields align with the step 7 prompt output contract:
-    ``QUALITATIVE_ASSESSMENT_BEGIN { cohesion, boundary_clarity,
-    change_decorrelation, overall_verdict, projection_vs_reality }``.
-
-    ``cohesion``, ``boundary_clarity``, ``change_decorrelation`` are dicts
-    with ``rating`` and ``evidence`` fields. ``overall_verdict`` drives
-    the improvement gate.
-    """
-    overall_verdict: str = "unknown"
-    cohesion: Dict[str, str] = field(default_factory=dict)
-    boundary_clarity: Dict[str, str] = field(default_factory=dict)
-    change_decorrelation: Dict[str, str] = field(default_factory=dict)
-    projection_vs_reality: str = ""
-    score: int = 0  # legacy — not produced by LLM, kept for back-compat
-    rationale: str = ""  # legacy
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    shared_layer_children: List[Any] = field(default_factory=list)
 
 
 @dataclass
 class SplitOption:
-    """Parsed SplitOption from step 4.
-
-    Fields align with the step 4 prompt output:
-    { name, plan, expected_improvements, qualitative_projection,
-      risk, blast_radius, rationale, score }
-
-    ``score`` may be a float OR a dict with a ``total`` key (the LLM
-    sometimes returns the full scoring breakdown). ``numeric_score``
-    property normalizes to a float.
-    """
-    plan: SplitPlan = field(default_factory=SplitPlan)
-    score: Any = 0.0
     name: str = ""
-    expected_improvements: Dict[str, Any] = field(default_factory=dict)
-    qualitative_projection: Dict[str, Any] = field(default_factory=dict)
-    risk: str = ""
-    blast_radius: Any = 0
-    rationale: str = ""
+    description: str = ""
+    score: Any = 0.0
+    plan: Any = field(default_factory=lambda: SplitPlan())
+    parent_changes: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def numeric_score(self) -> float:
-        """Extract numeric score regardless of format."""
-        if isinstance(self.score, (int, float)):
-            return float(self.score)
-        if isinstance(self.score, dict):
-            return float(self.score.get("total", 0))
+        s = self.score
         try:
-            return float(self.score)
-        except (ValueError, TypeError):
+            if isinstance(s, dict):
+                return float(s.get("total", 0.0))
+            if isinstance(s, (int, float)):
+                return float(s)
+            return float(str(s))
+        except Exception:
             return 0.0
 
 
 @dataclass
 class OptionsConsidered:
-    options: List[Dict[str, Any]] = field(default_factory=list)
+    options: List[Any] = field(default_factory=list)
+
+
+@dataclass
+class QualitativeAssessment:
+    overall_verdict: str = "unknown"
+    cohesion: Dict[str, Any] = field(default_factory=dict)
+    boundary_clarity: Dict[str, Any] = field(default_factory=dict)
+    change_decorrelation: Dict[str, Any] = field(default_factory=dict)
+    projection_vs_reality: Any = ""
+    score: Any = None
+    rationale: str = ""
 
 
 @dataclass
 class IntentDecision:
-    """Parsed intent decision from step 0 (U5).
-
-    Emitted inside INTENT_BEGIN/END markers by the step 0 LLM prompt.
-    Maps to one of VALID_INTENTS; downstream step 4 uses this to
-    re-weight its rubric.
-    """
     intent: str = "REDUCE_MONOLITH"
     confidence: float = 0.0
     rationale: str = ""
@@ -207,23 +148,16 @@ class IntentDecision:
 
 @dataclass
 class Phase:
-    """One phase inside a PhaseExtractionPlan (U1)."""
     name: str = ""
     description: str = ""
-    line_range: List[int] = field(default_factory=list)
-    inputs: List[str] = field(default_factory=list)
-    outputs: str = ""
-    side_effects: List[str] = field(default_factory=list)
+    line_range: Any = None
+    inputs: List[Any] = field(default_factory=list)
+    outputs: List[Any] = field(default_factory=list)
+    side_effects: List[Any] = field(default_factory=list)
 
 
 @dataclass
 class PhaseExtractionPlan:
-    """Parsed phase extraction plan from step 6a (U1).
-
-    Emitted inside PHASE_EXTRACTION_BEGIN/END markers per child.
-    When ``should_extract`` is False, the other fields are empty and
-    ``reason`` is populated with a one-sentence justification.
-    """
     should_extract: bool = False
     target_symbol: str = ""
     target_file: str = ""
@@ -235,186 +169,387 @@ class PhaseExtractionPlan:
 
 @dataclass
 class RefineCheck:
-    """Parsed refine-check decision from step 9 (U6)."""
     should_refine: bool = False
     target_child_file: str = ""
     reason: str = ""
     suggested_intent: str = ""
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ----------------------------- Helpers -----------------------------
 
-def _get_state_dir(cwd: Path) -> Path:
-    root = get_git_root(cwd) or cwd
-    return root / ".pdd" / "split-state"
+
+def _normalize_intent(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if s in VALID_INTENTS:
+        return s
+    low = s.lower()
+    if low in INTENT_ALIAS:
+        return INTENT_ALIAS[low]
+    upper = s.upper()
+    if upper in VALID_INTENTS:
+        return upper
+    return None
 
 
 def _stable_split_id(target_path: str) -> int:
-    """Deterministic ID from repo-relative target path (stable across Python runs)."""
+    """Deterministic 32-bit-folded hash of a path string, mod 100000."""
     h = 0
-    for ch in target_path:
-        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    for c in target_path:
+        h = (h * 31 + ord(c)) & 0xFFFFFFFF
     return h % 100000
 
 
-_MARKER_BLOCK_RE = re.compile(
-    r"(?P<name>[A-Z_]+)_BEGIN\s*\n?(?P<body>.*?)\n?\s*(?P=name)_END",
-    re.DOTALL,
-)
+def _detect_language(target_file: str) -> str:
+    """Map a target file's suffix to a language string (lowercased)."""
+    try:
+        suffix = Path(target_file).suffix
+        if not suffix:
+            return ""
+        lang = get_language(suffix) or ""
+        return str(lang).lower()
+    except Exception:
+        return ""
 
 
-def _extract_json_candidates(output: str) -> List[str]:
-    """Extract all top-level JSON values (objects and arrays) from a string."""
-    candidates: List[str] = []
-    depth = 0
-    start = -1
-    open_char = None
-    close_char = None
-    in_string = False
-    escape = False
-    for i, ch in enumerate(output):
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"' and depth > 0:
-            in_string = True
-            continue
-        if depth == 0 and ch in "{[":
-            open_char = ch
-            close_char = "}" if ch == "{" else "]"
-            start = i
-            depth = 1
-        elif depth > 0:
-            if ch == open_char:
-                depth += 1
-            elif ch == close_char:
-                depth -= 1
-                if depth == 0 and start >= 0:
-                    candidates.append(output[start:i + 1])
-                    start = -1
-                    open_char = None
-                    close_char = None
-    return candidates
-
-
-def _parse_step_output(output: str, dataclass_type: type) -> Any:
-    """Parse agent output JSON into a dataclass. Returns None on failure.
-
-    Strategy:
-    1. If the output contains ``NAME_BEGIN ... NAME_END`` marker blocks,
-       parse JSON from within those blocks first (per the prompt contracts).
-    2. Otherwise, collect all top-level ``{...}`` and ``[...]`` blocks and
-       try the largest first.
-
-    ``OptionsConsidered`` is a special case: the prompt emits a JSON *array*
-    (``OPTIONS_BEGIN [...] OPTIONS_END``), which this function wraps as
-    ``{"options": [...]}`` before dataclass conversion.
-    """
-    candidates: List[str] = []
-    # Prefer marker-block JSON
-    for match in _MARKER_BLOCK_RE.finditer(output):
-        body = match.group("body").strip()
-        # Strip markdown code fences if present
-        if body.startswith("```"):
-            lines = body.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].startswith("```"):
-                lines = lines[:-1]
-            body = "\n".join(lines).strip()
-        candidates.append(body)
-
-    # Also collect top-level JSON objects/arrays as fallback
-    candidates.extend(_extract_json_candidates(output))
-
-    # Try candidates from largest to smallest
-    for candidate in sorted(candidates, key=len, reverse=True):
-        try:
-            data = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        try:
-            # Special case: OptionsConsidered from a bare JSON array
-            if dataclass_type is OptionsConsidered and isinstance(data, list):
-                data = {"options": data}
-            result = _dict_to_dataclass(dataclass_type, data)
-            if result is not None:
-                return result
-        except (TypeError, KeyError):
-            continue
+def _find_architecture_json(target_file: str, cwd: Path) -> Optional[Path]:
+    try:
+        p = (cwd / target_file).resolve().parent
+    except Exception:
+        p = cwd
+    for _ in range(8):
+        candidate = p / "architecture.json"
+        if candidate.exists():
+            return candidate
+        if p.parent == p:
+            break
+        p = p.parent
     return None
 
 
-_NESTED_FIELD_TYPES: Dict[Tuple[type, str], type] = {
-    (SplitOption, "plan"): SplitPlan,
+def _find_arch_dirs(target_file: str, cwd: Path) -> Tuple[Optional[Path], Optional[Path]]:
+    try:
+        p = (cwd / target_file).resolve().parent
+    except Exception:
+        p = cwd
+    prompts_dir: Optional[Path] = None
+    arch_path: Optional[Path] = None
+    cur = p
+    for _ in range(8):
+        if (cur / "prompts").is_dir():
+            pd = cur / "prompts"
+            prompts_dir = pd / "src" if (pd / "src").is_dir() else pd
+        if (cur / "architecture.json").exists():
+            arch_path = cur / "architecture.json"
+        if prompts_dir and arch_path:
+            break
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return prompts_dir, arch_path
+
+
+def _strip_md(line: str) -> str:
+    s = line.strip()
+    while s and s[0] in {"*", "`", "#", ">", "-"}:
+        s = s[1:].strip()
+    while s and s[-1] in {"*", "`"}:
+        s = s[:-1].strip()
+    return s
+
+
+# Hard-stop markers per step. Used by _check_hard_stop.
+_STEP_HARD_STOPS: Dict[str, List[str]] = {
+    "1_survey": ["ARCHITECTURE_STALE"],
+    "2_diagnose": ["DIAGNOSIS: LEAVE_ALONE"],
+    "3_investigate": ["ARCHITECTURE_STALE", "NO_TEST_FILE"],
+    "4_propose_options": ["NO_IMPROVEMENT_POSSIBLE"],
+    "6_extract": ["EXTRACTION_BLOCKED"],
+    "7a_verify_local": ["ARCHITECTURAL_REGRESSION"],
+    "7b_regen_gate": ["REGEN_FAILED"],
+    "8_repair": ["REPAIR_EXHAUSTED"],
 }
 
-_NESTED_LIST_TYPES: Dict[Tuple[type, str], type] = {
-    (OptionsConsidered, "options"): SplitOption,
-    (PhaseExtractionPlan, "phases"): Phase,
+
+def _check_hard_stop(step_name: str, output: str, force_split: bool = False) -> Optional[str]:
+    """Return the marker name if a step's hard-stop marker appears at the
+    start of a trimmed line in *output*, else None.
+
+    Markdown emphasis (``*``, `` ` ``, ``#``, ``>``, ``-``) at the start of a
+    line is stripped before comparison. Match is case-insensitive prefix.
+    When ``force_split`` is True, the ``DIAGNOSIS: LEAVE_ALONE`` marker is
+    suppressed so the orchestrator proceeds past step 2.
+    """
+    markers = list(_STEP_HARD_STOPS.get(step_name, []))
+    if force_split:
+        markers = [m for m in markers if m.upper() != "DIAGNOSIS: LEAVE_ALONE"]
+    if not output or not markers:
+        return None
+    lows = [m.lower() for m in markers]
+    for raw in output.splitlines():
+        s = _strip_md(raw).lower()
+        if not s:
+            continue
+        for i, mk in enumerate(lows):
+            if s.startswith(mk):
+                return markers[i]
+    return None
+
+
+# ---------- JSON / dataclass parsing ----------
+
+# Map dataclasses to acceptable BEGIN/END marker names. The first alias is the
+# canonical one.
+_DATACLASS_MARKERS: Dict[type, List[str]] = {
+    Diagnosis: ["DIAGNOSIS"],
+    ModuleInvestigation: ["INVESTIGATION", "MODULE_INVESTIGATION"],
+    OptionsConsidered: ["OPTIONS", "OPTIONS_CONSIDERED"],
+    QualitativeAssessment: ["QUALITATIVE_ASSESSMENT", "ASSESSMENT"],
+    IntentDecision: ["INTENT", "INTENT_DECISION"],
+    Phase: ["PHASE"],
+    PhaseExtractionPlan: ["PHASE_EXTRACTION_PLAN"],
+    RefineCheck: ["REFINE_CHECK"],
+    SplitOption: ["SPLIT_OPTION"],
+    SplitPlan: ["SPLIT_PLAN", "PLAN"],
 }
+
+
+def _extract_marker_block(output: str, name: str) -> Optional[str]:
+    if not output:
+        return None
+    pattern = re.compile(
+        rf"{re.escape(name)}_BEGIN\s*(.*?)\s*{re.escape(name)}_END",
+        re.DOTALL | re.IGNORECASE,
+    )
+    m = pattern.search(output)
+    if not m:
+        return None
+    return m.group(1).strip()
+
+
+def _strip_code_fence(text: str) -> str:
+    s = text.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_]*\n?", "", s)
+        s = re.sub(r"```\s*$", "", s)
+    return s.strip()
+
+
+def _try_parse_json(s: str) -> Optional[Any]:
+    s = _strip_code_fence(s)
+    if not s:
+        return None
+    try:
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def _find_json_candidates(text: str) -> List[str]:
+    """Find balanced ``{...}`` and ``[...]`` blocks in *text*. String-aware."""
+    out: List[str] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        c = text[i]
+        if c not in "{[":
+            i += 1
+            continue
+        opener = c
+        closer = "}" if opener == "{" else "]"
+        depth = 0
+        in_str = False
+        esc = False
+        j = i
+        found = False
+        while j < n:
+            ch = text[j]
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif in_str:
+                if ch == '"':
+                    in_str = False
+            elif ch == '"':
+                in_str = True
+            elif ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    out.append(text[i : j + 1])
+                    found = True
+                    break
+            j += 1
+        if found:
+            i = j + 1
+        else:
+            i += 1
+    return out
 
 
 def _dict_to_dataclass(cls: type, data: Any) -> Any:
-    """Recursively convert a dict to a dataclass, handling nested types."""
+    """Recursively build a dataclass instance from a dict.
+
+    - Non-dict values are returned unchanged (so callers can pass primitives).
+    - Extra keys not in the dataclass are silently dropped.
+    - Nested fields with known dataclass types are recursed:
+        SplitOption.plan -> SplitPlan
+        OptionsConsidered.options -> List[SplitOption]
+        PhaseExtractionPlan.phases -> List[Phase]
+    """
     if not isinstance(data, dict):
         return data
-    valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-    filtered = {}
-    for k, v in data.items():
-        if k not in valid_fields:
-            continue
-        nested_cls = _NESTED_FIELD_TYPES.get((cls, k))
-        if nested_cls and isinstance(v, dict):
-            filtered[k] = _dict_to_dataclass(nested_cls, v)
-            continue
-        list_cls = _NESTED_LIST_TYPES.get((cls, k))
-        if list_cls and isinstance(v, list):
-            filtered[k] = [
-                _dict_to_dataclass(list_cls, item) if isinstance(item, dict) else item
-                for item in v
-            ]
-            continue
-        filtered[k] = v
-    return cls(**filtered)
+
+    if cls is OptionsConsidered:
+        opts_raw = data.get("options", []) or []
+        opts: List[Any] = []
+        for o in opts_raw:
+            if isinstance(o, dict):
+                opts.append(_dict_to_dataclass(SplitOption, o))
+            else:
+                opts.append(o)
+        return OptionsConsidered(options=opts)
+
+    if cls is SplitOption:
+        kw: Dict[str, Any] = {}
+        allowed = {f.name for f in dc_fields(cls)}
+        for k, v in data.items():
+            if k not in allowed:
+                continue
+            if k == "plan":
+                kw[k] = _dict_to_dataclass(SplitPlan, v) if isinstance(v, dict) else v
+            else:
+                kw[k] = v
+        return SplitOption(**kw)
+
+    if cls is SplitPlan:
+        allowed = {f.name for f in dc_fields(cls)}
+        kw = {k: v for k, v in data.items() if k in allowed}
+        return SplitPlan(**kw)
+
+    if cls is PhaseExtractionPlan:
+        phases_raw = data.get("phases", []) or []
+        phases: List[Phase] = []
+        for p in phases_raw:
+            if isinstance(p, dict):
+                phases.append(_dict_to_dataclass(Phase, p))
+            else:
+                phases.append(p)
+        allowed = {f.name for f in dc_fields(cls)}
+        kw = {k: v for k, v in data.items() if k in allowed and k != "phases"}
+        kw["phases"] = phases
+        return PhaseExtractionPlan(**kw)
+
+    # Generic flat case
+    try:
+        allowed = {f.name for f in dc_fields(cls)}
+    except TypeError:
+        return data
+    kw = {k: v for k, v in data.items() if k in allowed}
+    try:
+        return cls(**kw)
+    except Exception:
+        return None
 
 
-def _check_hard_stop(step: str, output: str, force_split: bool) -> Optional[str]:
-    """Check for hard stop markers in agent output.
+def _parse_step_output(output: str, dataclass_cls: type) -> Optional[Any]:
+    """Parse an LLM step's output text into a dataclass instance.
 
-    Markers must appear at the start of a trimmed line to avoid false
-    positives from the agent mentioning a marker in prose (e.g.
-    "I checked for ARCHITECTURE_STALE but it was fine").
+    Strategy:
+      1. Look for any ``<NAME>_BEGIN ... <NAME>_END`` marker block matching
+         this dataclass. If found, attempt JSON parse on the inner block
+         (stripping markdown code fences).
+      2. Otherwise, scan the output for balanced ``{...}`` / ``[...]`` blocks,
+         try to JSON-parse each, and pick the largest valid one that
+         produces a non-None dataclass instance.
+
+    Returns the dataclass instance or ``None``.
     """
-    markers = {
-        "1_survey": ["ARCHITECTURE_STALE"],
-        "2_diagnose": [] if force_split else ["DIAGNOSIS: LEAVE_ALONE"],
-        "3_investigate": ["ARCHITECTURE_STALE", "NO_TEST_FILE"],
-        "4_propose_options": ["NO_IMPROVEMENT_POSSIBLE"],
-        "6_extract": ["EXTRACTION_BLOCKED"],
-        "7a_verify_local": ["ARCHITECTURAL_REGRESSION"],
-        "7b_regen_gate": ["REGEN_FAILED"],
-        "8_repair": ["REPAIR_EXHAUSTED"],
-    }
-    for marker in markers.get(step, []):
-        for line in output.splitlines():
-            # Strip markdown formatting (**, *, `, #) before checking
-            cleaned = line.strip().strip("*`#").strip()
-            if cleaned.upper().startswith(marker.upper()):
-                return marker
-    return None
+    if not output:
+        return None
+
+    aliases = _DATACLASS_MARKERS.get(dataclass_cls, [dataclass_cls.__name__.upper()])
+    for name in aliases:
+        block = _extract_marker_block(output, name)
+        if block is None:
+            continue
+        data = _try_parse_json(block)
+        if data is None:
+            continue
+        if dataclass_cls is OptionsConsidered and isinstance(data, list):
+            data = {"options": data}
+        if isinstance(data, dict):
+            inst = _dict_to_dataclass(dataclass_cls, data)
+            if inst is not None:
+                return inst
+
+    # Fallback: scan inline JSON candidates and pick the largest valid one.
+    candidates = _find_json_candidates(output)
+    best: Optional[Tuple[int, Any]] = None
+    for cand in candidates:
+        data = _try_parse_json(cand)
+        if data is None:
+            continue
+        if dataclass_cls is OptionsConsidered and isinstance(data, list):
+            data = {"options": data}
+        if not isinstance(data, dict):
+            continue
+        inst = _dict_to_dataclass(dataclass_cls, data)
+        if inst is None:
+            continue
+        size = len(cand)
+        if best is None or size > best[0]:
+            best = (size, inst)
+    return best[1] if best else None
+
+
+_FILE_MARKER_RE = re.compile(
+    r"^FILES_(CREATED|MODIFIED):\s*(.*?)(?=^[A-Z_]+:|\n\s*\n|\Z)",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _parse_file_markers(output: str) -> Tuple[List[str], List[str]]:
+    """Parse ``FILES_CREATED:`` and ``FILES_MODIFIED:`` markers from agent output."""
+    if not output:
+        return [], []
+    created: List[str] = []
+    modified: List[str] = []
+    for m in _FILE_MARKER_RE.finditer(output):
+        kind = m.group(1)
+        body = m.group(2) or ""
+        items: List[str] = []
+        for line in body.splitlines():
+            if line.strip() == "":
+                continue
+            for piece in line.split(","):
+                p = piece.strip().strip(",").strip("`").strip()
+                if p:
+                    items.append(p)
+        if kind == "CREATED":
+            created.extend(items)
+        else:
+            modified.extend(items)
+
+    def _dedup(xs: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for x in xs:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    return _dedup(created), _dedup(modified)
 
 
 def _verdict_strength(verdict: str) -> str:
-    """Map LLM overall_verdict to strength category."""
-    v = verdict.lower().strip()
+    v = (verdict or "").strip().lower()
     if v == "clear_improvement":
         return "strong"
     if v in ("marginal", "moderate"):
@@ -423,92 +558,131 @@ def _verdict_strength(verdict: str) -> str:
 
 
 def _apply_improvement_gate(
-    quant_metrics: Dict[str, float],
-    qual_assess: QualitativeAssessment,
+    quant_metrics: Dict[str, Any],
+    qual_assess: Optional[QualitativeAssessment],
 ) -> str:
-    """Apply the quantitative + qualitative decision matrix.
+    """Decide what to do based on quantitative metrics and qualitative verdict.
 
-    Uses ``qual_assess.overall_verdict`` (the string produced by the step 7
-    assess LLM prompt) instead of a numeric score.  The verdict maps to
-    strength categories: ``"clear_improvement"`` → strong,
-    ``"marginal"`` → moderate, everything else → weak.
+    See spec's "Improvement Gate Decision Matrix" section.
     """
-    strength = _verdict_strength(qual_assess.overall_verdict)
-    is_strong = strength == "strong"
-    is_moderate = strength == "moderate"
+    qa = qual_assess or QualitativeAssessment(overall_verdict="moderate")
+    strength = _verdict_strength(qa.overall_verdict)
 
-    if not quant_metrics:
-        # No quantitative data — defer to qualitative
-        if is_strong:
+    has_any = bool(quant_metrics)
+    improves = 0
+    regresses = 0
+    if has_any:
+        for v in quant_metrics.values():
+            try:
+                num = float(v)
+            except (TypeError, ValueError):
+                continue
+            if num > 0:
+                improves += 1
+            elif num < 0:
+                regresses += 1
+
+    if not has_any:
+        if strength == "strong":
             return "HUMAN_REVIEW_REQUIRED"
-        if is_moderate:
+        if strength == "moderate":
             return "HUMAN_REVIEW_REQUIRED_MARGINAL"
         return "ABORT_NO_IMPROVEMENT"
 
-    improves = sum(1 for v in quant_metrics.values() if v > 0)
-    regresses = sum(1 for v in quant_metrics.values() if v < 0)
-
-    if improves >= 1 and regresses == 0:
-        return "AUTO_SHIP" if (is_strong or is_moderate) else "AUTO_SHIP_WARNING"
     if regresses > 0:
-        return "HUMAN_REVIEW_REQUIRED" if is_strong else "ABORT_REGRESSION"
-    # Flat metrics
-    if is_strong:
+        if strength == "strong":
+            return "HUMAN_REVIEW_REQUIRED"
+        return "ABORT_REGRESSION"
+
+    if improves >= 1:
+        if strength in ("strong", "moderate"):
+            return "AUTO_SHIP"
+        return "AUTO_SHIP_WARNING"
+
+    # flat
+    if strength == "strong":
         return "HUMAN_REVIEW_REQUIRED"
     return "ABORT_NO_IMPROVEMENT"
 
 
-def _detect_language(target_file: str) -> str:
-    """Detect language from file extension using pdd's get_language."""
-    ext = Path(target_file).suffix
-    lang = get_language(ext) if ext else ""
-    return lang.lower() if lang else ""
+def _safe_lines(p: Path) -> int:
+    try:
+        return len(p.read_text(encoding="utf-8", errors="ignore").splitlines())
+    except Exception:
+        return 0
 
 
-def _find_architecture_json(target_file: str, cwd: Path) -> Optional[Path]:
-    """Walk up from target file's directory looking for architecture.json.
+def _post_split_lines(work_dir: Path, target_file: str) -> int:
+    candidates: List[Path] = []
+    candidates.append(work_dir / target_file)
+    base = Path(target_file)
+    no_suffix = base.with_suffix("")
+    candidates.append(work_dir / no_suffix / "__init__.py")
+    candidates.append(work_dir / base.name)
+    for c in candidates:
+        if c.exists() and c.is_file():
+            n = _safe_lines(c)
+            if n:
+                return n
+    return 0
 
-    OPTIONAL signal only. Returns None when not found — step 1's prompt
-    treats absence as "zero information", so this helper never raises.
-    """
-    target_abs = (
-        Path(target_file)
-        if Path(target_file).is_absolute()
-        else cwd / target_file
+
+def _is_missing_module_stderr(stderr: str) -> bool:
+    s = stderr or ""
+    return (
+        "ImportError" in s
+        or "ModuleNotFoundError" in s
+        or "No module named" in s
     )
-    candidate = target_abs.parent
-    for _ in range(8):
-        maybe = candidate / "architecture.json"
-        if maybe.is_file():
-            return maybe
-        if candidate.parent == candidate:
-            break
-        candidate = candidate.parent
-    return None
 
 
-def _normalize_intent(raw: Optional[str]) -> Optional[str]:
-    """Map CLI short forms or free text to a canonical intent.
-
-    Returns None if the input is empty/unparseable — step 0 then runs
-    to infer the intent from the target file.
-    """
-    if not raw:
-        return None
-    v = raw.strip()
-    # Short form
-    if v.lower() in INTENT_ALIAS:
-        return INTENT_ALIAS[v.lower()]
-    # Canonical form
-    v_upper = v.upper().replace(" ", "_")
-    if v_upper in VALID_INTENTS:
-        return v_upper
-    return None
+def _run_subprocess(cmd: List[str], cwd: Path, timeout: float = 600.0) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Main orchestrator
-# ---------------------------------------------------------------------------
+def _state_dir_for(cwd: Path) -> Path:
+    git_root = get_git_root(cwd) or cwd
+    return git_root / ".pdd" / "split-state"
+
+
+def _coerce_int(v: Any) -> int:
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, list):
+        return len(v)
+    try:
+        return int(v)
+    except Exception:
+        return 0
+
+
+def _splitplan_field(plan: Any, name: str, default: Any) -> Any:
+    """Get a field from a SplitPlan or dict-like plan."""
+    if isinstance(plan, SplitPlan):
+        return getattr(plan, name, default)
+    if isinstance(plan, dict):
+        return plan.get(name, default)
+    return default
+
+
+def _to_splitplan(plan_like: Any) -> SplitPlan:
+    if isinstance(plan_like, SplitPlan):
+        return plan_like
+    if isinstance(plan_like, dict):
+        return _dict_to_dataclass(SplitPlan, plan_like)
+    return SplitPlan()
+
+
+# ----------------------------- Main Orchestrator -----------------------------
+
 
 def run_agentic_split_orchestrator(
     target_file: str,
@@ -528,35 +702,65 @@ def run_agentic_split_orchestrator(
     intent: Optional[str] = None,
     no_phase_extraction: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
+    """Orchestrate the agentic split workflow.
+
+    Returns a 5-tuple: ``(success, final_message, total_cost, model_used,
+    changed_files)``.
+    """
+
+    # ---------- Language tier gate ----------
+    language = _detect_language(target_file)
+    if language not in SUPPORTED_LANGUAGES and not experimental_language:
+        msg = f"Language not supported: {language}. Use --experimental-language."
+        if not quiet:
+            console.print(f"[red]{msg}[/red]")
+        return False, msg, 0.0, "", []
+
     if not quiet:
-        console.print(f"Splitting {target_file}...")
+        console.print(f"[bold]Splitting {target_file}...[/bold]")
 
-    # Language detection
-    lang = _detect_language(target_file)
-    if lang not in SUPPORTED_LANGUAGES and not experimental_language:
-        return (
-            False,
-            f"Language not supported: {lang or 'unknown'}. Use --experimental-language.",
-            0.0, "", [],
-        )
-
-    # Load persisted state. Use a stable ID derived from the repo-relative
-    # path so files with the same basename in different directories don't
-    # collide on the same state file or worktree/branch name.
-    state_dir = _get_state_dir(cwd)
-    _git_root_for_id = get_git_root(cwd)
-    _target_resolved = Path(target_file).resolve()
+    # ---------- Identity / state ----------
+    git_root = get_git_root(cwd)
+    repo_root = git_root or cwd
     try:
-        _id_path = (
-            str(_target_resolved.relative_to(_git_root_for_id))
-            if _git_root_for_id
-            else target_file
+        rel_target = str(Path(target_file).resolve().relative_to(repo_root.resolve()))
+    except Exception:
+        rel_target = target_file
+    split_id = _stable_split_id(rel_target)
+    state_dir = _state_dir_for(cwd)
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    # repo owner / name (best-effort)
+    repo_owner = ""
+    repo_name = ""
+    try:
+        r = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
-    except ValueError:
-        _id_path = target_file
-    split_id = _stable_split_id(_id_path)
-    state, github_comment_id = load_workflow_state(
-        cwd, split_id, "split", state_dir, "", "", use_github_state
+        url = r.stdout.strip()
+        m = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
+        if m:
+            repo_owner = m.group(1)
+            repo_name = m.group(2)
+    except Exception:
+        pass
+
+    # ---------- Load prior state ----------
+    state, gh_comment_id = load_workflow_state(
+        cwd=cwd,
+        issue_number=split_id,
+        workflow_type="split",
+        state_dir=state_dir,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        use_github_state=use_github_state,
     )
     if state is None:
         state = {
@@ -565,1473 +769,1171 @@ def run_agentic_split_orchestrator(
             "total_cost": 0.0,
             "model_used": "",
             "changed_files": [],
-            "children_extracted": [],
+            "children_extracted": 0,
             "phase_plans": [],
-            "intent": _normalize_intent(intent) or "",
+            "verify_failures": [],
+            "quant_metrics": {},
+            "worktree_path": "",
+            "intent": "",
             "iteration_count": 0,
+            "_pending_refine": None,
         }
-        github_comment_id = None
-
-    last_completed = state.get("last_completed_step")
-    total_cost = state.get("total_cost", 0.0)
-    model_used = state.get("model_used", "")
-    changed_files: List[str] = state.get("changed_files", [])
-    verify_failures: List[str] = state.get("verify_failures", [])
-    quant_metrics: Dict[str, float] = state.get("quant_metrics", {})
-    phase_plans: List[Dict[str, Any]] = state.get("phase_plans", [])
-    # Intent may arrive from CLI (user flag) or get inferred by step 0.
-    # Precedence: user_intent_hint (CLI) > step 0 inference > default.
-    current_intent: str = state.get("intent", "") or (_normalize_intent(intent) or "")
-    iteration_count: int = int(state.get("iteration_count", 0))
-
-    # Graceful shutdown: save state on Ctrl-C / SIGTERM so users don't
-    # lose progress. Installed AFTER all variables are defined (a signal
-    # between install and definition would crash with NameError).
-    def _handle_interrupt(signum: int, frame: Any) -> None:
+    else:
+        state.setdefault("step_outputs", {})
+        state.setdefault("last_completed_step", None)
+        state.setdefault("total_cost", 0.0)
+        state.setdefault("model_used", "")
+        state.setdefault("changed_files", [])
+        state.setdefault("children_extracted", 0)
+        state.setdefault("phase_plans", [])
+        state.setdefault("verify_failures", [])
+        state.setdefault("quant_metrics", {})
+        state.setdefault("worktree_path", "")
+        state.setdefault("intent", "")
+        state.setdefault("iteration_count", 0)
+        state.setdefault("_pending_refine", None)
         if not quiet:
-            cur_step = state.get("last_completed_step", last_completed)
             console.print(
-                "\n[yellow]Interrupted — saving progress. "
-                f"Spent ${total_cost:.2f} so far. "
-                f"Re-run to resume from step after '{cur_step}'.[/yellow]"
+                f"[cyan]Resuming split workflow at step {state.get('last_completed_step')}[/cyan]"
             )
-        state["total_cost"] = total_cost
-        state["model_used"] = model_used
-        state["changed_files"] = changed_files
-        save_workflow_state(
-            cwd, split_id, "split", state, state_dir,
-            "", "", use_github_state, github_comment_id,
-        )
-        clear_agentic_progress()
-        raise SystemExit(130)  # standard exit code for SIGINT
 
-    prev_sigint = signal.signal(signal.SIGINT, _handle_interrupt)
-    prev_sigterm = signal.signal(signal.SIGTERM, _handle_interrupt)
+    total_cost: float = float(state.get("total_cost", 0.0) or 0.0)
+    model_used: str = state.get("model_used", "") or ""
+    changed_files: List[str] = list(state.get("changed_files", []) or [])
 
-    # Tell users when resuming so they know they aren't paying twice.
-    if last_completed is not None and not quiet:
-        console.print(
-            f"[cyan]Resuming from saved state — "
-            f"last completed: {last_completed}, "
-            f"cost so far: ${total_cost:.2f}[/cyan]"
-        )
-
-    # Restore signal handlers on any exit path. Called explicitly before
-    # every early return and in the final return. This avoids re-indenting
-    # 1,400 lines of pipeline code into a try/finally block.
-    def _restore_signals() -> None:
-        signal.signal(signal.SIGINT, prev_sigint)
-        signal.signal(signal.SIGTERM, prev_sigterm)
-
-    # Capture original line count for quantitative metrics
-    original_line_count = 0
-    try:
-        original_line_count = len(Path(target_file).read_text().splitlines())
-    except OSError:
-        pass
-
-    # Optional architecture.json lookup — used by step 1 as a boost signal.
-    arch_json_path = _find_architecture_json(target_file, cwd)
-    architecture_json_excerpt = ""
-    if arch_json_path is not None:
+    # ---------- Architecture excerpt ----------
+    arch_path = _find_architecture_json(target_file, cwd)
+    arch_excerpt = ""
+    if arch_path:
         try:
-            text = arch_json_path.read_text(encoding="utf-8")
-            # Truncate to a sane size — the agent re-reads the full file
-            # if it wants more; this is just a hint.
-            architecture_json_excerpt = text[:4000]
-        except OSError:
-            architecture_json_excerpt = ""
+            arch_excerpt = arch_path.read_text(encoding="utf-8", errors="ignore")[:4000]
+        except Exception:
+            arch_excerpt = ""
 
+    # ---------- Original line count ----------
+    try:
+        original_line_count = _safe_lines(cwd / target_file)
+    except Exception:
+        original_line_count = 0
+
+    # ---------- Intent precedence ----------
+    user_intent_hint = intent or ""
+    cli_intent = _normalize_intent(intent)
+    resolved_intent = cli_intent or _normalize_intent(state.get("intent")) or ""
+
+    # ---------- Context ----------
     context: Dict[str, Any] = {
         "target_file": target_file,
-        "language": lang,
+        "language": language,
         "cwd": str(cwd),
+        "verbose": verbose,
+        "quiet": quiet,
+        "diagnose_only": diagnose_only,
+        "propose_only": propose_only,
         "delete_dead": delete_dead,
         "force_split": force_split,
         "no_verify": no_verify,
         "skip_regen_gate": skip_regen_gate,
-        "original_line_count": original_line_count,
-        "user_intent_hint": _normalize_intent(intent) or "",
-        "intent": current_intent,
+        "experimental_language": experimental_language,
         "no_phase_extraction": no_phase_extraction,
-        "iteration_count": iteration_count,
-        "architecture_json_present": arch_json_path is not None,
-        "architecture_json_excerpt": architecture_json_excerpt,
-        "phase_plan": "",  # Filled per-child during step 6.
-        "changed_files": "",  # Filled just before step 9.
+        "original_line_count": original_line_count,
+        "user_intent_hint": user_intent_hint,
+        "intent": resolved_intent or "",
+        "iteration_count": int(state.get("iteration_count", 0) or 0),
+        "architecture_json_present": bool(arch_path),
+        "architecture_json_excerpt": arch_excerpt,
+        "phase_plan": "",
+        "changed_files": list(changed_files),
     }
-    # Restore context from prior step outputs
-    for key, value in state.get("step_outputs", {}).items():
-        context[f"step{key}_output"] = value
 
-    ordered_steps = [
-        "0_intent",
-        "1_survey", "2_diagnose", "3_investigate", "4_propose_options",
-        "5_setup_worktree",
-        "6a_phase_extract",
-        "6_extract",
-        "7a_verify_local", "7b_regen_gate", "7c_arch_sync", "7_assess",
-        "8_repair",
-        "9_refine_check",
+    # Restore step outputs into context
+    for k, v in (state.get("step_outputs") or {}).items():
+        context[f"step{k}_output"] = v
+
+    # ---------- Step list ----------
+    ordered_steps: List[Tuple[str, Optional[str]]] = [
+        ("0_intent", "agentic_split_step0_intent_LLM"),
+        ("1_survey", "agentic_split_step1_survey_LLM"),
+        ("2_diagnose", "agentic_split_step2_diagnose_LLM"),
+        ("3_investigate", "agentic_split_step3_investigate_LLM"),
+        ("4_propose_options", "agentic_split_step4_propose_options_LLM"),
+        ("5_setup_worktree", None),
+        ("6a_phase_extract", "agentic_split_step6a_phase_extract_LLM"),
+        ("6_extract", "agentic_split_step6_extract_LLM"),
+        ("7a_verify_local", None),
+        ("7b_regen_gate", None),
+        ("7c_arch_sync", None),
+        ("7_assess", "agentic_split_step7_assess_LLM"),
+        ("8_repair", "agentic_split_step8_repair_LLM"),
+        ("9_refine_check", "agentic_split_step9_refine_check_LLM"),
     ]
+    total_steps = len(ordered_steps)
+    step_index_map = {name: i + 1 for i, (name, _) in enumerate(ordered_steps)}
 
-    # Resume from last completed step
-    start_idx = 0
-    if last_completed is not None:
+    # ---------- Signal handlers ----------
+    _prev_sigint = signal.getsignal(signal.SIGINT)
+    _prev_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _signal_handler(signum: int, frame: Any) -> None:  # pragma: no cover
         try:
-            start_idx = ordered_steps.index(last_completed) + 1
-        except ValueError:
-            # Step name in saved state doesn't match current pipeline
-            # (likely renamed in a code update). Warn — this causes a
-            # full pipeline rerun ($30-80).
-            if not quiet:
-                console.print(
-                    f"[yellow]Warning: saved last_completed_step "
-                    f"'{last_completed}' not in current pipeline — "
-                    f"restarting from step 1[/yellow]"
-                )
-            start_idx = 0
-
-    current_work_dir = cwd
-    worktree_path_str = state.get("worktree_path")
-    if worktree_path_str:
-        wt = Path(worktree_path_str)
-        if wt.is_dir():
-            current_work_dir = wt
-        elif not quiet:
-            console.print(f"[yellow]Warning: saved worktree {wt} no longer exists, using cwd[/yellow]")
-
-    # Parsed objects — reconstructed from saved step outputs on resume
-    selected_option: Optional[SplitOption] = None
-    qual_assess: Optional[QualitativeAssessment] = None
-
-    if start_idx > 0:
-        step4_raw = state.get("step_outputs", {}).get("4", "")
-        if step4_raw:
-            parsed_opts = _parse_step_output(step4_raw, OptionsConsidered)
-            if isinstance(parsed_opts, OptionsConsidered) and parsed_opts.options:
-                rebuilt = []
-                for o in parsed_opts.options:
-                    if isinstance(o, SplitOption):
-                        rebuilt.append(o)
-                    elif isinstance(o, dict):
-                        rebuilt.append(_dict_to_dataclass(SplitOption, o))
-                if rebuilt:
-                    selected_option = max(rebuilt, key=lambda o: o.numeric_score)
-
-        step7_raw = state.get("step_outputs", {}).get("7", "")
-        if step7_raw:
-            parsed_qa = _parse_step_output(step7_raw, QualitativeAssessment)
-            if isinstance(parsed_qa, QualitativeAssessment):
-                qual_assess = parsed_qa
-
-    for step in ordered_steps[start_idx:]:
-        # Skip step 0 when intent is already set (CLI flag or previous
-        # run). Saves ~$0.20 + 200s of LLM time.
-        if step == "0_intent" and current_intent:
-            state["step_outputs"]["0"] = f"Skipped — intent already set: {current_intent}"
-            context["step0_output"] = state["step_outputs"]["0"]
-            continue
-
-        step_num = step.split("_")[0]
-        step_index = ordered_steps.index(step) + 1
-        if not quiet:
-            console.print(f"[bold][Step {step_index}/{len(ordered_steps)}][/bold] {step}...")
-        set_agentic_progress("split", step_index, len(ordered_steps), step)
-
-        # ── LLM steps ──────────────────────────────────────────────
-        if step in (
-            "0_intent", "1_survey", "2_diagnose", "3_investigate",
-            "4_propose_options", "7_assess", "9_refine_check",
-        ):
-            # Pre-step context enrichment
-            if step == "7_assess":
-                context["quantitative_metrics"] = str(quant_metrics)
-                context["post_split_state"] = (
-                    f"verify_failures={len(verify_failures)}, "
-                    f"changed_files={len(changed_files)}"
-                )
-            if step == "9_refine_check":
-                context["quantitative_metrics"] = str(quant_metrics)
-                context["changed_files"] = ", ".join(changed_files)
-                context["iteration_count"] = iteration_count
-            if step == "4_propose_options":
-                # Make intent available to step 4's rubric.
-                context["intent"] = current_intent or "REDUCE_MONOLITH"
-
-            name = "_".join(step.split("_")[1:])
-            template_name = f"agentic_split_step{step_num}_{name}_LLM"
-            prompt_template = load_prompt_template(template_name)
-            if not prompt_template:
-                clear_agentic_progress()
-                _restore_signals()
-                return False, f"Missing template: {template_name}", total_cost, model_used, changed_files
-
-            processed = preprocess(
-                prompt_template, recursive=True,
-                double_curly_brackets=True, exclude_keys=list(context.keys()),
+            state["total_cost"] = total_cost
+            state["model_used"] = model_used
+            state["changed_files"] = changed_files
+            save_workflow_state(
+                cwd, split_id, "split", state,
+                state_dir=state_dir,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=gh_comment_id,
             )
-            formatted_prompt = substitute_template_variables(processed, context)
+        except Exception:
+            pass
+        try:
+            clear_agentic_progress()
+        except Exception:
+            pass
+        sys.exit(130)
 
-            timeout = SPLIT_STEP_TIMEOUTS.get(step, 340.0) + timeout_adder
-            success, output, step_cost, step_model = run_agentic_task(
-                instruction=formatted_prompt,
-                cwd=current_work_dir,
-                verbose=verbose, quiet=quiet,
-                timeout=timeout, label=step,
-                max_retries=DEFAULT_MAX_RETRIES,
-            )
-            total_cost += step_cost
-            model_used = step_model
+    def _restore_signals() -> None:
+        try:
+            signal.signal(signal.SIGINT, _prev_sigint)
+            signal.signal(signal.SIGTERM, _prev_sigterm)
+        except Exception:
+            pass
 
-            if not success:
-                if not quiet:
-                    console.print(f"[yellow]Warning: step {step} agent task failed[/yellow]")
-                # Still check for hard stops in partial output, then abort
-                stop_reason = _check_hard_stop(step, output, force_split)
-                state["total_cost"] = total_cost
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-                )
-                clear_agentic_progress()
-                _restore_signals()
-                reason = stop_reason or f"Step {step} failed"
-                return False, f"Stopped: {reason}", total_cost, model_used, changed_files
+    try:
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+    except Exception:
+        pass
 
-            stop_reason = _check_hard_stop(step, output, force_split)
-            if stop_reason:
-                state["total_cost"] = total_cost
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-                )
-                clear_agentic_progress()
-                _restore_signals()
-                return False, f"Stopped: {stop_reason}", total_cost, model_used, changed_files
-
-            state["step_outputs"][step_num] = output
-            context[f"step{step_num}_output"] = output
-
-            # Step-specific parsing
-            if step == "0_intent":
-                parsed_intent = _parse_step_output(output, IntentDecision)
-                if isinstance(parsed_intent, IntentDecision):
-                    # CLI intent wins; step 0 only fills in the blank.
-                    if not current_intent:
-                        normalized = _normalize_intent(parsed_intent.intent)
-                        current_intent = normalized or "REDUCE_MONOLITH"
-                    state["intent"] = current_intent
-                    context["intent"] = current_intent
-                    if not quiet:
-                        console.print(
-                            f"Intent: {current_intent} "
-                            f"(conf={parsed_intent.confidence:.2f})"
-                        )
-                else:
-                    # Parsing failed — default to REDUCE_MONOLITH.
-                    if not current_intent:
-                        current_intent = "REDUCE_MONOLITH"
-                        state["intent"] = current_intent
-                        context["intent"] = current_intent
-                    if not quiet:
-                        console.print(
-                            "[yellow]Warning: could not parse intent — "
-                            "defaulting to REDUCE_MONOLITH[/yellow]"
-                        )
-            elif step == "2_diagnose":
-                parsed = _parse_step_output(output, Diagnosis)
-                if isinstance(parsed, Diagnosis):
-                    if not quiet:
-                        console.print(f"Diagnosis: {parsed.type} — {parsed.rationale}")
-                    # Check LEAVE_ALONE from parsed JSON (the text-marker
-                    # check in _check_hard_stop may miss JSON-only output)
-                    is_leave_alone = (
-                        parsed.recommended_action.upper().replace(" ", "_") == "LEAVE_ALONE"
-                        or parsed.type.upper().replace(" ", "_") == "LEAVE_ALONE"
-                    )
-                    if is_leave_alone and not force_split:
-                        state["last_completed_step"] = step
-                        state["total_cost"] = total_cost
-                        state["model_used"] = model_used
-                        github_comment_id = save_workflow_state(
-                            cwd, split_id, "split", state, state_dir,
-                            "", "", use_github_state, github_comment_id,
-                        )
-                        clear_agentic_progress()
-                        _restore_signals()
-                        return False, f"Stopped: LEAVE_ALONE — {parsed.rationale}", total_cost, model_used, []
-                    if diagnose_only:
-                        state["last_completed_step"] = step
-                        state["total_cost"] = total_cost
-                        state["model_used"] = model_used
-                        github_comment_id = save_workflow_state(
-                            cwd, split_id, "split", state, state_dir,
-                            "", "", use_github_state, github_comment_id,
-                        )
-                        clear_agentic_progress()
-                        _restore_signals()
-                        return False, f"Diagnosis: {parsed.type} — {parsed.rationale}", total_cost, model_used, []
-                else:
-                    if not quiet:
-                        console.print("[yellow]Warning: could not parse diagnosis from agent output[/yellow]")
-                    if diagnose_only:
-                        state["last_completed_step"] = step
-                        state["total_cost"] = total_cost
-                        state["model_used"] = model_used
-                        github_comment_id = save_workflow_state(
-                            cwd, split_id, "split", state, state_dir,
-                            "", "", use_github_state, github_comment_id,
-                        )
-                        clear_agentic_progress()
-                        _restore_signals()
-                        return False, f"Diagnosis (raw): {output[:200]}", total_cost, model_used, []
-
-            elif step == "4_propose_options":
-                # Helper: locate shared_layer_children in a parsed option.
-                def _shared_layer_children_of(
-                    opt: "SplitOption",
-                    raw_opt: Any,
-                ) -> list:
-                    slc = []
-                    pc = opt.plan.parent_changes
-                    if isinstance(pc, dict):
-                        slc = pc.get("shared_layer_children", []) or []
-                    if not slc:
-                        slc = getattr(
-                            opt.plan, "shared_layer_children", []
-                        ) or []
-                    if not slc and isinstance(raw_opt, dict):
-                        plan_d = raw_opt.get("plan", {})
-                        if isinstance(plan_d, dict):
-                            slc = plan_d.get("shared_layer_children", []) or []
-                    return slc
-
-                # Does step 3 demand a shared layer?
-                step3_raw = state.get("step_outputs", {}).get("3", "")
-                shared_layer_required = (
-                    step3_raw
-                    and "shared_layer_candidates" in step3_raw
-                    and '"shared_layer_candidates": []' not in step3_raw
-                )
-
-                # Retry loop: if shared-layer is required but dropped,
-                # re-invoke step 4 with a corrective instruction. This
-                # converts the prior "soft warning" into a HARD gate.
-                step4_retry = 0
-                max_step4_retries = 2
-                while True:
-                    parsed_options = _parse_step_output(output, OptionsConsidered)
-                    if (
-                        not isinstance(parsed_options, OptionsConsidered)
-                        or not parsed_options.options
-                    ):
-                        if not quiet:
-                            console.print(
-                                "[yellow]Warning: could not parse options "
-                                "from agent output[/yellow]"
-                            )
-                        break
-
-                    # Build SplitOption objects from dicts
-                    options = []
-                    for o in parsed_options.options:
-                        if isinstance(o, SplitOption):
-                            options.append(o)
-                        elif isinstance(o, dict):
-                            options.append(_dict_to_dataclass(SplitOption, o))
-                    if not options:
-                        if not quiet:
-                            console.print(
-                                "[yellow]Warning: no valid options parsed[/yellow]"
-                            )
-                        break
-
-                    selected_option = max(options, key=lambda o: o.numeric_score)
-                    selected_idx = options.index(selected_option)
-                    raw_option = (
-                        parsed_options.options[selected_idx]
-                        if selected_idx < len(parsed_options.options)
-                        else {}
-                    )
-
-                    # Shared-layer hard gate
-                    if shared_layer_required:
-                        slc = _shared_layer_children_of(selected_option, raw_option)
-                        if not slc and step4_retry < max_step4_retries:
-                            step4_retry += 1
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Step 4 retry {step4_retry}/"
-                                    f"{max_step4_retries}: selected option has no "
-                                    f"shared_layer_children despite step 3 "
-                                    f"surfacing candidates. Re-invoking step 4 "
-                                    f"with corrective instruction.[/yellow]"
-                                )
-                            # Augment the context with a retry reason, then
-                            # re-run step 4 with the same prompt template.
-                            context["step4_retry_reason"] = (
-                                "Your previous output's selected option had "
-                                "no shared_layer_children, but step 3 "
-                                "surfaced non-empty shared_layer_candidates. "
-                                "Every valid option MUST include a "
-                                "shared_layer_children list that extracts the "
-                                "cross-worker duplication step 3 identified. "
-                                "Produce a corrected options set."
-                            )
-                            retry_prompt = substitute_template_variables(
-                                preprocess(
-                                    prompt_template, recursive=True,
-                                    double_curly_brackets=True,
-                                    exclude_keys=list(context.keys()),
-                                ),
-                                context,
-                            )
-                            retry_prompt += (
-                                "\n\n% RETRY NOTICE — shared_layer_children required\n"
-                                f"{context['step4_retry_reason']}"
-                            )
-                            r_success, r_output, r_cost, r_model = run_agentic_task(
-                                instruction=retry_prompt,
-                                cwd=current_work_dir,
-                                verbose=verbose, quiet=quiet,
-                                timeout=SPLIT_STEP_TIMEOUTS.get(
-                                    "4_propose_options", 900.0
-                                ) + timeout_adder,
-                                label=f"4_propose_options_retry_{step4_retry}",
-                                max_retries=DEFAULT_MAX_RETRIES,
-                            )
-                            total_cost += r_cost
-                            model_used = r_model
-                            if r_success:
-                                output = r_output
-                                state["step_outputs"]["4"] = output
-                                context["step4_output"] = output
-                                continue  # reparse with new output
-                            # Retry failed — loop again so the retry counter
-                            # check at line top triggers the next attempt or
-                            # the >= max_step4_retries branch records failure.
-                            continue
-                        elif not slc and step4_retry >= max_step4_retries:
-                            # After retries, still missing. Record as a hard
-                            # verify_failure so the improvement gate sees it.
-                            verify_failures.append(
-                                "shared_layer_candidates_dropped: step 4 did "
-                                "not include shared_layer_children after "
-                                f"{max_step4_retries} retries. Step 3 "
-                                "surfaced cross-worker duplication that "
-                                "should have been extracted."
-                            )
-
-                    # All good — render table, commit selection, exit loop
-                    table = Table(title="Split Options")
-                    table.add_column("Option")
-                    table.add_column("Score")
-                    for i, opt in enumerate(options, 1):
-                        table.add_row(str(i), str(opt.numeric_score))
-                    if not quiet:
-                        console.print(table)
-                    break
-                if propose_only:
-                    # Persist step 4 output so a subsequent full run resumes
-                    # from step 5 without re-running propose.
-                    state["last_completed_step"] = step
-                    state["total_cost"] = total_cost
-                    state["model_used"] = model_used
-                    github_comment_id = save_workflow_state(
-                        cwd, split_id, "split", state, state_dir,
-                        "", "", use_github_state, github_comment_id,
-                    )
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, "Propose only complete", total_cost, model_used, []
-
-            elif step == "7_assess":
-                parsed_qa = _parse_step_output(output, QualitativeAssessment)
-                if isinstance(parsed_qa, QualitativeAssessment):
-                    qual_assess = parsed_qa
-                else:
-                    # Fallback: if the pipeline got through extraction and
-                    # verification (steps 1-7a) but the assess LLM didn't
-                    # produce parseable output, default to moderate rather
-                    # than unknown. Reaching this point means the split was
-                    # structurally valid — aborting due to a parse failure
-                    # in the assessment step would discard good work.
-                    if not quiet:
-                        console.print(
-                            "[yellow]Warning: could not parse qualitative "
-                            "assessment — defaulting to moderate[/yellow]"
-                        )
-                    qual_assess = QualitativeAssessment(
-                        overall_verdict="moderate",
-                        rationale="Defaulted: assessment output unparseable but split passed verification",
-                    )
-
-            elif step == "9_refine_check":
-                parsed_refine = _parse_step_output(output, RefineCheck)
-                if isinstance(parsed_refine, RefineCheck):
-                    # Guard against runaway: enforce the iteration cap
-                    # in Python even if the agent missed it.
-                    if (parsed_refine.should_refine
-                            and iteration_count < MAX_REFINEMENT_ITERATIONS):
-                        state["_pending_refine"] = {
-                            "target_child_file": parsed_refine.target_child_file,
-                            "reason": parsed_refine.reason,
-                            "suggested_intent": parsed_refine.suggested_intent,
-                        }
-                        if not quiet:
-                            console.print(
-                                f"[cyan]Refine suggested on "
-                                f"{parsed_refine.target_child_file}: "
-                                f"{parsed_refine.reason}[/cyan]"
-                            )
-                    else:
-                        state["_pending_refine"] = None
-                        if not quiet:
-                            console.print(
-                                f"Refine check: ship as-is "
-                                f"({parsed_refine.reason})"
-                            )
-
-        # ── Phase extraction (per-child, fan-out) ──────────────────
-        elif step == "6a_phase_extract":
-            if selected_option is None:
-                # Can't run phase extraction without a plan.
-                state["step_outputs"]["6a"] = "Skipped — no selected_option"
-                context["step6a_output"] = state["step_outputs"]["6a"]
-                # Persist and continue to next step.
-            elif no_phase_extraction:
-                if not quiet:
-                    console.print(
-                        "[yellow]Skipping phase extraction (flag)[/yellow]"
-                    )
-                state["step_outputs"]["6a"] = "Skipped — no_phase_extraction flag"
-                context["step6a_output"] = state["step_outputs"]["6a"]
-                phase_plans = [None] * len(selected_option.plan.children)
-                state["phase_plans"] = phase_plans
-            else:
-                total_children = len(selected_option.plan.children)
-                if len(phase_plans) < total_children:
-                    # Pad with None — these are children we haven't
-                    # analyzed yet.
-                    phase_plans = (
-                        phase_plans
-                        + [None] * (total_children - len(phase_plans))
-                    )
-                for i in range(total_children):
-                    if phase_plans[i] is not None:
-                        continue  # already analyzed, resume
-                    child = selected_option.plan.children[i]
-                    child_name = (
-                        child.get("name", f"child_{i+1}")
-                        if isinstance(child, dict) else str(child)
-                    )
-                    if not quiet:
-                        console.print(
-                            f"Phase-extract analysis {i+1}/{total_children}: "
-                            f"{child_name}..."
-                        )
-                    context["current_child_index"] = i + 1
-                    context["current_child"] = json.dumps(
-                        child, default=str
-                    ) if isinstance(child, dict) else str(child)
-                    context["selected_option"] = json.dumps({
-                        "name": selected_option.name,
-                        "plan": {
-                            "children": selected_option.plan.children,
-                        },
-                    }, default=str)
-                    context["children_extracted"] = "[]"  # Not yet extracted
-
-                    template_name = "agentic_split_step6a_phase_extract_LLM"
-                    p_template = load_prompt_template(template_name)
-                    if not p_template:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Missing template: {template_name}, "
-                                "skipping phase extraction[/yellow]"
-                            )
-                        phase_plans[i] = {"should_extract": False,
-                                          "reason": "template missing"}
-                        continue
-                    processed = preprocess(
-                        p_template, recursive=True,
-                        double_curly_brackets=True,
-                        exclude_keys=list(context.keys()),
-                    )
-                    formatted_prompt = substitute_template_variables(
-                        processed, context
-                    )
-                    pe_success, pe_output, pe_cost, pe_model = run_agentic_task(
-                        instruction=formatted_prompt,
-                        cwd=current_work_dir,
-                        verbose=verbose, quiet=quiet,
-                        timeout=SPLIT_STEP_TIMEOUTS["6a_phase_extract"] + timeout_adder,
-                        label=f"6a_phase_extract_child_{i+1}",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                    )
-                    total_cost += pe_cost
-                    model_used = pe_model
-                    parsed_pe = _parse_step_output(pe_output, PhaseExtractionPlan)
-                    if isinstance(parsed_pe, PhaseExtractionPlan):
-                        # Serialize as dict for state persistence (JSON-safe).
-                        phase_plans[i] = {
-                            "should_extract": parsed_pe.should_extract,
-                            "target_symbol": parsed_pe.target_symbol,
-                            "target_file": parsed_pe.target_file,
-                            "phases": [
-                                {
-                                    "name": p.name,
-                                    "description": p.description,
-                                    "line_range": p.line_range,
-                                    "inputs": p.inputs,
-                                    "outputs": p.outputs,
-                                    "side_effects": p.side_effects,
-                                }
-                                for p in parsed_pe.phases
-                            ],
-                            "parent_shell": parsed_pe.parent_shell,
-                            "rationale": parsed_pe.rationale,
-                            "reason": parsed_pe.reason,
-                        }
-                    else:
-                        # Parse failed — treat as no-extract
-                        phase_plans[i] = {
-                            "should_extract": False,
-                            "reason": "output unparseable",
-                        }
-                    state["phase_plans"] = phase_plans
-                    state["total_cost"] = total_cost
-                    github_comment_id = save_workflow_state(
-                        cwd, split_id, "split", state, state_dir,
-                        "", "", use_github_state, github_comment_id,
-                    )
-                state["step_outputs"]["6a"] = (
-                    f"Phase plans: "
-                    f"{sum(1 for p in phase_plans if p and p.get('should_extract'))}"
-                    f"/{total_children} children flagged for extraction"
-                )
-                context["step6a_output"] = state["step_outputs"]["6a"]
-
-        # ── Extraction (fan-out) ───────────────────────────────────
-        elif step == "6_extract":
-            if selected_option is None:
-                clear_agentic_progress()
-                _restore_signals()
-                return False, "No selected option — step 4 may have failed", total_cost, model_used, changed_files
-            total_children = len(selected_option.plan.children)
-            children_extracted = state.get("children_extracted", [])
-            for i in range(len(children_extracted), total_children):
-                child = selected_option.plan.children[i]
-                child_name = child.get("name", f"child_{i+1}") if isinstance(child, dict) else str(child)
-                if not quiet:
-                    console.print(f"Extracting child {i+1}/{total_children}: {child_name}...")
-                context["current_child_index"] = i + 1
-                context["current_child"] = child
-                context["delete_dead_this_child"] = (i + 1 == total_children and delete_dead)
-                # Expose the full selected_option and children_extracted lists
-                # so the step 6 prompt's template placeholders resolve.
-                context["selected_option"] = json.dumps({
-                    "name": selected_option.name,
-                    "plan": {
-                        "children": selected_option.plan.children,
-                        "parent_changes": selected_option.plan.parent_changes,
-                        "reference_updates": selected_option.plan.reference_updates,
-                        "test_ownership": selected_option.plan.test_ownership,
-                    },
-                    "score": selected_option.numeric_score,
-                    "risk": selected_option.risk,
-                    "rationale": selected_option.rationale,
-                }, default=str)
-                context["children_extracted"] = json.dumps(children_extracted, default=str)
-
-                # Attach per-child phase plan (from step 6a). Empty string
-                # when no plan / no-extract — the step 6 prompt treats
-                # empty as "skip phase extraction".
-                if i < len(phase_plans) and phase_plans[i]:
-                    context["phase_plan"] = json.dumps(phase_plans[i], default=str)
-                else:
-                    context["phase_plan"] = ""
-
-                template_name = "agentic_split_step6_extract_LLM"
-                prompt_template = load_prompt_template(template_name)
-                if not prompt_template:
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, f"Missing template: {template_name}", total_cost, model_used, changed_files
-                processed = preprocess(
-                    prompt_template, recursive=True,
-                    double_curly_brackets=True, exclude_keys=list(context.keys()),
-                )
-                formatted_prompt = substitute_template_variables(processed, context)
-                success, output, step_cost, step_model = run_agentic_task(
-                    instruction=formatted_prompt,
-                    cwd=current_work_dir,
-                    verbose=verbose, quiet=quiet,
-                    timeout=SPLIT_STEP_TIMEOUTS["6_extract"] + timeout_adder,
-                    label=f"6_extract_child_{i+1}",
-                    max_retries=DEFAULT_MAX_RETRIES,
-                )
-                total_cost += step_cost
-                model_used = step_model
-
-                # Always check for hard-stop markers (agent may return success=True
-                # with EXTRACTION_BLOCKED embedded in output).
-                stop_reason = _check_hard_stop("6_extract", output, force_split)
-                if stop_reason:
-                    if not quiet:
-                        console.print(f"[red]Extraction blocked for child {i+1}: {stop_reason}[/red]")
-                    state["children_extracted"] = children_extracted
-                    state["changed_files"] = changed_files
-                    state["total_cost"] = total_cost
-                    github_comment_id = save_workflow_state(
-                        cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id,
-                    )
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, f"Stopped: {stop_reason}", total_cost, model_used, changed_files
-
-                if not success:
-                    if not quiet:
-                        console.print(f"[yellow]Warning: extraction failed for child {i+1}[/yellow]")
-
-                # Parse FILES_CREATED / FILES_MODIFIED markers from agent output.
-                # Do NOT add to changed_files yet — wait until we verify the
-                # files actually exist on disk (Bug #4: phantom files).
-                claimed_created: List[str] = []
-                claimed_modified: List[str] = []
-                for marker, bucket in (("FILES_CREATED:", claimed_created),
-                                        ("FILES_MODIFIED:", claimed_modified)):
-                    match = re.search(
-                        rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
-                        output,
-                    )
-                    if match:
-                        files_list = [
-                            f.strip().strip(",").strip("`").strip()
-                            for f in match.group(1).split(",")
-                        ]
-                        for f in files_list:
-                            if f:
-                                bucket.append(f)
-
-                # VERIFY: agent often claims file creation via FILES_CREATED
-                # marker without actually using Write/Edit tools. Check the
-                # filesystem and retry if any claimed-created file is missing.
-                missing = [
-                    f for f in claimed_created
-                    if not (current_work_dir / f).exists()
-                ]
-                retry_count = 0
-                max_extract_retries = 2
-                while missing and retry_count < max_extract_retries:
-                    retry_count += 1
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Child {i+1} claimed {len(claimed_created)} files "
-                            f"but {len(missing)} missing. Retry {retry_count}/{max_extract_retries}...[/yellow]"
-                        )
-                    context["missing_files"] = ", ".join(missing)
-                    context["retry_reason"] = (
-                        f"The agent claimed FILES_CREATED but these files "
-                        f"do not exist on disk: {missing}. "
-                        f"The agent MUST actually write every file using the Write tool."
-                    )
-                    retry_prompt_template = load_prompt_template(template_name)
-                    if retry_prompt_template is None:
-                        if not quiet:
-                            console.print(
-                                f"[red]Retry: could not load template "
-                                f"{template_name}[/red]"
-                            )
-                        break
-                    processed_retry = preprocess(
-                        retry_prompt_template, recursive=True,
-                        double_curly_brackets=True, exclude_keys=list(context.keys()),
-                    )
-                    retry_prompt = substitute_template_variables(processed_retry, context)
-                    retry_prompt += (
-                        "\n\n% RETRY NOTICE — MUST CREATE MISSING FILES\n"
-                        f"A prior extraction attempt claimed FILES_CREATED "
-                        f"but these are missing on disk: {missing}.\n"
-                        "You MUST use the Write tool to actually create each of "
-                        "these files with the correct content. Do not just emit "
-                        "markers — the orchestrator verifies files exist."
-                    )
-                    r_success, r_output, r_cost, r_model = run_agentic_task(
-                        instruction=retry_prompt,
-                        cwd=current_work_dir,
-                        verbose=verbose, quiet=quiet,
-                        timeout=SPLIT_STEP_TIMEOUTS["6_extract"] + timeout_adder,
-                        label=f"6_extract_child_{i+1}_retry_{retry_count}",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                    )
-                    total_cost += r_cost
-                    model_used = r_model
-                    output += f"\n---RETRY {retry_count}---\n{r_output}"
-                    missing = [
-                        f for f in claimed_created
-                        if not (current_work_dir / f).exists()
-                    ]
-                if missing and not quiet:
-                    console.print(
-                        f"[red]Child {i+1}: {len(missing)} files still missing "
-                        f"after {retry_count} retries[/red]"
-                    )
-
-                # NOW add verified files to changed_files (Bug #4 fix:
-                # only track files that actually exist on disk).
-                for f in claimed_created + claimed_modified:
-                    if f and f not in changed_files and (current_work_dir / f).exists():
-                        changed_files.append(f)
-
-                # Only count as extracted if the agent succeeded and all
-                # claimed files exist. Otherwise on resume we'd skip this
-                # child (the loop starts at len(children_extracted)).
-                if success and not missing:
-                    children_extracted.append(output)
-                elif not missing:
-                    # Agent reported failure but files were created — count it
-                    children_extracted.append(output)
-                else:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Child {i+1} extraction incomplete — "
-                            f"will retry on next run[/yellow]"
-                        )
-                state["children_extracted"] = children_extracted
-                state["changed_files"] = changed_files
-                state["total_cost"] = total_cost
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-                )
-            extracted_count = len(state.get("children_extracted", []))
-            extract_msg = (
-                f"{extracted_count}/{total_children} children extracted"
-                if extracted_count < total_children
-                else "All children extracted"
-            )
-            state["step_outputs"]["6"] = extract_msg
-            context["step6_output"] = extract_msg
-            # If some children failed, DON'T mark step 6 as complete so
-            # resume re-enters this step and retries the failed children.
-            if extracted_count < total_children:
-                step6_idx = ordered_steps.index("6_extract")
-                if step6_idx > 0:
-                    state["last_completed_step"] = ordered_steps[step6_idx - 1]
-                else:
-                    state["last_completed_step"] = None
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-                )
-                verify_failures.append(
-                    f"Partial extraction: {extracted_count}/{total_children} children"
-                )
-                continue
-
-        # ── Repair loop ────────────────────────────────────────────
-        elif step == "8_repair":
-            if not verify_failures:
-                state["step_outputs"]["8"] = "No repairs needed"
-                context["step8_output"] = "No repairs needed"
-                continue
-            if selected_option is None:
-                state["step_outputs"]["8"] = "No selected option for repair"
-                continue
-            max_iterations = 5
-            previous_fixes: List[str] = []
-            for iteration in range(1, max_iterations + 1):
-                if not verify_failures:
-                    break
-                context["child_name"] = "all_children"
-                context["verify_failures"] = "\n".join(verify_failures)
-                context["previous_fixes"] = "\n---\n".join(previous_fixes[-3:])
-                context["repair_iteration"] = iteration
-                context["max_repair_iterations"] = max_iterations
-
-                template_name = "agentic_split_step8_repair_LLM"
-                prompt_template = load_prompt_template(template_name)
-                if not prompt_template:
-                    break
-                processed = preprocess(
-                    prompt_template, recursive=True,
-                    double_curly_brackets=True, exclude_keys=list(context.keys()),
-                )
-                formatted_prompt = substitute_template_variables(processed, context)
-                success, output, step_cost, step_model = run_agentic_task(
-                    instruction=formatted_prompt,
-                    cwd=current_work_dir,
-                    verbose=verbose, quiet=quiet,
-                    timeout=SPLIT_STEP_TIMEOUTS["8_repair"] + timeout_adder,
-                    label=f"8_repair_iter_{iteration}",
-                    max_retries=DEFAULT_MAX_RETRIES,
-                )
-                total_cost += step_cost
-                model_used = step_model
-                previous_fixes.append(output)
-
-                # Parse FILES_CREATED / FILES_MODIFIED from repair output.
-                # Only track files that actually exist on disk (same guard
-                # as step 6 extraction — prevents phantom entries).
-                for marker in ("FILES_CREATED:", "FILES_MODIFIED:"):
-                    match = re.search(
-                        rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
-                        output,
-                    )
-                    if match:
-                        files_list = [
-                            f.strip().strip(",").strip("`").strip()
-                            for f in match.group(1).split(",")
-                        ]
-                        for f in files_list:
-                            if f and f not in changed_files and (current_work_dir / f).exists():
-                                changed_files.append(f)
-
-                # If repair agent emits REPAIR_EXHAUSTED, stop trying.
-                # Use _check_hard_stop (line-start matching) instead of
-                # raw substring to avoid false positives from prose.
-                if _check_hard_stop("8_repair", output, force_split):
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Repair iteration {iteration}: "
-                            f"REPAIR_EXHAUSTED — stopping[/yellow]"
-                        )
-                    break
-
-                # Re-run validation + tests + lint after repair (same as
-                # step 7a) so we detect whether the repair actually fixed
-                # the functional failures, not just structural ones.
-                plan = selected_option.plan if isinstance(selected_option, SplitOption) else None
-                new_failures: List[str] = []
-                if plan is not None:
-                    vr = validate_extraction(plan, current_work_dir)
-                    if not vr.passed:
-                        new_failures = [f.message for f in vr.failures if f.severity == "error"]
-                    # Re-run tests (same logic as step 7a)
-                    target_path = Path(target_file)
-                    test_cmd_obj = get_test_command(target_path)
-                    if test_cmd_obj is not None:
-                        try:
-                            subprocess.run(
-                                shlex.split(test_cmd_obj.command),
-                                cwd=str(test_cmd_obj.cwd or current_work_dir),
-                                check=True, capture_output=True, text=True,
-                                timeout=300,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            stderr = (e.stderr or '')[:500]
-                            if not ("ImportError" in stderr or "ModuleNotFoundError" in stderr
-                                    or "No module named" in stderr):
-                                new_failures.append(f"Tests failed: {stderr}")
-                        except subprocess.TimeoutExpired:
-                            new_failures.append("Tests timed out after 300s")
-                    # Re-run lint
-                    for lint_cmd_obj in get_lint_commands(target_path):
-                        try:
-                            subprocess.run(
-                                shlex.split(lint_cmd_obj.command),
-                                cwd=str(lint_cmd_obj.cwd or current_work_dir),
-                                check=True, capture_output=True, text=True,
-                                timeout=120,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            new_failures.append(f"Lint failed: {(e.stderr or '')[:500]}")
-                        except subprocess.TimeoutExpired:
-                            new_failures.append("Lint timed out after 120s")
-
-                if not quiet:
-                    console.print(
-                        f"[blue]Repair iter {iteration}: {len(verify_failures)} -> "
-                        f"{len(new_failures)} error-severity failures[/blue]"
-                    )
-
-                # If no progress, stop
-                if len(new_failures) >= len(verify_failures) and iteration > 1:
-                    if not quiet:
-                        console.print(
-                            "[yellow]Repair not making progress — stopping[/yellow]"
-                        )
-                    break
-                verify_failures = new_failures
-
-                # Update quant_metrics to reflect post-repair state. Without
-                # this, validation_pass stays at -1 from step 7a even after
-                # repair fixes all failures, and the improvement gate aborts
-                # a successful split as ABORT_REGRESSION.
-                quant_metrics["validation_pass"] = 1 if not verify_failures else -1
-
-                # Persist state after each iteration
-                state["verify_failures"] = verify_failures
-                state["changed_files"] = changed_files
-                state["quant_metrics"] = quant_metrics
-                state["total_cost"] = total_cost
-                github_comment_id = save_workflow_state(
-                    cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id,
-                )
-            state["step_outputs"]["8"] = f"Repair complete ({len(verify_failures)} remaining)"
-            context["step8_output"] = state["step_outputs"]["8"]
-
-        # ── Python (deterministic) steps ───────────────────────────
-        else:
-            if step == "5_setup_worktree":
-                git_root = get_git_root(cwd)
-                if not git_root:
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, "Not a git repository", total_cost, model_used, changed_files
-                wt_path, err = setup_worktree(
-                    git_root, split_id, quiet,
-                    branch_prefix="split", worktree_prefix="split",
-                    base_ref="HEAD",
-                )
-                if err:
-                    clear_agentic_progress()
-                    _restore_signals()
-                    return False, f"Worktree setup failed: {err}", total_cost, model_used, changed_files
-                current_work_dir = wt_path
-                context["worktree_path"] = str(wt_path)
-                state["worktree_path"] = str(wt_path)
-                worktree_path_str = str(wt_path)
-
-            elif step == "7a_verify_local":
-                if no_verify:
-                    if not quiet:
-                        console.print("[yellow]Skipping verification (no_verify flag)[/yellow]")
-                    # Even with no_verify, record that verification was skipped
-                    # so the improvement gate has something to work with
-                    # Use 0 (neutral), not 1 — otherwise the improvement
-                    # gate counts this as a "positive metric" and auto-ships
-                    # unverified splits (Bug #3 from review).
-                    quant_metrics["verification_skipped"] = 0
-                    # Also set validation_pass to 0 (neutral) so the
-                    # improvement gate doesn't see a missing metric and
-                    # produce ABORT_NO_IMPROVEMENT on valid splits.
-                    quant_metrics["validation_pass"] = 0
-                else:
-                    # Structural validation
-                    plan = selected_option.plan if isinstance(selected_option, SplitOption) else None
-                    if plan is not None:
-                        validation_result = validate_extraction(plan, current_work_dir)
-                        if not validation_result.passed:
-                            # Only route error-severity failures to repair.
-                            # Warnings are cosmetic and repair wastes time
-                            # trying to "fix" them.
-                            for f in validation_result.failures:
-                                if f.severity == "error":
-                                    verify_failures.append(f.message)
-                            if not quiet:
-                                err_ct = sum(1 for f in validation_result.failures if f.severity == "error")
-                                warn_ct = len(validation_result.failures) - err_ct
-                                console.print(f"[red]Validation: {err_ct} errors, {warn_ct} warnings[/red]")
-
-                    # Compute quantitative metrics from the split result.
-                    # These feed into the improvement gate alongside the
-                    # qualitative assessment from step 7 (assess).
-                    # The parent may have been replaced by a package dir
-                    # (e.g. pdd_executor.py -> pdd_executor/__init__.py),
-                    # so check both locations.
-                    target_path_obj = Path(target_file)
-                    target_rel = target_path_obj
-                    try:
-                        target_rel = target_path_obj.relative_to(cwd)
-                    except ValueError:
-                        pass
-                    # Candidates: original file path, or __init__.py of a
-                    # package that replaced it.
-                    parent_candidates = [
-                        current_work_dir / target_rel,
-                        current_work_dir / target_rel.with_suffix("") / "__init__.py",
-                        current_work_dir / target_path_obj.name,
-                    ]
-                    post_lines = 0
-                    for cand in parent_candidates:
-                        if cand.is_file():
-                            try:
-                                post_lines = len(cand.read_text().splitlines())
-                                break
-                            except OSError:
-                                continue
-                    if post_lines > 0:
-                        try:
-                            original_lines = int(context.get("original_line_count", 0))
-                            if original_lines > 0:
-                                # Positive delta = reduction = improvement
-                                quant_metrics["parent_line_reduction"] = original_lines - post_lines
-                        except (ValueError, TypeError):
-                            pass
-                    num_children = len(selected_option.plan.children) if selected_option else 0
-                    if num_children > 1:
-                        # Count children as improvement only if >1 (a real split)
-                        quant_metrics["children_created"] = num_children - 1
-                    # validation_pass is driven by whether any error-severity
-                    # failures exist. Previously used keyword matching on
-                    # messages which missed structural failures like
-                    # "Expected 5 children but found 2".
-                    quant_metrics["validation_pass"] = 1 if not verify_failures else -1
-
-                    # Run tests
-                    target_path = Path(target_file)
-                    test_cmd_obj = get_test_command(target_path)
-                    tests_ran = False
-                    tests_passed = True
-                    if test_cmd_obj is not None:
-                        tests_ran = True
-                        try:
-                            subprocess.run(
-                                shlex.split(test_cmd_obj.command),
-                                cwd=str(test_cmd_obj.cwd or current_work_dir),
-                                check=True, capture_output=True, text=True,
-                                timeout=300,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            stderr = (e.stderr or '')[:500]
-                            # ImportError / ModuleNotFoundError = missing deps,
-                            # not a real test failure from the split
-                            if ("ImportError" in stderr or "ModuleNotFoundError" in stderr
-                                    or "No module named" in stderr):
-                                if not quiet:
-                                    console.print(
-                                        "[yellow]Tests skipped — missing deps "
-                                        "(not a split regression)[/yellow]"
-                                    )
-                                tests_ran = False  # treat as unable-to-run
-                            else:
-                                verify_failures.append(f"Tests failed: {stderr}")
-                                tests_passed = False
-                        except subprocess.TimeoutExpired:
-                            verify_failures.append("Tests timed out after 300s")
-                            tests_passed = False
-                    # Only record tests_pass if we could actually run them
-                    if tests_ran:
-                        quant_metrics["tests_pass"] = 1 if tests_passed else -1
-
-                    # Run lint
-                    for lint_cmd_obj in get_lint_commands(target_path):
-                        try:
-                            subprocess.run(
-                                shlex.split(lint_cmd_obj.command),
-                                cwd=str(lint_cmd_obj.cwd or current_work_dir),
-                                check=True, capture_output=True, text=True,
-                                timeout=120,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            verify_failures.append(f"Lint failed: {(e.stderr or '')[:500]}")
-                        except subprocess.TimeoutExpired:
-                            verify_failures.append("Lint timed out after 120s")
-
-            elif step == "7b_regen_gate":
-                if skip_regen_gate:
-                    if not quiet:
-                        console.print("[yellow]Skipping regen gate (skip_regen_gate flag)[/yellow]")
-                else:
-                    for file in changed_files:
-                        file_path = Path(file)
-                        if file_path.suffix != ".prompt":
-                            continue
-                        basename = file_path.stem.replace("_python", "").replace("_typescript", "")
-                        try:
-                            snapshot_src = current_work_dir / file
-                            if snapshot_src.exists():
-                                shutil.copy(str(snapshot_src), f"{snapshot_src}.snapshot")
-                            subprocess.run(
-                                ["pdd", "sync", basename, "--max-attempts", "1", "--budget", "5.0"],
-                                cwd=str(current_work_dir), check=True,
-                                capture_output=True, text=True, timeout=600,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            verify_failures.append(
-                                f"Regen gate failed for {basename}: {(e.stderr or '')[:500]}"
-                            )
-                        except subprocess.TimeoutExpired:
-                            verify_failures.append(f"Regen gate timed out for {basename}")
-
-            elif step == "7c_arch_sync":
-                # Scope arch sync to the target file's directory tree. The
-                # sync_all_prompts_to_architecture function scans the entire
-                # prompts_dir recursively; if run on the project root it will
-                # also try to sync unrelated prompts (e.g. CRM, frontend) that
-                # aren't part of this split and may have broken references.
-                # Find the prompts dir closest to the target file.
-                target_abs = (Path(target_file)
-                              if Path(target_file).is_absolute()
-                              else cwd / target_file)
-                prompts_dir: Optional[Path] = None
-                # Walk up from target file's dir looking for a sibling prompts/
-                candidate = target_abs.parent
-                for _ in range(8):
-                    for p_name in ("prompts", "prompts/src"):
-                        maybe = candidate / p_name
-                        if maybe.is_dir():
-                            prompts_dir = maybe
-                            break
-                    if prompts_dir is not None:
-                        break
-                    if candidate.parent == candidate:
-                        break
-                    candidate = candidate.parent
-                # Similarly find an architecture.json near the target
-                architecture_path: Optional[Path] = None
-                candidate = target_abs.parent
-                for _ in range(8):
-                    maybe = candidate / "architecture.json"
-                    if maybe.is_file():
-                        architecture_path = maybe
-                        break
-                    if candidate.parent == candidate:
-                        break
-                    candidate = candidate.parent
-                if prompts_dir is None or architecture_path is None:
-                    if not quiet:
-                        console.print(
-                            "[yellow]Skipping arch sync — no prompts/ or "
-                            "architecture.json found near target[/yellow]"
-                        )
-                else:
-                    try:
-                        sync_result = sync_all_prompts_to_architecture(
-                            prompts_dir, architecture_path, dry_run=False
-                        )
-                        if not sync_result.get("success", False):
-                            errors = sync_result.get("errors", [])
-                            # Filter out errors for unrelated prompts that
-                            # existed before this split (we only care about
-                            # prompts we created/modified).
-                            # changed_files has source paths (e.g. pdd/foo.py)
-                            # while errors reference .prompt paths — match on
-                            # basenames (stems) so e.g. "foo" matches both
-                            # "pdd/foo.py" and "prompts/foo.prompt".
-                            own_stems = {
-                                Path(f).stem for f in changed_files
-                            }
-                            relevant_errors = [
-                                e for e in errors
-                                if any(stem in str(e) for stem in own_stems)
-                            ]
-                            if relevant_errors:
-                                verify_failures.append(
-                                    f"Arch sync failed: {relevant_errors}"
-                                )
-                    except Exception as exc:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Arch sync errored (non-fatal): {exc}[/yellow]"
-                            )
-
-        # Persist state after every step
-        state["last_completed_step"] = step
+    # ---------- Helpers bound to closure ----------
+    def _persist_state() -> None:
+        nonlocal gh_comment_id
         state["total_cost"] = total_cost
         state["model_used"] = model_used
         state["changed_files"] = changed_files
-        state["verify_failures"] = verify_failures
-        state["quant_metrics"] = quant_metrics
-        state["phase_plans"] = phase_plans
-        state["intent"] = current_intent
-        state["iteration_count"] = iteration_count
-        github_comment_id = save_workflow_state(
-            cwd, split_id, "split", state, state_dir, "", "", use_github_state, github_comment_id
-        )
-
-    # ── Refinement iteration (U6) — FOCUSED ────────────────────────
-    # If step 9 flagged a specific child as still too monolithic, run
-    # FOCUSED phase extraction on just that file: step 6a + step 6
-    # scoped to the one target. We do NOT re-run steps 0-4 because
-    # those produce a fresh decomposition of the target as if it were
-    # a new split problem, which roughly doubles cost and often
-    # produces the same 7-child plan (we saw this on pdd_executor).
-    pending_refine = state.get("_pending_refine")
-    if (
-        pending_refine
-        and iteration_count < MAX_REFINEMENT_ITERATIONS
-        and not no_phase_extraction
-    ):
-        iteration_count += 1
-        state["iteration_count"] = iteration_count
-        refined_target = pending_refine.get("target_child_file") or target_file
-        state["_pending_refine"] = None
-        if not quiet:
-            console.print(
-                f"[cyan]Focused refinement pass — "
-                f"phase extraction on {refined_target}[/cyan]"
+        try:
+            new_id = save_workflow_state(
+                cwd, split_id, "split", state,
+                state_dir=state_dir,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=gh_comment_id,
             )
+            if new_id is not None:
+                gh_comment_id = new_id
+        except Exception:
+            pass
 
-        # Treat the refined target as a single-child plan for step 6a.
-        refined_target_path = current_work_dir / refined_target
-        if not refined_target_path.is_file():
-            # File doesn't exist — skip refinement gracefully.
-            if not quiet:
-                console.print(
-                    f"[yellow]Refinement target not found: "
-                    f"{refined_target} — skipping iteration[/yellow]"
-                )
+    def _record_step(step_key: str, output: str) -> None:
+        pref = step_key.split("_", 1)[0]
+        state["step_outputs"][pref] = output
+        context[f"step{pref}_output"] = output
+        state["last_completed_step"] = step_key
+
+    def _run_llm_step(
+        step_key: str,
+        template_name: str,
+        extra_context: Optional[Dict[str, Any]] = None,
+        label_override: Optional[str] = None,
+        appendix: str = "",
+        work_dir: Optional[Path] = None,
+    ) -> Tuple[bool, str]:
+        nonlocal total_cost, model_used
+        template = load_prompt_template(template_name)
+        if not template:
+            return False, f"Missing template: {template_name}"
+        merged_ctx = dict(context)
+        if extra_context:
+            merged_ctx.update(extra_context)
+        try:
+            processed = preprocess(
+                template,
+                recursive=True,
+                double_curly_brackets=True,
+                exclude_keys=list(merged_ctx.keys()),
+            )
+        except Exception as e:
+            return False, f"Preprocess failed: {e}"
+        try:
+            formatted = substitute_template_variables(processed, merged_ctx)
+        except Exception as e:
+            return False, f"Template substitution failed: {e}"
+        if appendix:
+            formatted = formatted + "\n\n" + appendix
+
+        wd = work_dir if work_dir is not None else cwd
+        timeout = SPLIT_STEP_TIMEOUTS.get(step_key, 600.0) + timeout_adder
+        ok, out, cost, provider = run_agentic_task(
+            instruction=formatted,
+            cwd=wd,
+            verbose=verbose,
+            quiet=quiet,
+            timeout=timeout,
+            label=label_override or f"split-{step_key}",
+            max_retries=DEFAULT_MAX_RETRIES,
+        )
+        total_cost += float(cost or 0.0)
+        if provider:
+            model_used = provider
+        return ok, out
+
+    def _early_return(success: bool, msg: str) -> Tuple[bool, str, float, str, List[str]]:
+        _persist_state()
+        try:
+            clear_agentic_progress()
+        except Exception:
+            pass
+        if not quiet and not success:
+            console.print(
+                f"[yellow]State preserved at {state_dir} — rerun pdd split to resume...[/yellow]"
+            )
+        _restore_signals()
+        return success, msg, total_cost, model_used, changed_files
+
+    def _started_or_done(step_key: str) -> str:
+        last = state.get("last_completed_step")
+        if not last:
+            return "run"
+        last_idx = step_index_map.get(last, 0)
+        cur_idx = step_index_map.get(step_key, 0)
+        if cur_idx <= last_idx:
+            return "skip"
+        return "run"
+
+    # =============== STEP 0: INTENT ===============
+    step_key = "0_intent"
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        if resolved_intent:
+            out = f"Skipped — intent already set: {resolved_intent}"
+            _record_step(step_key, out)
+            state["intent"] = resolved_intent
+            context["intent"] = resolved_intent
         else:
-            # Build a minimal per-child context for step 6a.
-            refine_child = {
-                "name": Path(refined_target).stem,
-                "new_source": refined_target,
-                "new_prompt": "",
-                "new_example": "",
-                "new_test": "",
-                "symbols": [],
-                "rationale": pending_refine.get("reason", ""),
-            }
-            context["current_child_index"] = 1
-            context["current_child"] = json.dumps(refine_child, default=str)
-            context["selected_option"] = json.dumps({
-                "name": "refinement_mode",
-                "plan": {"children": [refine_child]},
-            }, default=str)
-            context["children_extracted"] = "[]"
-
-            # Step 6a on the refined target.
-            template_name = "agentic_split_step6a_phase_extract_LLM"
-            p_template = load_prompt_template(template_name)
-            refine_phase_plan: Optional[Dict[str, Any]] = None
-            if p_template:
-                processed = preprocess(
-                    p_template, recursive=True,
-                    double_curly_brackets=True,
-                    exclude_keys=list(context.keys()),
-                )
-                formatted_prompt = substitute_template_variables(
-                    processed, context
-                )
-                pe_success, pe_output, pe_cost, pe_model = run_agentic_task(
-                    instruction=formatted_prompt,
-                    cwd=current_work_dir,
-                    verbose=verbose, quiet=quiet,
-                    timeout=SPLIT_STEP_TIMEOUTS["6a_phase_extract"] + timeout_adder,
-                    label=f"6a_refine_iter_{iteration_count}",
-                    max_retries=DEFAULT_MAX_RETRIES,
-                )
-                total_cost += pe_cost
-                model_used = pe_model
-                parsed_pe = _parse_step_output(pe_output, PhaseExtractionPlan)
-                if isinstance(parsed_pe, PhaseExtractionPlan) and parsed_pe.should_extract:
-                    refine_phase_plan = {
-                        "should_extract": True,
-                        "target_symbol": parsed_pe.target_symbol,
-                        "target_file": parsed_pe.target_file or refined_target,
-                        "phases": [
-                            {
-                                "name": p.name, "description": p.description,
-                                "line_range": p.line_range, "inputs": p.inputs,
-                                "outputs": p.outputs, "side_effects": p.side_effects,
-                            }
-                            for p in parsed_pe.phases
-                        ],
-                        "parent_shell": parsed_pe.parent_shell,
-                        "rationale": parsed_pe.rationale,
-                        "reason": "",
-                    }
-
-            # Step 6 extract the phase plan (only if one was produced).
-            if refine_phase_plan:
-                context["phase_plan"] = json.dumps(refine_phase_plan, default=str)
-                template_name = "agentic_split_step6_extract_LLM"
-                p_template = load_prompt_template(template_name)
-                if p_template:
-                    processed = preprocess(
-                        p_template, recursive=True,
-                        double_curly_brackets=True,
-                        exclude_keys=list(context.keys()),
-                    )
-                    formatted_prompt = substitute_template_variables(
-                        processed, context
-                    )
-                    ex_success, ex_output, ex_cost, ex_model = run_agentic_task(
-                        instruction=formatted_prompt,
-                        cwd=current_work_dir,
-                        verbose=verbose, quiet=quiet,
-                        timeout=SPLIT_STEP_TIMEOUTS["6_extract"] + timeout_adder,
-                        label=f"6_refine_iter_{iteration_count}",
-                        max_retries=DEFAULT_MAX_RETRIES,
-                    )
-                    total_cost += ex_cost
-                    model_used = ex_model
-                    # Parse FILES_CREATED/FILES_MODIFIED markers.
-                    # Only track files that actually exist on disk (same
-                    # guard as step 6 extraction — prevents phantom entries).
-                    for marker in ("FILES_CREATED:", "FILES_MODIFIED:"):
-                        match = re.search(
-                            rf"{marker}\s*([\s\S]+?)(?:\n\s*\n|\n[A-Z_]+:|$)",
-                            ex_output,
-                        )
-                        if match:
-                            for f in match.group(1).split(","):
-                                f = f.strip().strip(",").strip("`").strip()
-                                if f and f not in changed_files and (current_work_dir / f).exists():
-                                    changed_files.append(f)
-                    if not quiet:
-                        console.print(
-                            f"[cyan]Refinement iter {iteration_count}: "
-                            f"phase extraction applied on {refined_target}[/cyan]"
-                        )
-            else:
+            ok, out = _run_llm_step(step_key, "agentic_split_step0_intent_LLM")
+            if not ok:
+                resolved_intent = "REDUCE_MONOLITH"
                 if not quiet:
                     console.print(
-                        f"[cyan]Refinement iter {iteration_count}: "
-                        f"step 6a said no extraction warranted on "
-                        f"{refined_target} — skipping[/cyan]"
+                        "[yellow]Step 0 failed; defaulting intent to REDUCE_MONOLITH[/yellow]"
                     )
+                state["intent"] = resolved_intent
+                context["intent"] = resolved_intent
+                _record_step(step_key, "Default intent applied: REDUCE_MONOLITH")
+            else:
+                decision = _parse_step_output(out, IntentDecision) or IntentDecision()
+                norm = _normalize_intent(decision.intent) or "REDUCE_MONOLITH"
+                resolved_intent = norm
+                state["intent"] = resolved_intent
+                context["intent"] = resolved_intent
+                if not quiet:
+                    console.print(
+                        f"[green]Intent: {decision.intent} (conf={float(decision.confidence or 0.0):.2f})[/green]"
+                    )
+                _record_step(step_key, out)
+        _persist_state()
 
-        # Re-run verification after refinement.
-        if selected_option is not None:
-            plan = selected_option.plan
-            vr = validate_extraction(plan, current_work_dir)
-            verify_failures = [f.message for f in vr.failures if f.severity == "error"]
-            quant_metrics["validation_pass"] = 1 if not verify_failures else -1
-            state["verify_failures"] = verify_failures
-            state["quant_metrics"] = quant_metrics
-            state["changed_files"] = changed_files
-            state["total_cost"] = total_cost
-            github_comment_id = save_workflow_state(
-                cwd, split_id, "split", state, state_dir,
-                "", "", use_github_state, github_comment_id,
+    if not resolved_intent:
+        resolved_intent = _normalize_intent(state.get("intent")) or "REDUCE_MONOLITH"
+        state["intent"] = resolved_intent
+        context["intent"] = resolved_intent
+
+    # =============== STEP 1: SURVEY ===============
+    step_key = "1_survey"
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        ok, out = _run_llm_step(step_key, "agentic_split_step1_survey_LLM")
+        if not ok:
+            return _early_return(False, f"Step 1 failed: {out[:200]}")
+        marker = _check_hard_stop(step_key, out, force_split)
+        if marker:
+            _record_step(step_key, out)
+            return _early_return(False, f"Stopped: {marker}")
+        _record_step(step_key, out)
+        _persist_state()
+
+    # =============== STEP 2: DIAGNOSE ===============
+    step_key = "2_diagnose"
+    diagnosis: Optional[Diagnosis] = None
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        ok, out = _run_llm_step(step_key, "agentic_split_step2_diagnose_LLM")
+        if not ok:
+            return _early_return(False, f"Step 2 failed: {out[:200]}")
+        diagnosis = _parse_step_output(out, Diagnosis) or Diagnosis()
+        if not quiet and (diagnosis.type or diagnosis.recommended_action):
+            console.print(
+                f"[green]Diagnosis: {diagnosis.type or diagnosis.recommended_action} — {diagnosis.rationale}[/green]"
+            )
+        marker = _check_hard_stop(step_key, out, force_split)
+        leave_alone = (
+            (diagnosis.recommended_action or "").upper() == "LEAVE_ALONE"
+            or (diagnosis.type or "").upper() == "LEAVE_ALONE"
+        )
+        if marker or (leave_alone and not force_split):
+            _record_step(step_key, out)
+            return _early_return(
+                False,
+                f"Stopped: LEAVE_ALONE — {diagnosis.leave_alone_rationale or diagnosis.rationale}",
+            )
+        _record_step(step_key, out)
+        _persist_state()
+
+        if diagnose_only:
+            return _early_return(
+                False,
+                f"Diagnosis: {diagnosis.type or diagnosis.recommended_action} — {diagnosis.rationale}",
             )
 
-    # ── Improvement gate ───────────────────────────────────────────
-    if qual_assess is None:
-        # If we reached here, the pipeline completed all steps. Default to
-        # moderate so a successful split isn't aborted by a missing assessment.
-        qual_assess = QualitativeAssessment(
-            overall_verdict="moderate",
-            rationale="Defaulted: pipeline completed but no assessment parsed",
+    # =============== STEP 3: INVESTIGATE ===============
+    step_key = "3_investigate"
+    investigation: Optional[ModuleInvestigation] = None
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        ok, out = _run_llm_step(step_key, "agentic_split_step3_investigate_LLM")
+        if not ok:
+            return _early_return(False, f"Step 3 failed: {out[:200]}")
+        marker = _check_hard_stop(step_key, out, force_split)
+        if marker:
+            _record_step(step_key, out)
+            return _early_return(False, f"Stopped: {marker}")
+        investigation = _parse_step_output(out, ModuleInvestigation) or ModuleInvestigation()
+        _record_step(step_key, out)
+        _persist_state()
+    else:
+        prev = state["step_outputs"].get("3", "")
+        investigation = _parse_step_output(prev, ModuleInvestigation) or ModuleInvestigation()
+
+    shared_layer_candidates = list(getattr(investigation, "shared_layer_candidates", []) or [])
+
+    # =============== STEP 4: PROPOSE OPTIONS ===============
+    step_key = "4_propose_options"
+    selected_option: Optional[SplitOption] = None
+    options_obj: Optional[OptionsConsidered] = None
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+
+        appendix = ""
+        attempts = 0
+        max_attempts = 3
+        last_out = ""
+        while attempts < max_attempts:
+            attempts += 1
+            ok, out = _run_llm_step(
+                step_key,
+                "agentic_split_step4_propose_options_LLM",
+                extra_context={"intent": resolved_intent},
+                appendix=appendix,
+            )
+            last_out = out
+            if not ok:
+                return _early_return(False, f"Step 4 failed: {out[:200]}")
+            marker = _check_hard_stop(step_key, out, force_split)
+            if marker:
+                _record_step(step_key, out)
+                return _early_return(False, f"Stopped: {marker}")
+            options_obj = _parse_step_output(out, OptionsConsidered) or OptionsConsidered()
+            options_list: List[SplitOption] = [o for o in (options_obj.options or []) if isinstance(o, SplitOption)]
+            if not options_list:
+                appendix = "% RETRY NOTICE — no parseable options"
+                continue
+            options_list.sort(key=lambda o: o.numeric_score, reverse=True)
+            selected_option = options_list[0]
+
+            # Shared-layer hard gate
+            if shared_layer_candidates:
+                pc = selected_option.parent_changes or {}
+                slc = pc.get("shared_layer_children", []) or _splitplan_field(
+                    selected_option.plan, "shared_layer_children", []
+                ) or []
+                if not slc:
+                    if attempts < max_attempts:
+                        appendix = (
+                            "% RETRY NOTICE — shared_layer_children required\n"
+                            f"Investigation surfaced shared_layer_candidates: "
+                            f"{json.dumps(shared_layer_candidates)}. The selected option "
+                            "MUST populate parent_changes.shared_layer_children."
+                        )
+                        continue
+                    else:
+                        state["verify_failures"].append(
+                            {
+                                "check": "shared_layer_gate",
+                                "message": "Selected option missing shared_layer_children after retries",
+                                "severity": "warning",
+                            }
+                        )
+            break
+
+        # Render options table
+        if not quiet and options_obj and options_obj.options:
+            table = Table(title="Proposed Split Options")
+            table.add_column("Option")
+            table.add_column("Score")
+            for opt in options_obj.options:
+                if isinstance(opt, SplitOption):
+                    nm = opt.name
+                    sc_raw = opt.score
+                else:
+                    nm = (opt.get("name", "") if isinstance(opt, dict) else str(opt))
+                    sc_raw = (opt.get("score", 0.0) if isinstance(opt, dict) else 0.0)
+                if isinstance(sc_raw, dict):
+                    sc = sc_raw.get("total", "")
+                else:
+                    sc = sc_raw
+                table.add_row(str(nm), str(sc))
+            console.print(table)
+
+        _record_step(step_key, last_out)
+        if selected_option is not None:
+            state["selected_option"] = {
+                "name": selected_option.name,
+                "description": selected_option.description,
+                "score": selected_option.score,
+                "plan": asdict(_to_splitplan(selected_option.plan)),
+                "parent_changes": selected_option.parent_changes,
+            }
+        _persist_state()
+    else:
+        # Restore selection: prefer state["selected_option"], then re-parse step_outputs["4"]
+        sel = state.get("selected_option")
+        if sel:
+            selected_option = SplitOption(
+                name=sel.get("name", ""),
+                description=sel.get("description", ""),
+                score=sel.get("score", 0.0),
+                plan=_to_splitplan(sel.get("plan")),
+                parent_changes=sel.get("parent_changes", {}) or {},
+            )
+        else:
+            prev = state["step_outputs"].get("4", "")
+            opts = _parse_step_output(prev, OptionsConsidered)
+            if opts and opts.options:
+                cand = [o for o in opts.options if isinstance(o, SplitOption)]
+                if cand:
+                    cand.sort(key=lambda o: o.numeric_score, reverse=True)
+                    selected_option = cand[0]
+
+    if propose_only:
+        return _early_return(False, "Propose only complete")
+
+    if selected_option is None:
+        return _early_return(False, "No selected option — step 4 may have failed")
+
+    # Build SplitPlan from selected option
+    split_plan = _to_splitplan(selected_option.plan)
+    # Merge in parent_changes from option-level field if SplitPlan didn't already have them
+    if not split_plan.parent_changes and selected_option.parent_changes:
+        split_plan.parent_changes = dict(selected_option.parent_changes)
+    if not split_plan.shared_layer_children:
+        slc = (selected_option.parent_changes or {}).get("shared_layer_children", [])
+        if slc:
+            split_plan.shared_layer_children = list(slc)
+
+    # =============== STEP 5: SETUP WORKTREE ===============
+    step_key = "5_setup_worktree"
+    work_dir: Path = cwd
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        if not git_root:
+            return _early_return(False, "Not a git repository")
+        wt_path, err = setup_worktree(
+            cwd=cwd,
+            issue_number=split_id,
+            quiet=quiet,
+            branch_prefix="split",
+            worktree_prefix="split",
+            base_ref="HEAD",
         )
-    decision = _apply_improvement_gate(quant_metrics, qual_assess)
-    if "ABORT" in decision:
-        clear_agentic_progress()
-        _restore_signals()
-        return False, f"Improvement gate: {decision}", total_cost, model_used, changed_files
+        if not wt_path:
+            return _early_return(False, f"Worktree setup failed: {err}")
+        work_dir = wt_path
+        state["worktree_path"] = str(wt_path)
+        _record_step(step_key, f"Worktree at {wt_path}")
+        _persist_state()
+    else:
+        wp = state.get("worktree_path")
+        if wp and Path(wp).is_dir():
+            work_dir = Path(wp)
+        else:
+            work_dir = cwd
 
-    # Final summary
-    if not quiet:
-        console.print("\n[green]Split complete[/green]")
-        console.print(f"   Total cost: ${total_cost:.4f}")
-        console.print(f"   Files changed: {', '.join(changed_files)}")
-        console.print(f"   Decision: {decision}")
+    children = list(split_plan.children or [])
+    num_children = len(children)
 
-    # Only clear state on a clean AUTO_SHIP. HUMAN_REVIEW_REQUIRED and
-    # AUTO_SHIP_WARNING preserve state so the user can resume / re-run
-    # without losing the $30-80 of accumulated context. AUTO_SHIP clears
-    # because the run is fully done and needs no human follow-up.
-    if decision == "AUTO_SHIP":
-        clear_workflow_state(cwd, split_id, "split", state_dir, "", "", use_github_state)
-        # Clean up the git worktree on AUTO_SHIP (the only fully-clean
-        # terminal state). For HUMAN_REVIEW_REQUIRED the worktree stays
-        # so the reviewer can inspect the split result.
-        if worktree_path_str and Path(worktree_path_str).is_dir():
+    # =============== STEP 6a: PHASE EXTRACT (per child) ===============
+    step_key = "6a_phase_extract"
+    phase_plans: List[Optional[Dict[str, Any]]] = list(state.get("phase_plans") or [])
+    while len(phase_plans) < num_children:
+        phase_plans.append(None)
+
+    if no_phase_extraction:
+        for i in range(num_children):
+            phase_plans[i] = None
+        state["phase_plans"] = phase_plans
+        if _started_or_done(step_key) != "skip":
+            _record_step(step_key, "Skipped (no_phase_extraction)")
+            _persist_state()
+    elif _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        for i, child in enumerate(children):
+            if phase_plans[i] is not None:
+                continue
+            if not quiet:
+                console.print(f"[cyan]Phase-extract analysis {i+1}/{num_children}: {child}[/cyan]")
+            sel_dict = {
+                "name": selected_option.name,
+                "description": selected_option.description,
+                "score": selected_option.score,
+                "plan": asdict(_to_splitplan(selected_option.plan)),
+                "parent_changes": selected_option.parent_changes,
+            }
+            extra = {
+                "current_child_index": i,
+                "current_child": json.dumps(child) if not isinstance(child, str) else child,
+                "selected_option": json.dumps(sel_dict),
+                "children_extracted": _coerce_int(state.get("children_extracted", 0)),
+            }
+            ok, out = _run_llm_step(
+                step_key,
+                "agentic_split_step6a_phase_extract_LLM",
+                extra_context=extra,
+                label_override=f"split-6a_phase_extract-child{i+1}",
+                work_dir=work_dir,
+            )
+            if not ok:
+                phase_plans[i] = {"should_extract": False, "reason": "agent failed"}
+            else:
+                pp = _parse_step_output(out, PhaseExtractionPlan)
+                if pp is None:
+                    phase_plans[i] = {"should_extract": False, "reason": "output unparseable"}
+                else:
+                    try:
+                        phase_plans[i] = asdict(pp)
+                    except Exception:
+                        phase_plans[i] = {"should_extract": False, "reason": "asdict failed"}
+            state["phase_plans"] = phase_plans
+            _persist_state()
+        _record_step(step_key, f"Phase plans for {num_children} children")
+        _persist_state()
+
+    # =============== STEP 6: EXTRACT (per child) ===============
+    step_key = "6_extract"
+    children_extracted: int = _coerce_int(state.get("children_extracted", 0))
+    if _started_or_done(step_key) != "skip" or children_extracted < num_children:
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+
+        for i in range(children_extracted, num_children):
+            child = children[i]
+            if not quiet:
+                console.print(f"[cyan]Extracting child {i+1}/{num_children}: {child}[/cyan]")
+            phase_plan_val = phase_plans[i] if i < len(phase_plans) else None
+            phase_plan_str = json.dumps(phase_plan_val) if phase_plan_val else ""
+
+            sel_dict = {
+                "name": selected_option.name,
+                "description": selected_option.description,
+                "score": selected_option.score,
+                "plan": asdict(_to_splitplan(selected_option.plan)),
+                "parent_changes": selected_option.parent_changes,
+            }
+            extra = {
+                "current_child_index": i,
+                "current_child": json.dumps(child) if not isinstance(child, str) else child,
+                "selected_option": json.dumps(sel_dict),
+                "children_extracted": children_extracted,
+                "phase_plan": phase_plan_str,
+                "allow_dead_symbol_deletion": delete_dead and (i == num_children - 1),
+            }
+            context["phase_plan"] = phase_plan_str
+
+            attempts = 0
+            max_attempts = 3
+            appendix = ""
+            success_for_child = False
+            last_out = ""
+            while attempts < max_attempts:
+                attempts += 1
+                ok, out = _run_llm_step(
+                    step_key,
+                    "agentic_split_step6_extract_LLM",
+                    extra_context=extra,
+                    label_override=f"split-6_extract-child{i+1}",
+                    appendix=appendix,
+                    work_dir=work_dir,
+                )
+                last_out = out
+                if not ok:
+                    appendix = "% RETRY NOTICE — previous attempt failed"
+                    continue
+                marker = _check_hard_stop(step_key, out, force_split)
+                if marker:
+                    _record_step(step_key, out)
+                    return _early_return(False, f"Stopped: {marker}")
+                claimed_created, claimed_modified = _parse_file_markers(out)
+                missing = [p for p in claimed_created if not (work_dir / p).exists()]
+                if missing:
+                    if attempts < max_attempts:
+                        appendix = (
+                            "% RETRY NOTICE — MUST CREATE MISSING FILES\n"
+                            f"The following claimed FILES_CREATED do not exist: {missing}"
+                        )
+                        continue
+                    else:
+                        state["verify_failures"].append(
+                            {
+                                "check": "files_created_missing",
+                                "message": f"Child {i+1} missing files after retries: {missing}",
+                                "severity": "error",
+                            }
+                        )
+                        _persist_state()
+                        return _early_return(
+                            False,
+                            f"Stopped: extraction missing files for child {i+1}: {missing}",
+                        )
+                # Vacuously true if no FILES_CREATED marker present
+                for p in claimed_created:
+                    if (work_dir / p).exists() and p not in changed_files:
+                        changed_files.append(p)
+                for p in claimed_modified:
+                    if p not in changed_files:
+                        changed_files.append(p)
+                success_for_child = True
+                break
+
+            if success_for_child:
+                children_extracted = i + 1
+                state["children_extracted"] = children_extracted
+                _record_step(step_key, last_out)
+                context["changed_files"] = list(changed_files)
+                _persist_state()
+            else:
+                _persist_state()
+                return _early_return(False, f"Extraction failed for child {i+1}")
+
+        _record_step(step_key, f"Extracted {children_extracted}/{num_children}")
+        _persist_state()
+
+    # =============== STEP 7a: VERIFY LOCAL ===============
+    step_key = "7a_verify_local"
+    quant_metrics: Dict[str, Any] = dict(state.get("quant_metrics") or {})
+    verify_failures: List[Dict[str, Any]] = list(state.get("verify_failures") or [])
+
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+
+        post_lines = _post_split_lines(work_dir, target_file)
+        if original_line_count and post_lines:
+            quant_metrics["parent_line_reduction"] = original_line_count - post_lines
+        if num_children > 1:
+            quant_metrics["children_created"] = num_children - 1
+
+        if no_verify:
+            if not quiet:
+                console.print(
+                    "[bold yellow]!! VERIFICATION SKIPPED (--no-verify) — split will not auto-ship[/bold yellow]"
+                )
+            quant_metrics["verification_skipped"] = 0
+            quant_metrics["validation_pass"] = 0
+        else:
             try:
-                git_root = get_git_root(cwd)
-                if git_root:
-                    subprocess.run(
-                        ["git", "worktree", "remove", "--force", worktree_path_str],
-                        cwd=str(git_root), capture_output=True, text=True,
+                vres = validate_extraction(split_plan, work_dir)
+                err_failures = [
+                    f for f in (vres.failures or [])
+                    if getattr(f, "severity", "error") == "error"
+                ]
+                warn_failures = [
+                    f for f in (vres.failures or [])
+                    if getattr(f, "severity", "error") == "warning"
+                ]
+                if not quiet and (err_failures or warn_failures):
+                    console.print(
+                        f"[red]Validation: {len(err_failures)} errors, {len(warn_failures)} warnings[/red]"
                     )
+                for f in err_failures:
+                    verify_failures.append(
+                        {
+                            "check": getattr(f, "check", ""),
+                            "message": getattr(f, "message", ""),
+                            "severity": "error",
+                        }
+                    )
+                quant_metrics["validation_pass"] = 1 if not err_failures else -1
+            except Exception as e:
+                quant_metrics["validation_pass"] = -1
+                verify_failures.append(
+                    {"check": "validate_extraction", "message": str(e), "severity": "error"}
+                )
+
+            try:
+                tcmd = get_test_command(Path(target_file))
+                if tcmd:
+                    cmd = getattr(tcmd, "command", None) or getattr(tcmd, "argv", None)
+                    cmd_list = cmd.split() if isinstance(cmd, str) else list(cmd or [])
+                    if cmd_list:
+                        try:
+                            res = _run_subprocess(cmd_list, work_dir, timeout=600.0)
+                            if res.returncode != 0:
+                                if _is_missing_module_stderr((res.stderr or "") + (res.stdout or "")):
+                                    pass  # skip — missing deps
+                                else:
+                                    quant_metrics["tests_pass"] = -1
+                                    verify_failures.append(
+                                        {
+                                            "check": "tests",
+                                            "message": (res.stderr or res.stdout or "")[:500],
+                                            "severity": "error",
+                                        }
+                                    )
+                            else:
+                                quant_metrics["tests_pass"] = 1
+                        except Exception as e:
+                            quant_metrics["tests_pass"] = -1
+                            verify_failures.append(
+                                {"check": "tests", "message": str(e)[:500], "severity": "error"}
+                            )
             except Exception:
-                pass  # best-effort cleanup
-    elif not quiet:
-        console.print(
-            f"[dim]State preserved at {state_dir} — rerun `pdd split` "
-            f"to resume, or `rm -rf {state_dir}` to discard.[/dim]"
+                pass
+
+            try:
+                lints = get_lint_commands(Path(target_file)) or []
+                for lc in lints:
+                    cmd = getattr(lc, "command", None) or getattr(lc, "argv", None)
+                    cmd_list = cmd.split() if isinstance(cmd, str) else list(cmd or [])
+                    if not cmd_list:
+                        continue
+                    try:
+                        res = _run_subprocess(cmd_list, work_dir, timeout=300.0)
+                        if res.returncode != 0:
+                            verify_failures.append(
+                                {
+                                    "check": "lint",
+                                    "message": (res.stderr or res.stdout or "")[:500],
+                                    "severity": "error",
+                                }
+                            )
+                    except Exception as e:
+                        verify_failures.append(
+                            {"check": "lint", "message": str(e)[:500], "severity": "error"}
+                        )
+            except Exception:
+                pass
+
+        state["quant_metrics"] = quant_metrics
+        state["verify_failures"] = verify_failures
+        _record_step(step_key, json.dumps({"quant_metrics": quant_metrics, "failures": len(verify_failures)}))
+        _persist_state()
+
+    # =============== STEP 7b: REGEN GATE ===============
+    step_key = "7b_regen_gate"
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+
+        if skip_regen_gate:
+            _record_step(step_key, "Skipped (skip_regen_gate)")
+        else:
+            prompt_files = [f for f in changed_files if f.endswith(".prompt")]
+            for pf in prompt_files:
+                basename = Path(pf).stem
+                try:
+                    res = _run_subprocess(
+                        ["pdd", "sync", basename, "--max-attempts", "1", "--budget", "5.0"],
+                        work_dir,
+                        timeout=1800.0,
+                    )
+                    combined = (res.stdout or "") + "\n" + (res.stderr or "")
+                    marker = _check_hard_stop(step_key, combined, force_split)
+                    if marker or res.returncode != 0:
+                        verify_failures.append(
+                            {
+                                "check": "regen_gate",
+                                "message": f"sync failed for {basename}: "
+                                f"{(res.stderr or res.stdout or '')[:500]}",
+                                "severity": "error",
+                            }
+                        )
+                except Exception as e:
+                    verify_failures.append(
+                        {"check": "regen_gate", "message": str(e)[:500], "severity": "error"}
+                    )
+            state["verify_failures"] = verify_failures
+            _record_step(step_key, f"Regen gate processed {len(prompt_files)} prompts")
+        _persist_state()
+
+    # =============== STEP 7c: ARCH SYNC ===============
+    step_key = "7c_arch_sync"
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        prompts_dir, arch_p = _find_arch_dirs(target_file, work_dir)
+        if not prompts_dir or not arch_p:
+            if not quiet:
+                console.print(
+                    "[yellow]Skipping arch sync — prompts dir or architecture.json not found[/yellow]"
+                )
+            _record_step(step_key, "Skipped (missing prompts/architecture)")
+        else:
+            try:
+                result = sync_all_prompts_to_architecture(
+                    prompts_dir=prompts_dir,
+                    architecture_path=arch_p,
+                    dry_run=False,
+                )
+                changed_stems = {Path(f).stem for f in changed_files}
+                for err in (result.get("errors", []) if isinstance(result, dict) else []) or []:
+                    if any(stem and stem in err for stem in changed_stems):
+                        verify_failures.append(
+                            {"check": "arch_sync", "message": err[:500], "severity": "error"}
+                        )
+                state["verify_failures"] = verify_failures
+                _record_step(step_key, "Arch sync complete")
+            except Exception as e:
+                if not quiet:
+                    console.print(f"[yellow]Arch sync error: {e}[/yellow]")
+                _record_step(step_key, f"Arch sync error: {e}")
+        _persist_state()
+
+    # =============== STEP 7: ASSESS ===============
+    step_key = "7_assess"
+    qual_assess: Optional[QualitativeAssessment] = None
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        post_state = {
+            "children_extracted": children_extracted,
+            "changed_files": changed_files,
+            "verify_failures_count": len(verify_failures),
+        }
+        ok, out = _run_llm_step(
+            step_key,
+            "agentic_split_step7_assess_LLM",
+            extra_context={
+                "quantitative_metrics": json.dumps(quant_metrics),
+                "post_split_state": json.dumps(post_state),
+            },
         )
-    clear_agentic_progress()
+        if not ok:
+            qual_assess = QualitativeAssessment(
+                overall_verdict="moderate",
+                rationale="Defaulted: step 7 failed",
+            )
+        else:
+            qual_assess = _parse_step_output(out, QualitativeAssessment)
+            if qual_assess is None:
+                qual_assess = QualitativeAssessment(
+                    overall_verdict="moderate",
+                    rationale="Defaulted: step 7 output unparseable",
+                )
+        _record_step(step_key, out if ok else "fallback moderate")
+        try:
+            state["assessment"] = asdict(qual_assess)
+        except Exception:
+            state["assessment"] = {"overall_verdict": qual_assess.overall_verdict}
+        _persist_state()
+    else:
+        a = state.get("assessment")
+        if a:
+            allowed = {f.name for f in dc_fields(QualitativeAssessment)}
+            qual_assess = QualitativeAssessment(**{k: v for k, v in a.items() if k in allowed})
+
+    # =============== STEP 8: REPAIR (if needed) ===============
+    step_key = "8_repair"
+    if verify_failures and _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+
+        prev_count = len([f for f in verify_failures if f.get("severity") == "error"])
+        for iteration in range(1, 6):
+            err_count_before = len([f for f in verify_failures if f.get("severity") == "error"])
+            ok, out = _run_llm_step(
+                step_key,
+                "agentic_split_step8_repair_LLM",
+                extra_context={
+                    "verify_failures": json.dumps(verify_failures),
+                    "iteration": iteration,
+                },
+                label_override=f"split-8_repair-iter{iteration}",
+                work_dir=work_dir,
+            )
+            if ok:
+                marker = _check_hard_stop(step_key, out, force_split)
+                if marker:
+                    if not quiet:
+                        console.print(f"[red]Repair: {marker}[/red]")
+                    break
+                created, modified = _parse_file_markers(out)
+                for p in created + modified:
+                    if (work_dir / p).exists() and p not in changed_files:
+                        changed_files.append(p)
+
+            new_failures: List[Dict[str, Any]] = []
+            try:
+                vres = validate_extraction(split_plan, work_dir)
+                for f in vres.failures or []:
+                    if getattr(f, "severity", "error") == "error":
+                        new_failures.append(
+                            {
+                                "check": getattr(f, "check", ""),
+                                "message": getattr(f, "message", ""),
+                                "severity": "error",
+                            }
+                        )
+            except Exception as e:
+                new_failures.append(
+                    {"check": "validate_extraction", "message": str(e), "severity": "error"}
+                )
+            try:
+                tcmd = get_test_command(Path(target_file))
+                if tcmd:
+                    cmd = getattr(tcmd, "command", None) or getattr(tcmd, "argv", None)
+                    cmd_list = cmd.split() if isinstance(cmd, str) else list(cmd or [])
+                    if cmd_list:
+                        res = _run_subprocess(cmd_list, work_dir, timeout=600.0)
+                        if res.returncode != 0:
+                            if not _is_missing_module_stderr((res.stderr or "") + (res.stdout or "")):
+                                new_failures.append(
+                                    {
+                                        "check": "tests",
+                                        "message": (res.stderr or res.stdout or "")[:500],
+                                        "severity": "error",
+                                    }
+                                )
+            except Exception:
+                pass
+            try:
+                for lc in get_lint_commands(Path(target_file)) or []:
+                    cmd = getattr(lc, "command", None) or getattr(lc, "argv", None)
+                    cmd_list = cmd.split() if isinstance(cmd, str) else list(cmd or [])
+                    if not cmd_list:
+                        continue
+                    res = _run_subprocess(cmd_list, work_dir, timeout=300.0)
+                    if res.returncode != 0:
+                        new_failures.append(
+                            {
+                                "check": "lint",
+                                "message": (res.stderr or res.stdout or "")[:500],
+                                "severity": "error",
+                            }
+                        )
+            except Exception:
+                pass
+
+            verify_failures = new_failures
+            quant_metrics["validation_pass"] = 1 if not new_failures else -1
+            err_count_after = len(new_failures)
+            if not quiet:
+                console.print(
+                    f"[cyan]Repair iter {iteration}: {err_count_before} -> {err_count_after} error-severity failures[/cyan]"
+                )
+            state["verify_failures"] = verify_failures
+            state["quant_metrics"] = quant_metrics
+            _persist_state()
+            if err_count_after == 0:
+                break
+            if iteration > 1 and err_count_after >= prev_count:
+                if not quiet:
+                    console.print("[yellow]Repair: failure count not decreasing — stopping[/yellow]")
+                break
+            prev_count = err_count_after
+        _record_step(step_key, f"Repair finished with {len(verify_failures)} failures")
+        _persist_state()
+
+    # =============== Improvement Gate ===============
+    decision = _apply_improvement_gate(quant_metrics, qual_assess)
+    if not quiet:
+        console.print(f"[bold]Decision: {decision}[/bold]")
+    if "ABORT" in decision:
+        return _early_return(False, f"Improvement gate: {decision}")
+
+    # =============== STEP 9: REFINE CHECK ===============
+    step_key = "9_refine_check"
+    refine: Optional[RefineCheck] = None
+    iter_count = int(state.get("iteration_count", 0) or 0)
+    if _started_or_done(step_key) != "skip":
+        idx = step_index_map[step_key]
+        if not quiet:
+            console.print(f"[bold cyan][Step {idx}/{total_steps}] {step_key}...[/bold cyan]")
+        set_agentic_progress("split", idx, total_steps, step_key)
+        context["changed_files"] = list(changed_files)
+        ok, out = _run_llm_step(
+            step_key,
+            "agentic_split_step9_refine_check_LLM",
+            extra_context={
+                "quantitative_metrics": json.dumps(quant_metrics),
+                "changed_files": json.dumps(changed_files),
+                "iteration_count": iter_count,
+            },
+        )
+        if ok:
+            refine = _parse_step_output(out, RefineCheck) or RefineCheck()
+            if refine.should_refine:
+                if not quiet:
+                    console.print(
+                        f"[yellow]Refine suggested on {refine.target_child_file}: {refine.reason}[/yellow]"
+                    )
+                state["_pending_refine"] = {
+                    "target_child_file": refine.target_child_file,
+                    "reason": refine.reason,
+                    "suggested_intent": refine.suggested_intent,
+                }
+            else:
+                if not quiet:
+                    console.print(f"[green]Refine check: ship as-is ({refine.reason})[/green]")
+                state["_pending_refine"] = None
+        _record_step(step_key, out if ok else "")
+        _persist_state()
+
+    # =============== Refinement Pass ===============
+    pending = state.get("_pending_refine")
+    if pending and iter_count < MAX_REFINEMENT_ITERATIONS and not no_phase_extraction:
+        target_child = pending.get("target_child_file", "")
+        target_path = work_dir / target_child if target_child else None
+        if target_path and target_path.exists():
+            iter_count += 1
+            state["iteration_count"] = iter_count
+            state["_pending_refine"] = None
+            context["iteration_count"] = iter_count
+            if not quiet:
+                console.print(f"[cyan]Running refinement pass on {target_child}[/cyan]")
+            synth_child = {"name": Path(target_child).stem, "code_file": target_child}
+            extra6a = {
+                "current_child_index": 0,
+                "current_child": json.dumps(synth_child),
+                "selected_option": json.dumps(
+                    {"name": "refinement", "description": pending.get("reason", "")}
+                ),
+                "children_extracted": 0,
+            }
+            ok, out = _run_llm_step(
+                "6a_phase_extract",
+                "agentic_split_step6a_phase_extract_LLM",
+                extra_context=extra6a,
+                label_override="split-refine-6a_phase_extract",
+                work_dir=work_dir,
+            )
+            pp = None
+            if ok:
+                pp = _parse_step_output(out, PhaseExtractionPlan)
+            if pp and pp.should_extract:
+                phase_str = json.dumps(asdict(pp))
+                extra6 = dict(extra6a)
+                extra6["phase_plan"] = phase_str
+                context["phase_plan"] = phase_str
+                ok2, out2 = _run_llm_step(
+                    "6_extract",
+                    "agentic_split_step6_extract_LLM",
+                    extra_context=extra6,
+                    label_override="split-refine-6_extract",
+                    work_dir=work_dir,
+                )
+                if ok2:
+                    created, modified = _parse_file_markers(out2)
+                    for p in created + modified:
+                        if (work_dir / p).exists() and p not in changed_files:
+                            changed_files.append(p)
+                try:
+                    vres = validate_extraction(split_plan, work_dir)
+                    new_fails = []
+                    for f in vres.failures or []:
+                        if getattr(f, "severity", "error") == "error":
+                            new_fails.append(
+                                {
+                                    "check": getattr(f, "check", ""),
+                                    "message": getattr(f, "message", ""),
+                                    "severity": "error",
+                                }
+                            )
+                    verify_failures = new_fails
+                    quant_metrics["validation_pass"] = 1 if not new_fails else -1
+                    state["verify_failures"] = verify_failures
+                    state["quant_metrics"] = quant_metrics
+                except Exception:
+                    pass
+            _persist_state()
+        else:
+            if not quiet and target_child:
+                console.print(f"[yellow]Refine target missing on disk: {target_child}[/yellow]")
+            state["_pending_refine"] = None
+            _persist_state()
+
+    # =============== Cleanup / Final ===============
+    final_msg = f"Split complete ({decision})"
+    if not quiet:
+        console.print("[bold green]Split complete[/bold green]")
+        console.print(f"Total cost: ${total_cost:.4f}")
+        console.print(f"Files changed: {changed_files}")
+        console.print(f"Decision: {decision}")
+
+    if decision == "AUTO_SHIP":
+        try:
+            clear_workflow_state(
+                cwd=cwd,
+                issue_number=split_id,
+                workflow_type="split",
+                state_dir=state_dir,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+            )
+        except Exception:
+            pass
+        wp = state.get("worktree_path")
+        if wp and git_root:
+            try:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(wp)],
+                    cwd=str(git_root),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception:
+                pass
+
+    try:
+        clear_agentic_progress()
+    except Exception:
+        pass
     _restore_signals()
-    return True, f"Split complete ({decision})", total_cost, model_used, changed_files
+    return True, final_msg, total_cost, model_used, changed_files
