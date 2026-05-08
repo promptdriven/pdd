@@ -848,6 +848,36 @@ def run_agentic_split_orchestrator(
             console.print(f"[yellow]{stop_reason}[/yellow]")
         return False, stop_reason, total_cost, model_used, changed_files
 
+    def _persist_refine_decision(output: str) -> None:
+        """Parse step 9 and save pending-refine state before budget checks."""
+        parsed_refine = _parse_step_output(output, RefineCheck)
+        if not isinstance(parsed_refine, RefineCheck):
+            return
+        # Guard against runaway: enforce the iteration cap in Python even
+        # if the agent missed it.
+        if (
+            parsed_refine.should_refine
+            and iteration_count < MAX_REFINEMENT_ITERATIONS
+        ):
+            state["_pending_refine"] = {
+                "target_child_file": parsed_refine.target_child_file,
+                "reason": parsed_refine.reason,
+                "suggested_intent": parsed_refine.suggested_intent,
+            }
+            if not quiet:
+                console.print(
+                    f"[cyan]Refine suggested on "
+                    f"{parsed_refine.target_child_file}: "
+                    f"{parsed_refine.reason}[/cyan]"
+                )
+        else:
+            state["_pending_refine"] = None
+            if not quiet:
+                console.print(
+                    f"Refine check: ship as-is "
+                    f"({parsed_refine.reason})"
+                )
+
     for step in ordered_steps[start_idx:]:
         budget_abort = _check_budget(step)
         if budget_abort is not None:
@@ -959,6 +989,11 @@ def run_agentic_split_orchestrator(
 
             state["step_outputs"][step_num] = output
             context[f"step{step_num}_output"] = output
+            if step == "9_refine_check":
+                # Step 9's parsed decision is required for resume. Persist it
+                # before the post-cost budget guard so a max-cost abort after
+                # the paid refine-check step does not skip focused refinement.
+                _persist_refine_decision(output)
 
             # Re-check budget after the step's LLM cost is added AND its
             # output is persisted to state. Order matters: if we abort here,
@@ -1245,32 +1280,6 @@ def run_agentic_split_orchestrator(
                         overall_verdict="moderate",
                         rationale="Defaulted: assessment output unparseable but split passed verification",
                     )
-
-            elif step == "9_refine_check":
-                parsed_refine = _parse_step_output(output, RefineCheck)
-                if isinstance(parsed_refine, RefineCheck):
-                    # Guard against runaway: enforce the iteration cap
-                    # in Python even if the agent missed it.
-                    if (parsed_refine.should_refine
-                            and iteration_count < MAX_REFINEMENT_ITERATIONS):
-                        state["_pending_refine"] = {
-                            "target_child_file": parsed_refine.target_child_file,
-                            "reason": parsed_refine.reason,
-                            "suggested_intent": parsed_refine.suggested_intent,
-                        }
-                        if not quiet:
-                            console.print(
-                                f"[cyan]Refine suggested on "
-                                f"{parsed_refine.target_child_file}: "
-                                f"{parsed_refine.reason}[/cyan]"
-                            )
-                    else:
-                        state["_pending_refine"] = None
-                        if not quiet:
-                            console.print(
-                                f"Refine check: ship as-is "
-                                f"({parsed_refine.reason})"
-                            )
 
         # ── Phase extraction (per-child, fan-out) ──────────────────
         elif step == "6a_phase_extract":

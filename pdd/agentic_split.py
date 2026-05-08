@@ -287,19 +287,30 @@ def _run_strangler_split(
     from .agentic_split_orchestrator import (
         OptionsConsidered, SplitOption, _parse_step_output, _dict_to_dataclass,
     )
-    parsed = _parse_step_output(step4_raw, OptionsConsidered)
-    if not isinstance(parsed, OptionsConsidered) or not parsed.options:
-        return False, "Strangler: could not parse plan", propose_cost, model, []
-    rebuilt = []
-    for o in parsed.options:
-        if isinstance(o, SplitOption):
-            rebuilt.append(o)
-        elif isinstance(o, dict):
-            rebuilt.append(_dict_to_dataclass(SplitOption, o))
-    if not rebuilt:
-        return False, "Strangler: plan had no options", propose_cost, model, []
-    best_plan = max(rebuilt, key=lambda o: o.numeric_score)
-    total_children = len(best_plan.plan.children)
+    saved_total_children = state.get("strangler_total_children")
+    total_children: Optional[int] = None
+    if saved_total_children is not None:
+        try:
+            total_children = int(saved_total_children)
+        except (TypeError, ValueError):
+            total_children = None
+        if total_children is not None and total_children <= 0:
+            total_children = None
+
+    if total_children is None:
+        parsed = _parse_step_output(step4_raw, OptionsConsidered)
+        if not isinstance(parsed, OptionsConsidered) or not parsed.options:
+            return False, "Strangler: could not parse plan", propose_cost, model, []
+        rebuilt = []
+        for o in parsed.options:
+            if isinstance(o, SplitOption):
+                rebuilt.append(o)
+            elif isinstance(o, dict):
+                rebuilt.append(_dict_to_dataclass(SplitOption, o))
+        if not rebuilt:
+            return False, "Strangler: plan had no options", propose_cost, model, []
+        best_plan = max(rebuilt, key=lambda o: o.numeric_score)
+        total_children = len(best_plan.plan.children)
     if not quiet:
         console.print(
             f"[cyan]Strangler: {total_children} children in proposed plan; "
@@ -411,6 +422,7 @@ def _run_strangler_split(
                     )
                     if cur_state is not None:
                         cur_state["strangler_total_cost"] = total_cost
+                        cur_state["strangler_total_children"] = total_children
                         # `idx` is the aborted pass index. Passes 0..idx-1
                         # completed successfully; resume should re-enter
                         # at `idx` (the aborted pass itself, since the

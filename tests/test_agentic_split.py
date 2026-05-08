@@ -12,6 +12,7 @@ Test Plan:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,34 @@ import pytest
 from pdd.agentic_split import run_agentic_split
 
 MODULE = "pdd.agentic_split"
+
+
+def _step4_options_output(child_count: int) -> str:
+    """Build parseable step-4 output with a best plan containing child_count children."""
+    children = [
+        {
+            "name": f"child_{idx}",
+            "code_file": f"child_{idx}.py",
+            "prompt_file": "",
+            "example_file": "",
+            "test_file": "",
+        }
+        for idx in range(1, child_count + 1)
+    ]
+    return json.dumps([
+        {
+            "name": "best",
+            "score": 10.0,
+            "risk": "low",
+            "rationale": "test",
+            "plan": {
+                "children": children,
+                "parent_changes": {},
+                "reference_updates": [],
+                "test_ownership": {},
+            },
+        }
+    ])
 
 
 class TestFileNotFound:
@@ -441,6 +470,141 @@ class TestStranglerPassesCompleted:
             "Strangler resume must read strangler_total_cost from saved state"
         )
 
+    def test_max_cost_abort_persists_original_total_children(self, tmp_path, monkeypatch):
+        """Behavioral: abort state records the original strangler pass count."""
+        from pdd.agentic_split import _run_strangler_split
+
+        target = tmp_path / "small.py"
+        target.write_text("def f():\n    return 1\n")
+        (tmp_path / ".git").mkdir()
+
+        propose_state = {"step_outputs": {"4": _step4_options_output(3)}}
+        aborted_pass_state = {
+            "max_cost_reached": True,
+            "step_outputs": {"4": _step4_options_output(1)},
+            "total_cost": 0.8,
+        }
+        loads = iter([None, propose_state, aborted_pass_state])
+        saves = []
+
+        def fake_load(*args, **kwargs):
+            return next(loads), None
+
+        def fake_save(cwd, split_id, workflow, state, state_dir, *args, **kwargs):
+            saves.append(dict(state))
+            return None
+
+        def fake_orchestrator(*args, **kwargs):
+            if kwargs.get("propose_only"):
+                return False, "Propose only complete", 0.1, "mock", []
+            return (
+                False,
+                "Aborted at step 6_extract: --max-cost $10.00 reached (spent $0.80)",
+                0.8,
+                "mock",
+                ["child_1.py"],
+            )
+
+        monkeypatch.setattr(
+            "pdd.agentic_common.load_workflow_state",
+            fake_load,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common.save_workflow_state",
+            fake_save,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common.clear_workflow_state",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_split.run_agentic_split_orchestrator",
+            fake_orchestrator,
+        )
+
+        ok, msg, cost, model, changed = _run_strangler_split(
+            target_path=target,
+            git_root=tmp_path,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=False,
+            force_split=False,
+            no_verify=False,
+            skip_regen_gate=False,
+            experimental_language=False,
+            intent=None,
+            no_phase_extraction=False,
+            max_cost=10.0,
+        )
+
+        assert ok is False
+        assert "Strangler pass 1 failed" in msg
+        assert cost == pytest.approx(0.9)
+        assert changed == ["child_1.py"]
+        assert saves, "Expected max-cost abort to persist strangler resume state"
+        assert saves[-1]["strangler_total_children"] == 3
+        assert saves[-1]["strangler_passes_completed"] == 0
+        assert saves[-1]["strangler_total_cost"] == pytest.approx(0.9)
+
+    def test_resume_uses_saved_total_children_not_aborted_pass_plan(self, tmp_path, monkeypatch):
+        """Behavioral: resume count comes from wrapper state, not pass-local step 4."""
+        from pdd.agentic_split import _run_strangler_split
+
+        target = tmp_path / "small.py"
+        target.write_text("def f():\n    return 1\n")
+        (tmp_path / ".git").mkdir()
+
+        saved_state = {
+            "max_cost_reached": True,
+            "step_outputs": {"4": _step4_options_output(1)},
+            "strangler_total_children": 3,
+            "strangler_passes_completed": 1,
+            "strangler_total_cost": 1.5,
+        }
+        pass_calls = []
+
+        monkeypatch.setattr(
+            "pdd.agentic_common.load_workflow_state",
+            lambda *args, **kwargs: (saved_state, None),
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_common.clear_workflow_state",
+            lambda *args, **kwargs: None,
+        )
+
+        def fake_orchestrator(*args, **kwargs):
+            pass_calls.append(kwargs)
+            return True, "ok", 0.2, "mock", [f"pass_{len(pass_calls)}.py"]
+
+        monkeypatch.setattr(
+            "pdd.agentic_split.run_agentic_split_orchestrator",
+            fake_orchestrator,
+        )
+
+        ok, msg, cost, model, changed = _run_strangler_split(
+            target_path=target,
+            git_root=tmp_path,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=False,
+            force_split=False,
+            no_verify=False,
+            skip_regen_gate=False,
+            experimental_language=False,
+            intent=None,
+            no_phase_extraction=False,
+            max_cost=10.0,
+        )
+
+        assert ok is True
+        assert "3 orchestrator passes ran" in msg
+        assert len(pass_calls) == 2
+        assert all(call["propose_only"] is False for call in pass_calls)
+        assert cost == pytest.approx(1.9)
+        assert changed == ["pass_1.py", "pass_2.py"]
+
 
 class TestChildResumeGuard:
     """Step 6 child loop skips re-extraction when files exist + max_cost_reached."""
@@ -556,6 +720,91 @@ class TestRefineMaxCostResume:
         assert 'state.get("_pending_refine_extract_applied")' in src, (
             "Refinement resume must check _pending_refine_extract_applied"
         )
+
+    def test_step9_budget_abort_preserves_pending_refine(self, tmp_path, monkeypatch):
+        """Behavioral: step-9 max-cost abort saves the parsed refine decision."""
+        from pdd.agentic_split_orchestrator import run_agentic_split_orchestrator
+
+        target = tmp_path / "small.py"
+        target.write_text("def f():\n    return 1\n")
+        (tmp_path / ".git").mkdir()
+
+        saved_state = {
+            "total_cost": 0.0,
+            "last_completed_step": "8_repair",
+            "step_outputs": {},
+            "model_used": "mock",
+            "changed_files": ["child.py"],
+            "children_extracted": [],
+            "phase_plans": [],
+            "intent": "REDUCE_MONOLITH",
+            "iteration_count": 0,
+            "verify_failures": [],
+            "quant_metrics": {},
+            "worktree_path": str(tmp_path),
+        }
+        saves = []
+
+        def fake_task(*args, **kwargs):
+            assert kwargs.get("label") == "9_refine_check"
+            return (
+                True,
+                json.dumps({
+                    "should_refine": True,
+                    "target_child_file": "child.py",
+                    "reason": "still too monolithic",
+                    "suggested_intent": "FOCUSED_EXTRACTION",
+                }),
+                1.0,
+                "mock",
+            )
+
+        def fake_save(cwd, split_id, workflow, state, state_dir, *args, **kwargs):
+            saves.append(dict(state))
+            return None
+
+        monkeypatch.setattr(
+            "pdd.agentic_split_orchestrator.load_workflow_state",
+            lambda *args, **kwargs: (saved_state, None),
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_split_orchestrator.save_workflow_state",
+            fake_save,
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_split_orchestrator._detect_language",
+            lambda _path: "python",
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_split_orchestrator.load_prompt_template",
+            lambda _name: "refine prompt",
+        )
+        monkeypatch.setattr(
+            "pdd.agentic_split_orchestrator.run_agentic_task",
+            fake_task,
+        )
+
+        ok, msg, cost, model, changed = run_agentic_split_orchestrator(
+            target_file=str(target),
+            cwd=tmp_path,
+            quiet=True,
+            max_cost=0.5,
+            use_github_state=False,
+        )
+
+        assert ok is False
+        assert "max-cost" in msg.lower()
+        assert cost == pytest.approx(1.0)
+        assert saves, "Expected budget abort to save workflow state"
+        final = saves[-1]
+        assert final["max_cost_reached"] is True
+        assert final["last_completed_step"] == "9_refine_check"
+        assert "9" in final["step_outputs"]
+        assert final["_pending_refine"] == {
+            "target_child_file": "child.py",
+            "reason": "still too monolithic",
+            "suggested_intent": "FOCUSED_EXTRACTION",
+        }
 
     def test_modify_only_extract_on_already_tracked_file_sets_applied_flag(self, tmp_path, monkeypatch):
         """Behavioral: successful FILES_MODIFIED on already-tracked file → flag SET.
