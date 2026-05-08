@@ -31,6 +31,7 @@ from .architecture_sync import (
     generate_tags_from_architecture,
 )
 from .architecture_registry import extract_modules
+from .construct_paths import _is_known_language
 from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
@@ -261,14 +262,17 @@ def _format_conformance_error(
     pin the real cause instead of truncating to "declared symbols missing".
     """
     basename = pathlib.Path(prompt_name).stem
-    # Drop a trailing language token like ``_Python`` / ``_TypeScript`` from
+    # Drop a trailing language token (e.g. ``_python`` or ``_TypeScript``) from
     # the basename so the repro hint matches what users actually pass to
-    # ``pdd sync``.
-    sync_basename = re.sub(
-        r"_(Python|TypeScript|TypeScriptReact|JavaScript|JavaScriptReact)$",
-        "",
-        basename,
-    )
+    # ``pdd sync``. Repository prompts use lowercase suffixes, so we mirror the
+    # sync-order basename logic by consulting the known-language registry.
+    sync_basename = basename
+    suffix_match = re.search(r"_([A-Za-z0-9]+)$", basename)
+    if suffix_match:
+        suffix_value = suffix_match.group(1)
+        if suffix_value.lower() not in {"llm", "prompt"} and _is_known_language(suffix_value.lower()):
+            sync_basename = basename[: suffix_match.start()]
+
     if sync_basename:
         repro = f"pdd sync {sync_basename}"
     else:

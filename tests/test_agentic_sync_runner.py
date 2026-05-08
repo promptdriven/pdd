@@ -1674,6 +1674,149 @@ class TestSyncOneModule:
             f"got:\n{error!r}"
         )
 
+    # === Issue #861: pin the structured conformance diagnostic block ===
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_conformance_block_pinned_with_content_selector_warning(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Issue #861: when a child emits the structured ``Architecture
+        conformance error`` block alongside a benign ContentSelector warning,
+        the failed-module summary must pin the full block (headline +
+        ``prompt:``/``generated:``/``missing:``/``detected:``/``repro:`` lines)
+        so missing symbol names survive the 500-char preview that GitHub and
+        Cloud Run show.
+        """
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                'Warning: ContentSelector failed for select='
+                '"def:_verify_architecture_conformance" \u2014 falling back\n'
+                "Architecture conformance error for agentic_sync_runner_python.prompt: "
+                "declared symbols missing from generated source\n"
+                "prompt: agentic_sync_runner_python.prompt\n"
+                "generated: pdd/agentic_sync_runner.py\n"
+                "missing: AsyncSyncRunner._extract_conformance_block\n"
+                "detected: AsyncSyncRunner, _format_duration, _parse_cost_from_csv\n"
+                "repro: pdd sync agentic_sync_runner\n"
+                "PDD command failed with exit code 1\n"
+            ),
+            exit_code=1,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["agentic_sync_runner"],
+            dep_graph={"agentic_sync_runner": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("agentic_sync_runner")
+        assert not success
+
+        # ContentSelector warning must NOT be promoted into the headline.
+        assert "ContentSelector failed for select=" not in error, (
+            f"Nonfatal warning leaked into pinned summary; got:\n{error!r}"
+        )
+
+        # The pinned conformance block must be present in full, with all five
+        # diagnostic prefixes intact and in order so log scrapers see the cause.
+        assert "Architecture conformance error for agentic_sync_runner_python.prompt" in error
+        assert "prompt: agentic_sync_runner_python.prompt" in error
+        assert "generated: pdd/agentic_sync_runner.py" in error
+        assert "missing: AsyncSyncRunner._extract_conformance_block" in error
+        assert "detected: AsyncSyncRunner, _format_duration, _parse_cost_from_csv" in error
+        assert "repro: pdd sync agentic_sync_runner" in error
+
+        # The pinned block must survive the 500-char preview that the runner
+        # uses for GitHub comments / Cloud Run summaries: the missing-symbol
+        # line must appear within the first 500 characters of the error.
+        preview = error[:500]
+        assert "missing: AsyncSyncRunner._extract_conformance_block" in preview, (
+            "Conformance block must be pinned early enough that the 500-char "
+            f"preview surfaces the missing symbol; preview was:\n{preview!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_conformance_block_not_duplicated_when_keyword_lines_overlap(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """The pinned block and the trailing keyword-line tail must not echo
+        the same conformance lines twice — the runner dedupes overlapping
+        lines so the summary stays compact.
+        """
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=(
+                "Architecture conformance error for models_python.prompt: "
+                "declared symbols missing\n"
+                "prompt: models_python.prompt\n"
+                "generated: src/models.py\n"
+                "missing: User\n"
+                "detected: Order\n"
+                "repro: pdd sync models\n"
+            ),
+            exit_code=1,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["models"],
+            dep_graph={"models": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _cost, error = runner._sync_one_module("models")
+        assert not success
+        # Each diagnostic line should appear exactly once.
+        for needle in (
+            "missing: User",
+            "detected: Order",
+            "repro: pdd sync models",
+        ):
+            assert error.count(needle) == 1, (
+                f"Expected `{needle}` to appear exactly once; got:\n{error!r}"
+            )
+
+
+def test_extract_conformance_block_returns_none_without_headline():
+    from pdd.agentic_sync_runner import _extract_conformance_block
+
+    assert _extract_conformance_block("") is None
+    assert _extract_conformance_block("PDD command failed with exit code 1\n") is None
+
+
+def test_extract_conformance_block_captures_diagnostic_lines():
+    from pdd.agentic_sync_runner import _extract_conformance_block
+
+    text = (
+        "warming up\n"
+        "Architecture conformance error for foo_python.prompt: declared symbols missing\n"
+        "prompt: foo_python.prompt\n"
+        "generated: src/foo.py\n"
+        "missing: Bar\n"
+        "detected: Baz\n"
+        "repro: pdd sync foo\n"
+        "\n"
+        "unrelated trailing line\n"
+    )
+    block = _extract_conformance_block(text)
+    assert block is not None
+    assert block.splitlines()[0].startswith("Architecture conformance error for foo_python.prompt")
+    assert "prompt: foo_python.prompt" in block
+    assert "generated: src/foo.py" in block
+    assert "missing: Bar" in block
+    assert "detected: Baz" in block
+    assert "repro: pdd sync foo" in block
+    # Blank line stops the block; unrelated trailing content must not be pulled in.
+    assert "unrelated trailing line" not in block
+
 
 # ---------------------------------------------------------------------------
 # Resumability: state file persistence

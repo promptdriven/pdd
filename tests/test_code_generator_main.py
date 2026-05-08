@@ -3145,6 +3145,108 @@ class TestVerifyArchitectureConformance:
                 verbose=False,
             )
 
+    # === Issue #861: structured diagnostic block ===
+
+    def _missing_symbol_arch(self, prompt_filename: str) -> list:
+        return [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Order", "signature": "class Order(BaseModel)"},
+                            {"name": "User", "signature": "class User(BaseModel)"},
+                        ]
+                    },
+                },
+            }
+        ]
+
+    def test_missing_symbol_emits_structured_diagnostic_block(self, tmp_path):
+        """Issue #861: a missing-symbol failure must emit the structured
+        ``Architecture conformance error`` headline followed by
+        ``prompt:``/``generated:``/``missing:``/``detected:``/``repro:`` lines.
+        """
+        arch = self._missing_symbol_arch("models_Python.prompt")
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = "class Order(BaseModel):\n    id: str\n"
+        generated_path = "/abs/build/src/models.py"
+
+        with pytest.raises(click.UsageError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+                generated_path=generated_path,
+            )
+
+        msg = str(excinfo.value)
+        # Stable headline naming the prompt
+        assert msg.splitlines()[0].startswith(
+            "Architecture conformance error for models_Python.prompt:"
+        )
+        # All five required diagnostic lines, in order
+        assert "\nprompt: models_Python.prompt" in msg
+        assert f"\ngenerated: {generated_path}" in msg
+        assert "\nmissing: User" in msg
+        assert "\ndetected: Order" in msg
+        # repro strips the language suffix; capitalized variant
+        assert "\nrepro: pdd sync models" in msg
+
+    def test_lowercase_language_suffix_strips_for_repro(self, tmp_path):
+        """Repository prompt files use lowercase suffixes like
+        ``agentic_sync_runner_python.prompt``. The ``repro:`` hint MUST be
+        ``pdd sync agentic_sync_runner`` (not ``agentic_sync_runner_python``)
+        because ``pdd sync`` resolves basenames by appending
+        ``_<language>.prompt`` itself.
+        """
+        arch = self._missing_symbol_arch("agentic_sync_runner_python.prompt")
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = "class Order(BaseModel):\n    id: str\n"
+
+        with pytest.raises(click.UsageError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="agentic_sync_runner_python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+                generated_path="src/agentic_sync_runner.py",
+            )
+
+        msg = str(excinfo.value)
+        assert "\nrepro: pdd sync agentic_sync_runner\n" in msg + "\n"
+        # Negative assertion: must not leave the lowercase language suffix in
+        assert "pdd sync agentic_sync_runner_python" not in msg
+
+    def test_generated_path_falls_back_when_omitted(self, tmp_path):
+        """When ``generated_path`` is not supplied, the ``generated:`` line
+        falls back to the prompt-derived ``.py`` basename so the diagnostic is
+        always populated.
+        """
+        arch = self._missing_symbol_arch("models_Python.prompt")
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = "class Order(BaseModel):\n    id: str\n"
+
+        with pytest.raises(click.UsageError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+        msg = str(excinfo.value)
+        assert "\ngenerated: models_Python.py" in msg
+
 
 # === Issue #687 Tests: example_output_path must be injected and consumed ===
 # Root cause: generate_prompt.prompt tells the LLM to parse .pddrc YAML for

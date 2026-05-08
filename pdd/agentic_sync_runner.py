@@ -1032,11 +1032,14 @@ class AsyncSyncRunner:
             # dominated by benign `ContentSelector failed` warnings or generic
             # `declared symbols missing` text. Pinning happens at most once.
             conformance_block = _extract_conformance_block(all_output)
+            pinned_lines: set = set()
             if conformance_block:
                 summary_parts.append(conformance_block)
                 # Drop any keyword lines that the pinned block already covers
                 # so the headline does not echo twice.
-                pinned_lines = set(conformance_block.splitlines())
+                pinned_lines = {
+                    pl.rstrip() for pl in conformance_block.splitlines()
+                }
                 keyword_lines = [
                     line for line in keyword_lines
                     if line.rstrip() not in pinned_lines
@@ -1047,18 +1050,21 @@ class AsyncSyncRunner:
             else:
                 # No high-signal line: fall back to labeled stderr/stdout
                 # tails so surrounding context is still visible. Exclude
-                # the failure_reason line so it is not echoed twice.
+                # the failure_reason line and any line already covered by the
+                # pinned conformance block so the summary does not echo twice.
                 stderr_tail = [
                     line for line in (stderr or "").splitlines()
                     if line.strip()
                     and line.strip() != failure_reason
                     and not _is_nonfatal_warning(line)
+                    and line.rstrip() not in pinned_lines
                 ][-10:]
                 stdout_tail = [
                     line for line in (stdout or "").splitlines()
                     if line.strip()
                     and line.strip() != failure_reason
                     and not _is_nonfatal_warning(line)
+                    and line.rstrip() not in pinned_lines
                 ][-10:]
                 if stderr_tail:
                     summary_parts.append(

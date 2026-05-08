@@ -70,7 +70,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     <include>pdd/core/cloud.py</include>
 </cloud_config>
 <architecture_sync>
-    <include select="def:_verify_architecture_conformance,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
+    <include select="def:_verify_architecture_conformance,def:_collect_python_symbols,def:_format_conformance_error,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
 </architecture_sync>
 <env_detector>
     <include>pdd/python_env_detector.py</include>
@@ -109,5 +109,5 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 A single Python file containing:
 1. The primary `code_generator_main` function returning `(generated_code, was_incremental, total_cost, model_name)`.
 2. Private helper functions for Git operations (`_run_git_command`, `is_git_repository`).
-3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, `_should_wire_generated_exports`, `_wire_to_parent_init`).
+3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, `_format_conformance_error`, `_should_wire_generated_exports`, `_wire_to_parent_init`). `_format_conformance_error(prompt_name, generated_path, missing, detected, summary)` is the single source of truth for the diagnostic block described in Requirement 5; both `UsageError` raises in `_verify_architecture_conformance` MUST go through it so the `prompt:`/`generated:`/`missing:`/`detected:`/`repro:` contract stays consistent. The repro hint MUST strip a trailing known-language suffix (e.g. `_python`, `_TypeScript`) regardless of case so the printed `pdd sync <basename>` matches the lowercase `<basename>_<language>.prompt` filenames used in the repository.
 4. Logic for handling Cloud API requests, including JWT authentication and error code handling.
