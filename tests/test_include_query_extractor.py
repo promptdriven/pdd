@@ -23,6 +23,7 @@ from pdd.include_query_extractor import (
     IncludeQueryExtractor,
     compute_cache_key,
     _ENV_CACHE_ENABLE,
+    _ENV_EXTRACTION_STRENGTH,
 )
 
 
@@ -119,13 +120,25 @@ class TestLLMInteractionPattern:
             exclude_keys=["file_content", "query"],
         )
 
-    def test_calls_llm_with_strong_strength(self, temp_project, mock_llm):
+    def test_calls_llm_with_strong_strength(self, temp_project, mock_llm, monkeypatch):
         _, source_file = temp_project
+        monkeypatch.delenv(_ENV_EXTRACTION_STRENGTH, raising=False)
+
         extractor = IncludeQueryExtractor()
         extractor.extract(str(source_file), "query")
 
         call_kwargs = mock_llm["llm_invoke"].call_args
         assert call_kwargs.kwargs["strength"] == 1.0
+
+    def test_extraction_strength_can_be_overridden(self, temp_project, mock_llm, monkeypatch):
+        _, source_file = temp_project
+        monkeypatch.setenv(_ENV_EXTRACTION_STRENGTH, "0.5")
+
+        extractor = IncludeQueryExtractor()
+        extractor.extract(str(source_file), "query")
+
+        call_kwargs = mock_llm["llm_invoke"].call_args
+        assert call_kwargs.kwargs["strength"] == 0.5
 
     def test_llm_receives_preprocessed_template(self, temp_project, mock_llm):
         _, source_file = temp_project

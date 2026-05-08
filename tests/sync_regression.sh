@@ -255,7 +255,7 @@ run_pdd_command_base() {
         log_error "Command failed with exit code $status."
         log_timestamped "Command: $full_command_str - Failed with exit code $status."
         if [ "$exit_on_fail" = "true" ]; then
-            exit 1
+            exit "$status"
         fi
     fi
     return $status
@@ -329,7 +329,11 @@ run_with_timeout() {
     local duration="$1"; shift
 
     if [ -n "$TIMEOUT_CMD" ]; then
-        "$TIMEOUT_CMD" "$duration" "$@"
+        if "$TIMEOUT_CMD" --help 2>&1 | grep -q -- "--kill-after"; then
+            "$TIMEOUT_CMD" --kill-after=10s "$duration" "$@"
+        else
+            "$TIMEOUT_CMD" "$duration" "$@"
+        fi
     else
         # Pure-bash timeout fallback for systems without timeout/gtimeout
         # Parse duration (supports formats: 30, 30s, 5m, 1h)
@@ -1025,7 +1029,11 @@ if [ "$TARGET_TEST" = "all" ] || [ "$TARGET_TEST" = "8" ]; then
     log "8c. Testing sync with malformed prompt"
     MALFORMED_PROMPT="malformed_test_python.prompt"
     echo "This is not a proper prompt format without clear requirements" > "prompts/$MALFORMED_PROMPT"
-    run_pdd_command_noexit sync "malformed_test" || true
+    MALFORMED_PROMPT_TIMEOUT="${MALFORMED_PROMPT_TIMEOUT:-120}"
+    log "Using ${MALFORMED_PROMPT_TIMEOUT}s timeout for malformed prompt check"
+    PDD_CMD_TIMEOUT="$MALFORMED_PROMPT_TIMEOUT" run_pdd_command_noexit \
+        sync --skip-tests --skip-verify --budget 1.0 --max-attempts 1 \
+        "malformed_test" || true
     # Should handle gracefully but may not produce optimal results
 fi
 

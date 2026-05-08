@@ -27,27 +27,27 @@ class IterationResult:
 def extract_test_results(pytest_output: str) -> Tuple[int, int]:
     """Extract the number of fails and errors from pytest output."""
     fails = errors = 0
-
+    
     # Look for patterns like "4 failed", "1 error"
     fail_match = re.search(r'(\d+)\s+failed', pytest_output)
     error_match = re.search(r'(\d+)\s+error', pytest_output)
-
+    
     if fail_match:
         fails = int(fail_match.group(1))
     if error_match:
         errors = int(error_match.group(1))
-
+    
     return fails, errors
 
-def create_backup_files(unit_test_file: str, code_file: str, fails: int,
+def create_backup_files(unit_test_file: str, code_file: str, fails: int, 
                        errors: int, iteration: int) -> Tuple[str, str]:
     """Create backup files with iteration information in the filename."""
     unit_test_backup = f"{os.path.splitext(unit_test_file)[0]}_{fails}_{errors}_{iteration}.py"
     code_backup = f"{os.path.splitext(code_file)[0]}_{fails}_{errors}_{iteration}.py"
-
+    
     shutil.copy2(unit_test_file, unit_test_backup)
     shutil.copy2(code_file, code_backup)
-
+    
     return unit_test_backup, code_backup
 
 def fix_error_loop(
@@ -69,17 +69,17 @@ def fix_error_loop(
         raise FileNotFoundError("One or more input files do not exist")
     if not (0 <= strength <= 1 and 0 <= temperature <= 1):
         raise ValueError("Strength and temperature must be between 0 and 1")
-
+    
     # Step 1: Remove existing error log file
     if os.path.exists(error_log_file):
         os.remove(error_log_file)
-
+    
     # Step 2: Initialize variables
     attempt_count = 0
     total_cost = 0.0
     best_iteration: Optional[IterationResult] = None
     model_name = ""
-
+    
     while attempt_count < max_attempts:
         rprint(f"[bold yellow]Attempt {attempt_count + 1}[/bold yellow]")
         # Step 3a: Run pytest
@@ -90,32 +90,32 @@ def fix_error_loop(
             f.write("\nAttempt " + str(attempt_count + 1) + ":\n")
             f.write("\n****************************************************************************************************\n")
             f.write(result.stdout + result.stderr)
-
+        
         # Extract test results
         fails, errors = extract_test_results(result.stdout)
         current_iteration = IterationResult(fails, errors, attempt_count, fails + errors)
-
+        
         # Step 3b: Check if tests pass
         if fails == 0 and errors == 0:
             break
-
+            
         # Step 3c: Handle test failures
         with open(error_log_file, 'r') as f:
             error_content = f.read()
         rprint(f"[bold red]Test output (attempt {attempt_count + 1}):[/bold red]")
         rprint(error_content.replace('[', '\\[').replace(']', '\\]'))
-
+        
         # Create backups
         backup_unit_test, backup_code = create_backup_files(
             unit_test_file, code_file, fails, errors, attempt_count
         )
-
+        
         # Read current files
         with open(unit_test_file, 'r') as f:
             current_unit_test = f.read()
         with open(code_file, 'r') as f:
             current_code = f.read()
-
+            
         # Try to fix errors
         update_unit_test, update_code, fixed_unit_test, fixed_code, iteration_cost, model_name = (
             fix_errors_from_unit_tests(
@@ -123,27 +123,27 @@ def fix_error_loop(
                 error_log_file, strength, temperature
             )
         )
-
+        
         total_cost += iteration_cost
         if total_cost > budget:
             rprint("[bold red]Budget exceeded![/bold red]")
             break
-
+            
         if not (update_unit_test or update_code):
             rprint("[bold yellow]No changes needed or possible.[/bold yellow]")
             break
-
+            
         # Update files if needed
         if update_unit_test:
             with open(unit_test_file, 'w') as f:
                 f.write(fixed_unit_test)
 
         attempt_count += 1
-
+                
         if update_code:
             with open(code_file, 'w') as f:
                 f.write(fixed_code)
-
+                
             # Run verification
             rprint("[bold yellow]Running Verification.[/bold yellow]")
             verification_result = subprocess.run(['python', verification_program],
@@ -157,12 +157,12 @@ def fix_error_loop(
                     f.write("****************************************************************************************************\n")
                     f.write(f"\nRestoring previous working code.\n")
                 continue
-
+                
         # Update best iteration if current is better
         if current_iteration.is_better_than(best_iteration):
             best_iteration = current_iteration
-
-
+            
+        
     # Step 4: Final test run
     with open(error_log_file, 'a') as f:
         final_result = subprocess.run(['python', '-m', 'pytest', '-vv', unit_test_file],
@@ -170,7 +170,7 @@ def fix_error_loop(
         f.write("\nFinal test run:\n" + final_result.stdout + final_result.stderr)
     rprint("[bold]Final test output:[/bold]")
     rprint(final_result.stdout.replace('[', '\\[').replace(']', '\\]'))
-
+    
     # Step 5: Restore best iteration if needed
     final_fails, final_errors = extract_test_results(final_result.stdout)
     if best_iteration and (final_fails + final_errors) > best_iteration.total_fails_and_errors:
@@ -179,13 +179,13 @@ def fix_error_loop(
         best_code = f"{os.path.splitext(code_file)[0]}_{best_iteration.fails}_{best_iteration.errors}_{best_iteration.iteration}.py"
         shutil.copy2(best_unit_test, unit_test_file)
         shutil.copy2(best_code, code_file)
-
+    
     # Step 6: Return results
     with open(unit_test_file, 'r') as f:
         final_unit_test = f.read()
     with open(code_file, 'r') as f:
         final_code = f.read()
-
+        
     success = final_fails == 0 and final_errors == 0
-
+    
     return success, final_unit_test, final_code, attempt_count, total_cost, model_name
