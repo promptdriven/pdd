@@ -96,6 +96,7 @@
 9. **Auto-Submit Example** (`_auto_submit_example` helper):
     - Skip if `PDD_FORCE_LOCAL` env var is set
     - Skip if `CloudConfig.is_running_in_cloud()` returns True (interactive Device Flow cannot complete in headless executors)
+    - Before calling the lower-level async `get_jwt_token(...)`, call `CloudConfig.ensure_default_env()` so `PDD_CLOUD_URL` infers staging/prod/local before cached JWT audience validation. This prevents a prod cached JWT from being reused against a staging `submitExample` URL (#859 follow-up).
     - Bound the JWT fetch with `asyncio.wait_for(get_jwt_token(...), timeout=auth_timeout_s)` where `auth_timeout_s` is `float(os.environ.get('PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S', '300'))` parsed defensively (`try/except (TypeError, ValueError)` falls back to `300.0`). On `asyncio.TimeoutError` / `TimeoutError`, emit a yellow warning and return.
     - Get JWT token via `get_jwt_token()` with Firebase API key and GitHub client ID from env
     - Preprocess prompt content via `preprocess()` with `recursive=False` and `double_curly_brackets=True`
@@ -176,6 +177,7 @@
 11. **`_auto_submit_example(basename: str, language: str, pdd_files: Dict[str, Path], ctx: click.Context) -> None`**:
     - Skip if PDD_FORCE_LOCAL env var is truthy
     - Skip if `CloudConfig.is_running_in_cloud()` returns True
+    - Before calling the lower-level async `get_jwt_token(...)`, call `CloudConfig.ensure_default_env()` so `PDD_CLOUD_URL` infers staging/prod/local before cached JWT audience validation. This prevents a prod cached JWT from being reused against a staging `submitExample` URL (#859 follow-up).
     - Get JWT token via `asyncio.run(asyncio.wait_for(get_jwt_token(...), timeout=auth_timeout_s))`, with `auth_timeout_s` defensively parsed from `PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S` (default `300.0`); on `asyncio.TimeoutError` / `TimeoutError`, log a yellow warning and return.
     - Read and preprocess prompt file
     - Build payload with prompt, code, example, test (if exists)

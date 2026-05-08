@@ -474,6 +474,10 @@ def fix_main(
                         # Get JWT token for cloud authentication; bound the
                         # asyncio call so a stuck Device Flow on a dev machine
                         # cannot eat the rest of the fix budget.
+                        # The lower-level helper checks JWT cache before it
+                        # infers the Firebase audience, so seed PDD_ENV from
+                        # PDD_CLOUD_URL first to avoid staging/prod token mixups.
+                        CloudConfig.ensure_default_env()
                         jwt_token = asyncio.run(asyncio.wait_for(
                             get_jwt_token(
                                 firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),

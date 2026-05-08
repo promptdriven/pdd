@@ -24,11 +24,12 @@
        if in async context, raise AuthError directing user to run `pdd auth login` first
      - Always display auth errors to user (critical for debugging auth issues)
      - Catch both expected auth exceptions and unexpected exceptions; return None on failure
-  5) `_ensure_default_env()`: Auto-default `PDD_ENV` when unset, called at start of `get_jwt_token`
+  5) `ensure_default_env()`: Auto-default `PDD_ENV` when unset, called at start of `get_jwt_token`
      - Set "local" if emulator env vars are detected (FUNCTIONS_EMULATOR, FIREBASE_AUTH_EMULATOR_HOST, FIREBASE_EMULATOR_HUB)
      - Set "local" if PDD_CLOUD_URL points to localhost/127.0.0.1/0.0.0.0
      - Set "staging" if PDD_CLOUD_URL contains "prompt-driven-development-stg" or "staging"
      - Default to "prod" for typical CLI usage
+     - Keep `_ensure_default_env()` as a backward-compatible alias that delegates to `ensure_default_env()`
   6) `is_running_in_cloud()`: Return True if running inside a cloud environment
      - Check for `K_SERVICE` env var (Google Cloud Functions/Cloud Run)
      - Check for `FUNCTIONS_EMULATOR` env var (Firebase emulator)

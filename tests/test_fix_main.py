@@ -2674,6 +2674,7 @@ def test_fix_main_auto_submit_calls_auth_when_not_local(
     monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
     monkeypatch.delenv("PDD_CLOUD_ONLY", raising=False)
     monkeypatch.delenv("PDD_NO_LOCAL_FALLBACK", raising=False)
+    monkeypatch.delenv("PDD_ENV", raising=False)
     monkeypatch.setenv(
         "PDD_CLOUD_URL",
         "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
@@ -2683,6 +2684,7 @@ def test_fix_main_auto_submit_calls_auth_when_not_local(
     monkeypatch.setenv("PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S", "5")
 
     async def _fake_jwt(*args, **kwargs):
+        assert os.environ.get("PDD_ENV") == "staging"
         return "fake_jwt_token"
 
     mock_get_jwt_token.side_effect = _fake_jwt
@@ -2781,6 +2783,8 @@ def test_fix_main_auto_submit_guard_exists_in_source():
     # Device Flow on a dev machine cannot eat the rest of the fix budget.
     assert "asyncio.wait_for(" in source and "PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S" in source, \
         "fix_main.py must bound the asyncio JWT call via PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S"
+    assert "CloudConfig.ensure_default_env()" in source, \
+        "fix_main.py must infer PDD_ENV before lower-level cached JWT lookup"
 
 
 def test_fix_main_auto_submit_prompt_documents_cloud_skip():
