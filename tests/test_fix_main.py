@@ -2789,3 +2789,44 @@ def test_fix_main_auto_submit_prompt_documents_cloud_skip():
         "fix_main_python.prompt must spec the cloud short-circuit for auto-submit"
     assert "asyncio.wait_for" in prose and "PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S" in prose, \
         "fix_main_python.prompt must spec the bounded asyncio JWT call"
+
+
+def test_fix_main_auto_submit_uses_cloudconfig_endpoint():
+    """Regression for #859: the auto-submit POST must route through
+    ``CloudConfig.get_endpoint_url("submitExample")`` so ``PDD_CLOUD_URL``
+    overrides (staging canary, local emulator) are honored. A hardcoded
+    production URL caused Firebase audience mismatches under the staging
+    canary deploy."""
+    from pathlib import Path as RealPath
+
+    fix_main_path = RealPath(__file__).parent.parent / "pdd" / "fix_main.py"
+    source = fix_main_path.read_text()
+
+    assert 'CloudConfig.get_endpoint_url("submitExample")' in source, (
+        "fix_main.py auto-submit must call "
+        "CloudConfig.get_endpoint_url(\"submitExample\") (issue #859)"
+    )
+    assert (
+        "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample"
+        not in source
+    ), (
+        "fix_main.py must not hardcode the production submitExample URL — "
+        "use CloudConfig.get_endpoint_url instead (issue #859)"
+    )
+
+
+def test_fix_main_prompt_documents_submitexample_endpoint():
+    """The prompt must require routing submitExample through CloudConfig
+    so future regenerations do not silently revert #859."""
+    from pathlib import Path as RealPath
+
+    prompt_path = (
+        RealPath(__file__).parent.parent
+        / "pdd" / "prompts" / "fix_main_python.prompt"
+    )
+    prose = prompt_path.read_text()
+
+    assert 'CloudConfig.get_endpoint_url("submitExample")' in prose, (
+        "fix_main_python.prompt must spec routing submitExample through "
+        "CloudConfig.get_endpoint_url (issue #859)"
+    )

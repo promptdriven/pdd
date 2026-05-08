@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 from typing import Tuple, Optional
 import json
@@ -564,13 +566,16 @@ def fix_main(
                                 "filename": "analysis.log"
                             }]
 
-                        # Submit the example to Firebase Cloud Function
+                        # Submit the example via CloudConfig endpoint so PDD_CLOUD_URL
+                        # (staging/local emulator overrides) is honored. See #859 —
+                        # hardcoding the production URL caused Firebase audience
+                        # mismatches under the staging canary.
                         headers = {
                             "Authorization": f"Bearer {jwt_token}",
                             "Content-Type": "application/json"
                         }
                         response = requests.post(
-                            'https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample',
+                            CloudConfig.get_endpoint_url("submitExample"),
                             json=payload,
                             headers=headers,
                             timeout=get_cloud_request_timeout(),
