@@ -1903,6 +1903,11 @@
           {
             "name": "code_generator_main",
             "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False) -> Tuple[str, bool, float, str]"
+          },
+          {
+            "name": "ArchitectureConformanceError",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str])",
+            "returns": "ArchitectureConformanceError"
           }
         ]
       }
@@ -7196,7 +7201,7 @@
   },
   {
     "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted.",
+    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects architecture-conformance failures from per-module sync subprocesses (line prefix 'Architecture conformance error for ') and retries the same module up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact missing symbols; short-circuits when the missing-symbol set repeats, and on hard failure records a structured '=== architecture conformance failure ===' block plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
@@ -8543,6 +8548,61 @@
     "position": {
       "x": 1200,
       "y": 600
+    }
+  },
+  {
+    "reason": "Job queue manager for async PDD command execution via subprocesses.",
+    "description": "Async job queue manager that executes PDD commands as subprocesses with concurrency control (semaphore), real-time output streaming, and robust cancellation (SIGTERM/SIGKILL). Surfaces architecture-conformance failures (markers 'Architecture conformance error for ' or '=== architecture conformance failure ===') in job.error with the structured block, 'Reproduce locally:' line, and '--- env ---' fingerprint instead of the generic 'Sync operation failed' so the GitHub App can show missing symbols and a repro command.",
+    "dependencies": [],
+    "priority": 220,
+    "filename": "server/jobs_python.prompt",
+    "filepath": "pdd/server/jobs.py",
+    "tags": [
+      "module",
+      "python",
+      "server"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "Job",
+            "signature": "(id, command, args, options, status, result, error, cost, ...)",
+            "returns": "Job"
+          },
+          {
+            "name": "JobCallbacks",
+            "signature": "()",
+            "returns": "JobCallbacks"
+          },
+          {
+            "name": "JobManager",
+            "signature": "(max_concurrent: int = 1, executor=None, project_root=None)",
+            "returns": "JobManager"
+          },
+          {
+            "name": "JobManager.submit",
+            "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
+            "returns": "Job"
+          },
+          {
+            "name": "JobManager.cancel",
+            "signature": "async (job_id: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "JobManager.cleanup_old_jobs",
+            "signature": "(max_age_seconds: float = 3600) -> int",
+            "returns": "int"
+          },
+          {
+            "name": "JobManager.shutdown",
+            "signature": "async () -> None",
+            "returns": "None"
+          }
+        ]
+      }
     }
   }
 ]
