@@ -51,16 +51,19 @@ def mock_dependencies():
     """
     with patch("pdd.commands.connect.uvicorn") as mock_uvicorn, \
          patch("pdd.commands.connect.webbrowser") as mock_webbrowser, \
-         patch("pdd.commands.connect.create_app") as mock_create_app:
+         patch("pdd.commands.connect.create_app") as mock_create_app, \
+         patch("pdd.core.cloud.CloudConfig.get_jwt_token") as mock_get_jwt:
 
         # Setup default mock behaviors
         mock_uvicorn.run.return_value = None
         mock_create_app.return_value = MagicMock(name="FastAPIApp")
+        mock_get_jwt.return_value = None
 
         yield {
             "uvicorn": mock_uvicorn,
             "webbrowser": mock_webbrowser,
-            "create_app": mock_create_app
+            "create_app": mock_create_app,
+            "get_jwt_token": mock_get_jwt
         }
 
 

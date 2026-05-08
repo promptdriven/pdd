@@ -8,6 +8,40 @@ import pytest
 from pdd.bug_to_unit_test import bug_to_unit_test
 
 
+@pytest.fixture(autouse=True)
+def mock_bug_to_unit_test_generation(monkeypatch):
+    """Keep these unit tests deterministic and off live LLM calls."""
+
+    monkeypatch.setattr(
+        "pdd.bug_to_unit_test.load_prompt_template",
+        lambda _template_name: "Template content",
+    )
+    monkeypatch.setattr(
+        "pdd.bug_to_unit_test.preprocess",
+        lambda text, **_kwargs: text,
+    )
+    monkeypatch.setattr(
+        "pdd.bug_to_unit_test.llm_invoke",
+        lambda **_kwargs: {
+            "result": "```python\ndef test_generated():\n    assert True\n```",
+            "cost": 0.01,
+            "model_name": "mock-model",
+        },
+    )
+    monkeypatch.setattr(
+        "pdd.bug_to_unit_test.unfinished_prompt",
+        lambda **_kwargs: (None, True, 0.0, "mock-model"),
+    )
+    monkeypatch.setattr(
+        "pdd.bug_to_unit_test.postprocess",
+        lambda result, language, **_kwargs: (
+            "def test_generated():\n    assert True\n",
+            0.0,
+            "mock-model",
+        ),
+    )
+
+
 @pytest.fixture
 def sample_inputs():
     """Provides sample inputs for the tests."""

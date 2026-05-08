@@ -122,6 +122,10 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     # Existing examples are reviewable artifacts. In PR auto-heal, do not spend
     # a full LLM call rewriting them by default; missing examples still heal.
     env.setdefault("PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT", "1")
+    # Git-reclassified example drifts mean the PR already touched the reviewed
+    # prompt/code side. Leave example refresh to review instead of blocking on
+    # a best-effort LLM generation in the auto-heal gate.
+    env.setdefault("PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT", "1")
     return env
 
 
@@ -254,6 +258,18 @@ def _get_heal_sync_skip_reason(basename: str) -> Optional[str]:
     return f"{basename} is listed in PDD_HEAL_SYNC_SKIP_MODULES"
 
 
+def _is_review_only_example_drift(drift: DriftInfo) -> bool:
+    """Return True for git-reclassified example drift already covered by PR edits."""
+    if drift.operation != "example":
+        return False
+    return drift.reason.startswith(
+        (
+            "Code and prompt changed together",
+            "Prompt changed without code changes",
+        )
+    )
+
+
 def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]:
     """Detect prompt and example drift across PDD modules.
 
@@ -348,7 +364,7 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 code_changed = bool(code_file_paths & git_changed)
                 prompt_changed = bool(prompt_file_paths & git_changed)
 
-                if code_changed and prompt_changed and decision.operation == "generate":
+                if code_changed and prompt_changed and decision.operation in {"auto-deps", "generate"}:
                     console.print(
                         f"[blue]↔ Reclassifying {basename}: code and prompt "
                         "changed together → example drift[/blue]"
@@ -366,7 +382,7 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 elif (
                     prompt_changed
                     and not code_changed
-                    and decision.operation == "generate"
+                    and decision.operation in {"auto-deps", "generate"}
                 ):
                     console.print(
                         f"[blue]↔ Reclassifying {basename}: prompt changed but "
@@ -1084,6 +1100,18 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
                 f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
                 f"{skip_reason}. This module can be regenerated in a separate "
                 "follow-up run without blocking the PR auto-heal build.[/yellow]"
+            )
+            return None
+        if (
+            env.get("PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT") == "1"
+            and drift.example_path
+            and Path(drift.example_path).exists()
+            and _is_review_only_example_drift(drift)
+        ):
+            console.print(
+                f"[yellow]⚠ Skipping auto-heal example for {drift.basename}: "
+                "prompt/code changes are already part of this PR, the example "
+                "file already exists, and example refresh is left for review.[/yellow]"
             )
             return None
         if (

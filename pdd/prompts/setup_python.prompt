@@ -4,10 +4,18 @@
 <requirements><include>requirements.txt</include></requirements>
 
 % Here is the README.md file:
-<readme><include>README.md</include></readme>
+<readme><include select="section:PDD,section:Installation">README.md</include></readme>
 
 % Here is the code for the Python application 'pdd':
 <cli_code><include>pdd/cli.py</include></cli_code>
+
+% Dependencies
+<pdd.cli>
+    <include select="def:cli,def:log_cost">context/change/15/initial_cli.py</include>
+</pdd.cli>
+<pdd.main>
+    <include>context/__init__example.py</include>
+</pdd.main>
 
 % Here is the repository URL: <shell>git config --get remote.origin.url</shell>
 

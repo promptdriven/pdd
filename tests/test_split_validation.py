@@ -314,13 +314,38 @@ class TestExampleFile:
         assert errors[0].severity == "error"
         assert "child.py" in errors[0].message
 
+    def test_explicit_new_example_path_satisfies_example_file(self, tmp_path):
+        """A plan's first-class child.new_example path is valid even when
+        conventional derived example paths do not exist."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "context").mkdir()
+        (tmp_path / "prompts" / "child_python.prompt").write_text(
+            FULL_PROMPT_CONTENT
+        )
+        (tmp_path / "pdd" / "child.py").write_text("")
+        (tmp_path / "context" / "child_example.py").write_text("import pdd.child\n")
+        plan = FakePlan(children=[
+            {
+                "name": "child",
+                "new_prompt": "prompts/child_python.prompt",
+                "new_source": "pdd/child.py",
+                "new_example": "context/child_example.py",
+            }
+        ])
+
+        with _mock_git_clean():
+            result = validate_extraction(plan, tmp_path)
+
+        assert not any(f.check == "example_file" for f in result.failures)
+
 
 # ---------------------------------------------------------------------------
 # 7. validate_extraction — test_ownership (e)
 # ---------------------------------------------------------------------------
 
 class TestTestOwnership:
-    """Tests for check (e): test ownership classification."""
+    """Tests for check (e): test file existence and ownership classification."""
 
     def test_ownership_clean(self, tmp_path):
         """Test file references only own module -> no failure."""
@@ -362,6 +387,78 @@ class TestTestOwnership:
         assert any("'b'" in f.message for f in ownership_warnings)
         assert all(f.severity == "warning" for f in ownership_warnings)
 
+    def test_explicit_new_test_path_is_used_for_ownership(self, tmp_path):
+        """A plan's first-class child.new_test path is scanned for ownership."""
+        for directory in ("prompts", "pkg", "context", "custom_tests"):
+            (tmp_path / directory).mkdir()
+        for name in ("foo", "bar"):
+            (tmp_path / "prompts" / f"{name}_python.prompt").write_text(
+                FULL_PROMPT_CONTENT
+            )
+            (tmp_path / "pkg" / f"{name}.py").write_text("")
+            (tmp_path / "context" / f"{name}_example.py").write_text(
+                f"from pkg import {name}\n"
+            )
+        (tmp_path / "custom_tests" / "foo_spec.py").write_text(
+            "from pkg import bar\n"
+        )
+        (tmp_path / "custom_tests" / "bar_spec.py").write_text(
+            "from pkg import bar\n"
+        )
+        plan = FakePlan(children=[
+            {
+                "name": "foo",
+                "new_prompt": "prompts/foo_python.prompt",
+                "new_source": "pkg/foo.py",
+                "new_example": "context/foo_example.py",
+                "new_test": "custom_tests/foo_spec.py",
+            },
+            {
+                "name": "bar",
+                "new_prompt": "prompts/bar_python.prompt",
+                "new_source": "pkg/bar.py",
+                "new_example": "context/bar_example.py",
+                "new_test": "custom_tests/bar_spec.py",
+            },
+        ])
+
+        with _mock_git_clean():
+            result = validate_extraction(plan, tmp_path)
+
+        ownership_warnings = [
+            f for f in result.failures if f.check == "test_ownership"
+        ]
+        assert any("foo_spec.py" in f.message for f in ownership_warnings)
+        assert any("'bar'" in f.message for f in ownership_warnings)
+
+    def test_missing_explicit_new_test_path_is_error(self, tmp_path):
+        """A declared child.new_test must exist for the child to verify."""
+        for directory in ("prompts", "pkg", "context", "tests"):
+            (tmp_path / directory).mkdir()
+        (tmp_path / "prompts" / "foo_python.prompt").write_text(
+            FULL_PROMPT_CONTENT
+        )
+        (tmp_path / "pkg" / "foo.py").write_text("")
+        (tmp_path / "context" / "foo_example.py").write_text("from pkg import foo\n")
+        plan = FakePlan(children=[
+            {
+                "name": "foo",
+                "new_prompt": "prompts/foo_python.prompt",
+                "new_source": "pkg/foo.py",
+                "new_example": "context/foo_example.py",
+                "new_test": "tests/test_foo.py",
+            }
+        ])
+
+        with _mock_git_clean():
+            result = validate_extraction(plan, tmp_path)
+
+        missing_tests = [f for f in result.failures if f.check == "test_file"]
+        assert len(missing_tests) == 1
+        assert missing_tests[0].severity == "error"
+        assert "tests/test_foo.py" in missing_tests[0].message
+        assert result.passed is False
+
 
 # ---------------------------------------------------------------------------
 # 8. failure_type classification
@@ -393,6 +490,7 @@ class TestFailureTypeClassification:
         """Only prompt_metadata warnings -> 'metadata'."""
         (tmp_path / "c.prompt").write_text("no tags")
         (tmp_path / "c.py").write_text("")  # example exists
+        (tmp_path / "test_c.py").write_text("import c\n")
         plan = FakePlan(children=[
             FakeChild(prompt_file="c.prompt", code_file="c.py"),
         ])
@@ -440,6 +538,7 @@ class TestDictChildren:
         (tmp_path / "child.prompt").write_text(FULL_PROMPT_CONTENT)
         (tmp_path / "examples").mkdir()
         (tmp_path / "examples" / "child_example.py").write_text("")
+        (tmp_path / "test_child.py").write_text("import child\n")
         plan = FakePlan(children=[
             {"name": "child", "new_prompt": "child.prompt", "new_source": "child.py"},
         ])
@@ -453,6 +552,7 @@ class TestDictChildren:
         (tmp_path / "child.prompt").write_text(FULL_PROMPT_CONTENT)
         (tmp_path / "examples").mkdir()
         (tmp_path / "examples" / "child_example.py").write_text("")
+        (tmp_path / "test_child.py").write_text("import child\n")
         plan = FakePlan(children=[
             {"name": "child", "prompt_file": "child.prompt", "code_file": "child.py"},
         ])
@@ -554,6 +654,7 @@ class TestPassedField:
         # Prompt with missing tags -> only warnings
         (tmp_path / "c.prompt").write_text("no tags here")
         (tmp_path / "c.py").write_text("")  # example exists
+        (tmp_path / "test_c.py").write_text("import c\n")
         plan = FakePlan(children=[
             FakeChild(prompt_file="c.prompt", code_file="c.py"),
         ])

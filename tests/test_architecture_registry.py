@@ -805,6 +805,24 @@ class TestFindProjectRootTiers:
 
         assert find_project_root(repo_dir) == repo_dir.resolve()
 
+    def test_temp_root_pdd_directory_is_not_a_project_marker(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # CI/test runners may create shared .pdd cache/config under the system
+        # temp root. That ambient marker must not make unrelated pytest temp
+        # children resolve to the temp root.
+        fake_tmp = (tmp_path / "tmp-root").resolve()
+        fake_tmp.mkdir()
+        (fake_tmp / ".pdd").mkdir()
+        child = fake_tmp / "pytest-case" / "orphan"
+        child.mkdir(parents=True)
+
+        monkeypatch.setattr(
+            "pdd.architecture_registry.tempfile.gettempdir",
+            lambda: str(fake_tmp),
+        )
+        assert find_project_root(child) == child.resolve()
+
 
 # --- find_git_toplevel Tests (issue 815) ---
 
