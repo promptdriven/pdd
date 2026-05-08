@@ -149,6 +149,65 @@ def test_update_main_with_input_code_and_no_git(
     # The open function should be called to write the updated prompt
     mock_open_file.assert_called_once_with("updated_prompt.prompt", "w")
 
+
+def test_update_main_sanitizes_invalid_prompt_includes_before_writing(tmp_path, mock_get_available_agents):
+    (tmp_path / "context").mkdir()
+    (tmp_path / "prompts").mkdir()
+    source_prompt = tmp_path / "source.prompt"
+    modified_code = tmp_path / "module.py"
+    original_code = tmp_path / "module_old.py"
+    output_prompt = tmp_path / "updated.prompt"
+    source_prompt.write_text("existing prompt", encoding="utf-8")
+    modified_code.write_text("def new(): pass\n", encoding="utf-8")
+    original_code.write_text("def old(): pass\n", encoding="utf-8")
+    (tmp_path / "context" / "llm_invoke_example.py").write_text(
+        "def run_llm_invoke_examples():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    bad_prompt = (
+        '<include select="class:TokenMatch,def:detect_control_token">'
+        "context/llm_invoke_example.py</include>"
+    )
+    ctx = click.Context(click.Command("update"))
+    ctx.params = {"force": True, "quiet": True}
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "quiet": True,
+        "time": 0.25,
+    }
+
+    with patch("pdd.update_main.construct_paths") as mock_construct, \
+         patch("pdd.update_main.update_prompt") as mock_update_prompt:
+        mock_construct.return_value = (
+            {},
+            {
+                "input_prompt_file": "existing prompt",
+                "modified_code_file": "def new(): pass",
+                "input_code_file": "def old(): pass",
+            },
+            {"output": str(output_prompt)},
+            None,
+        )
+        mock_update_prompt.return_value = (bad_prompt, 0.01, "mock-model")
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=str(source_prompt),
+            modified_code_file=str(modified_code),
+            input_code_file=str(original_code),
+            output=str(output_prompt),
+            use_git=False,
+        )
+
+    saved = output_prompt.read_text(encoding="utf-8")
+    assert result == (saved, 0.01, "mock-model")
+    assert "Invalid selector" in saved
+    assert "class:TokenMatch" not in saved
+
+
 def test_update_main_with_git_no_input_code(
     mock_ctx,
     minimal_input_files,

@@ -1440,6 +1440,66 @@ def test_change_main_non_csv_uses_construct_paths_default_output(tmp_path):
     assert model_name == "model-x"
 
 
+def test_change_main_sanitizes_invalid_prompt_includes_before_writing(tmp_path):
+    """Prompt-changing commands should not persist selectors that preprocess will warn on."""
+    change_file = tmp_path / "change.prompt"
+    prompt_file = tmp_path / "input.prompt"
+    code_file = tmp_path / "code.py"
+    output_file = tmp_path / "agentic_common_python.prompt"
+    (tmp_path / "context").mkdir()
+    (tmp_path / "prompts").mkdir()
+    change_file.write_text("change", encoding="utf-8")
+    prompt_file.write_text("prompt", encoding="utf-8")
+    code_file.write_text("print('x')", encoding="utf-8")
+    (tmp_path / "context" / "llm_invoke_example.py").write_text(
+        "def run_llm_invoke_examples():\n    pass\n",
+        encoding="utf-8",
+    )
+
+    bad_prompt = (
+        "% Dependencies\n"
+        "<pdd.llm_invoke>\n"
+        '  <include select="class:TokenMatch,def:detect_control_token">'
+        "context/llm_invoke_example.py</include>\n"
+        "</pdd.llm_invoke>\n"
+    )
+    ctx_instance = create_mock_context(obj={"quiet": True, "skip_user_stories": True})
+
+    with patch("pdd.change_main.construct_paths") as mock_construct, \
+         patch("pdd.change_main.resolve_effective_config") as mock_config, \
+         patch("pdd.change_main.change_func") as mock_change:
+        mock_construct.return_value = (
+            {"prompts_dir": str(tmp_path / "prompts")},
+            {
+                "change_prompt_file": "change",
+                "input_code": "print('x')",
+                "input_prompt_file": "prompt",
+            },
+            {"output_prompt_file": str(output_file)},
+            "python",
+        )
+        mock_config.return_value = {"strength": 0.2, "temperature": 0.0, "time": 0.25}
+        mock_change.return_value = (bad_prompt, 0.2, "model-x")
+
+        message, total_cost, model_name = change_main(
+            ctx=ctx_instance,
+            change_prompt_file=str(change_file),
+            input_code=str(code_file),
+            input_prompt_file=str(prompt_file),
+            output=None,
+            use_csv=False,
+            budget=5.0,
+        )
+
+    saved = output_file.read_text(encoding="utf-8")
+    assert message == f"Modified prompt saved to {output_file.resolve()}"
+    assert "Invalid selector" in saved
+    assert "class:TokenMatch" not in saved
+    assert "context/llm_invoke_example.py" in saved
+    assert total_cost == pytest.approx(0.2)
+    assert model_name == "model-x"
+
+
 def test_change_main_non_csv_missing_output_path(tmp_path):
     change_file = tmp_path / "change.prompt"
     prompt_file = tmp_path / "input.prompt"

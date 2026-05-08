@@ -23,6 +23,7 @@ from .change import change as change_func
 from .process_csv_change import process_csv_change
 from .get_extension import get_extension
 from .user_story_tests import run_user_story_tests, discover_prompt_files
+from .validate_prompt_includes import sanitize_prompt_output
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -433,6 +434,15 @@ def change_main(
 
                         try:
                             logger.debug("Attempting to save file to: %s", individual_output_path)
+                            modified_content, invalid_includes = sanitize_prompt_output(
+                                modified_content,
+                                individual_output_path,
+                            )
+                            if invalid_includes and not quiet:
+                                rprint(
+                                    "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                                    f"before saving {individual_output_path}.[/yellow]"
+                                )
                             with open(individual_output_path, 'w', encoding='utf-8') as output_file:
                                 output_file.write(modified_content)
                             logger.debug("Saved modified prompt to: %s", individual_output_path)
@@ -467,6 +477,15 @@ def change_main(
                 try:
                     output_path_obj.parent.mkdir(parents=True, exist_ok=True)  # Uses Path.mkdir, OK here
                     # Use open() for writing as expected by tests
+                    result_message, invalid_includes = sanitize_prompt_output(
+                        result_message,
+                        output_path_obj,
+                    )
+                    if invalid_includes and not quiet:
+                        rprint(
+                            "[yellow]Warning: Cleaned invalid <include> tag(s) "
+                            f"before saving {output_path_obj}.[/yellow]"
+                        )
                     with open(output_path_obj, 'w', encoding='utf-8') as output_file:
                         output_file.write(result_message)  # result_message contains the modified content here
                     if not quiet:

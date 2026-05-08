@@ -42,6 +42,11 @@
       <process_csv_change_example>
       <include>context/process_csv_change_example.py</include>
       </process_csv_change_example>
+
+      - Using prompt include sanitization:
+      <validate_prompt_includes>
+      <include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include>
+      </validate_prompt_includes>
    </internal_example_modules>
 </examples>
 
@@ -81,11 +86,11 @@
       - For CSV mode:
         - Determine the output target based on the `output` argument.
         - If `output` specifies a CSV file path (ending in `.csv`): Create a new CSV file at this path with columns `file_name` and `modified_prompt`. Iterate through `modified_prompts_list` and write rows only for entries that have both keys and a non-None `modified_prompt`.
-        - If `output` is not specified, is a directory path, or is a non-CSV file path: Treat the target as a directory (using the parent directory if a non-CSV file path was given). Iterate through `modified_prompts_list`. For each dictionary, save the `modified_prompt` content as an individual file within the target directory, using the basename of the original `file_name`. Respect the `--force` flag when overwriting existing files.
+        - If `output` is not specified, is a directory path, or is a non-CSV file path: Treat the target as a directory (using the parent directory if a non-CSV file path was given). Iterate through `modified_prompts_list`. For each dictionary, save the `modified_prompt` content as an individual file within the target directory, using the basename of the original `file_name`. Before writing any `.prompt` file, pass the content and destination path through `sanitize_prompt_output` so missing or invalid selected `<include>` tags are cleaned instead of persisted for a later `pdd sync` failure. Respect the `--force` flag when overwriting existing files.
         - Create directories using `os.makedirs(dir, exist_ok=True)` for directory saves.
       - For non-CSV mode:
         - Determine the output file path. Use the `--output` argument if provided; otherwise use the default path (`output_prompt_file`) from `output_file_paths`. Ensure a valid path is determined.
-        - Write the modified prompt string to the output path, then set the return string to `"Modified prompt saved to <path>"`.
+        - Before writing a `.prompt` output, pass the modified prompt string and destination path through `sanitize_prompt_output`; then write the cleaned content to the output path and set the return string to `"Modified prompt saved to <path>"`.
         - Create parent directories using `Path(...).parent.mkdir(parents=True, exist_ok=True)`.
       - Ensure output directories are created if they don't exist.
 

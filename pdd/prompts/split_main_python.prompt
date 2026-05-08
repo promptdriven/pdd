@@ -59,6 +59,11 @@
         <construct_paths_example>
             <include>context/construct_paths_example.py</include>
         </construct_paths_example>
+
+        For prompt output include cleanup:
+        <validate_prompt_includes>
+            <include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include>
+        </validate_prompt_includes>
     </internal_modules>
 
 % Here is the README for the cli command that has details of how the 'split' command works:
@@ -80,8 +85,9 @@
         - Unpack `sub_prompt, modified_prompt = result_tuple`.
 
     3. Persist outputs
-        - Write `sub_prompt` to `output_file_paths["output_sub"]`.
-        - Write `modified_prompt` to `output_file_paths["output_modified"]`.
+        - Before writing `.prompt` outputs, call `sanitize_prompt_output(content, destination_path)` for both `sub_prompt` and `modified_prompt` so missing or invalid selected `<include>` tags are cleaned instead of persisted for a later `pdd sync` failure.
+        - Write the cleaned `sub_prompt` to `output_file_paths["output_sub"]`.
+        - Write the cleaned `modified_prompt` to `output_file_paths["output_modified"]`.
 
     4. User feedback (respect `quiet`)
         - If not quiet, print success message, saved paths, model name, and total cost using Rich.
