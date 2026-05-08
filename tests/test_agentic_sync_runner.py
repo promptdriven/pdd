@@ -72,7 +72,7 @@ class TestFormatDuration:
         assert _format_duration(100.0, 145.0) == "45s"
 
     def test_minutes_and_seconds(self):
-        assert _format_duration(0.0, 125.0) == "2m5s"
+        assert _format_duration(0.0, 125.0) == "2m 5s"
 
 
 # ---------------------------------------------------------------------------

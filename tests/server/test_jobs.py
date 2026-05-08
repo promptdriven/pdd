@@ -568,3 +568,221 @@ class TestSubprocessTimeout:
 
             with pytest.raises(RuntimeError, match="signal"):
                 await manager._run_click_command(job)
+
+
+# ============================================================================
+# Tests for issue #865: architecture-conformance error surfacing
+# ----------------------------------------------------------------------------
+# Test plan (covers the spec's "Architecture-Conformance Surface" requirement):
+#   1. Structured "=== architecture conformance failure ===" block must be
+#      surfaced verbatim when sync subprocess exits non-zero with the marker.
+#   2. Same when sync exits 0 but "Overall status: Failed" line is present.
+#   3. The simple "Architecture conformance error for ..." line plus its
+#      Expected:/Found:/missing context must be surfaced when no structured
+#      block is present.
+#   4. A "Reproduce locally:" line in the runner output is preserved verbatim.
+#   5. When no "Reproduce locally:" line is present, one is constructed as
+#      "Reproduce locally: pdd sync <basename>" from job.args.
+#   6. The "--- env ---" fingerprint block is included verbatim when present.
+#   7. Generic "Sync operation failed" is used only as a final fallback when
+#      no conformance markers are present in the captured output.
+#   8. Non-sync commands are not modified by the conformance surfacing logic
+#      (so existing failure paths for generate/test/etc. remain unchanged).
+# ============================================================================
+
+
+@pytest.mark.asyncio
+class TestArchitectureConformanceSurface:
+    """Issue #865: surface architecture-conformance failures, not 'Sync operation failed'."""
+
+    async def _run_with_output(self, jobs_module, *, exit_code, stdout_lines, stderr_lines, command="sync", args=None):
+        """Helper: execute _run_click_command with a mocked subprocess yielding the given output."""
+        from unittest.mock import patch
+
+        Job = jobs_module["Job"]
+        JobManager = jobs_module["JobManager"]
+
+        manager = JobManager()
+
+        mock_process = MagicMock()
+        # The reader uses iter(stream.readline, ''); supply lines + sentinel.
+        mock_process.stdout.readline.side_effect = list(stdout_lines) + [""]
+        mock_process.stderr.readline.side_effect = list(stderr_lines) + [""]
+        mock_process.wait.return_value = exit_code
+        mock_process.returncode = exit_code
+
+        with patch("pdd.server.jobs.subprocess.Popen", return_value=mock_process):
+            job = Job(command=command, args=args or {})
+            err = None
+            try:
+                await manager._run_click_command(job)
+            except RuntimeError as e:
+                err = str(e)
+            return job, err
+
+    async def test_structured_block_surfaced_on_nonzero_exit(self, jobs_module):
+        """Spec rule 1: structured block verbatim on sync subprocess failure."""
+        block = (
+            "=== architecture conformance failure ===\n"
+            "prompt: my_module_python.prompt\n"
+            "missing: ['process_data', 'validate_input']\n"
+            "Reproduce locally: pdd sync my_module\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=1,
+            stdout_lines=[block],
+            stderr_lines=[],
+            args={"basename": "my_module"},
+        )
+        assert err is not None
+        # Generic message must NOT be the error.
+        assert err != "Sync operation failed"
+        assert "Sync operation failed (see output for details)" not in err
+        # Structured block included verbatim.
+        assert "=== architecture conformance failure ===" in err
+        assert "missing: ['process_data', 'validate_input']" in err
+
+    async def test_structured_block_surfaced_when_exit_zero_but_overall_failed(self, jobs_module):
+        """Spec rule 2: surface even when exit_code=0 but 'Overall status: Failed'."""
+        stdout = (
+            "=== architecture conformance failure ===\n"
+            "prompt: foo_python.prompt\n"
+            "missing: ['bar']\n"
+            "\n"
+            "Overall status: Failed\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=0,
+            stdout_lines=[stdout],
+            stderr_lines=[],
+            args={"basename": "foo"},
+        )
+        assert err is not None
+        assert err != "Sync operation failed (see output for details)"
+        assert "=== architecture conformance failure ===" in err
+        assert "missing: ['bar']" in err
+
+    async def test_simple_line_with_context_surfaced(self, jobs_module):
+        """Spec rule 3: simple 'Architecture conformance error for ...' line + context."""
+        out = (
+            "Some preamble line\n"
+            "Architecture conformance error for my_module_python.prompt\n"
+            "Expected: ['process_data']\n"
+            "Found: []\n"
+            "missing: ['process_data']\n"
+            "\n"
+            "Overall status: Failed\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=1,
+            stdout_lines=[out],
+            stderr_lines=[],
+            args={"basename": "my_module"},
+        )
+        assert err is not None
+        assert "Architecture conformance error for my_module_python.prompt" in err
+        assert "Expected: ['process_data']" in err
+        assert "Found: []" in err
+        assert "missing: ['process_data']" in err
+
+    async def test_reproduce_locally_preserved_verbatim(self, jobs_module):
+        """Spec rule 4: existing 'Reproduce locally:' line preserved verbatim."""
+        out = (
+            "=== architecture conformance failure ===\n"
+            "missing: ['x']\n"
+            "Reproduce locally: pdd --strength 0.9 sync custom_target\n"
+            "Overall status: Failed\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=1,
+            stdout_lines=[out],
+            stderr_lines=[],
+            args={"basename": "different"},
+        )
+        assert err is not None
+        # Verbatim runner-provided line is what's surfaced.
+        assert "Reproduce locally: pdd --strength 0.9 sync custom_target" in err
+
+    async def test_reproduce_locally_constructed_when_absent(self, jobs_module):
+        """Spec rule 5: when no Reproduce line, construct 'pdd sync <basename>'."""
+        out = (
+            "=== architecture conformance failure ===\n"
+            "missing: ['process_data']\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=1,
+            stdout_lines=[out],
+            stderr_lines=[],
+            args={"basename": "my_module"},
+        )
+        assert err is not None
+        assert "Reproduce locally: pdd sync my_module" in err
+
+    async def test_env_fingerprint_block_included(self, jobs_module):
+        """Spec rule 6: '--- env ---' fingerprint block surfaced verbatim."""
+        out = (
+            "=== architecture conformance failure ===\n"
+            "missing: ['x']\n"
+            "Reproduce locally: pdd sync foo\n"
+            "\n"
+            "--- env ---\n"
+            "python: 3.12.3\n"
+            "pdd: 0.0.55\n"
+            "platform: linux\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=1,
+            stdout_lines=[out],
+            stderr_lines=[],
+            args={"basename": "foo"},
+        )
+        assert err is not None
+        assert "--- env ---" in err
+        assert "python: 3.12.3" in err
+        assert "pdd: 0.0.55" in err
+
+    async def test_generic_fallback_when_no_conformance_markers(self, jobs_module):
+        """Spec rule 7: generic 'Sync operation failed' only when no markers."""
+        # exit 0 + Overall status: Failed but no conformance markers.
+        out = "Doing things...\nOverall status: Failed\n"
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=0,
+            stdout_lines=[out],
+            stderr_lines=[],
+            args={"basename": "foo"},
+        )
+        assert err is not None
+        # Generic fallback must mention "Sync operation failed".
+        assert "Sync operation failed" in err
+        # And must NOT contain conformance markers (since none were present).
+        assert "=== architecture conformance failure ===" not in err
+        assert "Architecture conformance error for" not in err
+
+    async def test_non_sync_command_unaffected(self, jobs_module):
+        """Spec rule 8: conformance surfacing applies to sync command only."""
+        # Even if conformance-looking text appears in output of a non-sync
+        # command, the surfacing logic is sync-specific.
+        out = (
+            "=== architecture conformance failure ===\n"
+            "missing: ['x']\n"
+            "actual error: bad thing happened\n"
+        )
+        _job, err = await self._run_with_output(
+            jobs_module,
+            exit_code=1,
+            stdout_lines=[out],
+            stderr_lines=[],
+            command="generate",
+            args={"prompt_file": "p.prompt"},
+        )
+        assert err is not None
+        # Generic last-N-lines path is used for non-sync; the actual error line
+        # should appear in the surfaced message.
+        assert "actual error: bad thing happened" in err
