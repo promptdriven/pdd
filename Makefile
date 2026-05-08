@@ -54,10 +54,11 @@ help:
 	@echo "Build & Deployment:"
 	@echo "  make install                 - Install pdd"
 	@echo "  make build                   - Build pdd package"
-	@echo "  make publish                 - Build & upload current version"
+	@echo "  make upload-pypi             - Upload dist/*.whl to PyPI"
+	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
-	@echo "  make release                 - Bump version and build package (runs check-deps first)"
+	@echo "  make release                 - Bump version, tag, and upload to PyPI (public origin only)"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -106,7 +107,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release check-release-remote check-release-branch check-release-clean
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -610,12 +611,14 @@ build:
 	@echo "Post-processing wheel with preprocessed prompts..."
 	@conda run -n pdd --no-capture-output python scripts/preprocess_wheel.py 'dist/*.whl'
 
+upload-pypi:
+	@echo "Uploading wheel to PyPI"
 	@conda run -n pdd --no-capture-output twine upload --repository pypi dist/*.whl
 
 publish:
-	@echo "Building and uploading package"
+	@echo "Building and uploading package to PyPI"
 	@$(MAKE) build
-	@$(MAKE) publish-public
+	@$(MAKE) upload-pypi
 
 # Check that pyproject.toml dependencies match requirements.txt
 check-deps:
@@ -647,35 +650,64 @@ check-suspicious-files:
 		echo "No suspicious files found."; \
 	fi
 
-release: check-deps check-suspicious-files
+check-release-remote:
+	@FETCH_URL=$$(git remote get-url origin); \
+	PUSH_URL=$$(git remote get-url --push origin); \
+	for url in "$$FETCH_URL" "$$PUSH_URL"; do \
+		case "$$url" in \
+			*github.com:promptdriven/pdd|*github.com:promptdriven/pdd.git|*github.com/promptdriven/pdd|*github.com/promptdriven/pdd.git) ;; \
+			*) \
+				echo "Error: release must run from the public promptdriven/pdd origin."; \
+				echo "  origin fetch: $$FETCH_URL"; \
+				echo "  origin push:  $$PUSH_URL"; \
+				exit 1; \
+				;; \
+		esac; \
+	done; \
+	echo "Release remote verified: $$PUSH_URL"
+
+check-release-branch:
+	@BRANCH=$$(git branch --show-current); \
+	if [ "$$BRANCH" != "main" ]; then \
+		echo "Error: release must run from branch main, not '$$BRANCH'."; \
+		exit 1; \
+	fi; \
+	git fetch origin main; \
+	LOCAL=$$(git rev-parse HEAD); \
+	REMOTE=$$(git rev-parse origin/main); \
+	if [ "$$LOCAL" != "$$REMOTE" ]; then \
+		echo "Error: local main must be aligned with origin/main before release."; \
+		echo "  local HEAD:  $$LOCAL"; \
+		echo "  origin/main: $$REMOTE"; \
+		exit 1; \
+	fi; \
+	echo "Release branch verified: main is aligned with origin/main"
+
+check-release-clean:
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree must be clean before release."; \
+		git status --short; \
+		exit 1; \
+	fi
+
+release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
 	@echo "Preparing release"
-	@CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
+	@set -e; \
+	CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \
 	if git tag --points-at HEAD | grep -qx "$$CURRENT_TAG"; then \
-		echo "HEAD already at $$CURRENT_TAG; skipping bump and publishing current version."; \
+		echo "HEAD already at $$CURRENT_TAG; publishing current version to PyPI."; \
 		$(MAKE) publish; \
 	else \
 		echo "Bumping version with commitizen"; \
 		python -m commitizen bump --increment PATCH --yes --check-consistency; \
-		echo "Pushing to origin before publishing"; \
+		echo "Pushing release commit and tags to origin"; \
 		git push origin main --tags; \
-		echo "Publishing new version"; \
+		echo "Publishing new version to PyPI"; \
 		$(MAKE) publish; \
 	fi
 	@# Post-release cleanup check (Issue #186)
 	@$(MAKE) check-suspicious-files
-	@# Update CHANGELOG.md with changes from this release
-	@echo "Updating CHANGELOG.md..."
-	@claude --dangerously-skip-permissions -p "Update CHANGELOG.md for the latest release. Steps: \
-1. Run 'git tag | tail -2' to find the prior and current version tags. \
-2. Run 'git diff <prior>..HEAD --stat' and 'git log <prior>..HEAD --oneline' to see all changes. \
-3. For files with significant changes (>20 lines in the stat), run 'git diff <prior>..HEAD -- <file>' to understand the SEMANTIC meaning of the change, not just that lines changed. Look for: new features, behavior changes, removed constants/functions, generalized logic. \
-4. Note any DELETED files (shown as 'delete mode' or '0 insertions, N deletions') - these are often meaningful (e.g., removed prompts, deprecated modules). \
-5. IMPORTANT: PR numbers in merge commits may come from forks rather than the public repo (promptdriven/pdd). Do NOT include fork-only PR numbers in the CHANGELOG - they will confuse users who look them up on the public repo. \
-6. For external contributor credits ONLY: use 'gh pr list --repo promptdriven/pdd --state merged --limit 20' to find upstream PRs. Verify PRs exist with 'gh pr view <num> --repo promptdriven/pdd --json state,title'. Only credit PRs that are actually merged on promptdriven/pdd. \
-7. Organize changes into sections: Feat, Fix, Build, Refactor, Docs. \
-8. Keep descriptions concise but complete. Every significant code change should be represented. \
-We are using a prompt driven development approach: docs/prompting_guide.md."
 
 analysis:
 	@echo "Running regression analysis"
