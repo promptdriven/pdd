@@ -107,7 +107,23 @@ Build a simple Python data model system with examples.
             elif "step4" in label:
                 return (True, "Design: Architecture defined", 0.001, "mock-model")
             elif "step5" in label:
-                return (True, "Dependencies: No external dependencies needed", 0.001, "mock-model")
+                # Step 5 must return a structurally valid module-design output
+                # (issue #817) — the short generic mock is rejected by the
+                # step-5 structural validator before step 5b. Provide enough
+                # non-whitespace content with the expected module-design
+                # markers so the validator passes and the workflow proceeds
+                # to the step 11 include-path validation under test.
+                step5_valid = (
+                    "## Step 5: Module Design\n"
+                    "module: user_model — Pydantic data model for user entities with validation.\n"
+                    "module: product_model — Pydantic data model for product entities with validation.\n"
+                    "module: example_loader — utilities for loading example payloads from context/.\n"
+                    "dependency: user_model -> pydantic\n"
+                    "dependency: product_model -> pydantic\n"
+                    "priority: 1 (user_model), 2 (product_model), 3 (example_loader)\n"
+                    "interface: each model exposes a constructor and a from_dict classmethod.\n"
+                )
+                return (True, step5_valid, 0.001, "mock-model")
             elif "step6" in label:
                 # Create architecture.json (array format matching orchestrator expectations)
                 architecture = [

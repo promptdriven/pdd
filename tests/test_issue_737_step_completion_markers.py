@@ -107,8 +107,28 @@ def arch_mocks(tmp_path):
 
         mock_load.return_value = (None, None)
         mock_tpl.return_value = "Prompt for {issue_title}"
-        # Include VALIDATION_RESULT: VALID so step 5b passes
-        mock_run.return_value = (True, "Step Output\nVALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+        # Step 5 must return a structurally valid module-design output (issue
+        # #817) — bare "Step Output" is too short and is now rejected upstream.
+        _STEP5_VALID = (
+            "## Step 5: Module Design\n"
+            "module: auth_module — handles authentication and session management.\n"
+            "module: admin_module — administrative dashboard and user management.\n"
+            "module: notifications_module — outbound email/SMS notifications.\n"
+            "dependency: auth_module -> database\n"
+            "priority: 1 (auth_module), 2 (admin_module), 3 (notifications_module)\n"
+            "interface: REST endpoints exposed by each module.\n"
+            "VALIDATION_RESULT: VALID"
+        )
+
+        def _side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if label.startswith("step5") and "step5b" not in label:
+                return (True, _STEP5_VALID, 0.1, "gpt-4")
+            # Include VALIDATION_RESULT: VALID so step 5b passes
+            return (True, "Step Output\nVALIDATION_RESULT: VALID", 0.1, "gpt-4")
+
+        mock_run.side_effect = _side_effect
         mock_merm.return_value = "graph TD; A-->B;"
         mock_html.return_value = "<html>...</html>"
 

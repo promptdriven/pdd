@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
@@ -125,6 +126,76 @@ def _check_step4_output(output: str) -> bool:
         return False
 
     return True
+
+
+# Regex for detecting bare-acknowledgement step-5 outputs (e.g. "Done.", "Ok").
+_STEP5_BARE_ACK_RE = re.compile(
+    r"^\s*(done|completed|finished|ok|acknowledged)\.?\s*$",
+    re.IGNORECASE,
+)
+
+# Module-design markers we expect to see in a non-degenerate step-5 output.
+_STEP5_DESIGN_MARKERS: Tuple[str, ...] = (
+    "module",
+    "dependency",
+    "priority",
+    "interface",
+    "## modules",
+)
+
+
+def _validate_step5_output_structure(output: str) -> Tuple[bool, str]:
+    """Deterministic structural validator for the step-5 module-design output.
+
+    Returns ``(is_valid, reason)``. The function is pure (no I/O, no LLM call)
+    so it is safe to use as a fail-fast pre-check both immediately after step 5
+    runs and again as a defense-in-depth gate before step 5b.
+
+    Failure cases (mirroring instruction #6.5 in the orchestrator prompt):
+      * Stripped (non-whitespace) content is shorter than 200 characters.
+      * Output is a bare acknowledgement such as "Done." or "Ok".
+      * Output contains none of the expected module-design markers.
+
+    The minimum-length check is based on stripped/non-whitespace content so that
+    a marker word padded with whitespace (e.g. ``"module" + " " * 300``) cannot
+    masquerade as a non-degenerate response. Marker detection is only reached
+    after the meaningful-content threshold has been met.
+
+    The diagnostic string always names "step 5" so downstream error messages
+    can surface the upstream cause clearly.
+    """
+    if output is None:
+        return False, "step 5 output is empty"
+
+    stripped = output.strip()
+    # Count only non-whitespace characters so that a marker word padded with
+    # interior whitespace (e.g. "module" + " " * 300 + "dependency") cannot
+    # masquerade as a non-degenerate response.
+    non_ws_len = len(re.sub(r"\s+", "", stripped))
+    if non_ws_len < 200:
+        return (
+            False,
+            f"step 5 output is shorter than 200 characters "
+            f"({non_ws_len} non-whitespace chars) — "
+            f"degenerate / near-empty response",
+        )
+
+    if _STEP5_BARE_ACK_RE.match(stripped):
+        return (
+            False,
+            "step 5 output is a bare acknowledgement "
+            "(e.g. 'Done.'/'Ok'/'Completed') with no module design",
+        )
+
+    stripped_lower = stripped.lower()
+    if not any(marker in stripped_lower for marker in _STEP5_DESIGN_MARKERS):
+        return (
+            False,
+            "step 5 output contains no module-design markers "
+            "(none of: module, dependency, priority, interface)",
+        )
+
+    return True, ""
 
 
 def _get_state_dir(cwd: Path) -> Path:
@@ -651,11 +722,30 @@ def run_agentic_architecture_orchestrator(
                 "relationships, and storage decisions."
             )
 
+        # Special handling for Step 5 (module design): structural validation.
+        # Fail-fast on degenerate output (e.g. "Done.") so the costly Step 5b
+        # gate retry loop never sees obviously-broken input. See issue #817.
+        step5_structural_failure: Optional[str] = None
+        if step_num == 5 and step_success:
+            is_valid_step5, step5_reason = _validate_step5_output_structure(step_output)
+            if not is_valid_step5:
+                if not quiet:
+                    console.print(
+                        f"[red]⏹️  Step 5 (module design) produced invalid output: "
+                        f"{step5_reason}[/red]"
+                    )
+                step_success = False
+                step5_structural_failure = step5_reason
+
         context[f"step{step_num}_output"] = step_output
 
         if step_success:
             state["step_outputs"][str(step_num)] = step_output
             state["last_completed_step"] = step_num
+        elif step5_structural_failure is not None:
+            # Persist the failure reason without re-wrapping the (possibly degenerate)
+            # output so a future resume can see the upstream diagnostic.
+            state["step_outputs"][str(step_num)] = f"FAILED: {step5_structural_failure}"
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
 
@@ -671,6 +761,17 @@ def run_agentic_architecture_orchestrator(
             console.print(f"   → {escape(brief)}")
             if step_success:
                 console.print(f"  → Step {step_num} complete.")
+
+        # Hard-stop on degenerate Step 5 output so we never enter the Step 5b
+        # gate retry loop with structurally invalid module-design content.
+        if step5_structural_failure is not None:
+            return (
+                False,
+                f"Step 5 (module design) produced invalid output: {step5_structural_failure}",
+                total_cost,
+                model_used,
+                [],
+            )
 
         # --- Step 1b: Complexity Assessment (after Step 1) ---
         if step_num == 1 and step_success and start_step <= 1.5:
@@ -775,6 +876,39 @@ def run_agentic_architecture_orchestrator(
     MAX_STEP5B_RETRIES = 3
 
     if state.get("last_completed_step", 0) >= 5 and start_step <= 6 and state.get("last_completed_step", 0) < 5.5:
+        # Defense-in-depth pre-check (instruction #7): re-validate the step 5
+        # output before entering the gate retry loop.  This protects resumed
+        # runs whose persisted state predates the post-step-5 validator and
+        # avoids burning ~2.5 minutes on three LLM gate retries against
+        # structurally invalid content.  See issue #817.
+        step5_output_for_gate = context.get("step5_output", state.get("step_outputs", {}).get("5", ""))
+        is_valid_pre, pre_reason = _validate_step5_output_structure(step5_output_for_gate)
+        if not is_valid_pre:
+            if not quiet:
+                console.print(
+                    f"[red]⏹️  Step 5 (module design) output is structurally invalid: "
+                    f"{pre_reason} — not entering completeness gate[/red]"
+                )
+            state["step_outputs"]["5"] = f"FAILED: {pre_reason}"
+            # Issue #467/#817: Lower last_completed_step to the previous
+            # successful step so the persisted state does not retain a
+            # contradictory `last_completed_step == 5` while step_outputs["5"]
+            # is FAILED.  Re-run the same cached-state correction used at load
+            # to derive the correct value from the (now-updated) step_outputs.
+            state["last_completed_step"] = validate_cached_state(
+                state.get("last_completed_step", 0),
+                state["step_outputs"],
+                quiet=quiet,
+            )
+            save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            return (
+                False,
+                f"Step 5 (module design) output is structurally invalid: {pre_reason}",
+                total_cost,
+                model_used,
+                [],
+            )
+
         for attempt_5b in range(1, MAX_STEP5B_RETRIES + 1):
             if not quiet:
                 attempt_str = f" (attempt {attempt_5b}/{MAX_STEP5B_RETRIES})" if attempt_5b > 1 else ""
@@ -846,6 +980,39 @@ def run_agentic_architecture_orchestrator(
                     total_cost += fix_cost
                     model_used = fix_model
                     state["total_cost"] = total_cost
+
+                    # Structural validation of fix output before storing it or
+                    # entering the next gate attempt.  Without this, a degenerate
+                    # fix response (e.g. "Done.") would be persisted into
+                    # context/state and the next loop iteration would burn
+                    # another ~50s LLM gate call against obviously-broken
+                    # content.  See issue #817.
+                    is_valid_fix, fix_reason = _validate_step5_output_structure(fix_output)
+                    if not is_valid_fix:
+                        if not quiet:
+                            console.print(
+                                f"[red]⏹️  Step 5b fix produced invalid module design: "
+                                f"{fix_reason} — not retrying completeness gate[/red]"
+                            )
+                        state["step_outputs"]["5"] = f"FAILED: {fix_reason}"
+                        # Issue #817 round 2: mirror the pre-check path —
+                        # lower last_completed_step so the persisted state
+                        # does not retain a contradictory
+                        # `last_completed_step == 5` while
+                        # `step_outputs["5"]` is FAILED.
+                        state["last_completed_step"] = validate_cached_state(
+                            state.get("last_completed_step", 0),
+                            state["step_outputs"],
+                            quiet=quiet,
+                        )
+                        save_workflow_state(cwd, issue_number, "architecture", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                        return (
+                            False,
+                            f"Step 5/Step 5b (module design) produced invalid output: {fix_reason}",
+                            total_cost,
+                            model_used,
+                            [],
+                        )
 
                     # Replace step5_output with corrected design
                     context["step5_output"] = fix_output

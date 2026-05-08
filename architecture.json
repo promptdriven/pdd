@@ -949,7 +949,9 @@
   {
     "reason": "Determines output file paths for generated code.",
     "description": "Calculates where generated files should be written based on project structure and conventions.",
-    "dependencies": ["auto_deps_main_python.prompt"],
+    "dependencies": [
+      "auto_deps_main_python.prompt"
+    ],
     "priority": 30,
     "filename": "generate_output_paths_python.prompt",
     "filepath": "pdd/generate_output_paths.py",
@@ -2363,7 +2365,10 @@
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
-    "dependencies": ["agentic_langtest_python.prompt","auth_service_python.prompt"],
+    "dependencies": [
+      "agentic_langtest_python.prompt",
+      "auth_service_python.prompt"
+    ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
     "filepath": "pdd/fix_main.py",
@@ -2577,7 +2582,9 @@
   {
     "reason": "Generates unit tests for PDD-generated code modules.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
-    "dependencies": ["bug_to_unit_test_python.prompt"],
+    "dependencies": [
+      "bug_to_unit_test_python.prompt"
+    ],
     "priority": 68,
     "filename": "generate_test_python.prompt",
     "filepath": "pdd/generate_test.py",
@@ -5423,7 +5430,7 @@
         "commands": [
           {
             "name": "generate",
-          "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
           },
           {
             "name": "test",
@@ -6042,7 +6049,9 @@
   {
     "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
-    "dependencies": ["agentic_bug_orchestrator_python.prompt"],
+    "dependencies": [
+      "agentic_bug_orchestrator_python.prompt"
+    ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
     "filepath": "pdd/agentic_e2e_fix_orchestrator.py",
@@ -7037,7 +7046,11 @@
   {
     "reason": "Determines correct sync order for PDD modules based on dependency graph.",
     "description": "Analyzes <include> and <include-many> directives across prompt files to build a dependency graph, performs topological sort, generates ordered sync scripts, identifies affected modules when a prompt changes, and discovers documentation files associated with modified prompts for the Step 10.5 doc-sync contract (pdd change, issue #739).",
-    "dependencies": ["auto_include_python.prompt","agentic_common_python.prompt","architecture_sync_python.prompt"],
+    "dependencies": [
+      "auto_include_python.prompt",
+      "agentic_common_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 214,
     "filename": "sync_order_python.prompt",
     "filepath": "pdd/sync_order.py",
