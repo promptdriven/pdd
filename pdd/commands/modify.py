@@ -57,7 +57,7 @@ console = Console()
     "--max-cost",
     type=click.FloatRange(min=0.01),
     default=None,
-    help="Abort cleanly if accumulated cost crosses USD threshold (resumable). Must be > 0.",
+    help="Abort if total cost would cross USD threshold.",
 )
 @click.pass_context
 @track_cost

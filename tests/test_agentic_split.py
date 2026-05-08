@@ -238,6 +238,11 @@ class TestSanitizePathString:
         polluted = "pdd/foo.py `inline annotation`"
         assert _sanitize_path_string(polluted) == "pdd/foo.py"
 
+    def test_strips_wrapping_backticks(self):
+        from pdd.agentic_split_orchestrator import _sanitize_path_string
+        assert _sanitize_path_string("`pdd/foo.py`") == "pdd/foo.py"
+        assert _sanitize_path_string("`pdd/foo.py` — keep helper") == "pdd/foo.py"
+
     def test_clean_path_passes_through(self):
         from pdd.agentic_split_orchestrator import _sanitize_path_string
         clean = "extensions/github_pdd_app/src/services/foo/bar.py"
@@ -287,6 +292,36 @@ class TestSanitizeSplitPaths:
         assert opt.plan.children[0]["prompt_file"] == "pdd/prompts/child_a_python.prompt"
         assert opt.plan.children[1]["code_file"] == "pdd/child_b.py"
 
+    def test_all_child_path_aliases_sanitized(self):
+        from pdd.agentic_split_orchestrator import (
+            SplitOption, SplitPlan, _sanitize_split_paths,
+        )
+        opt = SplitOption(plan=SplitPlan(
+            parent_changes={},
+            children=[
+                {
+                    "code_file": "pdd/child.py — source",
+                    "prompt_file": "prompts/child_python.prompt extra",
+                    "example_file": "examples/child_example.py # note",
+                    "test_file": "tests/test_child.py `note`",
+                    "new_source": "`pdd/new_child.py`",
+                    "new_prompt": "prompts/new_child_python.prompt — note",
+                    "new_example": "examples/new_child_example.py\nnote",
+                    "new_test": "tests/test_new_child.py # note",
+                },
+            ],
+        ))
+        _sanitize_split_paths(opt)
+        child = opt.plan.children[0]
+        assert child["code_file"] == "pdd/child.py"
+        assert child["prompt_file"] == "prompts/child_python.prompt"
+        assert child["example_file"] == "examples/child_example.py"
+        assert child["test_file"] == "tests/test_child.py"
+        assert child["new_source"] == "pdd/new_child.py"
+        assert child["new_prompt"] == "prompts/new_child_python.prompt"
+        assert child["new_example"] == "examples/new_child_example.py"
+        assert child["new_test"] == "tests/test_new_child.py"
+
     def test_no_op_when_already_clean(self):
         from pdd.agentic_split_orchestrator import (
             SplitOption, SplitPlan, _sanitize_split_paths,
@@ -321,6 +356,24 @@ class TestValidateExtractionLongPathSurvives:
         result = validate_extraction(plan, tmp_path)
         # validate_extraction returns a ValidationResult; we don't care
         # what its passed/failures contents are — only that it returned.
+        assert result is not None
+
+    def test_polluted_child_code_file_does_not_crash(self, tmp_path):
+        from pdd.split_validation import validate_extraction
+        from pdd.agentic_split_orchestrator import SplitPlan
+
+        plan = SplitPlan(
+            parent_changes={},
+            children=[
+                {
+                    "name": "child",
+                    "code_file": "pdd/" + ("x" * 600) + ".py — notes",
+                    "prompt_file": "",
+                }
+            ],
+        )
+
+        result = validate_extraction(plan, tmp_path)
         assert result is not None
 
 
