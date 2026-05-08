@@ -170,6 +170,7 @@ For CLI enthusiasts, implement GitHub issues directly:
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your stored Claude Max/Pro OAuth login if you've run `claude auth login`, otherwise falls back to `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth credentials if present, otherwise `GOOGLE_API_KEY` or `GEMINI_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login if present, otherwise `OPENAI_API_KEY`)
+   - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, `~/.config/opencode/opencode.json`, project `opencode.json`, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 **Usage:**
 ```bash
@@ -229,8 +230,8 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys or stored OAuth/subscription logins such as Claude Max/Pro, Gemini OAuth, or Codex ChatGPT login.
-  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription login, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription credentials such as Claude Max/Pro, Gemini OAuth, or Codex ChatGPT login, or OpenCode provider auth/config.
+  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription credential or config, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
   4. Optionally creates a `.pddrc` project config
   5. Tests the first available model with a real LLM call 
@@ -829,7 +830,7 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Codex OAuth alone is not sufficient for this mode.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
 
 ```bash
 # Project-wide architecture sync (no argument)
@@ -2029,7 +2030,7 @@ In this example, `pdd fix` will be run for each test file, and the fixed test fi
 For particularly difficult bugs that the standard iterative fix process cannot resolve, `pdd fix` offers a powerful agentic fallback mode. When activated, it invokes a project-aware CLI agent to attempt a fix with a much broader context.
 
 **How it Works:**
-If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, or OpenAI's Codex.
+If the standard fix loop completes all its attempts and fails to make the tests pass, the agentic fallback will take over. It constructs a detailed set of instructions and delegates the fixing task to a dedicated CLI agent like Google's Gemini, Anthropic's Claude, OpenAI's Codex, or OpenCode.
 
 **How to Use:**
 
@@ -2065,6 +2066,11 @@ For the agentic fallback to function, you need to have at least one of the suppo
 3.  **OpenAI Codex/GPT:**
     *   Requires the `codex` CLI to be installed and in your `PATH`.
     *   Authenticates with `~/.codex/auth.json` ChatGPT login (run `codex login` once) or `OPENAI_API_KEY` from your environment.
+4.  **OpenCode (provider-agnostic):**
+    *   Requires the `opencode` CLI to be installed and in your `PATH` (`npm install -g opencode-ai`).
+    *   Authenticates with OpenCode provider credentials from `opencode auth login` (stored in `~/.local/share/opencode/auth.json`), OpenCode JSON config (`~/.config/opencode/opencode.json` or project `opencode.json`), or underlying provider env vars such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GITHUB_TOKEN`, etc.
+    *   Recommended: set `OPENCODE_MODEL=provider/model` (for example, `anthropic/claude-sonnet-4-5`) to avoid relying on default model resolution.
+    *   Optional: set `OPENCODE_AGENT` and `OPENCODE_VARIANT` for OpenCode agent/variant selection.
 
 You can configure environment-variable keys using `pdd setup` or by setting them in your shell. For OAuth/subscription auth, run each CLI's login command once interactively.
 
@@ -2120,7 +2126,7 @@ pdd fix --protect-tests https://github.com/myorg/myrepo/issues/42
 
 **Prerequisites:**
 - The `gh` CLI must be installed and authenticated
-- At least one supported agent CLI (Claude, Gemini, or Codex) with valid credentials — either a stored OAuth/subscription login (recommended) or an API key in the environment
+- At least one supported agent CLI (Claude, Gemini, Codex, or OpenCode) with valid credentials — either a stored OAuth/subscription credential or config (recommended) or an API key in the environment
 - For CI validation, the current branch must have an open PR on GitHub
 
 **Relationship with `pdd bug`:**
@@ -2300,7 +2306,7 @@ Update prompts based on code changes. This command operates in two primary modes
 
 **Agentic Prompt Optimization (Default)**
 
-The `update` command uses an agentic AI (Claude Code, Gemini, or Codex) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
+The `update` command uses an agentic AI (Claude Code, Gemini, Codex, or OpenCode) by default to produce compact, high-quality prompts. The agent has full file access and performs a 4-step optimization:
 
 1. **Assess Differences**: Reads the prompt (including all `<include>` files) and compares against the modified code
 2. **Filter Using Guide + Tests**: Consults `docs/prompting_guide.md` and existing tests to determine what belongs in the prompt
@@ -2313,6 +2319,7 @@ This produces prompts that are more concise while remaining clear to developers 
 - `claude` (Anthropic Claude Code)
 - `gemini` (Google Gemini CLI)
 - `codex` (OpenAI Codex CLI)
+- `opencode` (OpenCode CLI)
 
 If no agentic CLI is available, the command automatically falls back to the legacy 2-stage LLM update process.
 
@@ -2464,7 +2471,7 @@ Options:
 
 When the `--loop` option is used, the crash command will attempt to fix errors through multiple iterations. It will use the program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
-If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, or Codex) installed with valid credentials — either a stored OAuth/subscription login or an API key in your environment (see [Prerequisites](#prerequisites) for details).
+If the iterative process fails, the agentic fallback mode will be triggered (unless disabled with `--no-agentic-fallback`). This mode uses a project-aware CLI agent to attempt a fix with a broader context. For this to work, you need to have at least one of the supported agent CLIs (Claude, Gemini, Codex, or OpenCode) installed with valid credentials — either a stored OAuth/subscription credential or config, or an API key in your environment (see [Prerequisites](#prerequisites) for details).
 
 Example:
 ```
@@ -3095,6 +3102,10 @@ PDD uses several environment variables to customize its behavior:
 - **`CLAUDE_MODEL`**: Override the model used by Claude CLI in agentic workflows (e.g., `claude-sonnet-4-5-20250929`). When set, passes `--model` to the Claude CLI command. No default; only used if explicitly set. Surfaced in the `.pdd/agentic-logs/` audit trail's `model` field when the response JSON does not carry an explicit model name (Issue #1376).
 - **`GEMINI_MODEL`**: Override the model used by Gemini CLI in agentic workflows (e.g., `gemini-3-flash-preview`). When set, passes `--model` to the Gemini CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON's `stats.models` is unavailable (Issue #1376).
 - **`CODEX_MODEL`**: Override the model used by Codex (OpenAI) CLI in agentic workflows (e.g., `gpt-5`). When set, passes `--model` to the Codex CLI command. No default; only used if explicitly set. Used as a fallback for the audit trail's `model` field when the response JSON does not carry one (Issue #1376).
+- **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
+- **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
+- **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens include `anthropic`, `google`, `openai`, and `opencode` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`).
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_GH_TOKEN_FILE`**: Path to a file containing a fresh GitHub App installation token. When set, the e2e fix orchestrator reads a new token from this file on push auth failure and retries once. The token file is written and refreshed by the cloud job runner (pdd_cloud). No default; only used in cloud-hosted job environments.
 
