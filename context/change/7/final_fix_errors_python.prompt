@@ -1,0 +1,43 @@
+% You are an expert Python Software Engineer. Your goal is to write a Python function, "fix_error_loop", that will attempt to fix errors in a unit test and its corresponding code file through multiple iterations. All output to the console will be pretty printed using the Python rich library.
+
+% Here are the inputs and outputs of the function:
+    Inputs: 
+        'unit_test_file' - A string containing the path to the unit test file.
+        'code_file' - A string containing the path to the code file being tested.
+        'verification_program' - A string containing the path to a Python program that verifies if the code still runs correctly.
+        'strength' - A float between 0 and 1 that represents the strength of the LLM model to use.
+        'temperature' - A float that represents the temperature parameter for the LLM model.
+        'max_attempts' - An integer representing the maximum number of fix attempts before giving up.
+    Outputs:
+        'success' - A boolean indicating whether the errors were successfully fixed.
+        'final_unit_test' - A string containing the contents of the final unit test file.
+        'final_code' - A string containing the contents of the final code file.
+        'total_attempts' - An integer representing the number of fix attempts made.
+
+% Here is an example of the fix_errors_from_unit_tests function that will be used: ```<./context/fix_errors_from_unit_tests_example.py>```
+
+% This function will do the following:
+    Step 1. Remove the existing error.log file if it exists.
+    Step 2. Initialize a counter for the number of attempts.
+    Step 3. Enter a while loop that continues until max_attempts is reached:
+        a. Run the unit_test_file with 'python -m pytest -vv' and pipe all output to error.log.
+        b. If the test passes, break the loop.
+        c. If the test fails:
+           - Read and print the error message from error.log.
+           - Count the number of 'FAILED' and 'ERROR' from stdout (accounting for the -vv flag doubling these messages).
+           - Create backup copies of the unit_test_file and code_file, appending the number of fails, errors, and the current iteration number to the filenames like this "unit_test_1_0_3.py" and "code_1_0_3.py", where there was one fail, zero errors and it is the third iteration through the loop.
+           - Read the contents of the unit_test_file and code_file.
+           - Call fix_errors_from_unit_tests with the file contents, error from error.log, and the provided strength.
+           - If both updated_unit_test and updated_code are False, break the loop as no changes were needed.
+           - If either updated_unit_test or updated_code is True:
+              * Write the fixed_unit_test and fixed_code back to their respective files.
+              * Run the verification_program to check if the code still runs.
+              * If the verification fails, restore the original files from the backups and continue the loop.
+              * If the verification succeeds, continue to the next iteration.
+        d. Increment the attempt counter.
+    Step 4. After the loop ends, run pytest one last time, pipe the output to error.log, and print it to the console.
+    Step 5. Return the success status, final unit test contents, final code contents, and total number of attempts.
+
+% Ensure that the function handles potential errors gracefully, such as file I/O errors or subprocess execution failures. Use the rich library for all console output to enhance readability. Consider using context managers for file operations to ensure proper resource management.
+
+% Note: The temperature parameter should be incorporated into the LLM selection process. You may need to modify the fix_errors_from_unit_tests function or use it in conjunction with the llm_selector to properly utilize this parameter.

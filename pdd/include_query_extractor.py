@@ -60,6 +60,7 @@ except ImportError:
 # Constants
 # ---------------------------------------------------------------------------
 EXTRACTION_STRENGTH = 1.0
+_ENV_EXTRACTION_STRENGTH = "PDD_EXTRACTS_STRENGTH"
 _ENV_CACHE_ENABLE = "EXTRACTS_CACHE_ENABLE"
 
 
@@ -89,6 +90,11 @@ def _cache_enabled() -> bool:
     """Return whether the extracts cache is enabled (default ``True``)."""
     val = os.environ.get(_ENV_CACHE_ENABLE, "true").strip().lower()
     return val not in ("false", "0", "no")
+
+
+def _extraction_strength() -> float:
+    """Return the semantic extraction strength, allowing CI/runtime overrides."""
+    return float(os.environ.get(_ENV_EXTRACTION_STRENGTH, str(EXTRACTION_STRENGTH)))
 
 
 def _cache_dir() -> Path:
@@ -195,7 +201,7 @@ class IncludeQueryExtractor:
         response = llm_invoke(
             prompt=processed_template,
             input_json={"file_content": source_content, "query": query},
-            strength=EXTRACTION_STRENGTH,
+            strength=_extraction_strength(),
         )
 
         # llm_invoke returns a dict with "result", "cost", "model_name".

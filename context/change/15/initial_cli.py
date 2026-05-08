@@ -76,7 +76,7 @@ def generate(ctx, prompt_file: str, output: str):
 
         with Progress() as progress:
             task = progress.add_task("[green]Generating code...", total=100)
-
+            
             runnable_code, total_cost, model_name = code_generator(
                 input_strings['prompt_file'],
                 language,
@@ -121,7 +121,7 @@ def example(ctx, code_file: str, prompt_file: str, output: str):
 
         with Progress() as progress:
             task = progress.add_task("[green]Generating example...", total=100)
-
+            
             example_code, total_cost, model= context_generator(
                 input_strings['code_file'],
                 input_strings['prompt_file'],
@@ -167,7 +167,7 @@ def test(ctx, code_file: str, prompt_file: str, output: str, language: str):
 
         with Progress() as progress:
             task = progress.add_task("[green]Generating unit test...", total=100)
-
+            
             unit_test_code, total_cost, model_name = generate_test(
                 input_strings['prompt_file'],
                 input_strings['code_file'],
@@ -212,7 +212,7 @@ def preprocess(ctx, prompt_file: str, output: str, xml: bool):
 
         with Progress() as progress:
             task = progress.add_task("[green]Preprocessing prompt...", total=100)
-
+            
             if xml:
                 processed_prompt, total_cost = xml_tagger(
                     input_strings['prompt_file'],
@@ -277,7 +277,7 @@ def fix(ctx, unit_test_file: str, code_file: str, error_file: str, output_test: 
 
         with Progress() as progress:
             task = progress.add_task("[green]Fixing errors...", total=100)
-
+            
             if loop:
                 success, final_unit_test_content, final_code_content, attempts, total_cost = fix_error_loop(
                     unit_test_file,
@@ -352,7 +352,7 @@ def split(ctx, input_prompt: str, input_code: str, example_code: str, output_sub
 
         with Progress() as progress:
             task = progress.add_task("[green]Splitting prompt...", total=100)
-
+            
             sub_prompt, modified_prompt, total_cost = split_func(
                 input_strings['input_prompt'],
                 input_strings['input_code'],
@@ -402,7 +402,7 @@ def change(ctx, input_prompt: str, input_code: str, change_prompt: str, output: 
 
         with Progress() as progress:
             task = progress.add_task("[green]Modifying prompt...", total=100)
-
+            
             modified_prompt, total_cost, model_name = change_func(
                 input_strings['input_prompt'],
                 input_strings['input_code'],
@@ -449,7 +449,7 @@ def update(ctx, input_prompt: str, input_code: str, modified_code: str, output: 
 
         with Progress() as progress:
             task = progress.add_task("[green]Updating prompt...", total=100)
-
+            
             modified_prompt, total_cost, model_name = update_prompt(
                 input_strings['input_prompt'],
                 input_strings['input_code'],
@@ -489,7 +489,7 @@ def get_paths_for_shell(shell):
     - shell_rc_path: The path to the shell's RC file.
     """
     home_dir = os.path.expanduser("~")
-
+    
     if shell == "bash":
         completion_script_path = os.path.join(home_dir, ".pdd-complete.bash")
         shell_rc_path = os.path.join(home_dir, ".bashrc")
@@ -501,7 +501,7 @@ def get_paths_for_shell(shell):
         shell_rc_path = os.path.join(home_dir, ".config", "fish", "config.fish")
     else:
         raise ValueError(f"Unsupported shell type: {shell}")
-
+    
     return completion_script_path, shell_rc_path
 
 @cli.command()
@@ -510,11 +510,11 @@ def install_completion():
     shell = os.environ.get('SHELL', '').split('/')[-1]
     if shell in ['bash', 'zsh', 'fish']:
         completion_script_path, shell_rc_path = get_paths_for_shell(shell)
-
+        
         # Generate the completion script based on the shell type
         completion_command = f"_PDD_COMPLETE={shell}_source pdd > {completion_script_path}"
         subprocess.run(completion_command, shell=True, check=True)
-
+        
         # Add the source command to the shell's RC file if it's not already there
         source_command = f"source {completion_script_path}"
         with open(shell_rc_path, 'a+') as rc_file:

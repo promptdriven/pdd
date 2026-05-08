@@ -52,12 +52,14 @@ shared:
   - examples/
 
   # Utils
+  - ci/cloud-batch/
   - scripts/ci_detect_changed_modules.py
   - scripts/copy_package_data_to_public.py
   - utils/mcp/prompts/
   - utils/vscode_prompt/
 
   # Context examples
+  - context/change/
   - context/**/*_example.py
   - context/cloud_function_call.py
   - context/python_preamble.prompt

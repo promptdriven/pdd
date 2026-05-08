@@ -30,6 +30,7 @@ When a PDD prompt contains `<include query="...">file</include>`, the system nee
 3. Load the companion LLM template `include_query_extractor_LLM` and preprocess it
    - Exclude keys `file_content` and `query` from curly-brace doubling
 4. Call `llm_invoke` with `input_json={"file_content": ..., "query": ...}` at `strength=1.0`
+   - Allow runtime override via `PDD_EXTRACTS_STRENGTH` for CI or constrained environments
    - Extract the `"result"` key from the response as the extracted content string
 5. Cache key: deterministic `sha256(project_relative_path + '\n' + query)`
    - Absolute paths are resolved to project-relative form (via `find_project_root_from_path`) before hashing, so the same file referenced by different path styles produces the same key

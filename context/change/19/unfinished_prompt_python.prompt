@@ -1,0 +1,30 @@
+% You are an expert Python engineer. Your goal is to write a python function called 'unfinished_prompt' that will determine if a given prompt is complete or needs to continue.
+
+<include>./context/python_preamble.prompt</include>
+
+% Here are the inputs and outputs of the function:
+    Inputs:
+        'prompt_text' - A string containing the prompt text to analyze.
+        'strength' - A float that is the strength of the LLM model to use for the analysis. Default is 0.5.
+        'temperature' - A float that is the temperature of the LLM model to use for the analysis. Default is 0.
+    Outputs:
+        'reasoning' - A string containing the structured reasoning for the completeness assessment.
+        'is_finished' - A boolean indicating whether the prompt is complete (True) or incomplete (False).
+        'total_cost' - A float that is the total cost of the analysis function. This is an optional output.
+        'model_name' - A string that is the name of the LLM model used for the analysis. This is an optional output.
+
+% Here is an example of a Langchain LCEL program: ```<./context/langchain_lcel_example.py>```
+
+% Here is an example how to select the Langchain llm and count tokens using an internal module: ```<./context/llm_selector_example.py>```
+
+% This function will do the following:
+    Step 1. Use $PDD_PATH environment variable to get the path to the project. Load the '$PDD_PATH/prompts/unfinished_prompt_LLM.prompt' file.
+    Step 2. Create a Langchain LCEL template from unfinished_prompt_LLM prompt so that it returns a JSON output.
+    Step 3. Use the llm_selector function for the LLM model.
+    Step 4. Run the prompt text through the model using Langchain LCEL.
+        4a. Pass the following string parameters to the prompt during invoke:
+            - 'PROMPT_TEXT'
+        4b. Pretty print a message letting the user know it is running and how many tokens (using token_counter function from llm_selector) are in the prompt and the cost. The cost from llm_selector is in dollars per million tokens.
+        4c. The dictionary output of the LCEL will have the keys 'reasoning' and 'is_finished'. Be sure to access these keys using the get method with default error messages.
+        4d. Pretty print the reasoning and completion status using the rich library. Also, print the number of tokens in the result, the output token cost and the total_cost.
+    Step 5. Return the 'reasoning' string and 'is_finished' boolean from the JSON output using 'get', and the 'total_cost' float, and 'model_name' string.
