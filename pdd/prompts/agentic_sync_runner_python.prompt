@@ -28,6 +28,13 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - Treat this as an incremental extension of the existing runner, not a replacement of its public API.
 - The generated module MUST define and export the exact architecture-declared symbols in the `<pdd-interface>` block: class `AsyncSyncRunner`, method `AsyncSyncRunner.run`, function `build_dep_graph_from_architecture`, and function `build_dep_graph_from_architecture_data`.
 - Do not rename, remove, privatize, nest, or replace these symbols with aliases. Keep their call signatures compatible with the interface and architecture.json so conformance verification passes.
+- Before returning final code, self-check that Python `ast.parse(...)` would find these concrete definitions:
+  - a top-level `ClassDef` named `AsyncSyncRunner`
+  - a `FunctionDef` or `AsyncFunctionDef` named `run` directly inside `AsyncSyncRunner`
+  - a top-level `FunctionDef` named `build_dep_graph_from_architecture`
+  - a top-level `FunctionDef` named `build_dep_graph_from_architecture_data`
+- These exports must be real definitions in this module, not imported aliases, conditional definitions, nested helpers, lambdas assigned to those names, or documentation-only examples.
+- If changing unrelated internals is unnecessary, preserve the existing module structure and make the smallest implementation change that satisfies the progress-event requirements and the export contract.
 
 % Requirements
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0)`
