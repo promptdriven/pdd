@@ -306,7 +306,7 @@
   },
   {
     "reason": "Handles authentication for PDD cloud services.",
-    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication.",
+    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target.",
     "dependencies": [
       "_keyring_timeout_python.prompt"
     ],

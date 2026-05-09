@@ -2221,6 +2221,7 @@ class TestAutoSubmitSkipInCloud:
             "PDD_CLOUD_URL",
             "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
         )
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "prompt-driven-development")
         monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "firebase-key")
         monkeypatch.setenv("GITHUB_CLIENT_ID", "github-client")
 
