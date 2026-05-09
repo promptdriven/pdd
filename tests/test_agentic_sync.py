@@ -1443,6 +1443,170 @@ class TestRunDryRunValidation:
         assert "mod_y" in errors[0]
         assert cost == pytest.approx(0.01)
 
+    def test_dry_run_success_still_fails_prompt_contract_preflight(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A syncable cwd is rejected when real sync would fail prompt-contract preflight."""
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        source = tmp_path / "bad.py"
+        source.write_text(
+            "def keep_me():\n"
+            "    return True\n\n"
+            "def missing_from_context():\n"
+            "    return False\n",
+            encoding="utf-8",
+        )
+        (prompts / "bad_python.prompt").write_text(
+            '<pdd-interface>{"type":"module","module":{"functions":['
+            '{"name":"keep_me","signature":"()","returns":"bool"},'
+            '{"name":"missing_from_context","signature":"()","returns":"bool"}'
+            "]}}</pdd-interface>\n"
+            "% Goal\n"
+            "Preserve this module.\n"
+            '<include select="def:keep_me">bad.py</include>\n',
+            encoding="utf-8",
+        )
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "bad_python.prompt",
+                        "filepath": "bad.py",
+                        "interface": {
+                            "type": "module",
+                            "module": {
+                                "functions": [
+                                    {"name": "keep_me"},
+                                    {"name": "missing_from_context"},
+                                ]
+                            },
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        mock_dry_run = MagicMock(return_value=(True, ""))
+        mock_llm = MagicMock(return_value=(True, tmp_path, 0.02, ""))
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", mock_dry_run)
+        monkeypatch.setattr("pdd.agentic_sync._llm_fix_dry_run_failure", mock_llm)
+
+        all_valid, cwds, errors, cost = _run_dry_run_validation(
+            ["bad"], tmp_path, quiet=True
+        )
+
+        assert all_valid is False
+        assert cwds == {}
+        assert cost == 0.0
+        assert len(errors) == 1
+        assert "bad: prompt contract preflight failed" in errors[0]
+        assert "missing_from_context" in errors[0]
+        mock_dry_run.assert_called_once_with("bad", tmp_path, quiet=True)
+        mock_llm.assert_not_called()
+
+    def test_dry_run_success_allows_legacy_no_self_include_prompt_contract(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Legacy prompt-local interfaces without self-includes remain syncable."""
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (tmp_path / "legacy.py").write_text(
+            "def keep_me():\n"
+            "    return True\n",
+            encoding="utf-8",
+        )
+        (prompts / "legacy_python.prompt").write_text(
+            '<pdd-interface>{"type":"module","module":{"functions":['
+            '{"name":"keep_me","signature":"()","returns":"bool"}'
+            "]}}</pdd-interface>\n"
+            "% Goal\n"
+            "Preserve this legacy module.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "legacy_python.prompt",
+                        "filepath": "legacy.py",
+                        "interface": {
+                            "type": "module",
+                            "module": {"functions": [{"name": "keep_me"}]},
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
+
+        all_valid, cwds, errors, cost = _run_dry_run_validation(
+            ["legacy"], tmp_path, quiet=True
+        )
+
+        assert all_valid is True
+        assert cwds == {"legacy": tmp_path}
+        assert errors == []
+        assert cost == 0.0
+
+    def test_dry_run_success_rejects_changed_no_self_include_prompt_contract(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Changed prompt-local self-contracts must include existing source context."""
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (tmp_path / "changed.py").write_text(
+            "def keep_me():\n"
+            "    return True\n",
+            encoding="utf-8",
+        )
+        (prompts / "changed_python.prompt").write_text(
+            '<pdd-interface>{"type":"module","module":{"functions":['
+            '{"name":"keep_me","signature":"()","returns":"bool"}'
+            "]}}</pdd-interface>\n"
+            "% Goal\n"
+            "Preserve this changed module.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "changed_python.prompt",
+                        "filepath": "changed.py",
+                        "interface": {
+                            "type": "module",
+                            "module": {"functions": [{"name": "keep_me"}]},
+                        },
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
+        monkeypatch.setattr(
+            "pdd.agentic_sync._prompt_contract_strict_self_context_required",
+            lambda *a, **k: True,
+        )
+
+        all_valid, cwds, errors, cost = _run_dry_run_validation(
+            ["changed"], tmp_path, quiet=True
+        )
+
+        assert all_valid is False
+        assert cwds == {}
+        assert cost == 0.0
+        assert len(errors) == 1
+        assert "changed: prompt contract preflight failed" in errors[0]
+        assert "includes no existing module source context" in errors[0]
+
 
 # ---------------------------------------------------------------------------
 # _filter_already_synced
