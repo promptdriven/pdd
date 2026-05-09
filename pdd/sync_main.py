@@ -517,6 +517,10 @@ def _auto_submit_example(
     except (TypeError, ValueError):
         auth_timeout_s = 300.0
     try:
+        # The lower-level async auth helper checks JWT cache before it knows
+        # which Firebase audience is expected. Infer PDD_ENV from PDD_CLOUD_URL
+        # first so staging/prod cache validation cannot reuse the wrong token.
+        CloudConfig.ensure_default_env()
         jwt_token = asyncio.run(asyncio.wait_for(
             get_jwt_token(
                 firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
@@ -573,7 +577,7 @@ def _auto_submit_example(
 
     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
     response = requests.post(
-        "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample",
+        CloudConfig.get_endpoint_url("submitExample"),
         json=payload,
         headers=headers,
         timeout=get_cloud_request_timeout(),

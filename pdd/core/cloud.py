@@ -97,6 +97,7 @@ CLOUD_ENDPOINTS = {
     "getCommandStatus": "/getCommandStatus",
     "updateCommand": "/updateCommand",
     "cancelCommand": "/cancelCommand",
+    "submitExample": "/submitExample",
 }
 
 
@@ -104,7 +105,7 @@ class CloudConfig:
     """Centralized cloud configuration for all PDD commands."""
 
     @staticmethod
-    def _ensure_default_env() -> None:
+    def ensure_default_env() -> None:
         """Default PDD_ENV for CLI usage when unset."""
         if os.environ.get("PDD_ENV"):
             return
@@ -127,6 +128,11 @@ class CloudConfig:
 
         # Default to production for typical CLI usage.
         os.environ["PDD_ENV"] = "prod"
+
+    @staticmethod
+    def _ensure_default_env() -> None:
+        """Backward-compatible alias for ensure_default_env()."""
+        CloudConfig.ensure_default_env()
 
     @staticmethod
     def get_base_url() -> str:
@@ -185,7 +191,7 @@ class CloudConfig:
             Callers should handle None return by falling back to local execution.
         """
         # Default env to prod for typical CLI usage (unless emulator/custom URL says otherwise).
-        CloudConfig._ensure_default_env()
+        CloudConfig.ensure_default_env()
 
         # Check for pre-injected token (testing/CI)
         injected_token = os.environ.get(PDD_JWT_TOKEN_ENV)
