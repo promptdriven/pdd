@@ -939,6 +939,16 @@ _OPENCODE_PROVIDER_ENV_KEYS_FALLBACK: Tuple[str, ...] = (
     "LMSTUDIO_HOST",
 )
 
+# Env vars that credential an OpenCode provider but that no CSV ``api_key``
+# row references (typically OAuth/device-flow providers whose CSV rows have an
+# empty ``api_key``). ``_opencode_configured_providers`` consults this map
+# after the CSV walk so the fallback resolver can pick a model for these
+# providers — otherwise ``_has_opencode_credentials`` would say "available"
+# while the resolver returns ``None``.
+_OPENCODE_ENV_VAR_TO_PROVIDER: Dict[str, str] = {
+    "GITHUB_TOKEN": "github-copilot",
+}
+
 
 def _opencode_provider_env_keys() -> Tuple[str, ...]:
     """Return the union of provider credential env vars from llm_model.csv.
@@ -1363,9 +1373,28 @@ def _opencode_configured_providers(
             if not model_id:
                 continue
             translated = _translate_to_opencode_model(model_id)
-            prefix = translated.split("/", 1)[0] if "/" in translated else translated
+            # Only rows that translate to OpenCode's required ``provider/model``
+            # form contribute a provider here. Rows whose translation is bare
+            # (e.g. AWS Bedrock IDs like ``anthropic.claude-opus-4-7`` that
+            # lack a known OpenCode provider prefix) must NOT pollute the
+            # configured-provider set, otherwise ``_resolve_opencode_csv_fallback``
+            # would happily echo that bare ID back as ``--model`` and OpenCode
+            # would reject it.
+            if "/" not in translated:
+                continue
+            prefix = translated.split("/", 1)[0]
             if prefix:
                 providers.add(prefix)
+
+    # Some OpenCode providers are credentialed by env vars that are not part
+    # of any CSV ``api_key`` field (e.g. ``GITHUB_TOKEN`` for ``github-copilot``,
+    # which uses device-flow / OAuth so its CSV rows have an empty ``api_key``).
+    # Without this mapping the env var alone makes ``_has_opencode_credentials``
+    # answer True while ``_resolve_opencode_csv_fallback`` returns ``None``,
+    # so OpenCode appears available but no model is selectable.
+    for env_var, provider_id in _OPENCODE_ENV_VAR_TO_PROVIDER.items():
+        if (src.get(env_var) or "").strip():
+            providers.add(provider_id)
 
     return providers
 
@@ -1412,7 +1441,13 @@ def _resolve_opencode_csv_fallback(
         if not model_id:
             continue
         translated = _translate_to_opencode_model(model_id)
-        prefix = translated.split("/", 1)[0] if "/" in translated else translated
+        # OpenCode requires ``--model provider/model`` form. Skip rows whose
+        # translation is bare (e.g. AWS Bedrock IDs like
+        # ``anthropic.claude-opus-4-7``) — passing them through would make
+        # OpenCode reject the run with an invalid-model error.
+        if "/" not in translated:
+            continue
+        prefix = translated.split("/", 1)[0]
         if prefix in configured:
             return translated
     return None
@@ -1443,13 +1478,34 @@ def _opencode_csv_cost(model_id: Optional[str], tokens: Optional[Dict[str, Any]]
         return 0.0
     if df is None or getattr(df, "empty", True):
         return 0.0
-    # Try matching the model id verbatim, then with any leading provider/
-    # prefix stripped — OpenCode IDs like ``anthropic/claude-sonnet-4-6``
-    # usually match the CSV row by suffix.
+    # Build a *provider-aware* candidate list. A naive suffix-strip fallback
+    # like ``model_id.rsplit("/", 1)[1]`` would match an OpenCode ID such as
+    # ``github-copilot/gpt-5`` against the unrelated OpenAI ``gpt-5`` row in
+    # the CSV (charging $11.25/M instead of GitHub Copilot's $0.0). Each rule
+    # below is the inverse of a translation in ``_translate_to_opencode_model``
+    # and only strips the OpenCode provider prefix when the suffix can only
+    # belong to that provider's CSV row family.
     candidates = [model_id]
     if "/" in model_id:
-        candidates.append(model_id.split("/", 1)[1])
-        candidates.append(model_id.rsplit("/", 1)[1])
+        head, tail = model_id.split("/", 1)
+        if head == "github-copilot":
+            candidates.append("github_copilot/" + tail)
+        elif head == "google":
+            candidates.append("gemini/" + tail)
+        elif head == "anthropic" and tail.startswith("claude-"):
+            # Anthropic native CSV rows are bare ``claude-...``.
+            candidates.append(tail)
+        elif head == "openai" and tail.startswith("gpt-"):
+            # OpenAI native CSV rows are bare ``gpt-...``.
+            candidates.append(tail)
+        else:
+            # Generic last-segment fallback for routers like
+            # ``openrouter/openai/gpt-5.3-codex`` whose final segment is the
+            # CSV model id. Kept conservative: only the *last* segment, and
+            # only when the prefix isn't one we already de-translated above
+            # — this avoids the cross-provider mismatch the inverse rules
+            # above were added to prevent.
+            candidates.append(model_id.rsplit("/", 1)[1])
     row = None
     for cand in candidates:
         match = df[df["model"] == cand]
