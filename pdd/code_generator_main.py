@@ -37,6 +37,73 @@ from .validate_prompt_includes import validate_prompt_includes
 console = Console()
 logger = logging.getLogger(__name__)
 
+
+class ArchitectureConformanceError(click.UsageError):
+    """Typed exception raised when generated code violates the architecture contract.
+
+    Subclass of :class:`click.UsageError` so existing call sites that catch
+    ``click.UsageError`` continue to work unchanged. Carries structured fields
+    so callers like ``pdd sync`` / ``agentic_sync_runner`` can build a repair
+    directive and retry generation without parsing the message string.
+    """
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        architecture_entry: Dict[str, Any],
+        expected_symbols: List[str],
+        found_symbols: List[str],
+        missing_symbols: List[str],
+        message: Optional[str] = None,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.architecture_entry = architecture_entry or {}
+        self.expected_symbols = list(expected_symbols)
+        self.found_symbols = list(found_symbols)
+        self.missing_symbols = list(missing_symbols)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        if message is None:
+            output_display = self.output_path or "<unknown>"
+            message = (
+                f"Architecture conformance error for {prompt_name}: "
+                f"declared symbols missing from generated code: "
+                f"{', '.join(self.missing_symbols)}. "
+                f"Output: {output_display}. "
+                f"Expected: {self.expected_symbols}. Found: {self.found_symbols}."
+            )
+        super().__init__(message)
+
+    @property
+    def repair_directive(self) -> str:
+        """Multi-line, model-facing instruction naming the missing symbols."""
+        lines: List[str] = []
+        lines.append(
+            f"Architecture conformance error for {self.prompt_name}: "
+            f"the generated code is missing required exports declared in architecture.json."
+        )
+        lines.append("Required missing exports:")
+        for sym in self.missing_symbols:
+            lines.append(f"- {sym}")
+        lines.append("")
+        lines.append(
+            "Do not modify architecture.json. Do not remove existing valid exports."
+        )
+        if self.expected_symbols:
+            lines.append(
+                f"Expected interface symbols: {', '.join(self.expected_symbols)}."
+            )
+        if self.found_symbols:
+            lines.append(
+                f"Currently exported symbols: {', '.join(self.found_symbols)}."
+            )
+        return "\n".join(lines)
+
+
 # --- Helper Functions ---
 def _parse_llm_bool(value: str) -> bool:
     """Parse LLM boolean value from string."""
@@ -294,6 +361,7 @@ def _verify_architecture_conformance(
     arch_path: Optional[str],
     language: Optional[str],
     verbose: bool,
+    output_path: Optional[str] = None,
 ) -> None:
     """Check generated code exports against architecture.json interface declarations.
 
@@ -378,10 +446,13 @@ def _verify_architecture_conformance(
     # Compare declared vs actual
     missing = [s for s in declared_symbols if s not in actual_symbols]
     if missing:
-        raise click.UsageError(
-            f"Architecture conformance error for {prompt_name}: "
-            f"declared symbols missing from generated code: {', '.join(missing)}. "
-            f"Expected: {declared_symbols}. Found: {actual_symbols}."
+        raise ArchitectureConformanceError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            architecture_entry=entry or {},
+            expected_symbols=declared_symbols,
+            found_symbols=actual_symbols,
+            missing_symbols=missing,
         )
 
     # Check naming convention: if architecture specifies snake_case but code has camelCase.
@@ -396,10 +467,21 @@ def _verify_architecture_conformance(
                     camel_exports.append(s)
                     break
         if camel_exports:
-            raise click.UsageError(
+            camel_message = (
                 f"Architecture conformance error for {prompt_name}: "
                 f"Python code uses camelCase names ({', '.join(camel_exports[:5])}) "
-                f"but Python convention requires snake_case."
+                f"but Python convention requires snake_case. "
+                f"Output: {output_path or '<unknown>'}. "
+                f"Expected: {declared_symbols}. Found: {actual_symbols}."
+            )
+            raise ArchitectureConformanceError(
+                prompt_name=prompt_name,
+                output_path=output_path or "",
+                architecture_entry=entry or {},
+                expected_symbols=declared_symbols,
+                found_symbols=actual_symbols,
+                missing_symbols=camel_exports,
+                message=camel_message,
             )
 
 
@@ -714,6 +796,20 @@ def code_generator_main(
                     console.print(f"[yellow]Warning: Could not read unit test file {tf}: {e}[/yellow]")
             prompt_content += "</unit_test_content>\n"
         # ---------------------------------
+
+        # Architecture-conformance repair directive (set by retrying callers
+        # such as agentic_sync_runner / sync_main when a prior generation
+        # failed conformance). Append to the prompt so the model sees the
+        # missing-export instruction on the next attempt. Without this, the
+        # subprocess retry would be an identical generation request and the
+        # repair loop would not actually repair anything (#866).
+        repair_directive_env = os.environ.get("PDD_REPAIR_DIRECTIVE")
+        if repair_directive_env and repair_directive_env.strip():
+            prompt_content += (
+                "\n\n<architecture_repair_directive>\n"
+                f"{repair_directive_env.strip()}\n"
+                "</architecture_repair_directive>\n"
+            )
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
@@ -1534,7 +1630,12 @@ def code_generator_main(
                         arch_path=None,  # Uses default architecture.json
                         language=language,
                         verbose=verbose,
+                        output_path=output_path,
                     )
+                except ArchitectureConformanceError as conform_err:
+                    conform_err.total_cost = float(total_cost or 0.0)
+                    conform_err.model_name = model_name or "unknown"
+                    raise  # Re-raise conformance errors as hard failures
                 except click.UsageError:
                     raise  # Re-raise conformance errors as hard failures
                 except Exception as conform_err:

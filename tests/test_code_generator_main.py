@@ -215,11 +215,24 @@ def mock_subprocess_run_fixture(monkeypatch):
     return mock
 
 
-@pytest.fixture(autouse=True) 
+@pytest.fixture(autouse=True)
 def mock_rich_console_fixture(monkeypatch):
     mock_console_print = MagicMock()
     monkeypatch.setattr("pdd.code_generator_main.console.print", mock_console_print)
     return mock_console_print
+
+@pytest.fixture(autouse=True)
+def _clear_cloud_runtime_env(monkeypatch):
+    """Strip cloud-runtime detection env vars for all tests.
+
+    The Cloud Run executor that runs these tests sets K_SERVICE, which causes
+    `CloudConfig.is_running_in_cloud()` to return True and short-circuits the
+    cloud branch in `code_generator_main`. Tests that exercise either the cloud
+    success path or the cloud→local fallback path need K_SERVICE/FUNCTIONS_EMULATOR
+    cleared so the mocked cloud call is actually reached.
+    """
+    monkeypatch.delenv("K_SERVICE", raising=False)
+    monkeypatch.delenv("FUNCTIONS_EMULATOR", raising=False)
 
 @pytest.fixture
 def mock_env_vars(monkeypatch):
@@ -2106,6 +2119,105 @@ def test_full_gen_local_with_unit_test(
     assert "<unit_test_content>" in called_prompt
     assert unit_test_content in called_prompt
     assert "</unit_test_content>" in called_prompt
+
+
+def test_full_gen_local_includes_architecture_repair_directive(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    monkeypatch,
+    mock_env_vars,
+):
+    """Retry callers can inject missing-symbol repair instructions into generation."""
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_prompt.prompt"
+    prompt_content = "Generate repaired code."
+    create_file(prompt_file_path, prompt_content)
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "repair.py")
+    repair_directive = (
+        "Architecture conformance repair required.\n"
+        "Required missing exports:\n"
+        "- AsyncSyncRunner.run\n"
+        "Do not modify architecture.json."
+    )
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", repair_directive)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": prompt_content},
+        {"output": output_file_path_str},
+        "python",
+    )
+
+    code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        output_file_path_str,
+        None,
+        False,
+    )
+
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert prompt_content in called_prompt
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "- AsyncSyncRunner.run" in called_prompt
+    assert "</architecture_repair_directive>" in called_prompt
+
+
+def test_conformance_error_from_codegen_carries_generation_cost(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    monkeypatch,
+    mock_env_vars,
+):
+    """Failed conformance after generation must still expose spent cost/model."""
+    from pdd.code_generator_main import ArchitectureConformanceError
+
+    monkeypatch.chdir(temp_dir_setup["tmp_path"])
+    mock_ctx.obj["local"] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "costed_python.prompt"
+    create_file(prompt_file_path, "Generate a costed module.")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "costed.py")
+    (temp_dir_setup["tmp_path"] / "architecture.json").write_text(json.dumps([
+        {
+            "filename": "costed_python.prompt",
+            "filepath": "output/costed.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {"name": "required_export", "signature": "def required_export()"},
+                    ]
+                },
+            },
+        }
+    ]))
+    mock_local_generator_fixture.return_value = (
+        "def other_export():\n    return None\n",
+        0.123,
+        "mock-cost-model",
+    )
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": "Generate a costed module."},
+        {"output": output_file_path_str},
+        "python",
+    )
+
+    with pytest.raises(ArchitectureConformanceError) as excinfo:
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            output_file_path_str,
+            None,
+            False,
+        )
+
+    assert excinfo.value.total_cost == pytest.approx(0.123)
+    assert excinfo.value.model_name == "mock-cost-model"
 
 
 def test_full_gen_local_with_unit_test_and_front_matter_conflict(
@@ -4686,3 +4798,263 @@ class TestParseFrontMatterCRLF:
         assert meta is not None, "BOM prompt read with encoding='utf-8' returned None"
         assert meta["name"] == "e2e_bom"
         assert body == "Body"
+
+
+# ---------------------------------------------------------------------------
+# Tests for ArchitectureConformanceError typed exception (Requirement 5)
+# ---------------------------------------------------------------------------
+class TestArchitectureConformanceErrorTypedException:
+    """Tests for the typed ArchitectureConformanceError class.
+
+    Requirement 5 of the spec mandates that architecture conformance failures
+    raise a typed ``ArchitectureConformanceError`` (subclass of
+    ``click.UsageError``) with structured fields so callers like
+    ``pdd sync`` / ``agentic_sync_runner`` can build a repair directive
+    and retry generation without parsing the message string.
+    """
+
+    def test_class_is_subclass_of_usage_error(self):
+        """ArchitectureConformanceError must subclass click.UsageError."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        assert issubclass(ArchitectureConformanceError, click.UsageError)
+
+    def test_class_importable_from_module(self):
+        """The class must be importable from pdd.code_generator_main."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        assert ArchitectureConformanceError is not None
+
+    def test_missing_symbol_raises_typed_exception_with_fields(self, tmp_path):
+        """Missing-symbol failure carries all structured fields per spec."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "User", "signature": "class User"},
+                            {"name": "Admin", "signature": "class Admin"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+        generated_code = "class User:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+        exc = excinfo.value
+        assert exc.prompt_name == "models_Python.prompt"
+        # output_path may be empty for in-memory failures.
+        assert exc.output_path == ""
+        # architecture_entry should be the matched entry, not empty.
+        assert isinstance(exc.architecture_entry, dict)
+        assert exc.architecture_entry.get("filename") == "models_Python.prompt"
+        # Declared interface symbols.
+        assert exc.expected_symbols == ["User", "Admin"]
+        # Symbols actually exported by the generated code.
+        assert exc.found_symbols == ["User"]
+        # Declared symbols absent from found_symbols.
+        assert exc.missing_symbols == ["Admin"]
+
+    def test_missing_symbol_message_format(self, tmp_path):
+        """String message must start with the legacy prefix and name missing symbols."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Admin", "signature": "class Admin"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code="",
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+        msg = str(excinfo.value)
+        # Per spec: must start with this exact prefix for legacy log parsers.
+        assert msg.startswith("Architecture conformance error for models_Python.prompt:")
+        # Must include the missing symbols.
+        assert "Admin" in msg
+
+    def test_missing_symbol_includes_output_path_when_provided(self, tmp_path):
+        """Structured failures should carry the generated output path."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Admin", "signature": "class Admin"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code="",
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+                output_path="src/models.py",
+            )
+
+        assert excinfo.value.output_path == "src/models.py"
+        assert "Output: src/models.py" in str(excinfo.value)
+
+    def test_missing_symbol_repair_directive_format(self, tmp_path):
+        """repair_directive must enumerate missing symbols and forbid arch edits."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "User", "signature": "class User"},
+                            {"name": "Admin", "signature": "class Admin"},
+                            {"name": "Guest", "signature": "class Guest"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code="class User:\n    pass\n",
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+        directive = excinfo.value.repair_directive
+        # Required header.
+        assert "Required missing exports:" in directive
+        # One bullet per missing symbol.
+        assert "- Admin" in directive
+        assert "- Guest" in directive
+        # Forbid architecture.json edits.
+        assert "Do not modify architecture.json. Do not remove existing valid exports." in directive
+
+    def test_camelcase_violation_raises_typed_exception(self, tmp_path):
+        """camelCase guard must raise ArchitectureConformanceError too (spec)."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        arch = [
+            {
+                "filename": "utils_Python.prompt",
+                "filepath": "src/utils.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "processData", "signature": "def processData(...)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code="def processData(data):\n    return data\n",
+                prompt_name="utils_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+        exc = excinfo.value
+        # Per spec: missing_symbols MUST be the offending camelCase symbols.
+        assert "processData" in exc.missing_symbols
+        # Subclass of UsageError so existing call sites still work.
+        assert isinstance(exc, click.UsageError)
+
+    def test_typed_exception_caught_as_usage_error(self, tmp_path):
+        """Code that catches click.UsageError still works (back-compat)."""
+        arch = [
+            {
+                "filename": "models_Python.prompt",
+                "filepath": "src/models.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "Missing", "signature": "class Missing"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        # Existing callers that catch click.UsageError MUST still work.
+        with pytest.raises(click.UsageError):
+            _verify_architecture_conformance(
+                generated_code="",
+                prompt_name="models_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+            )
+
+    def test_construction_directly_with_all_fields(self):
+        """Direct construction populates every documented field."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+        exc = ArchitectureConformanceError(
+            prompt_name="x_Python.prompt",
+            output_path="src/x.py",
+            architecture_entry={"filename": "x_Python.prompt"},
+            expected_symbols=["a", "b"],
+            found_symbols=["a"],
+            missing_symbols=["b"],
+            total_cost=0.42,
+            model_name="cost-model",
+        )
+        assert exc.prompt_name == "x_Python.prompt"
+        assert exc.output_path == "src/x.py"
+        assert exc.architecture_entry == {"filename": "x_Python.prompt"}
+        assert exc.expected_symbols == ["a", "b"]
+        assert exc.found_symbols == ["a"]
+        assert exc.missing_symbols == ["b"]
+        assert exc.total_cost == pytest.approx(0.42)
+        assert exc.model_name == "cost-model"
+        # repair_directive computable from fields.
+        assert "- b" in exc.repair_directive
+        assert "Do not modify architecture.json. Do not remove existing valid exports." in exc.repair_directive

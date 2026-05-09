@@ -13,12 +13,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pdd.agentic_sync_runner import (
+    GITHUB_COMMENT_BODY_LIMIT,
     MAX_WORKERS,
     STATE_FILE_PATH,
     AsyncSyncRunner,
     ModuleState,
     _BOX_CHARS_RE,
     _format_duration,
+    _parse_conformance_failure,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
@@ -72,7 +74,7 @@ class TestFormatDuration:
         assert _format_duration(100.0, 145.0) == "45s"
 
     def test_minutes_and_seconds(self):
-        assert _format_duration(0.0, 125.0) == "2m5s"
+        assert _format_duration(0.0, 125.0) == "2m 5s"
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +270,78 @@ class TestBuildCommentBody:
         body = runner._build_comment_body(5)
         assert "Paused" in body
         assert "`a` failed" in body
+
+    def test_failure_includes_state_error_details(self):
+        """#865: GitHub progress comment must surface the structured
+        conformance error for each failed module (missing symbols, the
+        ``Reproduce locally:`` line, and env fingerprint), not just the
+        ``Paused: <module> failed`` footer."""
+        runner = AsyncSyncRunner(
+            basenames=["alpha", "beta"],
+            dep_graph={"alpha": [], "beta": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        runner.module_states["alpha"].status = "failed"
+        runner.module_states["alpha"].start_time = 0.0
+        runner.module_states["alpha"].end_time = 10.0
+        runner.module_states["alpha"].error = (
+            "Architecture conformance failure\n"
+            "\n"
+            "=== architecture conformance failure ===\n"
+            "prompt: alpha_python.prompt\n"
+            "output: pdd/alpha.py\n"
+            "expected: foo, bar\n"
+            "found: foo\n"
+            "missing: bar\n"
+            "\n"
+            "Reproduce locally: pdd sync alpha\n"
+            "\n"
+            "--- env ---\n"
+            "pdd.__file__: /tmp/pdd/__init__.py\n"
+        )
+        runner.module_states["beta"].status = "success"
+        runner.module_states["beta"].start_time = 0.0
+        runner.module_states["beta"].end_time = 10.0
+
+        body = runner._build_comment_body(7)
+        assert "### Failed module details" in body
+        assert "<details><summary><code>alpha</code></summary>" in body
+        assert "missing: bar" in body
+        assert "Reproduce locally: pdd sync alpha" in body
+        assert "--- env ---" in body
+        # Successful module should not get a details block
+        assert "<code>beta</code>" not in body
+
+    def test_failure_details_comment_has_total_size_cap(self):
+        """Progress comments must stay under GitHub's 65,536 char limit."""
+        basenames = [f"mod_{i}" for i in range(10)]
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph={name: [] for name in basenames},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        long_error = (
+            "Architecture conformance failure\n"
+            "=== architecture conformance failure ===\n"
+            "missing: MissingExport\n"
+            + ("x" * 10000)
+        )
+        for basename in basenames:
+            state = runner.module_states[basename]
+            state.status = "failed"
+            state.start_time = 0.0
+            state.end_time = 1.0
+            state.error = long_error
+
+        body = runner._build_comment_body(7)
+
+        assert len(body) <= GITHUB_COMMENT_BODY_LIMIT
+        assert "### Failed module details" in body
+        assert "truncated" in body
 
     def test_failure_with_running_modules_shows_continuing(self):
         runner = AsyncSyncRunner(
@@ -905,6 +979,165 @@ class TestAsyncSyncRunnerRun:
 # ---------------------------------------------------------------------------
 
 class TestSyncOneModule:
+    def test_parse_conformance_failure_with_output_field(self):
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: "
+            "AsyncSyncRunner.run. "
+            "Output: pdd/agentic_sync_runner.py. "
+            "Expected: ['AsyncSyncRunner', 'AsyncSyncRunner.run']. "
+            "Found: ['AsyncSyncRunner']."
+        )
+
+        parsed = _parse_conformance_failure("", stderr)
+
+        assert parsed is not None
+        repair_directive, missing_symbols = parsed
+        assert missing_symbols == ("AsyncSyncRunner.run",)
+        assert "- AsyncSyncRunner.run" in repair_directive
+        assert "Output:" not in repair_directive
+
+    def test_parse_conformance_failure_without_symbols_is_not_repairable(self):
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code\n"
+        )
+
+        assert _parse_conformance_failure("", stderr) is None
+
+    def test_conformance_hard_failure_includes_structured_fields(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. "
+            "Expected: ['Foo', 'Foo.run']. "
+            "Found: ['Foo']."
+        )
+
+        block = runner._build_conformance_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "=== architecture conformance failure ===" in block
+        assert "prompt: foo_python.prompt" in block
+        assert "output: pdd/foo.py" in block
+        assert "expected: ['Foo', 'Foo.run']" in block
+        assert "found: ['Foo']" in block
+        assert "missing: Foo.run" in block
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_conformance_failure_retries_with_repair_directive(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        conformance_error = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. "
+            "Expected: ['Foo', 'Foo.run']. Found: ['Foo']."
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=conformance_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success
+        assert cost == pytest.approx(0.0)
+        assert error == ""
+        assert mock_popen.call_count == 2
+        first_env = mock_popen.call_args_list[0].kwargs["env"]
+        second_env = mock_popen.call_args_list[1].kwargs["env"]
+        assert "PDD_REPAIR_DIRECTIVE" not in first_env
+        assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_conformance_retry_shrinks_total_budget(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        conformance_error = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. "
+            "Expected: ['Foo', 'Foo.run']. Found: ['Foo']."
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=conformance_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"total_budget": 1.0},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success
+        assert cost == pytest.approx(0.7)
+        assert error == ""
+        assert mock_popen.call_count == 2
+        first_cmd = mock_popen.call_args_list[0][0][0]
+        second_cmd = mock_popen.call_args_list[1][0][0]
+        assert float(first_cmd[first_cmd.index("--budget") + 1]) == pytest.approx(1.0)
+        assert float(second_cmd[second_cmd.index("--budget") + 1]) == pytest.approx(0.4)
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=1.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_conformance_retry_stops_when_total_budget_exhausted(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, _mock_env
+    ):
+        conformance_error = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. "
+            "Expected: ['Foo', 'Foo.run']. Found: ['Foo']."
+        )
+        mock_popen.return_value = _make_mock_popen(
+            stderr_text=conformance_error,
+            exit_code=1,
+        )
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"total_budget": 1.0},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert not success
+        assert cost == pytest.approx(1.0)
+        assert mock_popen.call_count == 1
+        assert "Budget exhausted during architecture conformance repair" in error
+        assert "=== architecture conformance failure ===" in error
+
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
@@ -1888,6 +2121,25 @@ class TestBuildDepGraphFromArchitecture:
         assert result.graph["crm_models_Python"] == ["base_config_Python"]
         assert result.graph["base_config_Python"] == []
         assert result.graph["api_client_Python"] == ["crm_models_Python"]
+        assert result.warnings == []
+
+    def test_frontend_react_language_suffixes_use_language_catalog(self, tmp_path):
+        """TypeScriptReact/JavaScriptReact suffixes must resolve like Python."""
+        arch = [
+            {
+                "filename": "tasks_page_TypeScriptReact.prompt",
+                "dependencies": ["shared_ui_JavaScriptReact.prompt"],
+            },
+            {"filename": "shared_ui_JavaScriptReact.prompt", "dependencies": []},
+        ]
+
+        result = build_dep_graph_from_architecture_data(
+            arch,
+            ["tasks_page", "shared_ui"],
+            source_name="architecture.json",
+        )
+
+        assert result.graph == {"tasks_page": ["shared_ui"], "shared_ui": []}
         assert result.warnings == []
 
     def test_only_target_deps_included(self, tmp_path):

@@ -6,11 +6,12 @@ updates a live GitHub issue comment with progress, and pauses on failure.
 """
 from __future__ import annotations
 
-import csv
+import csv as _csv
 import datetime
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -24,19 +25,43 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
-from .agentic_change import _run_gh_command
-from .architecture_registry import extract_modules
-from .sync_order import extract_module_from_include
+from .construct_paths import _is_known_language
 
 console = Console()
+
+# ---------------------------------------------------------------------------
+# Module-level constants and helpers
+# ---------------------------------------------------------------------------
+
+# Maximum concurrent syncs
+MAX_WORKERS = 4
+
+# Heartbeat interval for printing progress hints during long-running modules
+HEARTBEAT_INTERVAL = 60
+
+# Architecture-conformance retry cap
+MAX_CONFORMANCE_ATTEMPTS = 3
+
+# GitHub accepts comments up to 65,536 characters. Keep a buffer for CLI/API
+# encoding overhead and future footer text.
+GITHUB_COMMENT_BODY_LIMIT = 60000
+GITHUB_FAILED_DETAIL_PER_MODULE_LIMIT = 8000
+GITHUB_FAILED_DETAIL_MIN_CHARS = 600
+
+# Per-module timeout in seconds. Default 45 min, override via env.
+try:
+    MODULE_TIMEOUT = int(os.environ.get("PDD_MODULE_TIMEOUT_SECONDS", "2700"))
+except ValueError:
+    MODULE_TIMEOUT = 2700
+
+# State file for resumability (relative to project root)
+STATE_FILE_PATH = Path(".pdd/agentic_sync_state.json")
 
 # Regex matching lines composed entirely of box-drawing / table characters
 # (Rich Panel borders, table separators, etc.) — used to skip them in heartbeat.
 _BOX_CHARS_RE = re.compile(r'^[\s╭╮╰╯─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬\-|+]*$')
 
 # Substrings that mark a child stdout/stderr line as a known nonfatal warning.
-# These contain the word "failed" but are benign preprocessing fallbacks, so
-# they must not be promoted to the headline error in `_sync_one_module`.
 _NONFATAL_WARNING_SUBSTRINGS: Tuple[str, ...] = (
     "ContentSelector failed",
 )
@@ -46,18 +71,46 @@ def _is_nonfatal_warning(line: str) -> bool:
     """Return True if `line` matches a known nonfatal-warning substring."""
     return any(s in line for s in _NONFATAL_WARNING_SUBSTRINGS)
 
-# Maximum concurrent syncs
-MAX_WORKERS = 4
-# Per-module timeout in seconds. Large modules (200KB+) routinely need the full
-# generate+crash+verify+test+fix loop and can land at ~30-35 min for legitimate
-# work. Default of 45 min keeps a ~10-min margin above observed real runtimes;
-# override via PDD_MODULE_TIMEOUT_SECONDS for environments with tighter caps.
-try:
-    MODULE_TIMEOUT = int(os.environ.get("PDD_MODULE_TIMEOUT_SECONDS", "2700"))
-except ValueError:
-    MODULE_TIMEOUT = 2700
-# State file for resumability (relative to project root)
-STATE_FILE_PATH = ".pdd/agentic_sync_state.json"
+
+def _cap_github_comment_body(body: str) -> str:
+    """Return a GitHub issue-comment body that cannot exceed GitHub's limit."""
+    if len(body) <= GITHUB_COMMENT_BODY_LIMIT:
+        return body
+    suffix = (
+        "\n\n_Comment truncated to fit GitHub's size limit. "
+        "See workflow logs for full output._"
+    )
+    keep = max(GITHUB_COMMENT_BODY_LIMIT - len(suffix), 0)
+    return body[:keep].rstrip() + suffix
+
+
+def _run_gh_command(args: List[str], timeout: int = 30) -> Tuple[bool, str]:
+    """
+    Execute a gh CLI command at module scope so tests can patch this symbol.
+
+    Returns:
+        Tuple of (success, output). Output is stdout on success, stderr on failure.
+    """
+    try:
+        result = subprocess.run(
+            ["gh"] + list(args),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            return False, (result.stderr or "").strip()
+        return True, (result.stdout or "").strip()
+    except subprocess.TimeoutExpired:
+        return False, f"gh command timed out after {timeout}s"
+    except Exception as exc:  # pragma: no cover - defensive
+        return False, str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -73,40 +126,6 @@ class ModuleState:
     completed_phases: List[str] = field(default_factory=list)
 
 
-def _find_pdd_executable() -> Optional[str]:
-    """Find the pdd executable path."""
-    import shutil
-
-    pdd_path = shutil.which("pdd")
-    if pdd_path:
-        return pdd_path
-
-    python_dir = Path(sys.executable).parent
-    pdd_in_python_dir = python_dir / "pdd"
-    if pdd_in_python_dir.exists():
-        return str(pdd_in_python_dir)
-
-    return None
-
-
-def _parse_cost_from_csv(csv_path: str) -> float:
-    """Parse total cost from a PDD_OUTPUT_COST_PATH CSV file."""
-    total = 0.0
-    try:
-        with open(csv_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                cost_val = row.get("cost", "")
-                if cost_val:
-                    try:
-                        total += float(cost_val)
-                    except (ValueError, TypeError):
-                        pass
-    except (OSError, csv.Error):
-        pass
-    return total
-
-
 class DepGraphFromArchitectureResult(NamedTuple):
     """Dependency subgraph from architecture.json plus validation warnings."""
 
@@ -114,91 +133,352 @@ class DepGraphFromArchitectureResult(NamedTuple):
     warnings: List[str]
 
 
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
+
+
+def _find_pdd_executable() -> Optional[str]:
+    """Find the pdd executable path."""
+    candidate = shutil.which("pdd")
+    if candidate:
+        return candidate
+
+    py_dir = Path(sys.executable).parent
+    for name in ("pdd", "pdd.exe"):
+        p = py_dir / name
+        if p.exists():
+            return str(p)
+    return None
+
+
+def _parse_cost_from_csv(csv_path: str) -> float:
+    """Parse total cost from a PDD_OUTPUT_COST_PATH CSV file."""
+    total = 0.0
+    try:
+        if not os.path.exists(csv_path):
+            return 0.0
+        with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                cost_val = row.get("cost") or row.get("Cost") or ""
+                if not cost_val:
+                    continue
+                try:
+                    total += float(cost_val)
+                except (ValueError, TypeError):
+                    continue
+        return total
+    except (OSError, _csv.Error):
+        return 0.0
+
+
+def _format_duration(start: Optional[float], end: Optional[float]) -> str:
+    """Format a duration from start/end timestamps."""
+    if start is None or end is None:
+        return "-"
+    seconds = int(end - start)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    remaining = seconds % 60
+    return f"{minutes}m {remaining}s"
+
+
+_CONFORMANCE_PREFIX = "Architecture conformance error for "
+_MISSING_DECLARED_MARKER = "declared symbols missing from generated code"
+_MISSING_CAMELCASE_MARKER = "Python code uses camelCase names"
+
+
+def _parse_conformance_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """
+    Detect an architecture-conformance failure in subprocess output.
+
+    Returns (repair_directive, missing_symbols_sorted_tuple) when a conformance
+    error is detected, or None otherwise.
+
+    Two output shapes are supported:
+
+    * Inline form emitted by ``ArchitectureConformanceError.__init__`` —
+      ``... declared symbols missing from generated code: A, B.c, D. Expected: ...``
+      The missing symbols are a comma-separated list on the same line, ending
+      at the next sentence-terminating period (followed by space/EOL or
+      ``Expected:``). The camelCase variant is similar but parenthesised:
+      ``... Python code uses camelCase names (foo, barBaz) but ...``
+    * Bullet form from a richer multi-line message (kept for forward
+      compatibility), where bullets follow the marker line.
+    """
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _CONFORMANCE_PREFIX not in combined:
+        return None
+
+    missing: List[str] = []
+
+    def _split_symbols(blob: str) -> List[str]:
+        out: List[str] = []
+        for tok in blob.split(","):
+            sym = tok.strip().rstrip(".").strip()
+            # Drop trailing punctuation/quoting and any embedded whitespace.
+            sym = sym.strip("`'\"")
+            if sym and " " not in sym and "\t" not in sym:
+                out.append(sym)
+        return out
+
+    # 1) Inline declared-missing form:
+    #    "... declared symbols missing from generated code: A, B.c. Output: ..."
+    # Capture symbols until a known field boundary. Dotted names
+    # (Class.method) are safe because boundaries require ". " followed by a
+    # field label.
+    inline_re = re.compile(
+        r"declared symbols missing from generated code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE,
+    )
+    for m in inline_re.finditer(combined):
+        missing.extend(_split_symbols(m.group(1)))
+
+    # 2) Inline camelCase form:
+    #    "... Python code uses camelCase names (foo, barBaz) but ..."
+    camel_re = re.compile(
+        r"Python code uses camelCase names\s*\(([^)]*)\)"
+    )
+    for m in camel_re.finditer(combined):
+        missing.extend(_split_symbols(m.group(1)))
+
+    # 3) Bullet form: capture bullet lines following the marker.
+    capture = False
+    for line in combined.splitlines():
+        stripped = line.strip()
+        if (
+            _MISSING_DECLARED_MARKER in stripped
+            or _MISSING_CAMELCASE_MARKER in stripped
+        ):
+            capture = True
+            continue
+        if capture:
+            m = re.match(r"^[-*]\s+(\S+)", stripped)
+            if m:
+                missing.append(m.group(1).rstrip(".,"))
+                continue
+            if stripped == "":
+                continue
+            capture = False
+
+    missing_sorted = tuple(sorted(set(missing)))
+    if not missing_sorted:
+        return None
+
+    directive_lines = [
+        "Architecture conformance repair required.",
+        "Required missing exports:",
+    ]
+    for sym in missing_sorted:
+        directive_lines.append(f"- {sym}")
+    directive_lines.append(
+        "Add these exact exports. Do not modify architecture.json. "
+        "Do not remove existing valid exports."
+    )
+    repair_directive = "\n".join(directive_lines)
+    return repair_directive, missing_sorted
+
+
+def build_conformance_hard_failure_from_error(
+    error: Any,
+    basename: str,
+) -> str:
+    """Format a structured architecture-conformance hard-failure block.
+
+    Mirrors :meth:`AsyncSyncRunner._build_conformance_hard_failure` but takes
+    a typed :class:`ArchitectureConformanceError` instance directly, so the
+    in-process ``pdd sync <module>`` paths in ``sync_main.py`` and
+    ``sync_orchestration.py`` can emit the same diagnostic without scraping
+    subprocess streams (#866).
+    """
+    missing = list(getattr(error, "missing_symbols", []) or [])
+    expected = list(getattr(error, "expected_symbols", []) or [])
+    found = list(getattr(error, "found_symbols", []) or [])
+    output = getattr(error, "output_path", "") or "<unknown>"
+    prompt = getattr(error, "prompt_name", "") or "<unknown>"
+
+    block_lines = [
+        str(error),
+        "",
+        "=== architecture conformance failure ===",
+        f"prompt: {prompt}",
+        f"output: {output}",
+        f"expected: {', '.join(expected) if expected else '<unknown>'}",
+        f"found: {', '.join(found) if found else '<unknown>'}",
+        f"missing: {', '.join(missing) if missing else '<none>'}",
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
+
+
+def _env_fingerprint() -> str:
+    """Best-effort environment fingerprint for diagnostic blocks."""
+    lines = ["--- env ---"]
+
+    pdd_file = "<unimportable>"
+    try:
+        import pdd as _pdd_mod  # type: ignore
+
+        pdd_file = getattr(_pdd_mod, "__file__", "<unknown>") or "<unknown>"
+    except Exception:
+        pdd_file = "<unimportable>"
+    lines.append(f"pdd.__file__: {pdd_file}")
+
+    pdd_version = "<unavailable>"
+    try:
+        result = subprocess.run(
+            ["pdd", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            first = (result.stdout or "").splitlines()
+            pdd_version = first[0].strip() if first else "<unavailable>"
+    except Exception:
+        pdd_version = "<unavailable>"
+    lines.append(f"pdd --version: {pdd_version}")
+
+    git_sha = "<no-git>"
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            git_sha = (result.stdout or "").strip() or "<no-git>"
+    except Exception:
+        git_sha = "<no-git>"
+    lines.append(f"git SHA: {git_sha}")
+
+    git_status = "<unknown>"
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if result.returncode == 0:
+            git_status = "dirty" if (result.stdout or "").strip() else "clean"
+    except Exception:
+        git_status = "<unknown>"
+    lines.append(f"git status: {git_status}")
+
+    source = "unknown"
+    try:
+        cwd = str(Path.cwd().resolve())
+        if pdd_file and pdd_file not in ("<unimportable>", "<unknown>"):
+            real = str(Path(pdd_file).resolve())
+            if "site-packages" in real:
+                source = "site-packages"
+            elif real.startswith(cwd + os.sep) or real == cwd:
+                source = "repo"
+    except Exception:
+        source = "unknown"
+    lines.append(f"source: {source}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Architecture parsing helpers
+# ---------------------------------------------------------------------------
+
+def _strip_known_language_suffix(name: str) -> str:
+    """Strip a final ``_<language>`` suffix using PDD's language catalog."""
+    match = re.search(r"_([a-zA-Z0-9]+)$", name)
+    if not match:
+        return name
+    suffix = match.group(1)
+    if suffix.lower() in {"llm", "prompt"}:
+        return name
+    if not _is_known_language(suffix):
+        return name
+    return name[: match.start()]
+
+
 def _basename_from_architecture_filename(filename: str) -> Optional[str]:
     """Return a sync basename from an architecture filename, preserving folders."""
     if not filename:
         return None
-
-    path = Path(filename)
-    basename = extract_module_from_include(path.name)
-    if not basename:
+    name = filename.strip()
+    if name.endswith(".prompt"):
+        name = name[: -len(".prompt")]
+    if not name:
         return None
-    if path.parent == Path("."):
-        return basename
-    return str(path.parent / basename)
+    # Skip LLM-only entries
+    base = Path(name).name
+    if base.startswith("_LLM") or base.endswith("_LLM") or base.endswith("_llm"):
+        return None
+    # Strip language suffix from final component, preserving directories
+    parent = Path(name).parent
+    base = Path(name).name
+    stripped = _strip_known_language_suffix(base)
+    if not stripped:
+        return None
+    if str(parent) in (".", ""):
+        return stripped
+    return f"{parent.as_posix()}/{stripped}"
 
 
 def _basename_from_architecture_filepath(filepath: str) -> Optional[str]:
     """Return a sync basename from an architecture filepath."""
     if not filepath:
         return None
+    p = Path(filepath)
+    if not p.name:
+        return None
+    stem = p.stem
+    if not stem:
+        return None
+    parent = p.parent
+    if str(parent) in (".", ""):
+        return stem
+    return f"{parent.as_posix()}/{stem}"
 
-    path = Path(filepath)
-    if path.suffix:
-        path = path.with_suffix("")
-    return path.as_posix()
 
-
-def _architecture_entry_aliases(entry: Dict[str, Any]) -> set[str]:
+def _architecture_entry_aliases(entry: Dict[str, Any]) -> set:
     """Return all sync basenames that may identify an architecture entry."""
-    aliases: set[str] = set()
-
-    filename_basename = _basename_from_architecture_filename(
-        str(entry.get("filename", "") or "")
-    )
-    if filename_basename:
-        aliases.add(filename_basename)
-
-    filepath_basename = _basename_from_architecture_filepath(
-        str(entry.get("filepath", "") or "")
-    )
-    if filepath_basename:
-        aliases.add(filepath_basename)
-
+    aliases: set = set()
+    fn = entry.get("filename")
+    if isinstance(fn, str):
+        a = _basename_from_architecture_filename(fn)
+        if a:
+            aliases.add(a)
+    fp = entry.get("filepath")
+    if isinstance(fp, str):
+        a = _basename_from_architecture_filepath(fp)
+        if a:
+            aliases.add(a)
     return aliases
 
 
-def _target_basename_aliases(target_basename: str) -> set[str]:
+def _target_basename_aliases(target_basename: str) -> set:
     """Return aliases that should match a requested sync target."""
     aliases = {target_basename}
-    path = Path(target_basename)
-    stripped_name = extract_module_from_include(path.name + ".prompt")
-    if stripped_name:
-        if path.parent == Path("."):
-            aliases.add(stripped_name)
+    p = Path(target_basename)
+    base = p.name
+    stripped = _strip_known_language_suffix(base)
+    if stripped and stripped != base:
+        if str(p.parent) in (".", ""):
+            aliases.add(stripped)
         else:
-            aliases.add((path.parent / stripped_name).as_posix())
+            aliases.add(f"{p.parent.as_posix()}/{stripped}")
     return aliases
-
-
-def build_dep_graph_from_architecture(
-    arch_path: Path, target_basenames: List[str]
-) -> DepGraphFromArchitectureResult:
-    """
-    Build dependency subgraph for target basenames from architecture.json.
-
-    Args:
-        arch_path: Path to architecture.json.
-        target_basenames: List of module basenames to include.
-
-    Returns:
-        DepGraphFromArchitectureResult: ``graph`` maps basename -> dependency basenames
-        (only edges to modules in ``target_basenames``). ``warnings`` lists orphan dependency
-        filenames and dependencies outside the target set (partial sync) that were omitted
-        from the graph.
-    """
-    empty = DepGraphFromArchitectureResult({b: [] for b in target_basenames}, [])
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            arch = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return empty
-
-    return build_dep_graph_from_architecture_data(
-        arch,
-        target_basenames,
-        source_name=str(arch_path),
-    )
 
 
 def build_dep_graph_from_architecture_data(
@@ -207,75 +487,139 @@ def build_dep_graph_from_architecture_data(
     *,
     source_name: str = "architecture.json",
 ) -> DepGraphFromArchitectureResult:
-    """
-    Build dependency subgraph from already-loaded architecture data.
+    """Build dependency subgraph from already-loaded architecture data."""
+    warnings: List[str] = []
+    graph: Dict[str, List[str]] = {b: [] for b in target_basenames}
 
-    This variant supports combined architecture data loaded from root and nested
-    architecture.json files, preserving dependency ordering for global sync.
-    """
-    empty = DepGraphFromArchitectureResult({b: [] for b in target_basenames}, [])
-    modules = extract_modules(architecture)
-    if not modules:
-        return empty
-
-    target_aliases_by_target = {
-        target: _target_basename_aliases(target) for target in target_basenames
-    }
-
-    # Map architecture filename -> original requested target basename. Architecture
-    # entries commonly store bare prompt filenames (config_Python.prompt) while
-    # branch-diff sync targets may be path-qualified for .pddrc context routing
-    # (src/config). Match via both filename-derived and filepath-derived aliases,
-    # but keep graph keys as the original target strings the runner must execute.
-    filename_to_target: Dict[str, str] = {}
-    filename_to_aliases: Dict[str, set[str]] = {}
-    for entry in modules:
-        filename = str(entry.get("filename", "") or "")
-        aliases = _architecture_entry_aliases(entry)
-        if not filename or not aliases:
-            continue
-        filename_to_aliases[filename] = aliases
-        for target in target_basenames:
-            if aliases & target_aliases_by_target[target]:
-                filename_to_target[filename] = target
+    # Extract entries: list, or dict with files/modules/entries
+    entries: List[Dict[str, Any]] = []
+    if isinstance(architecture, list):
+        entries = [e for e in architecture if isinstance(e, dict)]
+    elif isinstance(architecture, dict):
+        for key in ("files", "modules", "entries"):
+            value = architecture.get(key)
+            if isinstance(value, list):
+                entries = [e for e in value if isinstance(e, dict)]
                 break
 
-    warnings: List[str] = []
-    # Build graph using original target basenames
-    graph: Dict[str, List[str]] = {}
-    for entry in modules:
-        filename = str(entry.get("filename", "") or "")
-        target_name = filename_to_target.get(filename)
-        if target_name:
-            deps = []
-            for dep_filename in entry.get("dependencies", []):
-                dep_aliases = filename_to_aliases.get(dep_filename)
-                if dep_aliases is None:
-                    warnings.append(
-                        f"Orphan dependency {dep_filename!r} on architecture entry "
-                        f"{entry.get('filename', '')!r}: no matching module entry in {source_name}"
-                    )
-                    continue
-                dep_target = filename_to_target.get(dep_filename)
-                if dep_target == target_name:
-                    continue
-                if dep_target is None:
-                    dep_display = sorted(dep_aliases)[0]
-                    warnings.append(
-                        f"Partial sync: module {target_name!r} depends on {dep_display!r} "
-                        f"(via {dep_filename!r}), which is not in the sync target set; "
-                        "dependency edge omitted from graph"
-                    )
-                    continue
-                deps.append(dep_target)
-            graph[target_name] = deps
+    if not entries:
+        return DepGraphFromArchitectureResult(graph=graph, warnings=warnings)
 
-    # Ensure all target basenames are in graph
-    for b in target_basenames:
-        if b not in graph:
-            graph[b] = []
+    # Map every alias of every entry -> the entry itself
+    alias_to_entry: Dict[str, Dict[str, Any]] = {}
+    # Map filename -> aliases set (used for orphan detection)
+    filename_to_aliases: Dict[str, set] = {}
+    for entry in entries:
+        aliases = _architecture_entry_aliases(entry)
+        fn = entry.get("filename")
+        if isinstance(fn, str) and fn:
+            filename_to_aliases[fn] = aliases
+        for a in aliases:
+            alias_to_entry.setdefault(a, entry)
 
-    return DepGraphFromArchitectureResult(graph, warnings)
+    # Map every alias of every target -> target_basename
+    target_alias_map: Dict[str, str] = {}
+    for tb in target_basenames:
+        for alias in _target_basename_aliases(tb):
+            target_alias_map.setdefault(alias, tb)
+
+    for tb in target_basenames:
+        # Locate architecture entry for this target
+        entry: Optional[Dict[str, Any]] = None
+        for alias in _target_basename_aliases(tb):
+            if alias in alias_to_entry:
+                entry = alias_to_entry[alias]
+                break
+        if entry is None:
+            continue
+
+        deps_field = entry.get("dependencies") or []
+        if not isinstance(deps_field, list):
+            continue
+
+        resolved: List[str] = []
+        for dep in deps_field:
+            if not isinstance(dep, str):
+                continue
+            # Try both filename and filepath interpretations
+            dep_basename = _basename_from_architecture_filename(dep)
+            if dep_basename is None:
+                dep_basename = _basename_from_architecture_filepath(dep)
+
+            # Try to resolve dep to an architecture entry to learn its aliases
+            dep_entry = filename_to_aliases.get(dep)
+            if dep_entry is None and dep_basename is not None:
+                # Try by alias lookup
+                dep_aliases_set: set = set()
+                if dep_basename in alias_to_entry:
+                    dep_aliases_set = _architecture_entry_aliases(
+                        alias_to_entry[dep_basename]
+                    )
+                else:
+                    dep_aliases_set = {dep_basename} if dep_basename else set()
+                dep_aliases = dep_aliases_set
+                resolved_via_entry = bool(dep_aliases_set & set(alias_to_entry.keys()))
+            else:
+                dep_aliases = dep_entry if dep_entry is not None else set()
+                resolved_via_entry = dep_entry is not None
+
+            # Find matching target via aliases
+            matched: Optional[str] = None
+            for da in dep_aliases:
+                if da in target_alias_map:
+                    matched = target_alias_map[da]
+                    break
+
+            if matched is None:
+                if not resolved_via_entry:
+                    # Orphan: the dep filename has no matching architecture entry
+                    warnings.append(
+                        f"{source_name}: module '{tb}' lists orphan dependency "
+                        f"'{dep}' (no matching architecture entry)"
+                    )
+                else:
+                    # Outside the target sync set
+                    display = sorted(dep_aliases)[0] if dep_aliases else dep
+                    warnings.append(
+                        f"{source_name}: module '{tb}' depends on '{display}' "
+                        f"(via '{dep}'), which is not in the sync target set; "
+                        "edge omitted from schedule"
+                    )
+                continue
+
+            if matched == tb:
+                continue  # skip self-deps
+            if matched not in resolved:
+                resolved.append(matched)
+
+        graph[tb] = resolved
+
+    return DepGraphFromArchitectureResult(graph=graph, warnings=warnings)
+
+
+def build_dep_graph_from_architecture(
+    arch_path: Path, target_basenames: List[str]
+) -> DepGraphFromArchitectureResult:
+    """Build dependency subgraph for target basenames from architecture.json."""
+    if not arch_path.exists():
+        return DepGraphFromArchitectureResult(
+            graph={b: [] for b in target_basenames}, warnings=[]
+        )
+    try:
+        with open(arch_path, "r", encoding="utf-8") as f:
+            arch = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return DepGraphFromArchitectureResult(
+            graph={b: [] for b in target_basenames}, warnings=[]
+        )
+    return build_dep_graph_from_architecture_data(
+        arch, target_basenames, source_name=str(arch_path)
+    )
+
+
+# ---------------------------------------------------------------------------
+# AsyncSyncRunner
+# ---------------------------------------------------------------------------
 
 
 class AsyncSyncRunner:
@@ -291,43 +635,50 @@ class AsyncSyncRunner:
         sync_options: Dict[str, Any],
         github_info: Optional[Dict[str, Any]],
         quiet: bool = False,
+        *,
         verbose: bool = False,
         issue_url: Optional[str] = None,
-        module_cwds: Optional[Dict[str, Path]] = None,
+        module_cwds: Optional[Dict[str, Any]] = None,
         initial_cost: float = 0.0,
     ):
-        self.basenames = basenames
-        self.dep_graph = dep_graph
-        self.sync_options = sync_options
+        self.basenames: List[str] = list(basenames)
+        self.dep_graph: Dict[str, List[str]] = {
+            b: list(dep_graph.get(b, [])) for b in self.basenames
+        }
+        self.sync_options: Dict[str, Any] = dict(sync_options or {})
         self.github_info = github_info
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
-        self.project_root = Path.cwd()
-        self.module_cwds = module_cwds or {}
-        self.initial_cost = initial_cost
-        self.total_budget = sync_options.get("total_budget")
+        self.project_root: Path = Path.cwd()
+        self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
+        self.initial_cost = float(initial_cost or 0.0)
+
+        self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
 
         self.module_states: Dict[str, ModuleState] = {
-            b: ModuleState() for b in basenames
+            b: ModuleState() for b in self.basenames
         }
-        self.failed = False
-        self.budget_exhausted = False
+        self.failed: bool = False
+        self.budget_exhausted: bool = False
         self.comment_id: Optional[int] = None
         self.lock = threading.Lock()
 
         # Track child process groups for cleanup on interrupt
         self._child_pgids: set = set()
 
-        # Rate-limit GitHub comment updates for phase changes
+        # Rate-limit GitHub comment updates
         self._last_comment_update: float = 0.0
-        self._comment_update_interval: float = 15.0  # seconds
+        self._comment_update_interval: float = 15.0
 
-        # Try to resume from saved state
+        # Modules whose state was restored to "success" from disk
         self._resumed_modules: List[str] = []
         self._load_state()
 
+    # ------------------------------------------------------------------
+    # State persistence
+    # ------------------------------------------------------------------
     def _state_file_path(self) -> Path:
         """Return the path to the state file."""
         return self.project_root / STATE_FILE_PATH
@@ -347,22 +698,29 @@ class AsyncSyncRunner:
         except (OSError, json.JSONDecodeError):
             return
 
-        # Must match the same issue URL
         if saved.get("issue_url") != self.issue_url:
             return
-        saved_modules = saved.get("modules", {})
 
-        # Restore succeeded modules that are still in the current module list.
-        # Allow partial resumption: if the LLM returns a different (larger or
-        # smaller) module list on re-run, we still honour previously completed
-        # work instead of discarding everything and re-syncing from scratch.
+        saved_modules = saved.get("modules", {})
         for basename, info in saved_modules.items():
             if basename in self.module_states and info.get("status") == "success":
-                self.module_states[basename].status = "success"
-                self.module_states[basename].cost = info.get("cost", 0.0)
-                self._resumed_modules.append(basename)
+                state = self.module_states[basename]
+                state.status = "success"
+                state.cost = float(info.get("cost", 0.0) or 0.0)
+                phases = info.get("completed_phases") or []
+                if isinstance(phases, list):
+                    state.completed_phases = list(phases)
+                state.start_time = info.get("start_time")
+                state.end_time = info.get("end_time")
+                if basename not in self._resumed_modules:
+                    self._resumed_modules.append(basename)
 
-        self.comment_id = saved.get("comment_id")
+        cid = saved.get("comment_id")
+        if cid is not None:
+            try:
+                self.comment_id = int(cid)
+            except (TypeError, ValueError):
+                pass
 
     def _save_state(self) -> None:
         """Atomically persist current state to disk."""
@@ -370,27 +728,35 @@ class AsyncSyncRunner:
             return
 
         state_path = self._state_file_path()
-        state_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
 
-        modules_data = {}
+        modules_data: Dict[str, Dict[str, Any]] = {}
         with self.lock:
             for basename in self.basenames:
                 state = self.module_states[basename]
                 modules_data[basename] = {
                     "status": state.status,
                     "cost": state.cost,
+                    "completed_phases": list(state.completed_phases),
+                    "current_phase": state.current_phase,
+                    "start_time": state.start_time,
+                    "end_time": state.end_time,
+                    "error": state.error,
                 }
 
         data = {
             "issue_url": self.issue_url,
             "modules": modules_data,
-            "total_cost": sum(m["cost"] for m in modules_data.values()),
+            "total_cost": self.initial_cost
+            + sum(m["cost"] for m in modules_data.values()),
             "comment_id": self.comment_id,
             "started_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
 
-        # Atomic write via temp file + os.replace
-        tmp_path = None
+        tmp_path: Optional[str] = None
         try:
             fd, tmp_path = tempfile.mkstemp(
                 dir=str(state_path.parent), suffix=".tmp"
@@ -398,8 +764,10 @@ class AsyncSyncRunner:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, str(state_path))
+            tmp_path = None
         except OSError:
-            # Best-effort; don't break sync for state persistence failures
+            pass
+        finally:
             if tmp_path is not None:
                 try:
                     os.unlink(tmp_path)
@@ -407,12 +775,15 @@ class AsyncSyncRunner:
                     pass
 
     def _delete_state(self) -> None:
-        """Remove the state file (called on full success)."""
+        """Remove the state file (called on full success). Noop if missing."""
         try:
             self._state_file_path().unlink(missing_ok=True)
         except OSError:
             pass
 
+    # ------------------------------------------------------------------
+    # Signal handling
+    # ------------------------------------------------------------------
     def _kill_children(self) -> None:
         """Kill all tracked child process groups."""
         for pgid in list(self._child_pgids):
@@ -420,7 +791,6 @@ class AsyncSyncRunner:
                 os.killpg(pgid, signal.SIGTERM)
             except OSError:
                 pass
-        # Give children a moment to exit, then force-kill survivors
         time.sleep(1)
         for pgid in list(self._child_pgids):
             try:
@@ -429,159 +799,11 @@ class AsyncSyncRunner:
                 pass
         self._child_pgids.clear()
 
-    def run(self) -> Tuple[bool, str, float]:
-        """
-        Run all syncs respecting dependencies.
-
-        Returns:
-            Tuple of (all_success, summary_message, total_cost).
-        """
-        if not self.basenames:
-            return True, "No modules to sync", self.initial_cost
-
-        if self._resumed_modules and not self.quiet:
-            console.print(
-                f"[green]Resuming: skipping {len(self._resumed_modules)} already-succeeded "
-                f"module(s): {self._resumed_modules}[/green]"
-            )
-            fresh = [b for b in self.basenames if b not in self._resumed_modules]
-            if fresh:
-                console.print(f"[blue]Modules to sync: {fresh}[/blue]")
-
-        self._update_github_comment()
-
-        # Install signal handler so Ctrl+C kills child processes instead of orphaning them
-        prev_sigint = signal.getsignal(signal.SIGINT)
-        prev_sigterm = signal.getsignal(signal.SIGTERM)
-
-        def _on_interrupt(signum, frame):
-            """Kill children then re-raise."""
-            self._kill_children()
-            # Restore and re-raise so the parent sees the interrupt
-            signal.signal(signum, prev_sigint if signum == signal.SIGINT else prev_sigterm)
-            os.kill(os.getpid(), signum)
-
-        signal.signal(signal.SIGINT, _on_interrupt)
-        signal.signal(signal.SIGTERM, _on_interrupt)
-
-        try:
-            return self._run_inner()
-        finally:
-            # Restore original handlers and clean up any remaining children
-            signal.signal(signal.SIGINT, prev_sigint)
-            signal.signal(signal.SIGTERM, prev_sigterm)
-            self._kill_children()
-
-    def _run_inner(self) -> Tuple[bool, str, float]:
-        """Inner run loop, separated so signal handlers can be set up around it."""
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures: Dict[Any, str] = {}  # Future -> basename
-
-            while not self._all_done():
-                if not self.budget_exhausted and self._budget_exhausted():
-                    self.failed = True
-                    self.budget_exhausted = True
-
-                # Find modules whose deps are all "success"
-                ready = self._get_ready_modules()
-
-                if self.budget_exhausted:
-                    # Don't start new modules once the global budget is spent;
-                    # wait for already-running modules to finish.
-                    if not futures:
-                        break
-                else:
-                    # Only submit up to available worker slots so modules
-                    # aren't marked "running" while queued in the executor.
-                    # A failed module is handled through the dependency graph:
-                    # dependents remain pending, while unrelated ready modules
-                    # can still sync and be checkpointed.
-                    available_slots = self.max_workers - len(futures)
-                    for basename in ready[:available_slots]:
-                        with self.lock:
-                            self.module_states[basename].status = "running"
-                            self.module_states[basename].start_time = time.time()
-                        self._update_github_comment()
-                        future = executor.submit(self._sync_one_module, basename)
-                        futures[future] = basename
-
-                if not futures:
-                    # No futures running and nothing ready — check for blocked modules
-                    blocked = self._get_blocked_modules()
-                    if blocked and not self.failed:
-                        # Modules are blocked by failed deps
-                        self.failed = True
-                    break
-
-                # Wait for at least one future to complete
-                done, _ = wait(futures, return_when=FIRST_COMPLETED)
-                for future in done:
-                    basename = futures.pop(future)
-                    try:
-                        success, cost, error = future.result()
-                    except Exception as e:
-                        success, cost, error = False, 0.0, str(e)
-                    self._record_result(basename, success, cost, error)
-                    self._update_github_comment()
-                    if self._budget_exhausted():
-                        self.failed = True
-                        self.budget_exhausted = True
-                    elif not success:
-                        self.failed = True
-
-        # Final update
-        self._update_github_comment()
-
-        # Build summary
-        total_cost = self.initial_cost + sum(s.cost for s in self.module_states.values())
-        succeeded = [b for b, s in self.module_states.items() if s.status == "success"]
-        failed = [b for b, s in self.module_states.items() if s.status == "failed"]
-        pending = [b for b, s in self.module_states.items() if s.status == "pending"]
-        blocked = self._get_blocked_modules()
-        blocked_set = set(blocked)
-        not_run = [b for b in pending if b not in blocked_set]
-
-        if self.budget_exhausted:
-            budget = float(self.total_budget)
-            msg = (
-                f"Budget exhausted (${total_cost:.2f} of ${budget:.2f}). "
-                f"Succeeded: {succeeded}."
-            )
-            if failed:
-                msg += f" Failed: {failed}."
-            if pending:
-                msg += f" Skipped (budget): {pending}."
-            self._save_state()
-            return False, msg, total_cost
-        if failed:
-            msg = f"Failed: {failed}. Succeeded: {succeeded}."
-            if blocked:
-                msg += f" Skipped (blocked): {blocked}."
-            if not_run:
-                msg += f" Skipped (not run): {not_run}."
-            # Include error details for failed modules
-            for b in failed:
-                err = self.module_states[b].error
-                if err:
-                    # Truncate long errors but keep enough context
-                    err_summary = err.strip()[:500]
-                    msg += f"\n  {b}: {err_summary}"
-            self._save_state()
-            return False, msg, total_cost
-        elif pending:
-            msg = f"Succeeded: {succeeded}."
-            if blocked:
-                msg += f" Skipped (blocked): {blocked}."
-            if not_run:
-                msg += f" Skipped (not run): {not_run}."
-            self._save_state()
-            return False, msg, total_cost
-        else:
-            self._delete_state()
-            return True, f"All {len(succeeded)} modules synced successfully", total_cost
-
-    def _all_done(self) -> bool:
-        """Check if all modules are in a terminal state."""
+    # ------------------------------------------------------------------
+    # Scheduling helpers
+    # ------------------------------------------------------------------
+    def _all_terminal(self) -> bool:
+        """All modules are in a terminal state (success/failed)."""
         with self.lock:
             return all(
                 s.status in ("success", "failed")
@@ -589,455 +811,172 @@ class AsyncSyncRunner:
             )
 
     def _get_ready_modules(self) -> List[str]:
-        """Get modules whose deps are all satisfied and that are pending."""
-        ready = []
+        """Pending modules whose deps are all satisfied."""
+        ready: List[str] = []
         with self.lock:
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
                 deps = self.dep_graph.get(basename, [])
-                # All deps must be "success" (deps not in basenames are assumed ok)
-                deps_satisfied = all(
-                    self.module_states.get(d, ModuleState(status="success")).status == "success"
-                    for d in deps
-                )
-                if deps_satisfied:
+                deps_ok = True
+                for d in deps:
+                    dep_state = self.module_states.get(d)
+                    if dep_state is None:
+                        # Out-of-target deps assumed already synced
+                        continue
+                    if dep_state.status != "success":
+                        deps_ok = False
+                        break
+                if deps_ok:
                     ready.append(basename)
         return ready
 
     def _get_blocked_modules(self) -> List[str]:
-        """Get pending modules blocked by a failed dependency chain."""
-        blocked = []
+        """Pending modules transitively blocked by a failed dep."""
+        blocked: List[str] = []
         with self.lock:
-            blocked_cache: Dict[str, bool] = {}
+            cache: Dict[str, bool] = {}
 
-            def is_blocked_by_failure(module: str, visiting: set[str]) -> bool:
-                cached = blocked_cache.get(module)
+            def is_blocked(module: str, visiting: set) -> bool:
+                cached = cache.get(module)
                 if cached is not None:
                     return cached
                 if module in visiting:
-                    blocked_cache[module] = False
+                    cache[module] = False
                     return False
-
                 visiting.add(module)
-                for dep in self.dep_graph.get(module, []):
-                    dep_state = self.module_states.get(dep)
-                    if dep_state is None:
-                        continue
-                    if dep_state.status == "failed":
-                        blocked_cache[module] = True
-                        visiting.remove(module)
-                        return True
-                    if dep_state.status == "pending" and is_blocked_by_failure(
-                        dep, visiting
-                    ):
-                        blocked_cache[module] = True
-                        visiting.remove(module)
-                        return True
-                visiting.remove(module)
-                blocked_cache[module] = False
+                try:
+                    for dep in self.dep_graph.get(module, []):
+                        dep_state = self.module_states.get(dep)
+                        if dep_state is None:
+                            continue
+                        if dep_state.status == "failed":
+                            cache[module] = True
+                            return True
+                        if dep_state.status == "pending" and is_blocked(
+                            dep, visiting
+                        ):
+                            cache[module] = True
+                            return True
+                finally:
+                    visiting.discard(module)
+                cache[module] = False
                 return False
 
             for basename in self.basenames:
                 state = self.module_states[basename]
                 if state.status != "pending":
                     continue
-                if is_blocked_by_failure(basename, set()):
+                if is_blocked(basename, set()):
                     blocked.append(basename)
         return blocked
 
-    def _record_result(self, basename: str, success: bool, cost: float, error: str) -> None:
-        """Record the result of a module sync and persist state."""
+    # ------------------------------------------------------------------
+    # Budget
+    # ------------------------------------------------------------------
+    def _per_module_cost_so_far(self) -> float:
+        """Sum of per-module costs spent so far (excludes initial_cost)."""
         with self.lock:
-            state = self.module_states[basename]
-            state.status = "success" if success else "failed"
-            state.end_time = time.time()
-            state.cost = cost
-            if not success:
-                state.error = error
-            # Finalize phase tracking: move current_phase to completed
-            if state.current_phase and not state.current_phase.startswith("skip:"):
-                state.completed_phases.append(state.current_phase)
-            state.current_phase = None
-        self._save_state()
+            return sum(s.cost for s in self.module_states.values())
 
-    def _total_cost_so_far(self) -> float:
-        """Return initial cost plus completed module costs."""
-        with self.lock:
-            return self.initial_cost + sum(s.cost for s in self.module_states.values())
-
-    def _remaining_total_budget(self) -> Optional[float]:
-        """Return remaining total budget, or None when no total budget is set."""
+    def _remaining_total_budget(self, in_flight_cost: float = 0.0) -> Optional[float]:
+        """Remaining total budget (None if no total budget set)."""
         if self.total_budget is None:
             return None
-        return max(float(self.total_budget) - self._total_cost_so_far(), 0.0)
+        spent = float(self.initial_cost) + self._per_module_cost_so_far()
+        spent += max(float(in_flight_cost or 0.0), 0.0)
+        return max(float(self.total_budget) - spent, 0.0)
 
     def _budget_exhausted(self) -> bool:
-        """Return True when the configured total budget is fully spent."""
+        """True when the configured total budget is fully spent."""
         remaining = self._remaining_total_budget()
         return remaining is not None and remaining <= 0.0
 
-    def _budget_for_module(self, basename: str) -> Optional[float]:
-        """Return the budget cap to pass to a child sync process."""
-        module_budgets = self.sync_options.get("module_budgets") or {}
-        budget = module_budgets.get(basename, self.sync_options.get("budget"))
-        remaining = self._remaining_total_budget()
-        if remaining is None:
-            return budget
-        if budget is None:
-            return remaining
-        return min(float(budget), remaining)
-
+    # ------------------------------------------------------------------
+    # Phase handling
+    # ------------------------------------------------------------------
     def _on_phase_change(self, basename: str, phase: str) -> None:
         """Handle a phase transition for a module."""
         with self.lock:
-            state = self.module_states[basename]
-            if state.current_phase and state.current_phase != phase:
-                # Previous phase completed
-                if not state.current_phase.startswith("skip:"):
-                    state.completed_phases.append(state.current_phase)
+            state = self.module_states.get(basename)
+            if state is None:
+                return
+            prev = state.current_phase
+            if prev and prev != phase:
+                if not prev.startswith("skip:") and prev not in state.completed_phases:
+                    state.completed_phases.append(prev)
             state.current_phase = phase
-        # Rate-limited comment update
         self._update_github_comment_throttled()
 
+    # ------------------------------------------------------------------
+    # GitHub comment
+    # ------------------------------------------------------------------
     def _update_github_comment_throttled(self) -> None:
-        """Update comment at most once per interval."""
+        """Update comment at most once per interval. First call always fires."""
         now = time.time()
-        if now - self._last_comment_update >= self._comment_update_interval:
+        interval = self._comment_update_interval
+        if self._last_comment_update == 0.0 or interval <= 0 or (
+            now - self._last_comment_update
+        ) >= interval:
             self._last_comment_update = now
             self._update_github_comment()
 
-    def _sync_one_module(self, basename: str) -> Tuple[bool, float, str]:
-        """
-        Run pdd sync for a single module as a subprocess.
-
-        Uses Popen with threaded pipe readers to prevent deadlock when
-        subprocess output exceeds the OS pipe buffer (~64KB).
-
-        Returns:
-            Tuple of (success, cost, error_message).
-        """
-        pdd_exe = _find_pdd_executable()
-        if pdd_exe:
-            cmd = [pdd_exe]
-        else:
-            cmd = [sys.executable, "-m", "pdd"]
-
-        # Global options first
-        cmd.append("--force")
-        if self.sync_options.get("local"):
-            cmd.append("--local")
-
-        # Command + positional arg
-        cmd.extend(["sync", basename])
-
-        # Command-specific options
-        # Always pass --agentic and --no-steer: child subprocess is headless (stdin=/dev/null)
-        cmd.append("--agentic")
-        cmd.append("--no-steer")
-        if self.sync_options.get("skip_verify"):
-            cmd.append("--skip-verify")
-        if self.sync_options.get("skip_tests"):
-            cmd.append("--skip-tests")
-        target_coverage = self.sync_options.get("target_coverage")
-        if target_coverage is not None:
-            cmd.extend(["--target-coverage", str(target_coverage)])
-        module_budget = self._budget_for_module(basename)
-        if module_budget is not None:
-            cmd.extend(["--budget", str(module_budget)])
-        if self.sync_options.get("max_attempts"):
-            cmd.extend(["--max-attempts", str(self.sync_options["max_attempts"])])
-        if self.sync_options.get("one_session"):
-            cmd.append("--one-session")
-
-        # Set up environment for headless mode and cost capture
-        cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
-        cost_file.close()
-
-        env = os.environ.copy()
-        env["PDD_OUTPUT_COST_PATH"] = cost_file.name
-        env["CI"] = "1"
-        env["PDD_FORCE"] = "1"
-        env["PDD_AUTO_UPDATE"] = "false"
-        env["TERM"] = "dumb"
-        env["PYTHONUNBUFFERED"] = "1"
-
-        if not self.quiet:
-            console.print(f"[blue]Starting sync: {basename}[/blue]")
-
-        stdout_lines: List[str] = []
-        stderr_lines: List[str] = []
-        verbose_print = self.verbose and not self.quiet
-
-        def _read_stream(stream, lines_list: List[str], prefix: str = "") -> None:
-            """Drain a pipe stream line-by-line into a list."""
-            try:
-                for line in iter(stream.readline, ''):
-                    if line:
-                        lines_list.append(line)
-                        # Parse phase markers emitted by sync_orchestration
-                        stripped = line.strip()
-                        if stripped.startswith("PDD_PHASE: "):
-                            phase = stripped[len("PDD_PHASE: "):]
-                            self._on_phase_change(basename, phase)
-                        if verbose_print:
-                            console.print(f"[dim]{prefix}{basename}>[/dim] {line.rstrip()}")
-            except Exception:
-                pass
-            finally:
-                stream.close()
-
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                cwd=str(self.module_cwds.get(basename, self.project_root)),
-                env=env,
-                text=True,
-                bufsize=1,  # Line buffered
-                start_new_session=True,  # Create process group for clean kill
-            )
-            # Track the process group so we can kill it on Ctrl+C
-            self._child_pgids.add(process.pid)
-        except Exception as e:
-            cost = _parse_cost_from_csv(cost_file.name)
-            try:
-                os.remove(cost_file.name)
-            except OSError:
-                pass
-            return False, cost, str(e)
-
-        t_out = threading.Thread(
-            target=_read_stream, args=(process.stdout, stdout_lines, ""), daemon=True
-        )
-        t_err = threading.Thread(
-            target=_read_stream, args=(process.stderr, stderr_lines, "err:"), daemon=True
-        )
-        t_out.start()
-        t_err.start()
-
-        # Per-module wall-clock cap = MODULE_TIMEOUT plus the optional
-        # `--timeout-adder` (forwarded via sync_options) so users can stretch
-        # the budget for individual very-large modules without redefining the
-        # global default. Negative or non-numeric values are treated as 0 so
-        # that an over-eager flag never *shrinks* the cap.
-        try:
-            module_timeout = MODULE_TIMEOUT + max(
-                0.0, float(self.sync_options.get("timeout_adder") or 0.0)
-            )
-        except (TypeError, ValueError):
-            module_timeout = MODULE_TIMEOUT
-        try:
-            # Poll with heartbeat so user sees progress in non-verbose mode
-            heartbeat_interval = 60  # seconds
-            start_wall = self.module_states[basename].start_time or time.time()
-            last_heartbeat = time.time()
-            while True:
-                elapsed_total = time.time() - start_wall
-                remaining = max(module_timeout - elapsed_total, 0)
-                try:
-                    exit_code = process.wait(timeout=min(heartbeat_interval, remaining))
-                    break  # Process finished
-                except subprocess.TimeoutExpired:
-                    elapsed_total = time.time() - start_wall
-                    if elapsed_total >= module_timeout:
-                        raise  # Re-raise to hit the timeout handler below
-                    now = time.time()
-                    if not self.quiet and now - last_heartbeat >= heartbeat_interval:
-                        mins = int(elapsed_total) // 60
-                        secs = int(elapsed_total) % 60
-                        # Prefer parsed PDD_PHASE state over the last raw
-                        # stdout line: heartbeats based on stdout were stuck
-                        # on "Preprocessing complete" for the whole run even
-                        # while test/fix phases were progressing, hiding real
-                        # work behind a stale hint. Fall back to last
-                        # non-box stdout line only when no phase has been
-                        # reported yet.
-                        with self.lock:
-                            state = self.module_states[basename]
-                            current_phase = state.current_phase
-                            completed_phase_count = len(state.completed_phases)
-                        if current_phase:
-                            hint = (
-                                f" — phase: {current_phase} "
-                                f"({completed_phase_count} done)"
-                            )
-                        else:
-                            last_line = ""
-                            for line in reversed(stdout_lines):
-                                stripped = line.strip()
-                                if stripped and not _BOX_CHARS_RE.match(stripped):
-                                    last_line = stripped
-                                    break
-                            hint = f" — {last_line[:80]}" if last_line else ""
-                        console.print(
-                            f"[dim]  {basename}: still running ({mins}m{secs}s){hint}[/dim]"
-                        )
-                        last_heartbeat = now
-        except subprocess.TimeoutExpired:
-            # Kill entire process group (includes grandchild agentic subprocesses)
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except OSError:
-                process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except OSError:
-                    process.kill()
-                process.wait()
-            self._child_pgids.discard(process.pid)
-            return False, _parse_cost_from_csv(cost_file.name), f"Timeout after {int(module_timeout)}s"
-        finally:
-            self._child_pgids.discard(process.pid)
-            t_out.join(timeout=5)
-            t_err.join(timeout=5)
-
-        cost = _parse_cost_from_csv(cost_file.name)
-
-        # Clean up cost file
-        try:
-            os.unlink(cost_file.name)
-        except OSError:
-            pass
-
-        stdout = "".join(stdout_lines)
-        stderr = "".join(stderr_lines)
-
-        # Detect success
-        success = exit_code == 0
-        if success:
-            for line in stdout.splitlines():
-                if "Overall status:" in line and "Failed" in line:
-                    success = False
-                    break
-
-        if not self.quiet:
-            status_str = "success" if success else "FAILED"
-            console.print(f"[{'green' if success else 'red'}]Sync {basename}: {status_str}[/{'green' if success else 'red'}]")
-
-            # Forward notable status lines from child stdout
-            if success:
-                for line in stdout.splitlines():
-                    if "Successfully submitted example" in line:
-                        console.print(f"  [green]{basename}: Example submitted to cloud[/green]")
-                        break
-
-        error = ""
-        if not success:
-            # Extract meaningful error lines from stderr and stdout,
-            # filtering out INFO/DEBUG log noise and known nonfatal warnings
-            # (see _NONFATAL_WARNING_SUBSTRINGS).
-            all_output = (stderr or "") + "\n" + (stdout or "")
-            error_lines = [
-                line for line in all_output.splitlines()
-                if line.strip()
-                and not re.match(
-                    r"^\d{4}-\d{2}-\d{2} .* - (INFO|DEBUG)( |-)", line
-                )
-                and not _is_nonfatal_warning(line)
-            ]
-
-            # Always surface a deterministic failure reason: prefer the
-            # `Overall status: Failed` line when present, otherwise the
-            # nonzero exit code.
-            failure_reason = f"Exit code {exit_code}"
-            for line in stdout.splitlines():
-                if "Overall status:" in line and "Failed" in line:
-                    failure_reason = line.strip()
-                    break
-
-            # Prefer high-signal lines containing real error keywords.
-            # Drop any line equal to `failure_reason` so the headline does
-            # not echo the same line twice.
-            keyword_lines = [
-                line for line in error_lines
-                if line.strip() != failure_reason
-                and any(
-                    kw in line.lower()
-                    for kw in ("error", "failed", "traceback", "exception", "abort")
-                )
-            ]
-
-            summary_parts: List[str] = [failure_reason]
-            if keyword_lines:
-                summary_parts.append("\n".join(keyword_lines[-20:]))
-            else:
-                # No high-signal line: fall back to labeled stderr/stdout
-                # tails so surrounding context is still visible. Exclude
-                # the failure_reason line so it is not echoed twice.
-                stderr_tail = [
-                    line for line in (stderr or "").splitlines()
-                    if line.strip()
-                    and line.strip() != failure_reason
-                    and not _is_nonfatal_warning(line)
-                ][-10:]
-                stdout_tail = [
-                    line for line in (stdout or "").splitlines()
-                    if line.strip()
-                    and line.strip() != failure_reason
-                    and not _is_nonfatal_warning(line)
-                ][-10:]
-                if stderr_tail:
-                    summary_parts.append(
-                        "--- stderr tail ---\n" + "\n".join(stderr_tail)
-                    )
-                if stdout_tail:
-                    summary_parts.append(
-                        "--- stdout tail ---\n" + "\n".join(stdout_tail)
-                    )
-
-            error = "\n".join(p for p in summary_parts if p)
-            if not self.quiet:
-                console.print(f"[red]  Error for {basename}:[/red] {error[:500]}")
-
-        return success, cost, error
-
-    def _update_github_comment(self) -> None:
+    def _update_github_comment(self, status_label: Optional[str] = None) -> None:
         """Create or update a GitHub issue comment with current progress."""
         if not self.github_info:
             return
 
-        owner = self.github_info["owner"]
-        repo = self.github_info["repo"]
-        issue_number = self.github_info["issue_number"]
+        owner = self.github_info.get("owner")
+        repo = self.github_info.get("repo")
+        issue_number = self.github_info.get("issue_number")
+        if not (owner and repo and issue_number is not None):
+            return
 
-        body = self._build_comment_body(issue_number)
-
-        # Use a timeout to prevent gh API calls from blocking the runner
+        body = _cap_github_comment_body(self._build_comment_body(int(issue_number)))
         gh_timeout = 30
 
         try:
             if self.comment_id is None:
                 self.comment_id = self._find_existing_progress_comment_id(
-                    owner, repo, issue_number, timeout=gh_timeout
+                    owner, repo, int(issue_number), timeout=gh_timeout
                 )
 
             if self.comment_id is None:
-                ok, response = _run_gh_command([
-                    "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-                    "-X", "POST", "-f", f"body={body}",
-                ], timeout=gh_timeout)
+                ok, response = _run_gh_command(
+                    [
+                        "api",
+                        f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+                        "-X",
+                        "POST",
+                        "-f",
+                        f"body={body}",
+                    ],
+                    timeout=gh_timeout,
+                )
                 if ok:
                     try:
                         data = json.loads(response)
-                        self.comment_id = data.get("id")
-                    except json.JSONDecodeError:
+                        if isinstance(data, dict) and "id" in data:
+                            self.comment_id = int(data["id"])
+                    except (json.JSONDecodeError, TypeError, ValueError):
                         pass
             else:
-                ok, _ = _run_gh_command([
-                    "api", f"repos/{owner}/{repo}/issues/comments/{self.comment_id}",
-                    "-X", "PATCH", "-f", f"body={body}",
-                ], timeout=gh_timeout)
+                ok, _ = _run_gh_command(
+                    [
+                        "api",
+                        f"repos/{owner}/{repo}/issues/comments/{self.comment_id}",
+                        "-X",
+                        "PATCH",
+                        "-f",
+                        f"body={body}",
+                    ],
+                    timeout=gh_timeout,
+                )
                 if not ok:
                     self.comment_id = None
         except Exception:
-            pass  # Don't break sync for comment failures
+            pass
 
     def _find_existing_progress_comment_id(
         self,
@@ -1048,10 +987,15 @@ class AsyncSyncRunner:
         timeout: int,
     ) -> Optional[int]:
         """Return the newest existing PDD sync progress comment id for this issue."""
-        ok, response = _run_gh_command([
-            "api", f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-            "--paginate", "--slurp",
-        ], timeout=timeout)
+        ok, response = _run_gh_command(
+            [
+                "api",
+                f"repos/{owner}/{repo}/issues/{issue_number}/comments",
+                "--paginate",
+                "--slurp",
+            ],
+            timeout=timeout,
+        )
         if not ok:
             return None
 
@@ -1061,23 +1005,22 @@ class AsyncSyncRunner:
             return None
 
         comments: List[Dict[str, Any]] = []
-        if isinstance(payload, list) and all(isinstance(page, list) for page in payload):
-            comments = [
-                comment
-                for page in payload
-                for comment in page
-                if isinstance(comment, dict)
-            ]
-        elif isinstance(payload, list):
-            comments = [comment for comment in payload if isinstance(comment, dict)]
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, list):
+                    for c in item:
+                        if isinstance(c, dict):
+                            comments.append(c)
+                elif isinstance(item, dict):
+                    comments.append(item)
 
         marker = f"## PDD Agentic Sync Progress\nIssue: #{issue_number}"
         for comment in reversed(comments):
             body = comment.get("body")
-            comment_id = comment.get("id")
-            if isinstance(body, str) and body.startswith(marker) and comment_id:
+            cid = comment.get("id")
+            if isinstance(body, str) and body.startswith(marker) and cid is not None:
                 try:
-                    return int(comment_id)
+                    return int(cid)
                 except (TypeError, ValueError):
                     continue
         return None
@@ -1093,77 +1036,846 @@ class AsyncSyncRunner:
         ]
 
         total_cost = self.initial_cost
-        completed = 0
-        total = len(self.basenames)
 
         with self.lock:
-            for basename in self.basenames:
-                state = self.module_states[basename]
-                total_cost += state.cost
+            states_snapshot = {
+                b: ModuleState(
+                    status=s.status,
+                    start_time=s.start_time,
+                    end_time=s.end_time,
+                    cost=s.cost,
+                    error=s.error,
+                    current_phase=s.current_phase,
+                    completed_phases=list(s.completed_phases),
+                )
+                for b, s in self.module_states.items()
+            }
 
-                if state.status == "success":
-                    icon = "✅ Success"
-                    completed += 1
-                    duration = _format_duration(state.start_time, state.end_time)
-                    cost_str = f"${state.cost:.2f}"
-                    total_phases = len(state.completed_phases)
-                    phase_str = f"{total_phases} phases" if total_phases else "-"
-                elif state.status == "failed":
-                    icon = "❌ Failed"
-                    completed += 1
-                    duration = _format_duration(state.start_time, state.end_time)
-                    cost_str = f"${state.cost:.2f}"
-                    total_phases = len(state.completed_phases)
-                    phase_str = f"{total_phases} phases" if total_phases else "-"
-                elif state.status == "running":
-                    icon = "🔄 Running"
-                    duration = _format_duration(state.start_time, time.time())
-                    cost_str = "-"
-                    if state.current_phase:
-                        phase_name = state.current_phase.replace("skip:", "~")
-                        done_count = len(state.completed_phases)
-                        phase_str = f"`{phase_name}` ({done_count} done)" if done_count else f"`{phase_name}`"
-                    else:
-                        phase_str = "-"
+        for basename in self.basenames:
+            state = states_snapshot[basename]
+            total_cost += state.cost
+
+            if state.status == "success":
+                status_str = "Success"
+                duration = _format_duration(state.start_time, state.end_time)
+                cost_str = f"${state.cost:.2f}"
+                n = len(state.completed_phases)
+                phase_str = f"{n} phases" if n else "-"
+            elif state.status == "failed":
+                status_str = "Failed"
+                duration = _format_duration(state.start_time, state.end_time)
+                cost_str = f"${state.cost:.2f}"
+                n = len(state.completed_phases)
+                phase_str = f"{n} phases" if n else "-"
+            elif state.status == "running":
+                status_str = "Running"
+                duration = _format_duration(state.start_time, time.time())
+                cost_str = "-"
+                if state.current_phase:
+                    phase_name = state.current_phase
+                    if phase_name.startswith("skip:"):
+                        phase_name = "~" + phase_name[len("skip:"):]
+                    n = len(state.completed_phases)
+                    phase_str = f"`{phase_name}` ({n} done)"
                 else:
-                    icon = "⏳ Pending"
-                    duration = "-"
-                    cost_str = "-"
                     phase_str = "-"
+            else:
+                status_str = "Pending"
+                duration = "-"
+                cost_str = "-"
+                phase_str = "-"
 
-                lines.append(f"| {basename} | {icon} | {phase_str} | {duration} | {cost_str} |")
+            lines.append(
+                f"| {basename} | {status_str} | {phase_str} | {duration} | {cost_str} |"
+            )
 
         lines.append("")
         lines.append(f"**Total cost:** ${total_cost:.2f}")
 
-        # Status line
-        failed_modules = [b for b, s in self.module_states.items() if s.status == "failed"]
-        running_modules = [b for b, s in self.module_states.items() if s.status == "running"]
-        all_done = all(s.status in ("success", "failed") for s in self.module_states.values())
+        # Status footer
+        failed_modules = [
+            b for b in self.basenames if states_snapshot[b].status == "failed"
+        ]
+        running_modules = [
+            b for b in self.basenames if states_snapshot[b].status == "running"
+        ]
+        # Pending modules that are not transitively blocked are still "runnable"
+        blocked_set = set(self._get_blocked_modules())
+        runnable_pending = [
+            b
+            for b in self.basenames
+            if states_snapshot[b].status == "pending" and b not in blocked_set
+        ]
+        all_terminal = all(
+            states_snapshot[b].status in ("success", "failed")
+            for b in self.basenames
+        )
 
-        if failed_modules and running_modules:
+        if failed_modules and (running_modules or runnable_pending):
+            failed_str = ", ".join(f"`{b}`" for b in failed_modules)
             lines.append(
-                f"**⚠️ `{'`, `'.join(failed_modules)}` failed; "
-                f"Continuing independent module(s): `{'`, `'.join(running_modules)}`**"
+                f"Continuing independent module(s) after {failed_str} failed"
             )
         elif failed_modules:
-            lines.append(f"**⚠️ Paused: `{'`, `'.join(failed_modules)}` failed**")
-        elif all_done:
-            lines.append(f"**✅ All {total} modules synced successfully**")
+            failed_str = ", ".join(f"`{b}`" for b in failed_modules)
+            lines.append(f"Paused: {failed_str} failed")
+        elif all_terminal and not failed_modules:
+            lines.append(
+                f"All {len(self.basenames)} modules synced successfully"
+            )
         else:
-            lines.append(f"**Status:** In Progress ({completed}/{total} complete)")
+            successes = sum(
+                1
+                for b in self.basenames
+                if states_snapshot[b].status == "success"
+            )
+            lines.append(
+                f"In Progress ({successes}/{len(self.basenames)} complete)"
+            )
 
-        return "\n".join(lines)
+        # Failed-module details (#865): render each failed module's structured
+        # error (architecture-conformance block, "Reproduce locally:" line, and
+        # env fingerprint) so the GitHub progress comment carries the same
+        # diagnostics the local CLI prints. Each module is collapsed into a
+        # <details> block and its error is fenced as a code block. The body is
+        # truncated to keep the comment well under the 65 536-character GitHub
+        # limit even when several modules fail with long stack traces.
+        if failed_modules:
+            lines.append("")
+            lines.append("### Failed module details")
+            omitted_details = 0
+            truncated_details = 0
+            for idx, basename in enumerate(failed_modules):
+                remaining_modules = len(failed_modules) - idx
+                current_body_len = len("\n".join(lines))
+                reserved_footer = (
+                    "\n\n_Additional failed module details omitted to keep "
+                    "this GitHub comment under the size limit._"
+                )
+                remaining_budget = (
+                    GITHUB_COMMENT_BODY_LIMIT
+                    - current_body_len
+                    - len(reserved_footer)
+                )
+                detail_overhead = 96 + len(basename)
+                if remaining_budget <= detail_overhead + GITHUB_FAILED_DETAIL_MIN_CHARS:
+                    omitted_details = remaining_modules
+                    break
 
+                err = states_snapshot[basename].error or ""
+                err = err.rstrip()
+                if not err:
+                    err = "(no error captured)"
+                per_module_limit = min(
+                    GITHUB_FAILED_DETAIL_PER_MODULE_LIMIT,
+                    max(
+                        GITHUB_FAILED_DETAIL_MIN_CHARS,
+                        (remaining_budget // max(remaining_modules, 1)) - detail_overhead,
+                    ),
+                )
+                if len(err) > per_module_limit:
+                    truncated_details += 1
+                    err = (
+                        err[:per_module_limit]
+                        + f"\n... [truncated {len(err) - per_module_limit} chars]"
+                    )
+                # Escape any backtick fence inside the error so the markdown
+                # code block stays well-formed.
+                fence = "```"
+                while fence in err:
+                    fence += "`"
+                lines.append("")
+                lines.append(f"<details><summary><code>{basename}</code></summary>")
+                lines.append("")
+                lines.append(fence)
+                lines.append(err)
+                lines.append(fence)
+                lines.append("")
+                lines.append("</details>")
+            if truncated_details or omitted_details:
+                lines.append("")
+                summary_parts = []
+                if truncated_details:
+                    summary_parts.append(
+                        f"{truncated_details} failed detail block(s) truncated"
+                    )
+                if omitted_details:
+                    summary_parts.append(
+                        f"{omitted_details} failed detail block(s) omitted"
+                    )
+                lines.append(
+                    "_"
+                    + "; ".join(summary_parts)
+                    + " to keep this GitHub comment under the size limit. "
+                    + "See workflow logs for full output._"
+                )
 
+        return _cap_github_comment_body("\n".join(lines))
 
-def _format_duration(start: Optional[float], end: Optional[float]) -> str:
-    """Format a duration from start/end timestamps."""
-    if start is None or end is None:
-        return "-"
-    seconds = int(end - start)
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes = seconds // 60
-    remaining = seconds % 60
-    return f"{minutes}m{remaining}s"
+    # ------------------------------------------------------------------
+    # Recording results
+    # ------------------------------------------------------------------
+    def _record_result(
+        self, basename: str, success: bool, cost: float, error: str
+    ) -> None:
+        """Record the result of a module sync and persist state."""
+        with self.lock:
+            state = self.module_states[basename]
+            if state.current_phase and not state.current_phase.startswith("skip:"):
+                if state.current_phase not in state.completed_phases:
+                    state.completed_phases.append(state.current_phase)
+            state.current_phase = None
+            state.status = "success" if success else "failed"
+            state.end_time = time.time()
+            state.cost = cost
+            if not success:
+                state.error = error
+                self.failed = True
+        self._save_state()
+
+    # ------------------------------------------------------------------
+    # Run loop
+    # ------------------------------------------------------------------
+    def run(self) -> Tuple[bool, str, float]:
+        """Run all syncs respecting dependencies."""
+        if not self.basenames:
+            return True, "No modules to sync", self.initial_cost
+
+        if self._resumed_modules and not self.quiet:
+            resumed = sorted(self._resumed_modules)
+            console.print(
+                f"[green]Resuming: skipping {len(resumed)} already-succeeded "
+                f"module(s): {resumed}[/green]"
+            )
+
+        self._update_github_comment()
+
+        prev_sigint = signal.getsignal(signal.SIGINT)
+        prev_sigterm = signal.getsignal(signal.SIGTERM)
+
+        def _on_interrupt(signum, frame):
+            self._kill_children()
+            try:
+                signal.signal(
+                    signum,
+                    prev_sigint if signum == signal.SIGINT else prev_sigterm,
+                )
+                os.kill(os.getpid(), signum)
+            except Exception:
+                pass
+
+        try:
+            signal.signal(signal.SIGINT, _on_interrupt)
+            signal.signal(signal.SIGTERM, _on_interrupt)
+        except (ValueError, OSError):
+            pass
+
+        try:
+            return self._run_inner()
+        finally:
+            try:
+                signal.signal(signal.SIGINT, prev_sigint)
+                signal.signal(signal.SIGTERM, prev_sigterm)
+            except (ValueError, OSError, TypeError):
+                pass
+            self._kill_children()
+
+    def _run_inner(self) -> Tuple[bool, str, float]:
+        """Inner run loop, separated so signal handlers wrap it."""
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures: Dict[Any, str] = {}
+
+            while True:
+                if self._all_terminal() and not futures:
+                    break
+
+                if not self.budget_exhausted and self._budget_exhausted():
+                    self.budget_exhausted = True
+
+                if self.budget_exhausted:
+                    if not futures:
+                        break
+                else:
+                    ready = self._get_ready_modules()
+                    available = self.max_workers - len(futures)
+                    for basename in ready[:available]:
+                        with self.lock:
+                            state = self.module_states[basename]
+                            state.status = "running"
+                            state.start_time = time.time()
+                        self._update_github_comment()
+                        future = executor.submit(self._sync_one_module, basename)
+                        futures[future] = basename
+
+                if not futures:
+                    # Nothing to schedule, nothing running -> done
+                    break
+
+                done, _ = wait(futures, return_when=FIRST_COMPLETED)
+                for future in done:
+                    basename = futures.pop(future)
+                    try:
+                        success, cost, error = future.result()
+                    except Exception as exc:
+                        success, cost, error = False, 0.0, str(exc)
+                    self._record_result(basename, success, cost, error)
+                    self._update_github_comment()
+                    if self._budget_exhausted():
+                        self.budget_exhausted = True
+
+        # Final update
+        self._update_github_comment()
+
+        with self.lock:
+            total_cost = self.initial_cost + sum(
+                s.cost for s in self.module_states.values()
+            )
+            succeeded = [
+                b for b in self.basenames
+                if self.module_states[b].status == "success"
+            ]
+            failed = [
+                b for b in self.basenames
+                if self.module_states[b].status == "failed"
+            ]
+            pending = [
+                b for b in self.basenames
+                if self.module_states[b].status == "pending"
+            ]
+
+        blocked = self._get_blocked_modules()
+        blocked_set = set(blocked)
+        not_run = [b for b in pending if b not in blocked_set]
+
+        if self.budget_exhausted:
+            try:
+                budget = float(self.total_budget) if self.total_budget is not None else total_cost
+            except (TypeError, ValueError):
+                budget = total_cost
+            msg = (
+                f"Budget exhausted (${total_cost:.2f} of ${budget:.2f}). "
+                f"Succeeded: {succeeded}."
+            )
+            if failed:
+                msg += f" Failed: {failed}."
+            if pending:
+                msg += f" Skipped (budget): {pending}."
+            self._save_state()
+            return False, msg, total_cost
+
+        if failed:
+            msg = f"Failed: {failed}. Succeeded: {succeeded}."
+            if blocked:
+                msg += f" Skipped (blocked): {blocked}."
+            if not_run:
+                msg += f" Skipped (not run): {not_run}."
+            for b in failed:
+                err = self.module_states[b].error
+                if err:
+                    err_summary = err.strip()[:500]
+                    msg += f"\n  {b}: {err_summary}"
+            self._save_state()
+            return False, msg, total_cost
+
+        if pending:
+            msg = f"Succeeded: {succeeded}."
+            if blocked:
+                msg += f" Skipped (blocked): {blocked}."
+            if not_run:
+                msg += f" Skipped (not run): {not_run}."
+            self._save_state()
+            return False, msg, total_cost
+
+        self._delete_state()
+        return (
+            True,
+            f"All {len(succeeded)} modules synced successfully",
+            total_cost,
+        )
+
+    # ------------------------------------------------------------------
+    # Subprocess execution
+    # ------------------------------------------------------------------
+    def _build_command(self, basename: str, in_flight_cost: float = 0.0) -> List[str]:
+        """Build the pdd sync subprocess command for a basename."""
+        pdd_exe = _find_pdd_executable()
+        if pdd_exe:
+            cmd = [pdd_exe, "--force"]
+        else:
+            cmd = [sys.executable, "-m", "pdd", "--force"]
+
+        if self.sync_options.get("local"):
+            cmd.append("--local")
+        cmd.append("sync")
+
+        # Module-specific flags
+        if self.sync_options.get("agentic"):
+            cmd.append("--agentic")
+        if self.sync_options.get("no_steer"):
+            cmd.append("--no-steer")
+
+        target_coverage = self.sync_options.get("target_coverage")
+        if target_coverage is not None:
+            cmd.extend(["--target-coverage", str(target_coverage)])
+
+        if self.sync_options.get("one_session"):
+            cmd.append("--one-session")
+        if self.sync_options.get("skip_verify"):
+            cmd.append("--skip-verify")
+        if self.sync_options.get("skip_tests"):
+            cmd.append("--skip-tests")
+
+        max_attempts = self.sync_options.get("max_attempts")
+        if max_attempts:
+            cmd.extend(["--max-attempts", str(max_attempts)])
+
+        # Budget handling: total_budget takes precedence
+        if self.total_budget is not None:
+            remaining = self._remaining_total_budget(in_flight_cost)
+            if remaining is not None:
+                cmd.extend(["--budget", str(remaining)])
+        elif self.sync_options.get("budget") is not None:
+            cmd.extend(["--budget", str(self.sync_options["budget"])])
+
+        cmd.append(basename)
+        return cmd
+
+    def _build_env(
+        self, cost_file_path: str, repair_directive: Optional[str] = None
+    ) -> Dict[str, str]:
+        """Build the env dict for subprocess Popen."""
+        env = os.environ.copy()
+        env["PDD_OUTPUT_COST_PATH"] = cost_file_path
+        env["CI"] = "1"
+        env["PDD_FORCE"] = "1"
+        env["PDD_AUTO_UPDATE"] = "false"
+        env["TERM"] = "dumb"
+        env["PYTHONUNBUFFERED"] = "1"
+        if repair_directive:
+            env["PDD_REPAIR_DIRECTIVE"] = repair_directive
+        else:
+            env.pop("PDD_REPAIR_DIRECTIVE", None)
+        return env
+
+    def _sync_one_module(self, basename: str) -> Tuple[bool, float, str]:
+        """
+        Run pdd sync for a single module as one or more subprocess attempts.
+
+        Returns:
+            Tuple of (success, total_cost_across_attempts, error_message).
+        """
+        total_cost = 0.0
+        last_missing: Optional[Tuple[str, ...]] = None
+        last_error = ""
+        last_stdout = ""
+        last_stderr = ""
+        repair_directive: Optional[str] = None
+
+        for attempt in range(MAX_CONFORMANCE_ATTEMPTS):
+            success, cost, error, stdout, stderr = self._run_attempt(
+                basename,
+                repair_directive=repair_directive,
+                in_flight_cost=total_cost,
+            )
+            total_cost += cost
+            last_error = error
+            last_stdout = stdout
+            last_stderr = stderr
+
+            if success:
+                return True, total_cost, ""
+
+            conformance = _parse_conformance_failure(stdout, stderr)
+            if conformance is None:
+                # Not a conformance failure: do not retry
+                return False, total_cost, error
+
+            new_directive, new_missing = conformance
+            if last_missing is not None and new_missing == last_missing:
+                # Stuck on identical symbol set — abort and emit hard-failure block
+                break
+            last_missing = new_missing
+            repair_directive = new_directive
+
+            if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                break
+            remaining_budget = self._remaining_total_budget(total_cost)
+            if remaining_budget is not None and remaining_budget <= 0.0:
+                last_error = (
+                    f"Budget exhausted during architecture conformance repair "
+                    f"(${total_cost:.2f} spent in {basename})."
+                )
+                break
+
+        # Hard-failure path: include structured conformance block
+        hard_block = self._build_conformance_hard_failure(
+            basename, last_error, last_stdout, last_stderr
+        )
+        return False, total_cost, hard_block
+
+    def _build_conformance_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured hard-failure error string after retries."""
+        conformance = _parse_conformance_failure(stdout, stderr)
+        missing_symbols: Tuple[str, ...] = (
+            conformance[1] if conformance else tuple()
+        )
+
+        prompt_field = "<unknown>"
+        combined = (stdout or "") + "\n" + (stderr or "")
+        field_boundary = r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\n|$)"
+
+        def _extract_field(label: str, default: str = "<unknown>") -> str:
+            pattern = re.compile(
+                rf"{re.escape(label)}:\s*(.*?){field_boundary}",
+                re.DOTALL,
+            )
+            match = pattern.search(combined)
+            if not match:
+                return default
+            value = match.group(1).strip().rstrip(".").strip()
+            return value or default
+
+        for line in combined.splitlines():
+            if _CONFORMANCE_PREFIX in line:
+                tail = line.split(_CONFORMANCE_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        output_field = _extract_field("Output")
+        expected_field = _extract_field("Expected")
+        found_field = _extract_field("Found")
+
+        block_lines = [
+            failure_summary or "Architecture conformance failure",
+            "",
+            "=== architecture conformance failure ===",
+            f"prompt: {prompt_field}",
+            f"output: {output_field}",
+            f"expected: {expected_field}",
+            f"found: {found_field}",
+            "missing: "
+            + (", ".join(missing_symbols) if missing_symbols else "<none>"),
+            "",
+            f"Reproduce locally: pdd sync {basename}",
+            "",
+            _env_fingerprint(),
+        ]
+        return "\n".join(block_lines)
+
+    def _run_attempt(
+        self,
+        basename: str,
+        repair_directive: Optional[str] = None,
+        in_flight_cost: float = 0.0,
+    ) -> Tuple[bool, float, str, str, str]:
+        """
+        Execute a single subprocess attempt.
+
+        Returns (success, cost, error, stdout, stderr).
+        """
+        cmd = self._build_command(basename, in_flight_cost=in_flight_cost)
+
+        cost_file = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+        cost_file.close()
+
+        env = self._build_env(cost_file.name, repair_directive=repair_directive)
+
+        if not self.quiet:
+            try:
+                console.print(f"[blue]Starting sync: {basename}[/blue]")
+            except Exception:
+                pass
+
+        stdout_lines: List[str] = []
+        stderr_lines: List[str] = []
+        verbose_print = self.verbose and not self.quiet
+        line_lock = threading.Lock()
+
+        def _read_stream(stream, lines_list: List[str], prefix: str = "") -> None:
+            try:
+                for line in iter(stream.readline, ''):
+                    if not line:
+                        break
+                    with line_lock:
+                        lines_list.append(line)
+                    stripped = line.strip()
+                    if stripped.startswith("PDD_PHASE: "):
+                        phase = stripped[len("PDD_PHASE: "):]
+                        try:
+                            self._on_phase_change(basename, phase)
+                        except Exception:
+                            pass
+                    if "Successfully submitted example" in stripped:
+                        try:
+                            print(f"[{basename}] Example submitted to cloud")
+                        except Exception:
+                            pass
+                    if verbose_print:
+                        try:
+                            console.print(
+                                f"[dim]{prefix}{basename}>[/dim] {line.rstrip()}"
+                            )
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+
+        cwd_value = self.module_cwds.get(basename, str(self.project_root))
+        cwd_str = str(cwd_value)
+
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                cwd=cwd_str,
+                env=env,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+            try:
+                self._child_pgids.add(process.pid)
+            except Exception:
+                pass
+        except Exception as exc:
+            try:
+                cost = _parse_cost_from_csv(cost_file.name)
+            except Exception:
+                cost = 0.0
+            try:
+                os.unlink(cost_file.name)
+            except OSError:
+                pass
+            return False, cost, str(exc), "", ""
+
+        t_out = threading.Thread(
+            target=_read_stream,
+            args=(process.stdout, stdout_lines, ""),
+            daemon=True,
+        )
+        t_err = threading.Thread(
+            target=_read_stream,
+            args=(process.stderr, stderr_lines, "err:"),
+            daemon=True,
+        )
+        t_out.start()
+        t_err.start()
+
+        try:
+            timeout_adder = float(self.sync_options.get("timeout_adder") or 0.0)
+        except (TypeError, ValueError):
+            timeout_adder = 0.0
+        effective_timeout = MODULE_TIMEOUT + max(0.0, timeout_adder)
+
+        exit_code: int = 1
+        timed_out = False
+
+        try:
+            with self.lock:
+                start_wall = (
+                    self.module_states[basename].start_time or time.time()
+                )
+            last_heartbeat = time.time()
+            while True:
+                elapsed_total = time.time() - start_wall
+                remaining = max(effective_timeout - elapsed_total, 0)
+                wait_for = min(HEARTBEAT_INTERVAL, max(remaining, 1))
+                try:
+                    exit_code = process.wait(timeout=wait_for)
+                    break
+                except subprocess.TimeoutExpired:
+                    elapsed_total = time.time() - start_wall
+                    if elapsed_total >= effective_timeout:
+                        timed_out = True
+                        break
+                    now = time.time()
+                    if not self.quiet and (now - last_heartbeat) >= HEARTBEAT_INTERVAL:
+                        mins = int(elapsed_total) // 60
+                        secs = int(elapsed_total) % 60
+                        with self.lock:
+                            state = self.module_states[basename]
+                            current_phase = state.current_phase
+                            done_count = len(state.completed_phases)
+                        if current_phase:
+                            hint = (
+                                f" — phase: {current_phase} "
+                                f"({done_count} done)"
+                            )
+                        else:
+                            last_line = ""
+                            with line_lock:
+                                for line in reversed(stdout_lines):
+                                    stripped = line.strip()
+                                    if stripped and not _BOX_CHARS_RE.match(
+                                        stripped
+                                    ):
+                                        last_line = stripped
+                                        break
+                            hint = f" — {last_line[:80]}" if last_line else ""
+                        try:
+                            print(
+                                f"  {basename}: still running "
+                                f"({mins}m{secs}s){hint}"
+                            )
+                        except Exception:
+                            pass
+                        last_heartbeat = now
+        finally:
+            try:
+                self._child_pgids.discard(process.pid)
+            except Exception:
+                pass
+
+        if timed_out:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except OSError:
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                try:
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
+
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+            cost = _parse_cost_from_csv(cost_file.name)
+            try:
+                os.unlink(cost_file.name)
+            except OSError:
+                pass
+            stdout = "".join(stdout_lines)
+            stderr = "".join(stderr_lines)
+            return (
+                False,
+                cost,
+                f"Timeout after {int(effective_timeout)}s waiting for sync",
+                stdout,
+                stderr,
+            )
+
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+
+        cost = _parse_cost_from_csv(cost_file.name)
+        try:
+            os.unlink(cost_file.name)
+        except OSError:
+            pass
+
+        stdout = "".join(stdout_lines)
+        stderr = "".join(stderr_lines)
+
+        success = exit_code == 0
+        if success:
+            for line in stdout.splitlines():
+                if "Overall status:" in line and "Failed" in line:
+                    success = False
+                    break
+
+        if not self.quiet:
+            try:
+                tag = "success" if success else "FAILED"
+                color = "green" if success else "red"
+                console.print(
+                    f"[{color}]Sync {basename}: {tag}[/{color}]"
+                )
+            except Exception:
+                pass
+
+        if success:
+            return True, cost, "", stdout, stderr
+
+        # Build failure-summary
+        failure_reason = f"Exit code {exit_code}"
+        for line in stdout.splitlines():
+            if "Overall status:" in line and "Failed" in line:
+                failure_reason = line.strip()
+                break
+
+        all_output = (stderr or "") + "\n" + (stdout or "")
+        info_debug_re = re.compile(
+            r"^\d{4}-\d{2}-\d{2} .* - (INFO|DEBUG)( |-)"
+        )
+        candidate_lines: List[str] = []
+        for line in all_output.splitlines():
+            if not line.strip():
+                continue
+            if info_debug_re.match(line):
+                continue
+            if _is_nonfatal_warning(line):
+                continue
+            candidate_lines.append(line)
+
+        keyword_lines = [
+            line
+            for line in candidate_lines
+            if line.strip() != failure_reason
+            and any(
+                kw in line.lower()
+                for kw in ("error", "failed", "traceback", "exception", "abort")
+            )
+        ]
+
+        summary_parts: List[str] = [failure_reason]
+        if keyword_lines:
+            summary_parts.append("\n".join(keyword_lines[-20:]))
+        else:
+            stderr_tail = [
+                line
+                for line in (stderr or "").splitlines()
+                if line.strip()
+                and line.strip() != failure_reason
+                and not _is_nonfatal_warning(line)
+            ][-10:]
+            stdout_tail = [
+                line
+                for line in (stdout or "").splitlines()
+                if line.strip()
+                and line.strip() != failure_reason
+                and not _is_nonfatal_warning(line)
+            ][-10:]
+            if stderr_tail:
+                summary_parts.append(
+                    "--- stderr tail ---\n" + "\n".join(stderr_tail)
+                )
+            if stdout_tail:
+                summary_parts.append(
+                    "--- stdout tail ---\n" + "\n".join(stdout_tail)
+                )
+
+        error = "\n".join(p for p in summary_parts if p)
+        if not self.quiet:
+            try:
+                console.print(
+                    f"[red]  Error for {basename}:[/red] {error[:500]}"
+                )
+            except Exception:
+                pass
+
+        return False, cost, error, stdout, stderr

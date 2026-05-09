@@ -1322,8 +1322,8 @@ class TestOneSessionSyncOutputFromConfig:
         # Successful one-session result so the surrounding loop doesn't error.
         fake_one_session_result = {
             "success": True,
-            "total_cost": 0.0,
-            "model_name": "mock",
+            "total_cost": 0.2,
+            "model_name": "one-session-model",
             "operations_completed": ["generate"],
             "errors": [],
         }
@@ -1379,6 +1379,87 @@ class TestOneSessionSyncOutputFromConfig:
             f"Expected output_from_config=True from one-session sync path, "
             f"got: {kwargs}"
         )
+
+    @pytest.mark.timeout(30)
+    def test_one_session_retries_architecture_conformance_failure(
+        self, mock_project_dir, mock_construct_paths, monkeypatch
+    ):
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% generate a tiny module"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "generate"
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+        fake_one_session_result = {
+            "success": True,
+            "total_cost": 0.2,
+            "model_name": "one-session-model",
+            "operations_completed": ["generate"],
+            "errors": [],
+        }
+        repair_env_values = []
+
+        def fake_codegen(*_args, **_kwargs):
+            repair_env_values.append(os.environ.get("PDD_REPAIR_DIRECTIVE"))
+            if len(repair_env_values) == 1:
+                raise ArchitectureConformanceError(
+                    prompt_name="tinymod_python.prompt",
+                    output_path=str(fake_pdd_files["code"]),
+                    architecture_entry={"filename": "tinymod_python.prompt"},
+                    expected_symbols=["Tiny.run"],
+                    found_symbols=["Tiny"],
+                    missing_symbols=["Tiny.run"],
+                    total_cost=0.25,
+                    model_name="failed-generate-model",
+                )
+            fake_pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+            fake_pdd_files["code"].write_text(
+                "class Tiny:\n    def run(self):\n        return None\n"
+            )
+            return ("class Tiny:\n    pass\n", False, 0.5, "fixed-generate-model")
+
+        with patch(
+            "pdd.code_generator_main.code_generator_main",
+            side_effect=fake_codegen,
+        ) as mock_codegen, patch(
+            "pdd.sync_main.get_pdd_file_paths",
+            return_value=fake_pdd_files,
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ), patch(
+            "pdd.one_session_sync.run_one_session_sync",
+            return_value=fake_one_session_result,
+        ) as mock_one_session:
+            ctx = create_mock_context({"local": True})
+            results, total_cost, model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        assert mock_codegen.call_count == 2
+        assert repair_env_values[0] is None
+        assert repair_env_values[1] is not None
+        assert "- Tiny.run" in repair_env_values[1]
+        assert "PDD_REPAIR_DIRECTIVE" not in os.environ
+        assert mock_one_session.call_args.kwargs["budget"] == pytest.approx(0.25)
+        assert total_cost == pytest.approx(0.95)
+        assert results["total_cost"] == pytest.approx(0.95)
+        assert model == "one-session-model"
 
 
 # --- Tests for sync skipping LLM-only basenames ---
@@ -1496,12 +1577,18 @@ class TestIssue1048ValidateBasenameAcceptsFrameworkPaths:
     """_validate_basename should accept brackets, parentheses, and dots used by
     frontend frameworks for dynamic routes (Next.js, SvelteKit, Nuxt, Astro)."""
 
-    def test_nextjs_dynamic_route_bracket_id(self, mock_project_dir, mock_construct_paths):
+    def test_nextjs_dynamic_route_bracket_id(self, mock_project_dir, mock_construct_paths, mock_sync_orchestration):
         """Exact reproduction from issue: basename with Next.js [id] dynamic route."""
         # Create prompt file at the bracket path
         bracket_dir = mock_project_dir / "prompts" / "frontend" / "app" / "jobs" / "solving" / "[id]"
         bracket_dir.mkdir(parents=True, exist_ok=True)
         (bracket_dir / "page_python.prompt").write_text("# page prompt")
+        mock_sync_orchestration.return_value = {
+            "success": True,
+            "total_cost": 0.0,
+            "model_name": "mock",
+            "summary": "Sync OK.",
+        }
 
         ctx = create_mock_context({})
         # Should NOT raise UsageError about invalid characters
@@ -1514,6 +1601,7 @@ class TestIssue1048ValidateBasenameAcceptsFrameworkPaths:
         except click.UsageError as e:
             assert "invalid characters" not in str(e).lower(), \
                 f"Bug #1048: _validate_basename rejects brackets: {e}"
+        assert mock_sync_orchestration.called
 
     @pytest.mark.parametrize("basename", [
         "frontend/app/[...slug]/page",
@@ -2217,6 +2305,7 @@ class TestAutoSubmitSkipInCloud:
         """
         monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
         monkeypatch.delenv("PDD_ENV", raising=False)
+        monkeypatch.delenv("PDD_JWT_TOKEN", raising=False)
         monkeypatch.setenv(
             "PDD_CLOUD_URL",
             "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",

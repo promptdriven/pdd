@@ -2,8 +2,7 @@
 returns nonzero for models LiteLLM doesn't ship pricing for, and that the
 success callback falls back to CSV rates when LiteLLM silently returns 0.
 
-Regression: in cloud tests, models like
-``fireworks_ai/accounts/fireworks/models/kimi-k2p6`` are present in the project
+Regression: in cloud tests, CSV-defined models may be present in the project
 ``.pdd/llm_model.csv`` but missing from LiteLLM's bundled pricing DB. Without
 registration, ``litellm.completion_cost`` returned 0.0 silently, leaving the
 ``@pytest.mark.real`` cost-tracking assertions broken.
@@ -19,9 +18,11 @@ from litellm import Choices, Message, ModelResponse, Usage
 from pdd import llm_invoke
 from pdd.llm_invoke import _litellm_success_callback, _set_model_rate_map  # type: ignore
 
+CSV_ONLY_MODEL = "fireworks_ai/accounts/pdd-ci/models/csv-only-registration-test"
+
 
 def test_csv_only_model_completion_cost_is_nonzero():
-    model = "fireworks_ai/accounts/fireworks/models/kimi-k2p6"
+    model = CSV_ONLY_MODEL
     assert model not in litellm.model_cost, (
         "Precondition: LiteLLM should not ship pricing for this CSV-only model."
     )
@@ -58,7 +59,7 @@ def test_csv_only_model_completion_cost_is_nonzero():
 def test_callback_falls_back_to_csv_when_litellm_returns_zero(monkeypatch):
     """When LiteLLM silently returns 0.0 for an unpriced model, the success
     callback must fall back to CSV rates if the model is in _MODEL_RATE_MAP."""
-    model = "fireworks_ai/accounts/fireworks/models/kimi-k2p6"
+    model = CSV_ONLY_MODEL
     df = pd.DataFrame(
         [{"provider": "Fireworks", "model": model, "input": 0.95, "output": 4.0}]
     )
