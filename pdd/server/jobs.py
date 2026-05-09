@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -82,6 +83,117 @@ MANUAL_MODE_FILE_KEYS = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_architecture_conformance_error(
+    stdout_text: str,
+    stderr_text: str,
+    command: str,
+    args: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """
+    Surface architecture-conformance failure details from subprocess output
+    (issue #865). Returns a formatted multi-section error string, or None if
+    no conformance markers are present in the output.
+
+    The returned message includes (when available):
+      - The structured ``=== architecture conformance failure ===`` block
+        verbatim, OR the matching ``Architecture conformance error for ...``
+        line plus its surrounding ``Expected:``/``Found:``/``missing`` context.
+      - A ``Reproduce locally:`` line preserved verbatim from the runner output
+        if present, otherwise constructed as ``Reproduce locally: pdd sync
+        <basename>`` from the sync target.
+      - The runner's ``--- env ---`` fingerprint block verbatim if present.
+    """
+    full_output = (stdout_text or "") + "\n" + (stderr_text or "")
+
+    has_structured = "=== architecture conformance failure ===" in full_output
+    has_simple = "Architecture conformance error for " in full_output
+
+    if not (has_structured or has_simple):
+        return None
+
+    sections: List[str] = []
+
+    # 1) Structured block verbatim, or simple line + context.
+    if has_structured:
+        match = re.search(
+            r"(=== architecture conformance failure ===.*?)"
+            r"(?=\n=== |\n\s*\n(?=[^\s])|\Z)",
+            full_output,
+            re.DOTALL,
+        )
+        if match:
+            sections.append(match.group(1).rstrip())
+    elif has_simple:
+        lines = full_output.splitlines()
+        for idx, line in enumerate(lines):
+            if "Architecture conformance error for " in line:
+                context: List[str] = [line]
+                j = idx + 1
+                blank_streak = 0
+                while j < len(lines):
+                    nxt = lines[j]
+                    stripped = nxt.strip()
+                    if not stripped:
+                        blank_streak += 1
+                        if blank_streak >= 2:
+                            break
+                        context.append(nxt)
+                        j += 1
+                        continue
+                    blank_streak = 0
+                    lower = stripped.lower()
+                    if (
+                        stripped.startswith("Expected:")
+                        or stripped.startswith("Found:")
+                        or "missing" in lower
+                        or nxt.startswith((" ", "\t", "-", "*"))
+                    ):
+                        context.append(nxt)
+                        j += 1
+                        continue
+                    break
+                sections.append("\n".join(context).rstrip())
+                break
+
+    # 2) Reproduce locally: line — preserve verbatim if present, else build.
+    repro_match = re.search(r"^Reproduce locally:.*$", full_output, re.MULTILINE)
+    if repro_match:
+        sections.append(repro_match.group(0).rstrip())
+    else:
+        target: Optional[str] = None
+        if isinstance(args, dict) and args:
+            for key in ("basename", "target", "target_file", "prompt_file"):
+                if key in args and args[key]:
+                    target = str(args[key])
+                    break
+            if target is None:
+                # Fallback: first positional argument value for the command.
+                pos_names = POSITIONAL_ARGS.get(command, [])
+                for pn in pos_names:
+                    val = args.get(pn)
+                    if val:
+                        target = str(val) if not isinstance(val, (list, tuple)) else (
+                            str(val[0]) if val else None
+                        )
+                        if target:
+                            break
+        if target:
+            sections.append(f"Reproduce locally: pdd sync {target}")
+        else:
+            sections.append("Reproduce locally: pdd sync")
+
+    # 3) --- env --- fingerprint block (verbatim).
+    env_match = re.search(
+        r"(--- env ---.*?)(?=\n\s*\n(?=[^\s])|\n--- |\Z)",
+        full_output,
+        re.DOTALL,
+    )
+    if env_match:
+        sections.append(env_match.group(1).rstrip())
+
+    return "\n\n".join(s for s in sections if s)
 
 
 def _find_pdd_executable() -> Optional[str]:
@@ -574,6 +686,13 @@ class JobManager:
             # since other code (e.g. get_jwt_token.py keyring warnings) may print "Failed" elsewhere.
             for line in stdout_text.splitlines():
                 if "Overall status:" in line and "Failed" in line:
+                    # Surface architecture-conformance details (issue #865) when
+                    # present, instead of a generic "Sync operation failed".
+                    conformance_msg = _extract_architecture_conformance_error(
+                        stdout_text, stderr_text, job.command, job.args
+                    )
+                    if conformance_msg:
+                        raise RuntimeError(conformance_msg)
                     raise RuntimeError("Sync operation failed (see output for details)")
 
         if exit_code is not None and exit_code < 0:
@@ -583,6 +702,15 @@ class JobManager:
             )
 
         if exit_code != 0:
+            # Surface architecture-conformance details (issue #865) when sync
+            # subprocess fails with conformance markers in its output.
+            if job.command == "sync":
+                conformance_msg = _extract_architecture_conformance_error(
+                    stdout_text, stderr_text, job.command, job.args
+                )
+                if conformance_msg:
+                    raise RuntimeError(conformance_msg)
+
             # Combine stdout and stderr for complete error context
             # Filter out INFO/DEBUG logs to find the actual error message
             all_output = stdout_text + "\n" + stderr_text if stderr_text else stdout_text

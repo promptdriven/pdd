@@ -1,5 +1,22 @@
 <pdd-reason>Job queue manager for async PDD command execution via subprocesses.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "Job", "signature": "(id, command, args, options, status, result, error, cost, ...)", "returns": "Job"},
+      {"name": "JobCallbacks", "signature": "()", "returns": "JobCallbacks"},
+      {"name": "JobManager", "signature": "(max_concurrent: int = 1, executor=None, project_root=None)", "returns": "JobManager"},
+      {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job", "returns": "Job"},
+      {"name": "JobManager.cancel", "signature": "async (job_id: str) -> bool", "returns": "bool"},
+      {"name": "JobManager.cleanup_old_jobs", "signature": "(max_age_seconds: float = 3600) -> int", "returns": "int"},
+      {"name": "JobManager.shutdown", "signature": "async () -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/jobs.py`.
 
 % Role & Scope
@@ -36,6 +53,23 @@
        (CI=1, PDD_FORCE=1). Use threads to stream stdout/stderr line-by-line.
      - **Timeouts**: Enforce `JOB_TIMEOUT` (1800s). SIGTERM then SIGKILL.
      - **Sync Failure**: Detect "Failed" ONLY if on the "Overall status:" line.
+     - **Architecture-Conformance Surface (issue #865)**: when a sync subprocess
+       fails AND the captured stdout/stderr contains an architecture-conformance
+       failure (line prefix `Architecture conformance error for ` OR a structured
+       block starting with `=== architecture conformance failure ===` produced by
+       `agentic_sync_runner`), the recorded `job.error` MUST NOT be the generic
+       string `Sync operation failed`. Instead, it MUST include: (1) the
+       structured `=== architecture conformance failure ===` block verbatim if
+       present, otherwise the matching `Architecture conformance error for ...`
+       line and the surrounding `Expected:` / `Found:` / `missing` context; (2)
+       a `Reproduce locally:` line preserved from the runner output if present,
+       or constructed as `Reproduce locally: pdd sync <basename>` using the
+       sync target; and (3) the runner's `--- env ---` fingerprint block
+       verbatim when present in the captured output. Generic
+       `Sync operation failed` may only be used as a final fallback when no
+       conformance markers are found in the captured output. This guarantees
+       the GitHub App and any downstream consumer of `job.error` see the
+       missing symbols and a repro command rather than an opaque message.
 
   5. **Resilient Output**: Ensure `job.result` preserves `live_stdout`/`live_stderr`
      on all failure and exception paths to prevent data loss.
