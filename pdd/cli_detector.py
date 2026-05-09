@@ -289,19 +289,26 @@ def _has_opencode_oauth_or_config() -> bool:
     except (OSError, json.JSONDecodeError):
         pass
 
-    # 2. OpenCode config files (global, project, OPENCODE_CONFIG).
+    # 2. OpenCode config files (global, project, OPENCODE_CONFIG) and the
+    #    inline ``OPENCODE_CONFIG_CONTENT`` env var.
     try:
         from pdd.agentic_common import (
-            _opencode_config_paths,
-            _opencode_config_declares_provider,
+            _iter_opencode_config_texts,
+            _opencode_data_declares_provider,
+            _parse_opencode_config_text,
         )
     except ImportError:
-        _opencode_config_paths = None  # type: ignore[assignment]
-        _opencode_config_declares_provider = None  # type: ignore[assignment]
-    if _opencode_config_paths is not None and _opencode_config_declares_provider is not None:
+        _iter_opencode_config_texts = None  # type: ignore[assignment]
+        _opencode_data_declares_provider = None  # type: ignore[assignment]
+        _parse_opencode_config_text = None  # type: ignore[assignment]
+    if (
+        _iter_opencode_config_texts is not None
+        and _opencode_data_declares_provider is not None
+        and _parse_opencode_config_text is not None
+    ):
         try:
-            for cfg in _opencode_config_paths(None):
-                if _opencode_config_declares_provider(cfg):
+            for text in _iter_opencode_config_texts(None):
+                if _opencode_data_declares_provider(_parse_opencode_config_text(text)):
                     return True
         except Exception:
             pass

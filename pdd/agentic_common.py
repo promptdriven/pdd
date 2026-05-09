@@ -1006,6 +1006,79 @@ _OPENCODE_PROVIDER_CREDENTIAL_FIELDS = frozenset(
     {"apikey", "key", "token", "bearer", "bearertoken", "accesstoken", "secret"}
 )
 
+
+# Tokenizer for stripping JSONC comments while preserving string contents.
+# A naive ``re.sub(r"//[^\n]*", "", text)`` mangles valid configs that
+# contain ``"baseURL": "https://..."`` inside JSON strings — the ``//``
+# inside the URL gets eaten along with the rest of the line. This pattern
+# matches a complete double-quoted JSON string (with backslash escapes)
+# OR a block comment OR a line comment, in that priority order; strings
+# pass through untouched while comments are dropped.
+_JSONC_TOKEN_RE = re.compile(
+    r'"(?:\\.|[^"\\])*"'   # double-quoted JSON string with escape support
+    r'|/\*[\s\S]*?\*/'      # /* block comment */
+    r'|//[^\n]*'            # // line comment
+)
+
+
+def _strip_jsonc_comments(text: str) -> str:
+    """Strip JSONC line/block comments while preserving string contents.
+
+    The previous implementation used ``re.sub(r"//[^\\n]*", "", text)`` which
+    silently deleted ``https://...`` inside JSON string values, so a normal
+    OpenCode provider config with ``baseURL`` plus ``apiKey`` failed JSON
+    parsing and was reported unconfigured.
+    """
+    def _repl(match: "re.Match[str]") -> str:
+        token = match.group(0)
+        if token.startswith("//") or token.startswith("/*"):
+            return ""
+        return token
+    return _JSONC_TOKEN_RE.sub(_repl, text)
+
+
+def _parse_opencode_config_text(text: str) -> Optional[Dict[str, Any]]:
+    """Parse a JSON/JSONC OpenCode config payload to a dict, or ``None``."""
+    if not text:
+        return None
+    try:
+        data = json.loads(_strip_jsonc_comments(text))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _opencode_data_declares_provider(data: Optional[Dict[str, Any]]) -> bool:
+    """Return True when parsed OpenCode config declares usable provider auth."""
+    if not isinstance(data, dict):
+        return False
+    provider = data.get("provider")
+    if isinstance(provider, dict):
+        for value in provider.values():
+            if _opencode_provider_value_has_usable_credential(value):
+                return True
+    return False
+
+
+def _iter_opencode_config_texts(cwd: Optional[Path] = None) -> List[str]:
+    """Yield raw config text from all OpenCode config sources.
+
+    Includes both file-backed sources (``OPENCODE_CONFIG``, project
+    ``opencode.json``, global ``~/.config/opencode/opencode.json``) and the
+    ``OPENCODE_CONFIG_CONTENT`` env var, which the prompt contract treats as
+    an inline config payload equivalent to a discovered file.
+    """
+    texts: List[str] = []
+    for cfg in _opencode_config_paths(cwd):
+        try:
+            texts.append(cfg.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+    inline = os.environ.get("OPENCODE_CONFIG_CONTENT", "")
+    if inline and inline.strip():
+        texts.append(inline)
+    return texts
+
 # Containers within a provider mapping that may nest credential fields.
 _OPENCODE_PROVIDER_CREDENTIAL_CONTAINERS = frozenset({"options", "auth", "headers"})
 
@@ -1081,20 +1154,12 @@ def _opencode_config_declares_provider(path: Path) -> bool:
     """
     try:
         text = path.read_text(encoding="utf-8")
-        # OpenCode supports JSONC (JSON with comments). Strip line comments
-        # for the cheap check; anything ambiguous remains diagnostic-only.
-        cleaned = re.sub(r"//[^\n]*", "", text)
-        data = json.loads(cleaned)
-    except (OSError, json.JSONDecodeError, ValueError):
+    except OSError:
         return False
-    if not isinstance(data, dict):
-        return False
-    provider = data.get("provider")
-    if isinstance(provider, dict):
-        for value in provider.values():
-            if _opencode_provider_value_has_usable_credential(value):
-                return True
-    return False
+    # OpenCode supports JSONC. ``_parse_opencode_config_text`` strips
+    # comments without eating ``//`` that appears inside string values
+    # (e.g. ``"baseURL": "https://..."``).
+    return _opencode_data_declares_provider(_parse_opencode_config_text(text))
 
 
 def _has_opencode_credentials(cwd: Optional[Path] = None) -> bool:
@@ -1108,8 +1173,10 @@ def _has_opencode_credentials(cwd: Optional[Path] = None) -> bool:
     auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
     if _opencode_auth_file_has_credentials(auth_path):
         return True
-    for cfg in _opencode_config_paths(cwd):
-        if _opencode_config_declares_provider(cfg):
+    # File-backed configs and the inline ``OPENCODE_CONFIG_CONTENT`` env var
+    # both qualify per the prompt contract.
+    for text in _iter_opencode_config_texts(cwd):
+        if _opencode_data_declares_provider(_parse_opencode_config_text(text)):
             return True
     for key in _OPENCODE_PROVIDER_ENV_KEYS:
         val = os.environ.get(key)
@@ -1144,38 +1211,6 @@ def _translate_to_opencode_model(model_id: str) -> str:
     return mid
 
 
-# Mapping from llm_model.csv api_key env var names to OpenCode provider IDs.
-# Used to (a) build the configured-provider set for CSV-based model fallback
-# and (b) filter candidate CSV rows by whether OpenCode can route them.
-_OPENCODE_ENV_TO_PROVIDER: Dict[str, str] = {
-    "ANTHROPIC_API_KEY": "anthropic",
-    "OPENAI_API_KEY": "openai",
-    "GEMINI_API_KEY": "google",
-    "GOOGLE_API_KEY": "google",
-    "OPENROUTER_API_KEY": "openrouter",
-    "GITHUB_TOKEN": "github-copilot",
-    "XAI_API_KEY": "xai",
-    "DEEPSEEK_API_KEY": "deepseek",
-    "MISTRAL_API_KEY": "mistral",
-    "COHERE_API_KEY": "cohere",
-    "MOONSHOT_API_KEY": "moonshot",
-    "GROQ_API_KEY": "groq",
-    "TOGETHERAI_API_KEY": "together-ai",
-    "FIREWORKS_AI_API_KEY": "fireworks-ai",
-    "FIREWORKS_API_KEY": "fireworks-ai",
-    "PERPLEXITYAI_API_KEY": "perplexity",
-    "DEEPINFRA_API_KEY": "deepinfra",
-    "ZAI_API_KEY": "z-ai",
-    "DASHSCOPE_API_KEY": "dashscope",
-    "REPLICATE_API_KEY": "replicate",
-    "AZURE_API_KEY": "azure",
-    "AZURE_AI_API_KEY": "azure-ai",
-    "AWS_ACCESS_KEY_ID": "bedrock",
-    "OLLAMA_HOST": "ollama",
-    "LMSTUDIO_HOST": "lmstudio",
-}
-
-
 def _opencode_configured_providers(
     env: Optional[Dict[str, str]] = None,
     cwd: Optional[Path] = None,
@@ -1187,9 +1222,12 @@ def _opencode_configured_providers(
 
       * Top-level keys in ``~/.local/share/opencode/auth.json``
       * ``provider`` mapping keys in OpenCode config files (project, global,
-        ``OPENCODE_CONFIG``)
-      * Provider prefix of a config-level ``model`` string
-      * ``_OPENCODE_ENV_TO_PROVIDER`` env vars set in ``env``
+        ``OPENCODE_CONFIG``, or inline ``OPENCODE_CONFIG_CONTENT``)
+      * CSV rows in ``pdd/data/llm_model.csv`` whose *full* ``api_key`` env
+        var set is satisfied in ``env`` — pipe-delimited multi-var entries
+        like ``AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION`` MUST all be
+        set; partial credentials must not flip a provider to "configured"
+        because OpenCode cannot actually route to it.
     """
     src = env if env is not None else os.environ
     providers: set = set()
@@ -1207,13 +1245,8 @@ def _opencode_configured_providers(
     except (OSError, json.JSONDecodeError):
         pass
 
-    for cfg in _opencode_config_paths(cwd):
-        try:
-            text = cfg.read_text(encoding="utf-8")
-            cleaned = re.sub(r"//[^\n]*", "", text)
-            cfg_data = json.loads(cleaned)
-        except (OSError, json.JSONDecodeError, ValueError):
-            continue
+    for text in _iter_opencode_config_texts(cwd):
+        cfg_data = _parse_opencode_config_text(text)
         if not isinstance(cfg_data, dict):
             continue
         provider_dict = cfg_data.get("provider")
@@ -1225,10 +1258,34 @@ def _opencode_configured_providers(
                 if _opencode_provider_value_has_usable_credential(v):
                     providers.add(k)
 
-    for env_var, provider_id in _OPENCODE_ENV_TO_PROVIDER.items():
-        v = src.get(env_var)
-        if v and v.strip():
-            providers.add(provider_id)
+    # Walk the CSV catalog and add a provider only when *every* env var in
+    # its pipe-delimited ``api_key`` field is set. Mapping the CSV row to an
+    # OpenCode provider ID goes through ``_translate_to_opencode_model`` so
+    # the rules stay in lockstep with how the fallback labels rows.
+    try:
+        df = _load_model_data(None)
+    except Exception:
+        df = None
+    if df is not None and not getattr(df, "empty", True):
+        for _, row in df.iterrows():
+            api_key_field = str(row.get("api_key") or "").strip()
+            if not api_key_field:
+                # Empty ``api_key`` (no-key/device-flow rows like
+                # ``github_copilot/...``) cannot make a provider configured
+                # via env vars; auth.json / opencode.json handle those.
+                continue
+            keys = [k.strip() for k in api_key_field.split("|") if k.strip()]
+            if not keys:
+                continue
+            if not all((src.get(k) or "").strip() for k in keys):
+                continue
+            model_id = str(row.get("model") or "").strip()
+            if not model_id:
+                continue
+            translated = _translate_to_opencode_model(model_id)
+            prefix = translated.split("/", 1)[0] if "/" in translated else translated
+            if prefix:
+                providers.add(prefix)
 
     return providers
 
