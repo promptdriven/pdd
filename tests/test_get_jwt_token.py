@@ -60,6 +60,29 @@ def test_autouse_fixture_clears_pdd_jwt_token_env_leak():
     )
 
 
+def test_expected_jwt_audience_staging_ignores_generic_project_env(monkeypatch):
+    """PDD_ENV=staging must not be overridden by local ADC project settings."""
+    from pdd.get_jwt_token import _get_expected_jwt_audience
+
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("PDD_PROJECT_ID", "prompt-driven-development")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "prompt-driven-development")
+    monkeypatch.delenv("STAGING_PROJECT_ID", raising=False)
+
+    assert _get_expected_jwt_audience() == "prompt-driven-development-stg"
+
+
+def test_expected_jwt_audience_explicit_override_wins(monkeypatch):
+    """Custom deployments can still pin the expected Firebase audience."""
+    from pdd.get_jwt_token import _get_expected_jwt_audience
+
+    monkeypatch.setenv("PDD_ENV", "staging")
+    monkeypatch.setenv("PDD_JWT_EXPECTED_AUD", "custom-audience")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "prompt-driven-development")
+
+    assert _get_expected_jwt_audience() == "custom-audience"
+
+
 @pytest.mark.asyncio
 @patch("pdd.get_jwt_token._cache_jwt")
 @patch("pdd.get_jwt_token._get_cached_jwt", return_value=None)

@@ -306,7 +306,7 @@
   },
   {
     "reason": "Handles authentication for PDD cloud services.",
-    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication.",
+    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target.",
     "dependencies": [
       "_keyring_timeout_python.prompt"
     ],
@@ -2364,10 +2364,11 @@
   },
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "agentic_langtest_python.prompt",
-      "auth_service_python.prompt"
+      "auth_service_python.prompt",
+      "core/cloud_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -5134,8 +5135,10 @@
   },
   {
     "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
-    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
-    "dependencies": [],
+    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
+    "dependencies": [
+      "core/cloud_python.prompt"
+    ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
     "filepath": "pdd/sync_main.py",
@@ -8473,6 +8476,73 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
+    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+    "dependencies": [
+      "auth_service_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "core/cloud_python.prompt",
+    "filepath": "pdd/core/cloud.py",
+    "tags": [
+      "cloud",
+      "config",
+      "python",
+      "core"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "CloudConfig.get_base_url",
+            "signature": "() -> str",
+            "returns": "str"
+          },
+          {
+            "name": "CloudConfig.get_endpoint_url",
+            "signature": "(endpoint_name: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "CloudConfig.get_jwt_token",
+            "signature": "(verbose: bool = False, app_name: str = 'PDD Code Generator') -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "CloudConfig.ensure_default_env",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "CloudConfig.is_running_in_cloud",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "CloudConfig.is_cloud_enabled",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "get_cloud_timeout",
+            "signature": "() -> int",
+            "returns": "int"
+          },
+          {
+            "name": "get_cloud_request_timeout",
+            "signature": "() -> tuple[int, int]",
+            "returns": "tuple[int, int]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 1200,
+      "y": 600
     }
   }
 ]

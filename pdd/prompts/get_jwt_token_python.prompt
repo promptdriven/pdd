@@ -61,6 +61,7 @@
     - Format: JSON with fields: jwt, expires_at (unix timestamp), cached_at (unix timestamp)
     - Check cache FIRST before any keyring access
     - Return cached JWT immediately if valid (not expired, with 5-min buffer before expiration)
+    - Make the cache environment-aware by validating the cached JWT audience against PDD_ENV when set. PDD_JWT_EXPECTED_AUD is the explicit override. For PDD_ENV=staging, expect STAGING_PROJECT_ID or prompt-driven-development-stg; generic local/cloud project vars like PDD_PROJECT_ID and GOOGLE_CLOUD_PROJECT must not override staging because they may describe the developer's ADC context rather than the PDD_CLOUD_URL target. For PDD_ENV=prod/production, expect prompt-driven-development.
     - Cache new JWT after obtaining it (from refresh or device flow)
     - File permissions: 0600 (user read/write only) using os.chmod()
     - Handle corruption gracefully: delete cache file and fall back to keyring

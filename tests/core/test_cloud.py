@@ -148,6 +148,18 @@ def test_get_endpoint_url_full_override(clean_env):
         # Should return the env var exactly because "generateCode" is in the string
         assert CloudConfig.get_endpoint_url("generateCode") == full_custom_url
 
+
+def test_submit_example_endpoint_honors_custom_base(clean_env):
+    """Regression for #859: auto-submit must route through PDD_CLOUD_URL."""
+    custom_base = "https://us-central1-prompt-driven-development-stg.cloudfunctions.net"
+
+    assert CLOUD_ENDPOINTS["submitExample"] == "/submitExample"
+    with patch.dict(os.environ, {PDD_CLOUD_URL_ENV: custom_base}):
+        assert (
+            CloudConfig.get_endpoint_url("submitExample")
+            == f"{custom_base}/submitExample"
+        )
+
 # -----------------------------------------------------------------------------
 # Unit Tests: Cloud Enablement
 # -----------------------------------------------------------------------------
