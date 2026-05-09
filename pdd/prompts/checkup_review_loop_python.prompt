@@ -127,6 +127,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
     - `max-cost-reached: true|false`
     - `max-duration-reached: true|false`
 27. Sections, in order: `### Summary`, `### Per-Reviewer Status` (markdown table including primary reviewer, fixer role marker, and `fresh-final`), `### Findings` (markdown table; only unfixed findings with columns `Severity | Status | Location | Finding | Required fix | Reviewer`; placeholder row when empty), `### Fixer Rationale` (one bullet per remaining finding with latest fixer disposition/rationale, or `- none`), `### Fixes Attempted` (one bullet per `FixResult`).
+27a. Each `### Fixes Attempted` bullet MUST include `verification=verified|unverified`. Use `verified` only when no findings remain and no hard-not-clean reviewer state or configured safety limit stopped the loop. Use `unverified` when findings remain, the final verifier is missing/failed/degraded, or max rounds/cost/duration stopped the loop. Fixer summaries are not authoritative until the reviewer/verifier path is clean.
 28. Pipe characters and newlines inside finding fields must be escaped via a helper before being inserted into table rows.
 
 % GitHub posting
