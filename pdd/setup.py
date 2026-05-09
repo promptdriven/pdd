@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="pdd-cli",
-    version="0.0.231",
+    version="0.0.232",
     author="pdd-auto-heal[bot]",
     author_email="pdd-auto-heal[bot]@users.noreply.github.com",
     description="PDD (Prompt-Driven Development) - A toolkit for AI-powered code generation and maintenance",

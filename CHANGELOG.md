@@ -1,3 +1,19 @@
+## v0.0.232 (2026-05-08)
+
+### Feat
+
+- repair architecture conformance failures in pdd sync (#865)
+
+### Fix
+
+- sync conformance retry prompt contracts
+- address codex review-loop findings
+- harden architecture conformance retry diagnostics
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- route submitExample through cloud config
+
 ## v0.0.231 (2026-05-08)
 
 ### Feat
