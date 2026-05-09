@@ -902,10 +902,15 @@ def _has_codex_auth_file() -> bool:
 # OpenCode helpers (auth detection, model resolution, JSONL parsing)
 # ---------------------------------------------------------------------------
 
-# Provider credential env vars used by OpenCode-backed providers, derived from
-# pdd/data/llm_model.csv. Any one of these being set is treated as a usable
-# credential signal for OpenCode availability detection.
-_OPENCODE_PROVIDER_ENV_KEYS: Tuple[str, ...] = (
+# Provider credential env vars used by OpenCode-backed providers. The
+# authoritative source is ``pdd/data/llm_model.csv`` — the constant below is a
+# minimal fallback used only when CSV loading fails (import errors, missing
+# pandas, etc.) so detection still works in degraded environments. The
+# ``_opencode_provider_env_keys()`` helper merges this fallback with every env
+# var named in the CSV's ``api_key`` column, so multi-key rows like
+# ``AZURE_API_KEY|AZURE_API_BASE|AZURE_API_VERSION`` and provider-specific
+# keys like ``GMI_API_KEY``/``SNOWFLAKE_API_KEY`` are picked up automatically.
+_OPENCODE_PROVIDER_ENV_KEYS_FALLBACK: Tuple[str, ...] = (
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "GEMINI_API_KEY",
@@ -933,6 +938,39 @@ _OPENCODE_PROVIDER_ENV_KEYS: Tuple[str, ...] = (
     "OLLAMA_HOST",
     "LMSTUDIO_HOST",
 )
+
+
+def _opencode_provider_env_keys() -> Tuple[str, ...]:
+    """Return the union of provider credential env vars from llm_model.csv.
+
+    Derives the env-var allowlist from the catalog the rest of the OpenCode
+    code path already trusts (``pdd/data/llm_model.csv``) instead of a static
+    list that drifts out of sync with the CSV. Each row's ``api_key`` field
+    may be a single env var or a pipe-delimited multi-var set
+    (``AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME``); every
+    individual var is included so that a single API-key signal — even a
+    partial multi-key set — is sufficient to flip ``_has_opencode_credentials``
+    to ``True``. Falls back to ``_OPENCODE_PROVIDER_ENV_KEYS_FALLBACK`` when
+    CSV loading is unavailable.
+    """
+    keys: set = set(_OPENCODE_PROVIDER_ENV_KEYS_FALLBACK)
+    try:
+        df = _load_model_data(None)
+    except Exception:
+        df = None
+    if df is not None and not getattr(df, "empty", True):
+        try:
+            for raw in df["api_key"].dropna().tolist():
+                field = str(raw).strip()
+                if not field or field.lower() == "api_key":
+                    continue
+                for k in field.split("|"):
+                    k = k.strip()
+                    if k:
+                        keys.add(k)
+        except Exception:
+            pass
+    return tuple(sorted(keys))
 
 
 def _opencode_auth_file_has_credentials(path: Path) -> bool:
@@ -1048,47 +1086,73 @@ def _parse_opencode_config_text(text: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-def _opencode_data_declares_provider(data: Optional[Dict[str, Any]]) -> bool:
-    """Return True when parsed OpenCode config declares usable provider auth."""
+def _opencode_data_declares_provider(
+    data: Optional[Dict[str, Any]],
+    base_dir: Optional[Path] = None,
+) -> bool:
+    """Return True when parsed OpenCode config declares usable provider auth.
+
+    ``base_dir`` is the directory of the config file the data was parsed from
+    (or ``None`` for inline ``OPENCODE_CONFIG_CONTENT``). It is passed to the
+    template resolver so that ``{file:relative.txt}`` references resolve
+    against the config directory, matching the OpenCode config contract
+    (https://opencode.ai/docs/config/).
+    """
     if not isinstance(data, dict):
         return False
     provider = data.get("provider")
     if isinstance(provider, dict):
         for value in provider.values():
-            if _opencode_provider_value_has_usable_credential(value):
+            if _opencode_provider_value_has_usable_credential(value, base_dir=base_dir):
                 return True
     return False
 
 
-def _iter_opencode_config_texts(cwd: Optional[Path] = None) -> List[str]:
-    """Yield raw config text from all OpenCode config sources.
+def _iter_opencode_config_texts(
+    cwd: Optional[Path] = None,
+) -> List[Tuple[str, Optional[Path]]]:
+    """Yield ``(text, base_dir)`` pairs from all OpenCode config sources.
 
     Includes both file-backed sources (``OPENCODE_CONFIG``, project
     ``opencode.json``, global ``~/.config/opencode/opencode.json``) and the
     ``OPENCODE_CONFIG_CONTENT`` env var, which the prompt contract treats as
-    an inline config payload equivalent to a discovered file.
+    an inline config payload equivalent to a discovered file. ``base_dir`` is
+    the directory of the config file (used to resolve ``{file:...}``
+    substitutions per the OpenCode config contract); for inline content there
+    is no on-disk anchor so ``base_dir`` is ``None``.
     """
-    texts: List[str] = []
+    texts: List[Tuple[str, Optional[Path]]] = []
     for cfg in _opencode_config_paths(cwd):
         try:
-            texts.append(cfg.read_text(encoding="utf-8"))
+            texts.append((cfg.read_text(encoding="utf-8"), cfg.parent))
         except OSError:
             continue
     inline = os.environ.get("OPENCODE_CONFIG_CONTENT", "")
     if inline and inline.strip():
-        texts.append(inline)
+        texts.append((inline, None))
     return texts
 
 # Containers within a provider mapping that may nest credential fields.
 _OPENCODE_PROVIDER_CREDENTIAL_CONTAINERS = frozenset({"options", "auth", "headers"})
 
 
-def _resolve_opencode_template_value(value: Any) -> Optional[str]:
+def _resolve_opencode_template_value(
+    value: Any,
+    base_dir: Optional[Path] = None,
+) -> Optional[str]:
     """Resolve an OpenCode config template ``{env:VAR}`` / ``{file:PATH}``.
 
     Returns the resolved non-empty string, or ``None`` when the template
     cannot be resolved (env var unset, file missing/empty). Plain strings
     pass through after stripping; non-strings return ``None``.
+
+    Per the OpenCode config docs (https://opencode.ai/docs/config/),
+    relative ``{file:...}`` paths resolve against the directory of the
+    config file that referenced them — not the PDD process cwd. ``base_dir``
+    carries that anchor through from the iterator. Absolute paths and
+    ``~``-prefixed paths are honored as-is. When ``base_dir`` is ``None``
+    (inline ``OPENCODE_CONFIG_CONTENT`` has no on-disk anchor) we fall back
+    to the existing cwd-relative behavior.
     """
     if not isinstance(value, str):
         return None
@@ -1101,8 +1165,13 @@ def _resolve_opencode_template_value(value: Any) -> Optional[str]:
         return v.strip() if v and v.strip() else None
     m = re.fullmatch(r"\{file:([^}]+)\}", s)
     if m:
+        raw = m.group(1).strip()
+        candidate = Path(raw).expanduser()
+        # Anchor relative paths to the config file directory if known.
+        if not candidate.is_absolute() and base_dir is not None and not raw.startswith("~"):
+            candidate = base_dir / candidate
         try:
-            text = Path(m.group(1).strip()).expanduser().read_text(encoding="utf-8").strip()
+            text = candidate.read_text(encoding="utf-8").strip()
         except OSError:
             return None
         return text or None
@@ -1110,17 +1179,22 @@ def _resolve_opencode_template_value(value: Any) -> Optional[str]:
     return s
 
 
-def _opencode_provider_value_has_usable_credential(value: Any) -> bool:
+def _opencode_provider_value_has_usable_credential(
+    value: Any,
+    base_dir: Optional[Path] = None,
+) -> bool:
     """Return True when an OpenCode ``provider.<id>`` value carries usable auth.
 
     OpenCode config files frequently contain provider preferences (model
     name, options) without credentials, including unresolved
     ``{env:VAR}`` / ``{file:PATH}`` references. This walks one level deep
     into the value, looking only for credential-shaped fields whose
-    resolved string is non-empty.
+    resolved string is non-empty. ``base_dir`` is forwarded to the template
+    resolver so ``{file:relative.txt}`` references are anchored to the
+    config file directory.
     """
     if isinstance(value, str):
-        return _resolve_opencode_template_value(value) is not None
+        return _resolve_opencode_template_value(value, base_dir=base_dir) is not None
     if not isinstance(value, dict):
         return False
     for key, sub in value.items():
@@ -1129,15 +1203,15 @@ def _opencode_provider_value_has_usable_credential(value: Any) -> bool:
         normalized = key.lower().replace("-", "").replace("_", "")
         if normalized in _OPENCODE_PROVIDER_CREDENTIAL_FIELDS:
             if isinstance(sub, str):
-                if _resolve_opencode_template_value(sub) is not None:
+                if _resolve_opencode_template_value(sub, base_dir=base_dir) is not None:
                     return True
             elif isinstance(sub, dict):
                 for v in sub.values():
-                    if isinstance(v, str) and _resolve_opencode_template_value(v) is not None:
+                    if isinstance(v, str) and _resolve_opencode_template_value(v, base_dir=base_dir) is not None:
                         return True
             continue
         if normalized in _OPENCODE_PROVIDER_CREDENTIAL_CONTAINERS and isinstance(sub, dict):
-            if _opencode_provider_value_has_usable_credential(sub):
+            if _opencode_provider_value_has_usable_credential(sub, base_dir=base_dir):
                 return True
     return False
 
@@ -1158,8 +1232,12 @@ def _opencode_config_declares_provider(path: Path) -> bool:
         return False
     # OpenCode supports JSONC. ``_parse_opencode_config_text`` strips
     # comments without eating ``//`` that appears inside string values
-    # (e.g. ``"baseURL": "https://..."``).
-    return _opencode_data_declares_provider(_parse_opencode_config_text(text))
+    # (e.g. ``"baseURL": "https://..."``). The config-file directory is
+    # passed as ``base_dir`` so ``{file:relative.txt}`` substitutions
+    # resolve against the config file's directory, per the OpenCode docs.
+    return _opencode_data_declares_provider(
+        _parse_opencode_config_text(text), base_dir=path.parent
+    )
 
 
 def _has_opencode_credentials(cwd: Optional[Path] = None) -> bool:
@@ -1175,10 +1253,12 @@ def _has_opencode_credentials(cwd: Optional[Path] = None) -> bool:
         return True
     # File-backed configs and the inline ``OPENCODE_CONFIG_CONTENT`` env var
     # both qualify per the prompt contract.
-    for text in _iter_opencode_config_texts(cwd):
-        if _opencode_data_declares_provider(_parse_opencode_config_text(text)):
+    for text, base_dir in _iter_opencode_config_texts(cwd):
+        if _opencode_data_declares_provider(
+            _parse_opencode_config_text(text), base_dir=base_dir
+        ):
             return True
-    for key in _OPENCODE_PROVIDER_ENV_KEYS:
+    for key in _opencode_provider_env_keys():
         val = os.environ.get(key)
         if val and val.strip():
             return True
@@ -1245,7 +1325,7 @@ def _opencode_configured_providers(
     except (OSError, json.JSONDecodeError):
         pass
 
-    for text in _iter_opencode_config_texts(cwd):
+    for text, base_dir in _iter_opencode_config_texts(cwd):
         cfg_data = _parse_opencode_config_text(text)
         if not isinstance(cfg_data, dict):
             continue
@@ -1255,7 +1335,7 @@ def _opencode_configured_providers(
                 # Only count provider entries that actually carry usable
                 # auth — a bare options/model preference or an unresolved
                 # ``{env:VAR}`` reference does not constitute a credential.
-                if _opencode_provider_value_has_usable_credential(v):
+                if _opencode_provider_value_has_usable_credential(v, base_dir=base_dir):
                     providers.add(k)
 
     # Walk the CSV catalog and add a provider only when *every* env var in

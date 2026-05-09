@@ -593,3 +593,72 @@ def test_opencode_config_declares_provider_accepts_literal_credential(tmp_path):
         encoding="utf-8",
     )
     assert _opencode_config_declares_provider(cfg) is True
+
+
+def test_opencode_config_file_template_resolves_relative_to_config_dir(
+    tmp_path, monkeypatch,
+):
+    """``{file:relative.txt}`` in an OpenCode config must resolve relative to
+    the config file's directory, not the PDD process cwd. Regression for the
+    cwd-anchored resolver that rejected valid OpenCode configs unless PDD
+    happened to run from the config directory.
+    """
+    from pdd.agentic_common import _opencode_config_declares_provider
+
+    cfg_dir = tmp_path / "opencode_cfg"
+    cfg_dir.mkdir()
+    secret = cfg_dir / "secret.txt"
+    secret.write_text("sk-ant-from-file\n", encoding="utf-8")
+    cfg = cfg_dir / "opencode.json"
+    cfg.write_text(
+        json.dumps(
+            {"provider": {"anthropic": {"options": {"apiKey": "{file:secret.txt}"}}}}
+        ),
+        encoding="utf-8",
+    )
+
+    other_cwd = tmp_path / "elsewhere"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    # Even though cwd does not contain ``secret.txt``, the resolver must
+    # anchor relative ``{file:...}`` paths to the config file directory and
+    # find the credential. Pre-fix this returned False.
+    assert _opencode_config_declares_provider(cfg) is True
+
+
+def test_opencode_provider_env_keys_includes_csv_only_keys():
+    """The provider env-key allowlist must include CSV keys missing from the
+    static fallback (e.g. ``GMI_API_KEY``, ``SNOWFLAKE_API_KEY``,
+    ``HEROKU_API_KEY``, ``LAMBDA_API_KEY``, ``AWS_SECRET_ACCESS_KEY``) so a
+    user with only one of those keys set still flips OpenCode availability.
+    Regression for the hardcoded allowlist that drifted out of sync with
+    ``pdd/data/llm_model.csv``.
+    """
+    from pdd.agentic_common import _opencode_provider_env_keys
+
+    keys = set(_opencode_provider_env_keys())
+    for required in (
+        "GMI_API_KEY",
+        "SNOWFLAKE_API_KEY",
+        "HEROKU_API_KEY",
+        "LAMBDA_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+    ):
+        assert required in keys, f"{required} missing from derived OpenCode env keys"
+
+
+def test_has_opencode_credentials_recognizes_gmi_only(monkeypatch, tmp_path):
+    """Setting only ``GMI_API_KEY`` (a CSV-listed provider key absent from the
+    prior hardcoded allowlist) must flip ``_has_opencode_credentials`` to True.
+    """
+    from pdd.agentic_common import _has_opencode_credentials, _opencode_provider_env_keys
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+    # Clear every known provider env var, then set only GMI_API_KEY.
+    for k in _opencode_provider_env_keys():
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("GMI_API_KEY", "sk-gmi-test")
+    assert _has_opencode_credentials(cwd=tmp_path) is True

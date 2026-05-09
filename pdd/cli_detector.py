@@ -295,11 +295,13 @@ def _has_opencode_oauth_or_config() -> bool:
         from pdd.agentic_common import (
             _iter_opencode_config_texts,
             _opencode_data_declares_provider,
+            _opencode_provider_env_keys,
             _parse_opencode_config_text,
         )
     except ImportError:
         _iter_opencode_config_texts = None  # type: ignore[assignment]
         _opencode_data_declares_provider = None  # type: ignore[assignment]
+        _opencode_provider_env_keys = None  # type: ignore[assignment]
         _parse_opencode_config_text = None  # type: ignore[assignment]
     if (
         _iter_opencode_config_texts is not None
@@ -307,23 +309,38 @@ def _has_opencode_oauth_or_config() -> bool:
         and _parse_opencode_config_text is not None
     ):
         try:
-            for text in _iter_opencode_config_texts(None):
-                if _opencode_data_declares_provider(_parse_opencode_config_text(text)):
+            for text, base_dir in _iter_opencode_config_texts(None):
+                if _opencode_data_declares_provider(
+                    _parse_opencode_config_text(text), base_dir=base_dir
+                ):
                     return True
         except Exception:
             pass
 
-    # 3. Backend provider env vars the OpenCode router can route to.
-    backend_env_keys = (
-        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-        "OPENROUTER_API_KEY", "GITHUB_TOKEN", "XAI_API_KEY", "DEEPSEEK_API_KEY",
-        "MISTRAL_API_KEY", "COHERE_API_KEY", "MOONSHOT_API_KEY", "AZURE_API_KEY",
-        "AZURE_AI_API_KEY", "AWS_ACCESS_KEY_ID", "GROQ_API_KEY",
-        "TOGETHERAI_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY",
-        "PERPLEXITYAI_API_KEY", "REPLICATE_API_KEY", "DEEPINFRA_API_KEY",
-        "ZAI_API_KEY", "DASHSCOPE_API_KEY", "MINIMAX_API_KEY", "OLLAMA_HOST",
-        "LMSTUDIO_HOST",
-    )
+    # 3. Backend provider env vars the OpenCode router can route to. The set
+    #    is derived from ``pdd/data/llm_model.csv`` (the source of truth for
+    #    OpenCode-routable providers) so newly-added catalog rows like
+    #    ``GMI_API_KEY``/``SNOWFLAKE_API_KEY`` are picked up automatically;
+    #    falls back to a static list if the helper is unavailable.
+    backend_env_keys: Tuple[str, ...]
+    if _opencode_provider_env_keys is not None:
+        try:
+            backend_env_keys = _opencode_provider_env_keys()
+        except Exception:
+            backend_env_keys = ()
+    else:
+        backend_env_keys = ()
+    if not backend_env_keys:
+        backend_env_keys = (
+            "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+            "OPENROUTER_API_KEY", "GITHUB_TOKEN", "XAI_API_KEY", "DEEPSEEK_API_KEY",
+            "MISTRAL_API_KEY", "COHERE_API_KEY", "MOONSHOT_API_KEY", "AZURE_API_KEY",
+            "AZURE_AI_API_KEY", "AWS_ACCESS_KEY_ID", "GROQ_API_KEY",
+            "TOGETHERAI_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY",
+            "PERPLEXITYAI_API_KEY", "REPLICATE_API_KEY", "DEEPINFRA_API_KEY",
+            "ZAI_API_KEY", "DASHSCOPE_API_KEY", "MINIMAX_API_KEY", "OLLAMA_HOST",
+            "LMSTUDIO_HOST",
+        )
     for key in backend_env_keys:
         v = os.environ.get(key)
         if v and v.strip():

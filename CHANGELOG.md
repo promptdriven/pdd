@@ -1,25 +1,3 @@
-## v0.0.231 (2026-05-08)
-
-### Feat
-
-- **split**: add per-child verify gate
-- **pdd-split**: defensive resilience — sanitize paths, 429 backoff, --max-cost (#854)
-- fail-fast on degenerate step-5 module-design output (#817)
-
-### Fix
-
-- clean public release flow (#857)
-- **split**: run checkup after arch sync
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- **#813**: preserve Claude OAuth when stale Anthropic key is set
-
 ## v0.0.230 (2026-05-06)
 
 ### Feat
