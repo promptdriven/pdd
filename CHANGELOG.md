@@ -2,17 +2,25 @@
 
 ### Feat
 
-- repair architecture conformance failures in pdd sync (#865)
+- **sync/architecture conformance (#865)**: typed `ArchitectureConformanceError` (subclass of `click.UsageError`) carries `prompt_name`, expected/found/missing symbols, failed-attempt cost/model, and a `repair_directive`. All three `pdd sync` entry points (`sync_main`, `sync_orchestration`, `agentic_sync_runner`) now run a bounded repair loop (max 3 attempts, short-circuit on identical missing-symbol sets or budget exhaustion) that injects the directive via `PDD_REPAIR_DIRECTIVE` inside an `<architecture_repair_directive>` block on retry. Hard failures emit a structured `=== architecture conformance failure ===` block, `Reproduce locally:` line, and `--- env ---` fingerprint.
+- **server jobs (#865)**: when a sync subprocess fails with conformance markers in its output, `job.error` now surfaces the structured failure block, repro command, and env fingerprint instead of the generic `Sync operation failed`, so GitHub App comments and downstream consumers see the missing exports.
+- **agentic arch step 1b**: tighten complexity-split policy — splitting is a last resort, default to 2 sub-issues (max 3, only with separate product/workflow ownership), forbid prompt-/architecture-/test-/review-only sub-issues, and preserve a parent-level end-to-end acceptance check.
 
 ### Fix
 
-- sync conformance retry prompt contracts
-- address codex review-loop findings
-- harden architecture conformance retry diagnostics
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- route submitExample through cloud config
+- **sync prompt-contract preflight (#862)**: new `validate_prompt_contract_context` runs at sync dry-run and at code-generation time. It detects prompts that declare a broad `<pdd-interface>` but `<include>` only a partial slice (`select=`, `lines=`, `query=`, or `mode="interface"`) of the existing output source, and rejects them when declared public symbols are uncovered. A staged strict mode (`require_prompt_local_source_context`) hard-fails newly changed prompts with a prompt-local `<pdd-interface>` and no self-include of an already-populated module file, while keeping legacy prompts compatible.
+- **submitExample routing (#859)**: route auto-submit in `sync_main` and `fix_main` through `CloudConfig.get_endpoint_url("submitExample")` (added to `CLOUD_ENDPOINTS`) instead of the hardcoded production URL, and call `CloudConfig.ensure_default_env()` before the async JWT request so `PDD_CLOUD_URL` infers staging/prod before cached-JWT audience validation. Promote `_ensure_default_env` to public `ensure_default_env` with a backward-compat alias.
+- **JWT audience inference (#859 follow-up)**: in `_get_expected_jwt_audience`, treat `PDD_ENV` as the stronger signal so generic ADC variables (`PDD_PROJECT_ID`, `GOOGLE_CLOUD_PROJECT`) describing the developer's local gcloud context cannot override the staging/prod project derived from `PDD_CLOUD_URL`. The JWT cache check is now environment-aware via `PDD_JWT_EXPECTED_AUD` / staging override.
+- **checkup review loop**: each `### Fixes Attempted` bullet in the final report now records `verification=verified|unverified`, marking results unverified when findings remain, the final verifier failed/degraded, or a max-rounds/cost/duration limit stopped the loop.
+- **agentic conformance retry diagnostics**: harden the retry path against malformed conformance payloads, accumulate failed-attempt cost across attempts, and propagate the final missing-symbol set into the GitHub progress comment (capped at GitHub's 60K-character limit via `_cap_github_comment_body`).
+
+### Build
+
+- Bump version 0.0.231 → 0.0.232 in `pyproject.toml`, `pdd/setup.py`, `README.md`, `pypi_description.rst`, and `pdd/pdd_completion.sh`; refresh `architecture.json` descriptions and Cloud Batch test-duration metrics.
+
+### Test
+
+- Add `tests/test_prompt_contract_validation.py` and expand coverage in `tests/server/test_jobs.py`, `tests/test_agentic_sync.py`, `tests/test_agentic_sync_runner.py`, `tests/test_code_generator_main.py`, `tests/test_sync_main.py`, `tests/test_sync_orchestration.py`, `tests/test_fix_main.py`, `tests/test_get_jwt_token.py`, `tests/core/test_cloud.py`, `tests/test_checkup_review_loop.py`, and `tests/test_agentic_arch_complexity_prompt.py` for the conformance repair loop, prompt-contract preflight, submitExample routing, JWT audience inference, checkup verification labeling, and split-policy guidance.
 
 ## v0.0.231 (2026-05-08)
 
