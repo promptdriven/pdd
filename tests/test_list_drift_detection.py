@@ -177,11 +177,15 @@ def test_drift_across_files_in_same_package(tmp_path):
 
 
 def test_regression_opencode_provider_env_keys_pattern(tmp_path):
-    """Mimics the test_opencode_provider.py 26-vs-45 pattern that motivated #1405.
+    """Mimics the *real* test_opencode_provider.py shape that motivated #1405.
 
-    The test in #858 hard-coded 26 env-var names while the canonical helper
-    ``_opencode_provider_env_keys()`` returned 45. This regression fixture
-    keeps that exact asymmetry.
+    The bug in #858 used an inline tuple inside a ``for k in (...)`` loop
+    in a test function body (NOT a module-level constant). The scanner
+    must recurse into function bodies and pick up the literal tuple to
+    pair it with the canonical fallback in agentic_common.py.
+
+    This is the exact shape the original PR #899 claimed to catch but did
+    not (review-blocker #2). It also exercises cross-file pairing.
     """
     canonical_keys_45 = [
         "ANTHROPIC_API_KEY",
@@ -241,24 +245,37 @@ def test_regression_opencode_provider_env_keys_pattern(tmp_path):
         )
         """,
     )
+    # *** Real shape ***: inline tuple inside a ``for k in (...)`` loop
+    # inside a test function body.  This mirrors the actual #858 bug
+    # at tests/test_opencode_provider.py:195-200 in the production repo.
+    inline_keys = ", ".join(repr(k) for k in hardcoded_keys_26)
     test_file = _write(
         tmp_path,
         "tests/test_opencode_provider.py",
         f"""
-        _OPENCODE_PROVIDER_KEYS_HARDCODED = [
-            {", ".join(repr(k) for k in hardcoded_keys_26)},
-        ]
+        def test_has_opencode_credentials_anthropic_signal(monkeypatch, tmp_path):
+            monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+            for k in (
+                {inline_keys},
+            ):
+                monkeypatch.delenv(k, raising=False)
+            monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         """,
     )
 
     findings = detect_static_list_drift([canonical, test_file])
 
+    # The detector pairs the inline 26-element tuple in the test file
+    # against the 45-element fallback in agentic_common.py.
     matched = [
         f
         for f in findings
-        if f.static_list_name == "_OPENCODE_PROVIDER_KEYS_HARDCODED"
+        if f.static_path == test_file and f.static_size == 26
     ]
-    assert matched, "should detect 26-vs-45 drift across files"
+    assert matched, (
+        "should detect 26-vs-45 drift across files with the REAL inline "
+        "for-loop shape (not the synthetic module-level constant shape)"
+    )
     primary = matched[0]
     assert primary.static_size == 26
     assert primary.canonical_size == 45
@@ -539,3 +556,188 @@ def test_review_prompt_omits_static_section_when_no_candidates(tmp_path):
     )
 
     assert "Static-Analysis Candidate Findings" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Regression: real-shape scanning (function bodies / for-loops / frozensets)
+# ---------------------------------------------------------------------------
+
+
+def test_regression_real_opencode_provider_for_loop_shape(tmp_path):
+    """The real #858 bug used an inline tuple in a ``for k in (...)`` loop
+    inside a test function body, NOT a module-level constant.
+
+    Reproduces the exact shape from ``tests/test_opencode_provider.py``
+    (the 12-vs-45 case the original PR claimed to catch but did not).
+    """
+    canonical_keys_45 = [
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+        "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GITHUB_TOKEN",
+        "XAI_API_KEY", "DEEPSEEK_API_KEY", "MISTRAL_API_KEY",
+        "COHERE_API_KEY", "MOONSHOT_API_KEY", "AZURE_API_KEY",
+        "AZURE_AI_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION_NAME", "GROQ_API_KEY", "TOGETHERAI_API_KEY",
+        "FIREWORKS_AI_API_KEY", "FIREWORKS_API_KEY", "PERPLEXITYAI_API_KEY",
+        "REPLICATE_API_KEY", "DEEPINFRA_API_KEY", "ZAI_API_KEY",
+        "DASHSCOPE_API_KEY", "MINIMAX_API_KEY", "OLLAMA_HOST",
+        "LMSTUDIO_HOST", "GMI_API_KEY", "SNOWFLAKE_API_KEY",
+        "VERTEXAI_PROJECT", "VERTEXAI_LOCATION", "GOOGLE_APPLICATION_CREDENTIALS",
+        "AZURE_API_BASE", "AZURE_API_VERSION", "BEDROCK_ACCESS_KEY_ID",
+        "WATSONX_API_KEY", "DATABRICKS_TOKEN", "BASETEN_API_KEY",
+        "PUBLICAI_API_KEY", "WANDB_API_KEY", "OVHCLOUD_API_KEY",
+        "GRADIENT_AI_API_KEY", "HEROKU_API_KEY", "OCI_API_KEY",
+    ]
+    hardcoded_12 = canonical_keys_45[:12]
+
+    canonical_file = _write(
+        tmp_path,
+        "pdd/agentic_common.py",
+        f"""
+        _OPENCODE_PROVIDER_ENV_KEYS_FALLBACK = (
+            {", ".join(repr(k) for k in canonical_keys_45)},
+        )
+        """,
+    )
+
+    # The real shape: inline tuple inside a ``for k in (...)`` loop in a
+    # test function body.  Mirrors tests/test_opencode_provider.py:195-200
+    # of the production repo as of the PR-899 review.
+    real_shape_keys = ", ".join(repr(k) for k in hardcoded_12)
+    test_file = _write(
+        tmp_path,
+        "tests/test_opencode_provider.py",
+        f"""
+        def test_has_opencode_credentials_anthropic_signal(monkeypatch, tmp_path):
+            monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+            # Clear all backing-provider env vars to a known state, then set one.
+            for k in (
+                {real_shape_keys},
+            ):
+                monkeypatch.delenv(k, raising=False)
+            monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        """,
+    )
+
+    findings = detect_static_list_drift([canonical_file, test_file])
+    # Drift should fire: 12 inline-loop keys vs 45 canonical-fallback keys.
+    matched = [f for f in findings if f.static_path == test_file]
+    assert matched, (
+        "must detect inline tuple in for-loop drift; the real #858 shape "
+        "is an inline tuple in a function body, not a module-level constant"
+    )
+    primary = matched[0]
+    assert primary.static_size == 12
+    assert primary.canonical_size == 45
+
+
+def test_regression_inline_list_in_function_body(tmp_path):
+    """Hardcoded list inside a function body assignment must be scanned."""
+    target = _write(
+        tmp_path,
+        "tests/test_inline_assign.py",
+        '''
+        CANONICAL_KEYS = ("FOO", "BAR", "BAZ", "QUX", "QUUX")
+
+        def test_cleans_env(monkeypatch):
+            # Function-body assignment to a literal list.  The original
+            # AST scan only walked ``tree.body`` so this was ignored.
+            keys_to_clean = ["FOO", "BAR", "BAZ"]
+            for key in keys_to_clean:
+                monkeypatch.delenv(key, raising=False)
+        ''',
+    )
+
+    findings = detect_static_list_drift([target])
+    matched = [f for f in findings if f.static_list_name == "keys_to_clean"]
+    assert matched, (
+        "function-body assignments to literal lists must be picked up "
+        "by the AST walk"
+    )
+
+
+def test_canonical_frozenset_is_recognized(tmp_path):
+    """``CANONICAL = frozenset({"a", "b", "c"})`` must be recognized as a
+    canonical source.  The production codebase uses this pattern at
+    ``pdd/agentic_common.py:1053`` for ``_OPENCODE_PROVIDER_CREDENTIAL_FIELDS``.
+    """
+    target = _write(
+        tmp_path,
+        "pkg/frozen_canonical.py",
+        '''
+        # Mirrors the agentic_common.py:1053 pattern.
+        CANONICAL_FIELDS = frozenset(
+            {"apikey", "key", "token", "bearer", "bearertoken", "accesstoken", "secret"}
+        )
+
+        SUBSET_FIELDS = ["apikey", "key", "token"]
+        ''',
+    )
+
+    findings = detect_static_list_drift([target])
+    matched = [f for f in findings if f.static_list_name == "SUBSET_FIELDS"]
+    assert matched, (
+        "frozenset(...)-defined canonical sources must be paired against "
+        "hardcoded subset lists"
+    )
+    primary = matched[0]
+    assert primary.canonical_source_name == "CANONICAL_FIELDS"
+    assert primary.static_size == 3
+    assert primary.canonical_size == 7
+
+
+def test_canonical_set_call_with_list_literal_is_recognized(tmp_path):
+    """``CANONICAL = set([...])`` must also be recognized."""
+    target = _write(
+        tmp_path,
+        "pkg/set_canonical.py",
+        '''
+        CANONICAL_KEYS = set(["FOO", "BAR", "BAZ", "QUX", "QUUX"])
+
+        SUBSET = ("FOO", "BAR")
+        ''',
+    )
+
+    findings = detect_static_list_drift([target])
+    matched = [f for f in findings if f.static_list_name == "SUBSET"]
+    assert matched, "set([literal,...]) canonicals must be recognized"
+
+
+def test_set_literal_canonical_is_recognized(tmp_path):
+    """Bare ``CANONICAL = {"a", "b", "c"}`` set literal must be a canonical."""
+    target = _write(
+        tmp_path,
+        "pkg/set_literal_canonical.py",
+        '''
+        CANONICAL = {"FOO", "BAR", "BAZ", "QUX"}
+
+        SUBSET = ["FOO", "BAR"]
+        ''',
+    )
+
+    findings = detect_static_list_drift([target])
+    matched = [f for f in findings if f.static_list_name == "SUBSET"]
+    assert matched, "set-literal canonicals must be recognized"
+
+
+def test_canonical_in_function_body_is_recognized(tmp_path):
+    """A canonical source defined inside a function body should still be
+    scannable (e.g., a fixture closing over a list).
+    """
+    target = _write(
+        tmp_path,
+        "tests/test_helper.py",
+        '''
+        SUBSET = ["FOO", "BAR"]
+
+        def _make_fixture():
+            full_set = ("FOO", "BAR", "BAZ", "QUX", "QUUX")
+            return full_set
+        ''',
+    )
+
+    findings = detect_static_list_drift([target])
+    matched = [f for f in findings if f.static_list_name == "SUBSET"]
+    assert matched, (
+        "canonical assigned in a function body must still be discoverable "
+        "for cross-pairing"
+    )

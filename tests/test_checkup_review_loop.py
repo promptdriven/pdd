@@ -1750,3 +1750,99 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         )
 
         assert "Static-Analysis Candidate Findings" not in captured["prompt"]
+
+    def test_detector_fires_on_clean_pr_worktree_via_pr_diff(
+        self, tmp_path: Path
+    ) -> None:
+        """Reviewer's blocker #1 (PR #899): the production path uses a fresh
+        ``git fetch pull/N/head`` worktree where ``git status --porcelain``
+        is empty by construction.  The detector must derive its changed-file
+        list from the PR's merge-base diff (``git diff --name-only
+        BASE...HEAD``) so it actually fires on committed changes.
+
+        This test creates a real two-commit-on-a-branch scenario and asserts
+        the detector fires WITHOUT staging any uncommitted edits.
+        """
+        import subprocess
+
+        import pdd.checkup_review_loop as mod
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "test@example.com")
+        run("config", "user.name", "Test")
+
+        # Base commit: only the canonical source exists.
+        canonical = worktree / "pkg" / "common.py"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_text(
+            'CANONICAL = ("FOO", "BAR", "BAZ", "QUX", "QUUX")\n',
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+
+        # Branch + PR commit: introduce the drift pattern.
+        run("checkout", "-q", "-b", "pr-branch")
+        bad_test = worktree / "tests" / "test_x.py"
+        bad_test.parent.mkdir(parents=True)
+        bad_test.write_text(
+            'SUBSET = ["FOO", "BAR"]\n',
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "introduce drift")
+
+        # Sanity: ``git status --porcelain`` is empty (the existing helper
+        # would yield []), but ``git diff --name-only main...HEAD`` lists
+        # the new test file.
+        status_porcelain = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert status_porcelain.strip() == "", (
+            "fresh PR worktree must be clean per ``git status``; this is "
+            "the production shape that broke the detector"
+        )
+
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        # Production call shape: invoke through the public collector with
+        # the base branch resolved from the PR (here we pass it as a kwarg
+        # / pr_metadata; see the implementation).  The fix must use the
+        # merge-base diff rather than ``_git_changed_files``.
+        results = mod._collect_static_analysis_candidate_findings(
+            worktree,
+            artifacts,
+            round_number=1,
+            mode="review",
+            pr_metadata={"base_ref": "main"},
+        )
+
+        # We expect the cross-file pair to be detected even though the
+        # canonical file is unchanged.  The new test file alone, when
+        # combined with the canonical-source candidates picked up from
+        # other Python files in the same package, must yield a finding.
+        assert results, (
+            "detector must fire on a real PR worktree using the merge-base "
+            "diff (not ``git status --porcelain``)"
+        )
+        # The finding must be the SUBSET-vs-CANONICAL drift.
+        names = {r["summary"] for r in results}
+        assert any("SUBSET" in name and "CANONICAL" in name for name in names), (
+            f"expected SUBSET vs CANONICAL drift, got: {names}"
+        )
