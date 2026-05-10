@@ -6021,6 +6021,52 @@ class TestGemini3TemperatureClamp:
         assert is_g3(None) is False
 
     # ------------------------------------------------------------------
+    # Helper polish: PR #900 follow-up — non-string types and empty
+    # strings must be rejected explicitly, not via str() coercion.
+    # See https://github.com/promptdriven/pdd/pull/900 reviewer minors.
+    # ------------------------------------------------------------------
+    def test_is_gemini_3_model_rejects_non_string_types(self, llm_mod):
+        """Reviewer minor (PR #900): ``str(model_name)`` coercion lets a
+        list / dict containing a Gemini 3 string falsely match. The helper
+        must require an actual string and return False for every other
+        type, so future routing layers that accidentally hand off a list
+        or dict do NOT trigger the clamp."""
+        is_g3 = llm_mod._is_gemini_3_model
+
+        # The bug the reviewer flagged: list[str] becomes
+        # "['gemini-3-flash']" under str() coercion, which the regex
+        # matches. After the fix this must be False.
+        assert is_g3(["gemini-3-flash"]) is False, (
+            "list containing a Gemini 3 string must NOT match — "
+            "str() coercion was the bug the reviewer flagged"
+        )
+        assert is_g3(["gemini-3-pro-preview", "gpt-5"]) is False
+        # dict — values may contain the family name but the helper must
+        # not introspect arbitrary container types.
+        assert is_g3({"model": "gemini-3-flash"}) is False
+        assert is_g3({"gemini-3-flash": True}) is False
+        # tuple — same family of container coercion bugs.
+        assert is_g3(("gemini-3-flash",)) is False
+        # Numeric — str(3) == "3" already wouldn't match, but pin it.
+        assert is_g3(3) is False
+        assert is_g3(3.1) is False
+        # Bool — Python treats bool as int, but coercion would still be
+        # unsafe in principle. Pin explicit False return.
+        assert is_g3(True) is False
+        assert is_g3(False) is False
+        # Bytes — not a str, must be rejected even if decoded value would
+        # match.
+        assert is_g3(b"gemini-3-flash") is False
+
+    def test_is_gemini_3_model_empty_string_explicit_guard(self, llm_mod):
+        """Reviewer minor (PR #900): empty string currently returns False
+        only because ``re.search`` happens to return None. Pin the
+        explicit-guard behavior so a future regex change cannot
+        accidentally make ``""`` truthy."""
+        is_g3 = llm_mod._is_gemini_3_model
+        assert is_g3("") is False
+
+    # ------------------------------------------------------------------
     # Pre-flight: Gemini 3 Flash with low temperature
     # ------------------------------------------------------------------
     def test_gemini_3_flash_low_temperature_clamped_to_1(
