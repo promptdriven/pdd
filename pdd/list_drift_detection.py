@@ -379,6 +379,13 @@ def _pair_drifts(
     for static in static_lists:
         if len(static.items) < _MIN_STATIC_LIST_SIZE:
             continue
+        # The deduped item set must also be at least the minimum size --
+        # ``["", "", ""]`` deduplicates to ``{""}``, a singleton in
+        # disguise that produces noise when the canonical set happens
+        # to contain ``""`` as a sentinel (e.g.,
+        # ``EXTERNAL_STATUS_AREAS = ("", "check", ..., "workflow")``).
+        if len(static.item_set) < _MIN_STATIC_LIST_SIZE:
+            continue
         # Best canonical match per static list = largest superset.  This
         # avoids emitting M*N findings for one drift when several
         # canonical sources share most items.

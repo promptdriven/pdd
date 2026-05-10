@@ -719,6 +719,36 @@ def test_set_literal_canonical_is_recognized(tmp_path):
     assert matched, "set-literal canonicals must be recognized"
 
 
+def test_singleton_disguised_as_repeated_literal_is_skipped(tmp_path):
+    """``["", "", ""]`` deduplicates to ``{""}`` -- a singleton in disguise.
+    The detector must skip these to avoid false positives when the
+    canonical set happens to contain ``""`` as a sentinel.
+
+    Real production hit: ``input_sequence = ["", "", ""]`` in
+    ``tests/test_setup_tool.py:184`` was paired against
+    ``EXTERNAL_STATUS_AREAS = ("", "check", "checks", ...)`` in
+    ``pdd/checkup_review_loop.py:99``.  Pure noise.
+    """
+    target = _write(
+        tmp_path,
+        "pkg/repeated_literal.py",
+        '''
+        EXTERNAL_AREAS = ("", "check", "checks", "ci", "github", "status")
+
+        def make_input():
+            input_sequence = ["", "", ""]  # repeated empty strings
+            return input_sequence
+        ''',
+    )
+
+    findings = detect_static_list_drift([target])
+    matched = [f for f in findings if f.static_list_name == "input_sequence"]
+    assert matched == [], (
+        "lists whose deduped set is below the minimum size are noise "
+        "and must not be paired"
+    )
+
+
 def test_function_body_literals_are_static_only_not_canonical(tmp_path):
     """Function-body local assignments to literals are recorded as
     *static lists* (so a subset-in-function-body finding fires when the
