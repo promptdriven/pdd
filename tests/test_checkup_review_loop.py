@@ -1629,3 +1629,124 @@ class TestPushWithRetryClonedRemote:
         assert any("x-access-token:" in c[2] for c in retry_cmds)
         # No `git remote set-url` was issued for the URL remote.
         assert not any(c[:3] == ["git", "remote", "set-url"] for c in cmds)
+
+
+class TestStaticAnalysisCandidateFindingsIntegration:
+    """The AST drift scan must actually reach the reviewer prompt that
+    `_run_review` sends to the role.  Mocks `_run_role_task` and asserts
+    the prompt the mock receives carries the new static-analysis section
+    when the worktree contains drift, and omits it when it does not.
+    """
+
+    def _make_drift_worktree(self, tmp_path: Path) -> Path:
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        sample = worktree / "pkg" / "sample.py"
+        sample.parent.mkdir(parents=True)
+        sample.write_text(
+            'ENV_KEYS = ["FOO", "BAR", "BAZ"]\n'
+            "\n"
+            "def _canonical_env_keys():\n"
+            '    return ["FOO", "BAR", "BAZ", "QUX", "QUUX"]\n',
+            encoding="utf-8",
+        )
+        return worktree
+
+    def test_drift_candidates_are_embedded_in_prompt_when_present(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            _run_review,
+        )
+
+        worktree = self._make_drift_worktree(tmp_path)
+        artifacts_dir = tmp_path / "artifacts"
+        artifacts_dir.mkdir()
+
+        # Stub `_git_changed_files` to claim our drift fixture is the
+        # PR-touched file (avoids needing a real git repo for the test).
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: ["pkg/sample.py"],
+        )
+
+        captured: Dict[str, str] = {}
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            captured["prompt"] = instruction
+            return True, _json("clean"), 0.0, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        _run_review(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            worktree=worktree,
+            round_number=1,
+            state=ReviewLoopState(),
+            config=_config(),
+            verbose=False,
+            quiet=True,
+            artifacts_dir=artifacts_dir,
+            mode="review",
+            findings_to_verify=None,
+            fix_result=None,
+        )
+
+        prompt = captured["prompt"]
+        assert "Static-Analysis Candidate Findings" in prompt
+        assert "ENV_KEYS" in prompt
+        assert "_canonical_env_keys" in prompt
+        # The missing items must be visible to the LLM.
+        assert "QUX" in prompt and "QUUX" in prompt
+        # And the candidate-findings JSON artifact must be persisted.
+        artifact = (
+            artifacts_dir
+            / "round-1-review-static-analysis-candidates.json"
+        )
+        assert artifact.is_file()
+
+    def test_no_static_section_when_changed_files_are_empty(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            _run_review,
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        artifacts_dir = tmp_path / "artifacts"
+        artifacts_dir.mkdir()
+
+        # No PR-changed files -> no scan -> no section in the prompt.
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _wt: [])
+
+        captured: Dict[str, str] = {}
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            captured["prompt"] = instruction
+            return True, _json("clean"), 0.0, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        _run_review(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            worktree=worktree,
+            round_number=1,
+            state=ReviewLoopState(),
+            config=_config(),
+            verbose=False,
+            quiet=True,
+            artifacts_dir=artifacts_dir,
+            mode="review",
+            findings_to_verify=None,
+            fix_result=None,
+        )
+
+        assert "Static-Analysis Candidate Findings" not in captured["prompt"]
