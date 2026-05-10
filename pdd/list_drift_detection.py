@@ -135,11 +135,24 @@ def _extract_string_literal_sequence(node: ast.AST) -> Optional[Tuple[str, ...]]
     """Return the string-literal items of *node* iff *every* element is a
     ``Constant`` of type ``str``; else ``None``.
 
-    Accepts ``ast.List`` and ``ast.Tuple`` nodes only.  This guards against
-    half-literal lists like ``[FALLBACK, "FOO"]`` (where ``FALLBACK`` is
-    a ``Name``), which are not AST-comparable without runtime evaluation.
+    Accepts:
+    * ``ast.List`` and ``ast.Tuple`` -- the bare literal forms.
+    * ``ast.Set`` -- the bare ``{"a", "b"}`` set literal.
+    * ``ast.Call`` wrapping ``set`` or ``frozenset`` with a single literal
+      argument: ``set([...])``, ``frozenset({...})``, etc.  This is the
+      production pattern at ``pdd/agentic_common.py:1053``
+      (``_OPENCODE_PROVIDER_CREDENTIAL_FIELDS = frozenset({...})``).
+
+    Guards against half-literal lists like ``[FALLBACK, "FOO"]`` (where
+    ``FALLBACK`` is a ``Name``), which are not AST-comparable without
+    runtime evaluation.
     """
-    if not isinstance(node, (ast.List, ast.Tuple)):
+    # Unwrap ``set(...)`` / ``frozenset(...)`` calls with a single literal
+    # argument so the canonical-source matcher can pair against them.
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id in {"set", "frozenset"} and len(node.args) == 1 and not node.keywords:
+            node = node.args[0]
+    if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return None
     items: List[str] = []
     for elt in node.elts:
@@ -239,6 +252,12 @@ def _function_with_literal_return(
 def _scan_module(path: Path) -> Tuple[List[_LiteralList], List[_LiteralList]]:
     """Return ``(static_lists, canonical_sources)`` extracted from *path*.
 
+    Walks the full AST -- not just ``tree.body`` -- so inline literals in
+    function/method/class bodies are also captured.  The real #858 bug
+    used ``for k in (...)`` inline tuples inside test function bodies,
+    not module-level constants; restricting to ``tree.body`` silently
+    skipped those.
+
     Files that cannot be opened or parsed yield ``([], [])``.
     """
     try:
@@ -253,13 +272,10 @@ def _scan_module(path: Path) -> Tuple[List[_LiteralList], List[_LiteralList]]:
     static_lists: List[_LiteralList] = []
     canonical_sources: List[_LiteralList] = []
 
+    # First pass: top-level constructs (module-level constants, top-level
+    # function definitions).  Keeps backwards-compatible behavior for
+    # callers that read the (well-tested) module-level path.
     for stmt in tree.body:
-        # Module-level literal lists: candidates for either side of the
-        # drift comparison.  A module-level constant assigned to a
-        # literal can simultaneously be a "static" list (if some other
-        # site has a smaller one) and a "canonical" source (if some
-        # other site has a smaller hardcoded copy of it).  We classify
-        # by size at pairing time, not extraction time.
         as_constant = _module_level_literal_list_or_constant(stmt, path)
         if as_constant is not None:
             static_lists.append(as_constant)
@@ -269,6 +285,64 @@ def _scan_module(path: Path) -> Tuple[List[_LiteralList], List[_LiteralList]]:
         as_function = _function_with_literal_return(stmt, path)
         if as_function is not None:
             canonical_sources.append(as_function)
+
+    # Second pass: walk the entire tree to pick up literal sequences in
+    # function/method/class/conditional bodies.  These are recorded as
+    # *static lists only* -- never as canonical sources -- because
+    # function-local literals (fixture data, scratch buffers) regularly
+    # share names like ``candidates`` or ``lines`` across unrelated
+    # tests and would produce noise pairs.  A canonical source must be
+    # a module-level constant or a top-level function with a single
+    # literal return (already captured in the first pass).
+    seen: set = {(lit.name, lit.line) for lit in static_lists}
+
+    def _add_function_body_static(name: str, line: int, items: Tuple[str, ...]) -> None:
+        if (name, line) in seen:
+            return
+        seen.add((name, line))
+        static_lists.append(
+            _LiteralList(name=name, path=path, line=line, items=items)
+        )
+
+    # ``ast.walk`` yields every node including ``tree.body`` items.  We
+    # only want descendants -- module-level was handled above.  Use a
+    # parent map to skip top-level statements.
+    top_level_ids = {id(stmt) for stmt in tree.body}
+
+    for node in ast.walk(tree):
+        if id(node) in top_level_ids:
+            continue
+        # Inline assignments: ``name = [literal, ...]`` inside function,
+        # class, with-, try-, etc. bodies.
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            name = _module_assign_target_name(node.targets[0])
+            if name is None:
+                continue
+            items = _extract_string_literal_sequence(node.value)
+            if items is None:
+                continue
+            _add_function_body_static(name, node.lineno, items)
+            continue
+        if isinstance(node, ast.AnnAssign) and node.value is not None:
+            name = _module_assign_target_name(node.target)
+            if name is None:
+                continue
+            items = _extract_string_literal_sequence(node.value)
+            if items is None:
+                continue
+            _add_function_body_static(name, node.lineno, items)
+            continue
+        # Inline ``for k in (literal, ...)`` loops -- the real #858 shape.
+        # Synthesize a stable pseudo-name keyed on file:line so the
+        # pairing logic can still match by literal-set membership without
+        # collapsing two different for-loops in the same module.
+        if isinstance(node, ast.For):
+            items = _extract_string_literal_sequence(node.iter)
+            if items is None or len(items) < _MIN_STATIC_LIST_SIZE:
+                continue
+            synthetic_name = f"<for-loop:line-{node.lineno}>"
+            _add_function_body_static(synthetic_name, node.lineno, items)
+            continue
 
     return static_lists, canonical_sources
 

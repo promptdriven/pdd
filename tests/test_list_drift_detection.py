@@ -719,25 +719,37 @@ def test_set_literal_canonical_is_recognized(tmp_path):
     assert matched, "set-literal canonicals must be recognized"
 
 
-def test_canonical_in_function_body_is_recognized(tmp_path):
-    """A canonical source defined inside a function body should still be
-    scannable (e.g., a fixture closing over a list).
+def test_function_body_literals_are_static_only_not_canonical(tmp_path):
+    """Function-body local assignments to literals are recorded as
+    *static lists* (so a subset-in-function-body finding fires when the
+    canonical lives at module level), but they are NOT treated as
+    canonical sources.
+
+    Reasoning: function-local names like ``candidates``, ``lines``,
+    ``operation_history`` are routinely reused across unrelated tests
+    with different domains, and pairing them as canonicals would produce
+    massive cross-test false positives.  A canonical source must be
+    deliberate: a module-level constant or a top-level function
+    returning a literal.
     """
     target = _write(
         tmp_path,
         "tests/test_helper.py",
         '''
+        # SUBSET is at module level -> can be static or canonical.
         SUBSET = ["FOO", "BAR"]
 
         def _make_fixture():
+            # full_set is function-local: static-only, not a canonical.
             full_set = ("FOO", "BAR", "BAZ", "QUX", "QUUX")
             return full_set
         ''',
     )
 
     findings = detect_static_list_drift([target])
-    matched = [f for f in findings if f.static_list_name == "SUBSET"]
-    assert matched, (
-        "canonical assigned in a function body must still be discoverable "
-        "for cross-pairing"
+    # The function-local ``full_set`` must NOT be paired as a canonical
+    # source against ``SUBSET`` (would generate noise across the repo).
+    assert findings == [], (
+        "function-body literals must be static-only; pairing them as "
+        "canonical sources is a documented false-positive generator"
     )
