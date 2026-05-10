@@ -419,7 +419,13 @@ def test_run_with_provider_pops_stale_key_when_oauth_present(_isolated_env, tmp_
     os.environ["ANTHROPIC_API_KEY"] = "stale-depleted"
 
     # Avoid the gemini OAuth check from making real filesystem calls.
+    # Suppress OpenCode availability so the orchestrator does not fall
+    # through to the opencode provider (which has its own auth model and
+    # legitimately may carry ANTHROPIC_API_KEY into its subprocess) — that
+    # would shift ``mock_run.call_args`` away from the claude call this
+    # test pins.
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_opencode_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
@@ -504,7 +510,10 @@ def test_run_with_provider_pops_key_when_oauth_token_env_set(_isolated_env, tmp_
     # Override the conftest autouse fixture's False default. The
     # oauth_token authMethod path itself is verified at the
     # _claude_has_oauth_login layer in test_oauth_detected_for_env_supplied_token.
+    # Suppress OpenCode availability so we pin the claude call (see other
+    # Issue #813 tests for the same rationale).
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_opencode_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
@@ -562,7 +571,10 @@ def test_pop_does_not_mutate_parent_environ(_isolated_env, tmp_path):
     """
     os.environ["ANTHROPIC_API_KEY"] = "sk-must-survive-in-parent"
 
+    # Suppress OpenCode availability so the orchestrator pins the claude
+    # provider (see other Issue #813 tests for the same rationale).
     with patch.object(agentic_common, "_has_gemini_oauth_credentials", return_value=False), \
+         patch.object(agentic_common, "_has_opencode_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/claude"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
          patch.object(agentic_common, "_subprocess_run") as mock_run:
