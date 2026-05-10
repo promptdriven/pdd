@@ -262,10 +262,11 @@ def test_regression_opencode_provider_env_keys_pattern(tmp_path):
     primary = matched[0]
     assert primary.static_size == 26
     assert primary.canonical_size == 45
-    # The missing keys should be reported so the reviewer prompt can quote them.
-    assert "XAI_API_KEY" in canonical_keys_45[26:]
+    # The missing keys should be reported so the reviewer prompt can quote
+    # them as concrete evidence.
     missing_set = set(canonical_keys_45) - set(hardcoded_keys_26)
     assert set(primary.missing_items) == missing_set
+    assert len(missing_set) == 19, "26-vs-45 must yield exactly 19 missing entries"
 
 
 def test_drift_with_constant_canonical_source(tmp_path):

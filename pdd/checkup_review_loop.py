@@ -587,6 +587,91 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     return normalized
 
 
+def _collect_static_analysis_candidate_findings(
+    worktree: Path,
+    artifacts_dir: Path,
+    *,
+    round_number: int,
+    mode: str,
+) -> List[Dict[str, Any]]:
+    """Run AST drift detection over PR-touched Python files; return prompt-ready findings.
+
+    The scan is best-effort and never raises: any failure (missing import,
+    git error, malformed paths) yields ``[]`` so the reviewer prompt simply
+    omits the static-analysis section.
+
+    Each returned dict contains ``summary``, ``static_location``,
+    ``canonical_location``, and ``missing`` (truncated to 25 entries to
+    keep the prompt bounded for very wide drifts like 26-vs-300).
+    """
+    try:
+        from .list_drift_detection import detect_static_list_drift
+    except Exception:  # noqa: BLE001 - optional, never fail the review
+        return []
+
+    try:
+        # Limit to files touched by the PR plus the canonical sources they
+        # could pair against.  We scan the changed-file list directly; the
+        # AST scanner pairs static lists against canonical sources within
+        # the same scan input, so cross-file pairs are only detected when
+        # both sides are in the input.  Including the changed files alone
+        # is the right scope for "the diff introduced or modified a static
+        # list".  Where the diff modifies the canonical, the drift will
+        # also be visible to the scan.
+        changed = _git_changed_files(worktree)
+    except Exception:  # noqa: BLE001
+        changed = []
+
+    if not changed:
+        return []
+
+    paths: List[Path] = []
+    for rel in changed:
+        if not rel.endswith(".py"):
+            continue
+        paths.append(worktree / rel)
+
+    try:
+        findings = detect_static_list_drift(paths)
+    except Exception:  # noqa: BLE001
+        return []
+
+    candidates: List[Dict[str, Any]] = []
+    for f in findings:
+        # Format file:line locations relative to the worktree when possible
+        # so the LLM can attach them to a finding without absolute paths.
+        try:
+            static_rel = f.static_path.resolve().relative_to(worktree.resolve())
+            static_loc = f"{static_rel}:{f.static_line}"
+        except ValueError:
+            static_loc = f"{f.static_path}:{f.static_line}"
+        try:
+            canonical_rel = f.canonical_path.resolve().relative_to(worktree.resolve())
+            canonical_loc = f"{canonical_rel}:{f.canonical_line}"
+        except ValueError:
+            canonical_loc = f"{f.canonical_path}:{f.canonical_line}"
+
+        candidates.append(
+            {
+                "summary": f.summary,
+                "static_location": static_loc,
+                "canonical_location": canonical_loc,
+                "static_size": f.static_size,
+                "canonical_size": f.canonical_size,
+                "missing": list(f.missing_items[:25]),
+                "missing_total": len(f.missing_items),
+            }
+        )
+
+    # Persist for offline inspection alongside the prompt artifact.
+    _write_artifact(
+        artifacts_dir
+        / f"round-{round_number}-{mode}-static-analysis-candidates.json",
+        json.dumps(candidates, indent=2),
+    )
+    return candidates
+
+
 def _run_review(
     *,
     reviewer: str,
@@ -602,6 +687,12 @@ def _run_review(
     findings_to_verify: Optional[Sequence[ReviewFinding]] = None,
     fix_result: Optional[FixResult] = None,
 ) -> ReviewResult:
+    candidate_findings = _collect_static_analysis_candidate_findings(
+        worktree,
+        artifacts_dir,
+        round_number=round_number,
+        mode=mode,
+    )
     prompt = _review_prompt(
         reviewer=reviewer,
         context=context,
@@ -611,6 +702,7 @@ def _run_review(
         mode=mode,
         findings_to_verify=findings_to_verify or [],
         fix_result=fix_result,
+        candidate_findings=candidate_findings,
     )
     base = f"round-{round_number}-{mode}-{reviewer}"
     _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
@@ -913,6 +1005,39 @@ def _forced_provider(provider: str) -> Iterable[None]:
             os.environ["PDD_AGENTIC_PROVIDER"] = old_value
 
 
+def _format_candidate_findings(
+    candidate_findings: Sequence[Dict[str, Any]],
+) -> str:
+    """Render the AST/static-analysis candidate findings block.
+
+    Returns an empty string when ``candidate_findings`` is empty so the
+    section disappears from the prompt entirely (no noise when the scanner
+    finds nothing).  When findings are present, the section is structured
+    as a deterministic JSON list followed by an instruction reminding the
+    reviewer that these are *candidate* findings — not pre-approved — and
+    must be verified or rejected like any other finding.
+    """
+    if not candidate_findings:
+        return ""
+    return (
+        "\n\n## Static-Analysis Candidate Findings\n"
+        "The following candidate findings were produced by deterministic "
+        "static analysis (AST scan) of changed files. Each one targets the "
+        "'hardcoded list of N domain items + canonical source returning M "
+        "items' pattern — the same pattern that produced the test-isolation "
+        "drift in promptdriven/pdd#858 (3 of the 7 hidden bugs).\n"
+        "Treat each candidate as untrusted, like any other finding. Verify "
+        "by reading both file:line locations. If the static list is "
+        "intentionally a subset (e.g., a deliberate compatibility shim), "
+        "reject the candidate with a one-line reason. If the static list "
+        "should call the canonical source (or be replaced by a meta-test "
+        "that asserts equivalence), surface it as a finding with severity "
+        "matching its impact (typically `medium` for tests, `critical` for "
+        "runtime modules).\n"
+        f"{json.dumps(list(candidate_findings), indent=2)}\n"
+    )
+
+
 def _review_prompt(
     *,
     reviewer: str,
@@ -923,6 +1048,7 @@ def _review_prompt(
     mode: str,
     findings_to_verify: Sequence[ReviewFinding],
     fix_result: Optional[FixResult] = None,
+    candidate_findings: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     mode_instruction = (
         "\n\n## Initial Review Instructions\n"
@@ -960,6 +1086,7 @@ def _review_prompt(
             "If it is not acceptable, re-report the finding with concrete "
             "evidence and a clear reason the fixer should act on it.\n"
         )
+    static_analysis_block = _format_candidate_findings(candidate_findings or [])
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
@@ -1060,6 +1187,17 @@ Use this manual PR-review standard:
   generated metadata stay synchronized with the implementation. Include
   architecture entries, prompt contracts, `.pdd/meta` hashes/run records,
   examples, and tests when they exist for the touched module.
+- Watch for the "hardcoded list of N domain items + same-package canonical
+  source returning M items" pattern. When a test or helper duplicates a
+  domain literal list (provider env vars, file markers, supported
+  languages, model identifiers, error codes, etc.) that the same package
+  already owns the authoritative version of, the duplicate silently drifts
+  whenever the canonical grows. This drift class produced 3 of the 7
+  test-isolation bugs in promptdriven/pdd#858. The fix is to call the
+  canonical source directly, or to add a meta-test asserting equivalence
+  between the static list and the canonical set. The static-analysis
+  candidate findings section below pre-extracts likely instances of this
+  pattern; verify each one against the actual code.
 - Run a caller-compatibility sweep for changed public functions, CLI flags,
   imports, and generated module interfaces. Use repository search patterns
   such as `rg "function_name\\("` or `rg "import_name"` to verify all callers
@@ -1109,7 +1247,7 @@ Architecture context:
 Prior normalized findings:
 {prior_findings}
 {verify_block}
-{fix_block}
+{fix_block}{static_analysis_block}
 
 Return ONLY JSON with this shape:
 {{
