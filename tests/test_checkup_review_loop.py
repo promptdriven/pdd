@@ -1665,12 +1665,14 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         artifacts_dir = tmp_path / "artifacts"
         artifacts_dir.mkdir()
 
-        # Stub `_git_changed_files` to claim our drift fixture is the
+        # Stub the PR diff resolver to claim our drift fixture is the
         # PR-touched file (avoids needing a real git repo for the test).
+        # The production code uses ``_pr_changed_python_files`` to derive
+        # the change set from ``git diff --name-only BASE...HEAD``.
         monkeypatch.setattr(
             mod,
-            "_git_changed_files",
-            lambda _wt: ["pkg/sample.py"],
+            "_pr_changed_python_files",
+            lambda _wt, _pr_metadata=None: ["pkg/sample.py"],
         )
 
         captured: Dict[str, str] = {}
@@ -1724,7 +1726,11 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         artifacts_dir.mkdir()
 
         # No PR-changed files -> no scan -> no section in the prompt.
-        monkeypatch.setattr(mod, "_git_changed_files", lambda _wt: [])
+        monkeypatch.setattr(
+            mod,
+            "_pr_changed_python_files",
+            lambda _wt, _pr_metadata=None: [],
+        )
 
         captured: Dict[str, str] = {}
 
