@@ -2,8 +2,28 @@
 
 ### Feat
 
-- PDD enhancement for #798 (#858)
-- implement architecture conformance repair loop, prompt-contract validation, and environment-aware cloud routing for version 0.0.232
+- **OpenCode agentic provider (#798, #858)**: add OpenCode (`opencode-ai`) as a fourth agentic CLI alongside Claude/Gemini/Codex. `PDD_AGENTIC_PROVIDER` accepts the `opencode` token, and `cli_detector` adds it to the setup wizard's selection table, install flow (`npm install -g opencode-ai`), and OAuth-style detection.
+- **OpenCode credential detection**: `get_available_agents()` requires the CLI plus a real credential signal — `~/.local/share/opencode/auth.json` provider data, an `opencode.json` (global / project / `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT`) whose `provider/model` credential resolves (`options.apiKey`, `{env:VAR}` set, `{file:PATH}` readable), or any provider env var named in `pdd/data/llm_model.csv`'s `api_key` column (including pipe-delimited multi-key rows). `OPENCODE_MODEL`/`OPENCODE_AGENT`/`OPENCODE_VARIANT` are model knobs, not credentials.
+- **OpenCode subprocess execution**: `run_agentic_task` parses JSONL cost (`step_finish.part.cost`), extracts model from `model` / `session.model` / `message.model` / `part.model` (joined with `+`, with `OPENCODE_MODEL` audit-trail fallback), passes `--agent` / `--variant` through, and treats `provider not configured`, `model not found in provider`, and `run opencode auth login` as permanent errors that fall through to the next provider.
+- **No-key setup path**: OpenCode is intentionally omitted from `_API_KEY_ENV_VARS` / `PROVIDER_PRIMARY_KEY`; `_prompt_api_key` short-circuits with `opencode auth login` guidance so user input is never saved under an unrelated provider's key.
+
+### Fix
+
+- **OpenCode-aware test isolation (#798)**: `mock_env` in `tests/test_agentic_common.py` now also patches `_opencode_auth_file_has_credentials` and `_iter_opencode_config_texts`, and `tests/test_opencode_provider.py` clears env via `_opencode_provider_env_keys()` (45 keys from `llm_model.csv`) instead of a hardcoded 26-key list. Unblocks 7 tests that failed locally on machines with `opencode` installed or stray provider env vars but passed in CI.
+- **auto-deps drift heal (#898)**: `agentic_split_orchestrator_python.prompt` switches the `context/agentic_test_orchestrator_example.py` include from `query=` to an explicit `select=def:main,def:example_*` list, healing residual drift the #858 auto-heal run intentionally skipped.
+- **agentic_common circular import**: lazy-wrap the `_load_model_data` import from `pdd.llm_invoke` so `pdd/__init__.py → agentic_common → llm_invoke → agentic_common` no longer triggers when OpenCode detection consults `llm_model.csv` at import time.
+
+### Build
+
+- Bump 0.0.232 → 0.0.233 in `pyproject.toml`, `pdd/setup.py`, `README.md`, `pypi_description.rst`, and `pdd/pdd_completion.sh`; refresh `architecture.json` with full `run_agentic_task` keyword signatures and the previously-undocumented `agentic_common` exports (`detect_control_token`, `classify_step_output`, `substitute_template_variables`, progress/interrupt helpers, `post_final_comment`, `github_clear_state`, `load_workflow_state` / `save_workflow_state` / `clear_workflow_state`).
+
+### Docs
+
+- README, `SETUP_WITH_GEMINI.md`, `docs/ONBOARDING.md`, `docs/TUTORIALS.md`, and the `examples/` READMEs add OpenCode to supported-CLI lists, install instructions, and agentic fallback prerequisites; README env-var reference adds `OPENCODE_MODEL`, `OPENCODE_AGENT`, `OPENCODE_VARIANT`, and `PDD_AGENTIC_PROVIDER`.
+
+### Test
+
+- New `tests/test_opencode_provider.py` (+646 lines) covers availability detection, config parsing, credential resolution, JSONL cost/model parsing, and permanent-error classification; add `tests/test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py` regression and OpenCode-aware fixtures in `tests/test_agentic_common.py`.
 
 ## v0.0.232 (2026-05-08)
 
