@@ -27,6 +27,7 @@ Issue/PR context is supplied through ``ReviewLoopContext`` by the caller.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -43,6 +44,7 @@ from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
 
+logger = logging.getLogger(__name__)
 console = Console()
 
 ROLE_TO_PROVIDER: Dict[str, str] = {
@@ -336,6 +338,7 @@ def run_checkup_review_loop(
                 verbose=verbose,
                 quiet=quiet,
                 artifacts_dir=artifacts_dir,
+                pr_metadata=pr_metadata,
             )
             _record_review(state, review)
             _mark_non_required_findings_advisory(state, config)
@@ -431,6 +434,7 @@ def run_checkup_review_loop(
             mode="verify",
             findings_to_verify=fix_findings,
             fix_result=fix,
+            pr_metadata=pr_metadata,
         )
         _record_review(state, verify)
         _mark_non_required_findings_advisory(state, config)
@@ -587,6 +591,296 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     return normalized
 
 
+def _pr_changed_python_files(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Return the list of Python files changed in the PR's merge-base diff.
+
+    Uses ``git diff --name-only <base>...HEAD`` so the answer is the same
+    on a fresh ``git fetch pull/N/head`` PR worktree as it is on a
+    locally-staged checkout.  ``git status --porcelain`` (the previous
+    behavior) returns ``[]`` on a fresh PR worktree by construction --
+    that's the production execution path the reviewer of PR #899
+    flagged as never firing.
+
+    Resolution order for the base ref:
+      1. ``pr_metadata['base_ref']`` if set -- typically the value
+         returned by ``_fetch_pr_metadata`` (``main``/``master``/etc.).
+      2. ``origin/main`` then ``origin/master`` -- the conventional
+         remote-tracking refs.
+      3. ``HEAD~1`` -- last-resort fallback so the scan still produces
+         a non-empty answer on the most recent commit if no base ref
+         is resolvable.
+
+    Returns an empty list on git error so the caller's fail-open
+    contract is preserved.
+    """
+    base_candidates: List[str] = []
+    if pr_metadata and pr_metadata.get("base_ref"):
+        base_ref = str(pr_metadata["base_ref"])
+        base_candidates.append(f"origin/{base_ref}")
+        base_candidates.append(base_ref)
+    base_candidates.extend(["origin/main", "origin/master", "main", "master"])
+
+    for base in base_candidates:
+        try:
+            verify = subprocess.run(
+                ["git", "rev-parse", "--verify", base],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("list-drift base-ref verify failed for %r: %s", base, exc)
+            continue
+        if verify.returncode != 0:
+            continue
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--name-only", f"{base}...HEAD"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("list-drift git diff failed for %r: %s", base, exc)
+            continue
+        if diff.returncode != 0:
+            logger.debug(
+                "list-drift git diff returned %s for %r: %s",
+                diff.returncode,
+                base,
+                diff.stderr.strip(),
+            )
+            continue
+        names = [
+            line.strip()
+            for line in diff.stdout.splitlines()
+            if line.strip() and line.strip().endswith(".py")
+        ]
+        if names or base.endswith(("/main", "/master", "main", "master")):
+            # Either we got results or we resolved a canonical base ref:
+            # take this answer (even if empty) rather than falling back
+            # to HEAD~1 which would mis-report the PR scope.
+            return names
+
+    # Fallback: most-recent-commit diff.  Better than ``[]`` on a single-
+    # commit smoke test, and safe because the AST detector is fail-open.
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("list-drift HEAD~1 fallback failed: %s", exc)
+        return []
+    if diff.returncode != 0:
+        return []
+    return [
+        line.strip()
+        for line in diff.stdout.splitlines()
+        if line.strip() and line.strip().endswith(".py")
+    ]
+
+
+def _package_companion_python_files(
+    worktree: Path,
+    changed_rel_paths: Sequence[str],
+    max_companions: int = 400,
+) -> List[Path]:
+    """Return Python files in the same package(s) as ``changed_rel_paths``.
+
+    Cross-file drift pairing requires both the static-list file and the
+    canonical-source file to be in the scan input.  A typical drift PR
+    only changes the test file; the canonical source lives in an
+    unchanged module.  Without companion files in the input, the
+    detector would miss every cross-file drift (review-blocker #6).
+
+    Strategy:
+    * Include every ``.py`` under each top-level dir of every changed
+      file (``pdd/`` for ``pdd/foo.py``, ``tests/`` for ``tests/test_x.py``).
+    * When ANY changed file is under ``tests/``, ALSO include every
+      top-level Python package in the worktree.  Test files routinely
+      drift from canonicals in ``pkg/<name>/`` (the production code);
+      restricting to the same top-level dir would miss every such
+      cross-package drift.
+
+    ``max_companions`` caps the worst-case fan-out so PRs in very large
+    packages still parse in milliseconds.
+    """
+    if not changed_rel_paths:
+        return []
+    package_roots: set = set()
+    has_test_change = False
+    for rel in changed_rel_paths:
+        parts = Path(rel).parts
+        if not parts:
+            continue
+        # First path component is the package root (e.g. ``pdd`` for
+        # ``pdd/foo.py``, ``tests`` for ``tests/test_x.py``).
+        root_name = parts[0]
+        package_roots.add(root_name)
+        if root_name == "tests" or root_name.startswith("test"):
+            has_test_change = True
+
+    # When a test file changes, add every top-level Python package as a
+    # companion candidate so we can pair the test's hardcoded list
+    # against canonicals in the source tree.
+    if has_test_change:
+        try:
+            for entry in sorted(worktree.iterdir()):
+                if not entry.is_dir():
+                    continue
+                name = entry.name
+                # Skip dot-dirs and conventional non-source roots.
+                if name.startswith(".") or name in {
+                    "__pycache__", "node_modules", "build", "dist",
+                    "site-packages", ".venv", "venv", "env",
+                }:
+                    continue
+                # An "obvious package" has at least one ``.py`` file in it.
+                try:
+                    if any(True for _ in entry.glob("*.py")) or any(
+                        True for _ in entry.glob("**/__init__.py")
+                    ):
+                        package_roots.add(name)
+                except OSError:
+                    continue
+        except OSError as exc:
+            logger.debug("list-drift root walk failed: %s", exc)
+
+    companions: List[Path] = []
+    changed_set = {(worktree / rel).resolve() for rel in changed_rel_paths}
+    for root_name in sorted(package_roots):
+        root = worktree / root_name
+        if not root.is_dir():
+            continue
+        try:
+            for entry in sorted(root.rglob("*.py")):
+                if not entry.is_file():
+                    continue
+                if entry.resolve() in changed_set:
+                    continue
+                companions.append(entry)
+                if len(companions) >= max_companions:
+                    return companions
+        except OSError as exc:
+            logger.debug("list-drift companion walk failed for %s: %s", root, exc)
+            continue
+    return companions
+
+
+def _collect_static_analysis_candidate_findings(
+    worktree: Path,
+    artifacts_dir: Path,
+    *,
+    round_number: int,
+    mode: str,
+    pr_metadata: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Run AST drift detection over PR-touched Python files; return prompt-ready findings.
+
+    The scan is best-effort and never raises: any failure (missing import,
+    git error, malformed paths) yields ``[]`` so the reviewer prompt simply
+    omits the static-analysis section.  Failures are logged at DEBUG so
+    operators can distinguish "scan crashed on this file" from "scan
+    found nothing".
+
+    Each returned dict contains ``summary``, ``static_location``,
+    ``canonical_location``, and ``missing`` (truncated to 25 entries to
+    keep the prompt bounded for very wide drifts like 26-vs-300).
+
+    ``pr_metadata`` should be the dict returned by ``_fetch_pr_metadata``
+    so the merge-base diff can be computed against the PR's actual base
+    branch (e.g., ``main``).  Production worktrees are fresh
+    ``git fetch pull/N/head`` checkouts where ``git status --porcelain``
+    is empty by construction; the merge-base diff is the only signal
+    that reflects "what the PR changed".
+    """
+    try:
+        from .list_drift_detection import detect_static_list_drift
+    except Exception as exc:  # noqa: BLE001 - optional, never fail the review
+        logger.debug("list-drift module import failed: %s", exc, exc_info=True)
+        return []
+
+    try:
+        changed = _pr_changed_python_files(worktree, pr_metadata)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("list-drift changed-file resolution failed: %s", exc, exc_info=True)
+        changed = []
+
+    if not changed:
+        return []
+
+    # Include package companions so cross-file drift pairs are visible
+    # (review-major #6).  A typical drift PR changes only the test file;
+    # without the unchanged canonical-source file in the scan input,
+    # the AST detector cannot pair them.
+    paths: List[Path] = [worktree / rel for rel in changed]
+    paths.extend(_package_companion_python_files(worktree, changed))
+
+    try:
+        findings = detect_static_list_drift(paths)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("list-drift scan failed: %s", exc, exc_info=True)
+        return []
+
+    # Filter: only emit findings where at least one side of the drift is
+    # in the PR-changed set.  Companion files are scanned for canonical-
+    # source coverage; they should not generate findings on their own
+    # (those would belong to the PR that introduced the drift, not this
+    # PR which merely touched an unrelated file).
+    changed_abs = {(worktree / rel).resolve() for rel in changed}
+
+    def _is_pr_relevant(f: Any) -> bool:
+        try:
+            sp = f.static_path.resolve()
+            cp = f.canonical_path.resolve()
+        except OSError:
+            return False
+        return sp in changed_abs or cp in changed_abs
+
+    findings = [f for f in findings if _is_pr_relevant(f)]
+
+    candidates: List[Dict[str, Any]] = []
+    for f in findings:
+        # Format file:line locations relative to the worktree when possible
+        # so the LLM can attach them to a finding without absolute paths.
+        try:
+            static_rel = f.static_path.resolve().relative_to(worktree.resolve())
+            static_loc = f"{static_rel}:{f.static_line}"
+        except ValueError:
+            static_loc = f"{f.static_path}:{f.static_line}"
+        try:
+            canonical_rel = f.canonical_path.resolve().relative_to(worktree.resolve())
+            canonical_loc = f"{canonical_rel}:{f.canonical_line}"
+        except ValueError:
+            canonical_loc = f"{f.canonical_path}:{f.canonical_line}"
+
+        candidates.append(
+            {
+                "summary": f.summary,
+                "static_location": static_loc,
+                "canonical_location": canonical_loc,
+                "static_size": f.static_size,
+                "canonical_size": f.canonical_size,
+                "missing": list(f.missing_items[:25]),
+                "missing_total": len(f.missing_items),
+            }
+        )
+
+    # Persist for offline inspection alongside the prompt artifact.
+    _write_artifact(
+        artifacts_dir
+        / f"round-{round_number}-{mode}-static-analysis-candidates.json",
+        json.dumps(candidates, indent=2),
+    )
+    return candidates
+
+
 def _run_review(
     *,
     reviewer: str,
@@ -601,7 +895,15 @@ def _run_review(
     mode: str = "review",
     findings_to_verify: Optional[Sequence[ReviewFinding]] = None,
     fix_result: Optional[FixResult] = None,
+    pr_metadata: Optional[Dict[str, Any]] = None,
 ) -> ReviewResult:
+    candidate_findings = _collect_static_analysis_candidate_findings(
+        worktree,
+        artifacts_dir,
+        round_number=round_number,
+        mode=mode,
+        pr_metadata=pr_metadata,
+    )
     prompt = _review_prompt(
         reviewer=reviewer,
         context=context,
@@ -611,6 +913,7 @@ def _run_review(
         mode=mode,
         findings_to_verify=findings_to_verify or [],
         fix_result=fix_result,
+        candidate_findings=candidate_findings,
     )
     base = f"round-{round_number}-{mode}-{reviewer}"
     _write_artifact(artifacts_dir / f"{base}.prompt.txt", prompt)
@@ -913,6 +1216,39 @@ def _forced_provider(provider: str) -> Iterable[None]:
             os.environ["PDD_AGENTIC_PROVIDER"] = old_value
 
 
+def _format_candidate_findings(
+    candidate_findings: Sequence[Dict[str, Any]],
+) -> str:
+    """Render the AST/static-analysis candidate findings block.
+
+    Returns an empty string when ``candidate_findings`` is empty so the
+    section disappears from the prompt entirely (no noise when the scanner
+    finds nothing).  When findings are present, the section is structured
+    as a deterministic JSON list followed by an instruction reminding the
+    reviewer that these are *candidate* findings — not pre-approved — and
+    must be verified or rejected like any other finding.
+    """
+    if not candidate_findings:
+        return ""
+    return (
+        "\n\n## Static-Analysis Candidate Findings\n"
+        "The following candidate findings were produced by deterministic "
+        "static analysis (AST scan) of changed files. Each one targets the "
+        "'hardcoded list of N domain items + canonical source returning M "
+        "items' pattern — the same pattern that produced the test-isolation "
+        "drift in promptdriven/pdd#858 (3 of the 7 hidden bugs).\n"
+        "Treat each candidate as untrusted, like any other finding. Verify "
+        "by reading both file:line locations. If the static list is "
+        "intentionally a subset (e.g., a deliberate compatibility shim), "
+        "reject the candidate with a one-line reason. If the static list "
+        "should call the canonical source (or be replaced by a meta-test "
+        "that asserts equivalence), surface it as a finding with severity "
+        "matching its impact (typically `medium` for tests, `critical` for "
+        "runtime modules).\n"
+        f"{json.dumps(list(candidate_findings), indent=2)}\n"
+    )
+
+
 def _review_prompt(
     *,
     reviewer: str,
@@ -923,6 +1259,7 @@ def _review_prompt(
     mode: str,
     findings_to_verify: Sequence[ReviewFinding],
     fix_result: Optional[FixResult] = None,
+    candidate_findings: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> str:
     mode_instruction = (
         "\n\n## Initial Review Instructions\n"
@@ -960,6 +1297,7 @@ def _review_prompt(
             "If it is not acceptable, re-report the finding with concrete "
             "evidence and a clear reason the fixer should act on it.\n"
         )
+    static_analysis_block = _format_candidate_findings(candidate_findings or [])
     prior_findings = json.dumps([f.to_dict() for f in state.findings], indent=2)
     blocking = ", ".join(config.blocking_severities) or "blocker, critical, medium"
     return f"""Review this PR as {reviewer} in PDD checkup review-loop mode.
@@ -1060,6 +1398,17 @@ Use this manual PR-review standard:
   generated metadata stay synchronized with the implementation. Include
   architecture entries, prompt contracts, `.pdd/meta` hashes/run records,
   examples, and tests when they exist for the touched module.
+- Watch for the "hardcoded list of N domain items + same-package canonical
+  source returning M items" pattern. When a test or helper duplicates a
+  domain literal list (provider env vars, file markers, supported
+  languages, model identifiers, error codes, etc.) that the same package
+  already owns the authoritative version of, the duplicate silently drifts
+  whenever the canonical grows. This drift class produced 3 of the 7
+  test-isolation bugs in promptdriven/pdd#858. The fix is to call the
+  canonical source directly, or to add a meta-test asserting equivalence
+  between the static list and the canonical set. The static-analysis
+  candidate findings section below pre-extracts likely instances of this
+  pattern; verify each one against the actual code.
 - Run a caller-compatibility sweep for changed public functions, CLI flags,
   imports, and generated module interfaces. Use repository search patterns
   such as `rg "function_name\\("` or `rg "import_name"` to verify all callers
@@ -1109,7 +1458,7 @@ Architecture context:
 Prior normalized findings:
 {prior_findings}
 {verify_block}
-{fix_block}
+{fix_block}{static_analysis_block}
 
 Return ONLY JSON with this shape:
 {{
@@ -1948,11 +2297,15 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
         return {}
     head = data.get("head") or {}
     head_repo = head.get("repo") or {}
+    base = data.get("base") or {}
     return {
         "head_ref": str(head.get("ref") or ""),
         "head_owner": str((head_repo.get("owner") or {}).get("login") or ""),
         "head_repo": str(head_repo.get("name") or ""),
         "clone_url": str(head_repo.get("clone_url") or ""),
+        # The base ref is what the static-analysis scanner uses to
+        # compute the PR's merge-base diff (``base...HEAD``).
+        "base_ref": str(base.get("ref") or ""),
     }
 
 
