@@ -151,9 +151,15 @@ def test_default_timeout_sufficient_for_complex_tasks():
 
 @pytest.fixture
 def mock_env():
+    # OpenCode (issue #798): silence home-directory credential signals so tests
+    # don't depend on the developer's `~/.local/share/opencode/auth.json` or
+    # `~/.config/opencode/opencode.json`. Environment-variable signals (which
+    # tests do set explicitly) are still honored by `_has_opencode_credentials`.
     with (
         patch.dict(os.environ, {}, clear=True),
         patch("pdd.agentic_common._has_gemini_oauth_credentials", return_value=False),
+        patch("pdd.agentic_common._opencode_auth_file_has_credentials", return_value=False),
+        patch("pdd.agentic_common._iter_opencode_config_texts", return_value=[]),
     ):
         yield os.environ
 
