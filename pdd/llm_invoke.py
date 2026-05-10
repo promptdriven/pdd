@@ -1637,6 +1637,78 @@ def _model_disallows_temperature(model_name: Any) -> bool:
     return "claude-opus-4-7" in model_lower or "claude-opus-4.7" in model_lower
 
 
+# Regex anchored to the Gemini 3 family identifier so that:
+#   - matches: gemini-3, gemini-3-flash, gemini-3-pro, gemini-3.1-..., gemini-3.5-...
+#   - does NOT match: gemini-2.5-*, gemini-1.5-*, gemini-30-* (hypothetical
+#     unrelated families), claude-3, etc.
+# The lookahead requires a separator (-, _, /, ., end-of-string, or whitespace)
+# after the version number so that "gemini-30-something" cannot be mistaken for
+# a Gemini 3 variant.
+_GEMINI_3_RE = re.compile(r"gemini-3(?:\.\d+)?(?=$|[-_./\s])", re.IGNORECASE)
+
+
+def _is_gemini_3_model(model_name: Any) -> bool:
+    """Return True when *model_name* belongs to the Gemini 3 family.
+
+    See ``_GEMINI_3_RE`` for the matching contract. This intentionally covers
+    every routing prefix (``gemini/``, ``vertex_ai/``, ``gmi/google/``,
+    ``github_copilot/``, bare Vertex AI names like ``gemini-3.1-pro-preview``)
+    by anchoring on the model family identifier itself rather than the prefix.
+    """
+    if model_name is None:
+        return False
+    return bool(_GEMINI_3_RE.search(str(model_name)))
+
+
+def _maybe_clamp_gemini_3_temperature(
+    litellm_kwargs: Dict[str, Any], model_name: Any, verbose: bool
+) -> bool:
+    """Force ``temperature=1`` in *litellm_kwargs* when the model is Gemini 3.
+
+    WHY this override exists (do NOT remove without checking the litellm
+    upstream behavior):
+
+      litellm prints the following warning for Gemini 3 models invoked with
+      temperature < 1.0::
+
+          Warning: Setting temperature < 1.0 for Gemini 3 models
+          (gemini-3-flash-preview) can cause infinite loops, degraded
+          reasoning performance, and failure on complex tasks. Strongly
+          recommended to use temperature = 1.0 (default).
+
+      PDD's defaults pass ``temperature=0.1`` and many callers pass 0.0
+      explicitly, which would trip this warning on every Gemini 3 call and
+      expose us to the documented production failure modes (infinite loops,
+      degraded reasoning). The fix is a narrow, model-family-scoped clamp
+      that only fires for Gemini 3; every other model keeps the
+      caller-supplied temperature unchanged.
+
+    Returns True iff the clamp fired (used to keep ``current_temperature``
+    in sync at the call site).
+    """
+    if "temperature" not in litellm_kwargs:
+        # Caller already removed temperature (e.g. provider rejects it) —
+        # nothing to clamp.
+        return False
+    if not _is_gemini_3_model(model_name):
+        return False
+    current = litellm_kwargs.get("temperature")
+    try:
+        if current is not None and float(current) >= 1.0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if verbose:
+        logger.info(
+            "[INFO] Gemini 3 model detected: forcing temperature=1 (was %s). "
+            "See litellm warning re infinite loops / degraded reasoning at "
+            "temperature < 1.0.",
+            current,
+        )
+    litellm_kwargs["temperature"] = 1
+    return True
+
+
 def _response_usage_summary(response: Any) -> Dict[str, Any]:
     """Return token and finish metadata from a LiteLLM response."""
     responses = response if isinstance(response, list) else [response]
@@ -3108,6 +3180,14 @@ def llm_invoke(
                 # Use a local adjustable temperature to allow provider-specific fallbacks.
                 litellm_kwargs["temperature"] = current_temperature
 
+            # Gemini 3 family clamp: temperature < 1.0 is documented by litellm
+            # to cause infinite loops and degraded reasoning. Apply BEFORE the
+            # batch/single split so both litellm.completion and
+            # litellm.batch_completion paths are protected. See
+            # _maybe_clamp_gemini_3_temperature for the rationale.
+            if _maybe_clamp_gemini_3_temperature(litellm_kwargs, model_name_litellm, verbose):
+                current_temperature = 1
+
             # --- Resolve API key / credentials ---
             # The CSV api_key field may be:
             #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
@@ -3676,16 +3756,11 @@ def llm_invoke(
                                 current_temperature = 1
                     except Exception:
                         pass
-                    # Gemini 3 requirement: temperature < 1.0 causes infinite loops and
-                    # degraded reasoning. Force temperature=1 for all Gemini 3+ models.
-                    try:
-                        if 'gemini-3' in model_name_litellm.lower() and litellm_kwargs.get('temperature', 0) < 1:
-                            if verbose:
-                                logger.info(f"[INFO] Gemini 3 model detected: forcing temperature=1 (was {litellm_kwargs.get('temperature')}).")
-                            litellm_kwargs['temperature'] = 1
-                            current_temperature = 1
-                    except Exception:
-                        pass
+                    # Gemini 3 temperature clamp now happens once, early —
+                    # see _maybe_clamp_gemini_3_temperature in section 5 above.
+                    # Both litellm.completion and litellm.batch_completion
+                    # paths are protected by the early clamp, so no per-call
+                    # override is needed here.
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
                     response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
