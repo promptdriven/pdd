@@ -261,7 +261,7 @@ Import from `split_validation`: `validate_extraction`, `get_test_command`, `get_
 <pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 <pdd.architecture_sync><include select="def:sync_all_prompts_to_architecture">pdd/architecture_sync.py</include></pdd.architecture_sync>
 <pdd.agentic_test_orchestrator>
-    <include query="pattern for 11-step pipeline, state resumption, and hard stop markers">context/agentic_test_orchestrator_example.py</include>
+    <include select="def:main,def:example_happy_path,def:example_state_resumption,def:example_hard_stop_duplicate,def:example_hard_stop_needs_info,def:example_step_timeouts,def:example_file_parsing">context/agentic_test_orchestrator_example.py</include>
 </pdd.agentic_test_orchestrator>
 
 % Deliverables
