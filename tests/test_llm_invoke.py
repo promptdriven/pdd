@@ -5924,3 +5924,389 @@ class TestIssue796TypeScriptPythonValidation:
             "_has_invalid_python_code() should return True for a CodeFix containing "
             "TypeScript code, because TypeScript looks like Python but fails ast.parse()"
         )
+
+
+# ============================================================================
+# TESTS: Gemini 3 temperature clamp (litellm warning prevention)
+# ============================================================================
+#
+# litellm emits the following warning when a Gemini 3 model is invoked with
+# temperature < 1.0:
+#
+#   Warning: Setting temperature < 1.0 for Gemini 3 models
+#   (gemini-3-flash-preview) can cause infinite loops, degraded reasoning
+#   performance, and failure on complex tasks. Strongly recommended to use
+#   temperature = 1.0 (default).
+#
+# PDD passes temperature=0.1 by default (see llm_invoke signature) and many
+# call sites pass temperature=0.0. These default flows triggered the warning
+# during Path C validation of PR #899 / issue #1405. The documented failure
+# modes (infinite loops, degraded reasoning) are real production risks, so
+# PDD clamps the temperature to 1.0 before handing it to litellm whenever
+# the resolved model is in the Gemini 3 family.
+#
+# The override is intentionally narrow: only Gemini 3 (gemini-3 / gemini-3.x)
+# is affected, never Gemini 2.x / Gemini 1.5 / non-Gemini models.
+
+class TestGemini3TemperatureClamp:
+    """Pre-flight clamp: Gemini 3 models receive temperature=1.0 regardless of
+    the user-supplied temperature, because temperature < 1.0 is documented to
+    cause infinite loops and degraded reasoning."""
+
+    def _make_csv(self, tmp_path, provider, model_name, reasoning_type='none'):
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            f"{provider},{model_name},1,2,1437,TEST_KEY,True,{reasoning_type},"
+            f"4096,4096,0\n"
+        )
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(content)
+        return csv_path
+
+    def _make_mock_response(self):
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+        return mock_response
+
+    # ------------------------------------------------------------------
+    # Helper: _is_gemini_3_model classifier
+    # ------------------------------------------------------------------
+    def test_is_gemini_3_model_classifier(self, llm_mod):
+        """The helper should match the Gemini 3 family and ONLY the Gemini 3
+        family. This test pins the regex contract."""
+        is_g3 = llm_mod._is_gemini_3_model
+
+        # Positive cases — Gemini 3.x family
+        assert is_g3("gemini-3-flash-preview") is True
+        assert is_g3("gemini-3-pro-preview") is True
+        assert is_g3("gemini/gemini-3-flash-preview") is True
+        assert is_g3("gemini/gemini-3-pro-preview") is True
+        assert is_g3("vertex_ai/gemini-3-flash-preview") is True
+        assert is_g3("vertex_ai/gemini-3-pro-preview") is True
+        # Bare Vertex AI form (no provider prefix) — see llm_model.csv
+        assert is_g3("gemini-3.1-pro-preview") is True
+        assert is_g3("gemini-3.1-pro-preview-customtools") is True
+        assert is_g3("gemini/gemini-3.1-pro-preview") is True
+        # GMI / GitHub Copilot routes
+        assert is_g3("gmi/google/gemini-3-pro-preview") is True
+        assert is_g3("gmi/google/gemini-3-flash-preview") is True
+        assert is_g3("github_copilot/gemini-3-pro-preview") is True
+        # Hypothetical Gemini 3.5 / 3.x — match too
+        assert is_g3("gemini-3.5-flash") is True
+        # Case-insensitive
+        assert is_g3("GEMINI-3-FLASH-PREVIEW") is True
+
+        # Negative cases — non-Gemini-3 models must NOT match
+        assert is_g3("gemini-2.5-flash") is False
+        assert is_g3("gemini/gemini-2.5-flash") is False
+        assert is_g3("gemini-1.5-pro") is False
+        assert is_g3("gemini-pro") is False
+        assert is_g3("claude-3") is False  # "3" is in claude-3 but not gemini-3
+        assert is_g3("vertex_ai/claude-opus-4-7") is False
+        assert is_g3("gpt-5") is False
+        assert is_g3("o1-preview") is False
+        # Edge case: "gemini-30-..." (hypothetical, not a real family) must NOT
+        # match — boundary-aware regex
+        assert is_g3("gemini-30-something") is False
+        # Defensive: None / empty
+        assert is_g3("") is False
+        assert is_g3(None) is False
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Gemini 3 Flash with low temperature
+    # ------------------------------------------------------------------
+    def test_gemini_3_flash_low_temperature_clamped_to_1(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """gemini/gemini-3-flash-preview with temperature=0.1 must be clamped
+        to temperature=1.0 before reaching litellm."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Gemini", "gemini/gemini-3-flash-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini/gemini-3-flash-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            "Gemini 3 Flash with temperature=0.1 must be clamped to "
+            f"temperature=1, got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Vertex AI Gemini 3 Flash with temperature=0
+    # ------------------------------------------------------------------
+    def test_vertex_ai_gemini_3_flash_zero_temperature_clamped_to_1(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """vertex_ai/gemini-3-flash-preview with temperature=0.0 must be
+        clamped to temperature=1.0. This reproduces the Path C validation
+        scenario for issue #1405 Fix B."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Vertex AI", "vertex_ai/gemini-3-flash-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3-flash-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.0,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            "Vertex AI Gemini 3 Flash with temperature=0.0 must be clamped "
+            f"to 1, got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: Bare gemini-3.1-pro-preview
+    # ------------------------------------------------------------------
+    def test_gemini_3_1_pro_bare_name_temperature_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """gemini-3.1-pro-preview (bare Vertex AI name in CSV) with
+        temperature=0.7 must be clamped to 1.0."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Vertex AI", "gemini-3.1-pro-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini-3.1-pro-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.7,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            f"Bare gemini-3.1-pro-preview must be clamped to 1, "
+            f"got {captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-flight: explicit temperature=1.0 is a no-op
+    # ------------------------------------------------------------------
+    def test_gemini_3_explicit_temperature_1_is_no_op(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """When the caller already passes temperature=1.0, the clamp is a
+        no-op — the value stays 1.0."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Gemini", "gemini/gemini-3-pro-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini/gemini-3-pro-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=1.0,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1
+        # And specifically: it didn't drift below 1 in some weird way
+        assert captured_kwargs.get("temperature") >= 1
+
+    # ------------------------------------------------------------------
+    # Negative: Gemini 2.5 must NOT be clamped
+    # ------------------------------------------------------------------
+    def test_gemini_2_5_temperature_NOT_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """gemini/gemini-2.5-flash must KEEP the user-supplied temperature.
+        Only Gemini 3 has the documented infinite-loop failure mode."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Gemini", "gemini/gemini-2.5-flash"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "gemini/gemini-2.5-flash"
+        )
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 0.1, (
+            f"Gemini 2.5 must NOT be clamped (only Gemini 3 has the "
+            f"infinite-loop failure mode), got "
+            f"{captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Negative: non-Gemini model must NOT be clamped
+    # ------------------------------------------------------------------
+    def test_non_gemini_model_temperature_NOT_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """A non-Gemini model with the same low temperature must keep its
+        temperature — this rule is Gemini-3-specific."""
+        csv_path = self._make_csv(
+            tmp_path, "OpenAI", "gpt-4o-mini"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-4o-mini")
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(
+            llm_mod.litellm, "completion", side_effect=capture_completion
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json={"topic": "physics"},
+                strength=0.5,
+                temperature=0.1,
+                time=0.0,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 0.1, (
+            f"Non-Gemini-3 model must NOT be clamped, got "
+            f"{captured_kwargs.get('temperature')}"
+        )
+
+    # ------------------------------------------------------------------
+    # Batch mode: Gemini 3 must also be clamped in batch_completion path
+    # ------------------------------------------------------------------
+    def test_gemini_3_batch_mode_temperature_clamped(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """The batch_completion path (use_batch_mode=True) must also clamp
+        the temperature. Without this, callers that use batch mode bypass
+        the protection."""
+        csv_path = self._make_csv(
+            tmp_path, "Google Vertex AI", "vertex_ai/gemini-3-flash-preview"
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(
+            llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3-flash-preview"
+        )
+
+        captured_kwargs = {}
+
+        def capture_batch_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            # batch_completion returns a list of response items
+            return [self._make_mock_response()]
+
+        with patch.object(
+            llm_mod.litellm,
+            "batch_completion",
+            side_effect=capture_batch_completion,
+        ):
+            llm_mod.llm_invoke(
+                prompt="Question about {topic}",
+                input_json=[{"topic": "physics"}],
+                strength=0.5,
+                temperature=0.0,
+                time=0.0,
+                use_batch_mode=True,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs.get("temperature") == 1, (
+            "Gemini 3 in batch mode must also be clamped to temperature=1, "
+            f"got {captured_kwargs.get('temperature')}"
+        )
